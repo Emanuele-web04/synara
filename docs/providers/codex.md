@@ -15,6 +15,10 @@ The **Codex accounts** list has one row per account:
 - Each row shows the account's state (`Authenticated`, `Not authenticated`,
   `Unavailable`, `Disabled`, …) and a switch. A switched-off account keeps its
   settings and disappears from the model picker.
+- The editor of a signed-in account names who it is signed in as: the ChatGPT
+  email stored with the account's login. The state line carries the plan
+  (`ChatGPT Plus Subscription`), read from the same stored login when the Codex
+  CLI prints none.
 - Selecting a row opens its editor beside the list: display name and accent
   color, sign-in state, runtime paths, and environment variables. Launch
   details most accounts never touch sit behind **Advanced**.
@@ -22,7 +26,9 @@ The **Codex accounts** list has one row per account:
 In the model picker every enabled account gets its own tab. Accounts of the
 same provider share the provider icon, so the open tab spells out its
 account's name and every account beyond the default carries a dot on its icon,
-in the account's accent color when it has one. An account other than the
+in the account's accent color when it has one. Hovering a tab shows the
+account's signed-in email, and the account entries inside the picker list it
+beside the account name. An account other than the
 default is also named on the composer's model button, so you can always tell which account a
 message will use.
 
@@ -47,6 +53,37 @@ The default account uses the same overlay mechanism, with authentication and
 other shared state sourced from the configured Codex home (`~/.codex` by
 default).
 
+Codex can rediscover the source `config.toml` as project-local configuration and
+warn that user-only keys such as `notify` were ignored there. Synara already
+loads those settings from its user-level overlay, so this duplicate diagnostic
+does not add a runtime-warning row. Warnings for other project configuration
+files and actual configuration errors remain visible.
+
+## Startup configuration and MCP warnings
+
+Codex 0.169 can report the same `[features].multi_agent` deprecation through
+stderr, `configWarning`, and a thread `warning`. Synara keeps one visible runtime
+warning for this configuration issue per app-server process. It does not rewrite
+that setting in the source config or its generated overlay: the legacy key still controls the V1 fallback,
+and removing it can change the user's opt-out. Review the configuration for the
+selected Codex account, including its active profile and project layers. Modern
+`agents.enabled = false` disables subagent tools, except when
+`features.multi_agent_v2` is explicitly enabled. Keep older CLI compatibility in
+mind when changing a config shared with other Codex installations.
+
+An MCP HTTP 403 with `subscription_inactive` or `subscription_required` means
+the configured service refused access. Synara leaves the connection, credentials,
+and subscription untouched. The app-server reports the named startup failure
+and can also emit an anonymous `rmcp` worker error on stderr. Synara keeps these
+signals in diagnostics and filters MCP startup failures and app-server stderr
+from Work Performed and the chat timeline, including saved history. MCP tool
+calls that fail during a turn and turn failures remain visible.
+
+For a canceled or missing SuperX subscription, review that service's subscription
+or disable/remove its server in the effective Codex configuration if it is no
+longer wanted. Reinstalling Synara or changing an unrelated provider account does
+not grant service access.
+
 ## Adding a second account
 
 1. In the **Codex accounts** list, choose **Add account**.
@@ -55,16 +92,14 @@ default).
    be changed later. Optionally pick an accent color.
 3. Leave **CODEX_HOME path** blank to let Synara keep the account's sign-in in
    its own folder, then choose **Add account**.
-4. Select the new row. While it is not signed in, the editor shows the command
-   to run, built from the account's **Terminal command** (`codex-work` for an
-   account with the ID `codex_work`):
-
-   ```sh
-   codex-work login
-   ```
-
-   Run it in a Synara terminal, then choose **Refresh status** at the top of
-   the Providers settings. The row turns to `Authenticated`.
+4. Select the new row and choose **Sign in**. Synara runs `codex login` in the
+   account's own environment; complete the browser prompts it opens. When the
+   login exits, Synara rechecks the account (choose **Check authentication**
+   if the prompts finished outside the dialog). The row turns to
+   `Authenticated` and the editor shows the signed-in email. The same login
+   also works from a Synara terminal through the account's **Terminal command**
+   (`codex-work login` for an account with the ID `codex_work`), followed by
+   **Refresh status** at the top of the Providers settings.
 
 5. Open the model picker in a new thread and pick a model from the account's
    tab.

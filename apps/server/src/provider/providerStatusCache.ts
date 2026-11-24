@@ -47,6 +47,12 @@ export const orderProviderStatuses = (
     return (left.instanceId ?? left.provider).localeCompare(right.instanceId ?? right.provider);
   });
 
+/** Account labels are available only from a fresh provider probe. */
+export function withoutProviderAccountIdentity(status: ServerProviderStatus): ServerProviderStatus {
+  const { accountEmail: _email, accountOrganization: _organization, ...readiness } = status;
+  return readiness;
+}
+
 function normalizeProviderStatusIdentity(status: ServerProviderStatus): ServerProviderStatus {
   return {
     ...status,
@@ -98,7 +104,9 @@ export const readProviderStatusCache = (
     if (!status) {
       return undefined;
     }
-    const normalizedStatus = normalizeProviderStatusIdentity(status);
+    const normalizedStatus = normalizeProviderStatusIdentity(
+      withoutProviderAccountIdentity(status),
+    );
     if (!expected) {
       return normalizedStatus;
     }
@@ -128,6 +136,6 @@ export const writeProviderStatusCache = (input: {
 }) => {
   return writeFileStringAtomically({
     filePath: input.filePath,
-    contents: `${JSON.stringify(input.provider, null, 2)}\n`,
+    contents: `${JSON.stringify(withoutProviderAccountIdentity(input.provider), null, 2)}\n`,
   });
 };

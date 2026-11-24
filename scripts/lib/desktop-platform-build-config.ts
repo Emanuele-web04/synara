@@ -5,17 +5,18 @@
 
 import { fileURLToPath } from "node:url";
 
+import { UI_LOCALES } from "@synara/contracts/uiLocale";
 import {
   SYNARA_BETA_WINDOWS_INSTALLER_GUID,
   SYNARA_STABLE_WINDOWS_INSTALLER_GUID,
 } from "@synara/shared/betaChannel";
 import type { SynaraPackagedDesktopFlavor } from "@synara/shared/desktopIdentity";
-import { availableUiLocales } from "@synara/shared/uiLocale";
 
 import {
   createDesktopBundleFilePatterns,
   preserveDependencyDiagnostics,
 } from "./desktop-bundle-files.ts";
+import { MAC_ICON_ASSET_NAME, MAC_ICON_COMPOSER_DEPLOYMENT_TARGET } from "./mac-icon-catalog.ts";
 
 export const MICROPHONE_USAGE_DESCRIPTION =
   "Synara needs microphone access so you can record voice notes and transcribe them into the chat composer, and, if you turn it on, to move the chat message trail with your voice.";
@@ -42,15 +43,22 @@ export const MAC_DEVICE_HELPER_RESOURCE_PATH = "Resources/device-helper";
 export const WINDOWS_INSTALLER_GUID = SYNARA_STABLE_WINDOWS_INSTALLER_GUID;
 // Remote must install alongside Stable and Beta without owning their uninstaller.
 const REMOTE_WINDOWS_INSTALLER_GUID = "7639a24e-c753-4f4c-b4e3-37b259bdc793";
-// Asset catalog name of the compiled Icon Composer icon. macOS 26 reads
-// CFBundleIconName out of Assets.car and renders that layered icon with the
-// Liquid Glass material; older releases ignore it and keep using the ICNS.
-export const MAC_ICON_ASSET_NAME = "Synara";
-export const MAC_ICON_COMPOSER_DEPLOYMENT_TARGET = "26.0";
+// Asset catalog name and deployment target of the compiled Icon Composer icon,
+// shared with the dependency-free release catalog fingerprint.
+export { MAC_ICON_ASSET_NAME, MAC_ICON_COMPOSER_DEPLOYMENT_TARGET };
 export const MAC_ICON_ASSETS_CAR_STAGE_PATH = "apps/desktop/resources/Assets.car";
 export const MAC_ICON_ASSETS_CAR_BUNDLE_PATH = "Resources/Assets.car";
 export { SYNARA_BETA_WINDOWS_INSTALLER_GUID };
 const MAC_DMG_ICON_PATH = "icon.icns";
+// electron-builder signs every file it classifies as binary, one `codesign`
+// call at a time, each with its own request to Apple's timestamp server. The
+// walk follows Electron Framework's `Versions/Current` and top-level symlinks,
+// so the 223 Chromium `.pak` data files alone accounted for 669 of about 724
+// calls. A `.pak` is a resource, not code: the signature of the enclosing
+// framework seals its hash, so its own signature added nothing that
+// `codesign --verify --deep --strict`, Gatekeeper or notarization check.
+// Every Mach-O file, helper app and framework is still signed.
+export const MAC_SIGN_IGNORE_PATTERNS = ["\\.pak$"] as const;
 const NODE_PTY_ASAR_UNPACK_GLOBS = ["node_modules/node-pty/**"] as const;
 
 export interface DesktopPlatformBuildConfig {
@@ -71,14 +79,10 @@ export interface DesktopPlatformBuildConfig {
 
 const ELECTRON_LOCALE_CODES: Readonly<Record<string, ReadonlyArray<string>>> = {
   en: ["en-US", "en-GB", "en_GB"],
-  es: ["es", "es-419", "es_419"],
-  "zh-CN": ["zh-CN", "zh_CN", "zh-Hans"],
 };
 
-export function electronLanguagesForFlavor(
-  flavor: SynaraPackagedDesktopFlavor = "production",
-): string[] {
-  return availableUiLocales(flavor).flatMap((locale) => ELECTRON_LOCALE_CODES[locale] ?? [locale]);
+export function electronLanguagesForFlavor(): string[] {
+  return UI_LOCALES.flatMap((locale) => ELECTRON_LOCALE_CODES[locale] ?? [locale]);
 }
 
 export interface CreateDesktopPlatformBuildConfigInput {
@@ -133,7 +137,7 @@ export function createDesktopPlatformBuildConfig(
   const connectorResources = { from: "apps/desktop/resources/cloudflared", to: "cloudflared" };
   const nativePackaging = {
     asarUnpack: [...NODE_PTY_ASAR_UNPACK_GLOBS],
-    electronLanguages: electronLanguagesForFlavor(input.flavor ?? "production"),
+    electronLanguages: electronLanguagesForFlavor(),
     files,
     extraResources: [connectorResources],
     // TypeScript reads these declarations at runtime in the intelligence worker.
@@ -164,6 +168,7 @@ export function createDesktopPlatformBuildConfig(
         : {}),
       entitlements: MAC_ENTITLEMENTS_PATH,
       entitlementsInherit: MAC_INHERITED_ENTITLEMENTS_PATH,
+      signIgnore: [...MAC_SIGN_IGNORE_PATTERNS],
       binaries: [
         MAC_APPSNAP_HELPER_BUNDLE_PATH,
         MAC_WINDOW_MATERIAL_ADDON_BUNDLE_PATH,
@@ -237,14 +242,6 @@ export function createDesktopPlatformBuildConfig(
           from: MAC_ICON_ASSETS_CAR_STAGE_PATH,
           to: MAC_ICON_ASSETS_CAR_BUNDLE_PATH,
         },
-        // macOS reads permission explanations from the bundle's language folders.
-        ...availableUiLocales(input.flavor ?? "production").map((locale) => {
-          const directory = `${locale === "zh-CN" ? "zh-Hans" : locale}.lproj`;
-          return {
-            from: `apps/desktop/resources/localizations/${directory}`,
-            to: `Resources/${directory}`,
-          };
-        }),
       ],
       mac,
     };

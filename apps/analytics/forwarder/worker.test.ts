@@ -10,6 +10,22 @@ const NEW = "https://synara-beta-diagnostics.example.workers.dev";
 afterEach(() => vi.unstubAllGlobals());
 
 describe("forwarder", () => {
+  it.each([{}, { TARGET: NEW }])(
+    "rejects legacy raw dumps without forwarding or reading them",
+    async (env) => {
+      const outbound = vi.fn();
+      vi.stubGlobal("fetch", outbound);
+      const request = new Request(`${OLD}/v1/crash`, {
+        method: "POST",
+        body: "violet kettle private draft",
+      });
+      const response = await forwarder.fetch(request, env);
+      expect(response.status).toBe(410);
+      expect(request.bodyUsed).toBe(false);
+      expect(outbound).not.toHaveBeenCalled();
+    },
+  );
+
   it("answers 503 without a target so clients keep their queue", async () => {
     const res = await forwarder.fetch(
       new Request(`${OLD}/v1/events`, { method: "POST", body: "x" }),

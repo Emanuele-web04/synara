@@ -1,5 +1,5 @@
-import { AccountBillingCheckoutRequest } from "@synara/contracts";
-import { decideRemoteBillingAccess } from "../billing/accessPolicy";
+import { AccountBillingCheckoutRequest, AccountWebCheckoutRequest } from "@synara/contracts";
+import { decideRemoteBillingAccess, isProfileBillingEntitled } from "../billing/accessPolicy";
 import { BILLING_UNAVAILABLE, BillingError, type BillingService } from "../billing/service";
 import {
   RegisterLiveActivity,
@@ -24,8 +24,6 @@ import {
   RemoteTunnelRequest,
   type AccountErrorBody,
   type AccountErrorCode,
-  ACCOUNT_HOST_ENDPOINTS_MAX,
-  AccountHostEndpoint,
   AuthorizeTokenRequest,
   AuthorizeUrlRequest,
   type AuthorizeUrlResponse,
@@ -71,6 +69,7 @@ import {
   SESSION_CREDENTIAL_MAX_AGE_SECONDS,
   RefreshTokenRequest,
   type RefreshTokenResponse,
+  ReplaceHostEndpointsRequest,
   UpdateHostRequest,
   UpdateOrganizationRequest,
   UpdateProfileRequest,
@@ -80,9 +79,11 @@ import {
 } from "@synara/contracts";
 import { and, desc, eq, gte, inArray, isNotNull, isNull, lt, or, sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
+import { unionAll } from "drizzle-orm/pg-core";
 import { Schema } from "effect";
 import { Hono } from "hono";
 import type { Context } from "hono";
+import { cors } from "hono/cors";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { createHash, timingSafeEqual } from "node:crypto";
 import type { AvatarStorage } from "../avatarStorage";
@@ -125,6 +126,7 @@ import type { ApiSigningService } from "../identity/signing";
 import { hostRecordFromRow, isHostProofAuthorization } from "../identity/hostKeyRegistry";
 import { deleteHostSecretRows } from "../identity/hostSecretStore";
 import { writeRevocationEvents } from "../identity/revocationLog";
+import { getCachedUser, invalidateUserCache, type UserCacheDeps } from "../identity/userCache";
 import { createRateLimiter } from "../rateLimit";
 import packageJson from "../../package.json" with { type: "json" };
 
@@ -241,12 +243,6 @@ function secretHeaderMatches(expected: string, presented: string | undefined): b
     expectedBytes.length === presentedBytes.length && timingSafeEqual(expectedBytes, presentedBytes)
   );
 }
-
-const ReplaceHostEndpointsRequest = Schema.Struct({
-  endpoints: Schema.Array(AccountHostEndpoint).check(
-    Schema.isMaxLength(ACCOUNT_HOST_ENDPOINTS_MAX),
-  ),
-});
 
 type ProfileRow = typeof profiles.$inferSelect;
 
@@ -378,12 +374,15 @@ function authTokensBody(auth_: AuthTokens): AuthTokensResponse {
 export function createV1Routes(deps: {
   accountDeletion?: AccountDeletionService;
   billing?: BillingService;
+  webCheckoutOrigin?: string;
   liveActivities?: LiveActivityService;
   tunnels?: TunnelCoordinator;
   apiIssuer?: string;
   remoteTestUserIds?: readonly string[];
   remoteBetaAccessEnabled?: boolean;
   remoteBillingEnforced?: boolean;
+  /** Paid public profiles: only Alto subscribers can publish or be viewed. */
+  profileBillingEnforced?: boolean;
   verifier: AccountIdentityVerifier;
   grants: EnvironmentGrantIssuer;
   signing: ApiSigningService;
@@ -455,30 +454,36 @@ export function createV1Routes(deps: {
       setTimeout(() => void task(), delayMs).unref?.();
     });
   const v1 = new Hono();
+  /**
+   * A fresh Alto check for a signed-in action: 403 without a subscription, 503
+   * when Polar cannot be verified. An outage only refuses the action; it never
+   * changes ownership or anything stored.
+   */
+  async function requireFreshAltoAccess(
+    c: Context,
+    userId: string,
+    messages: { readonly subscriptionRequired: string; readonly unavailable: string },
+  ): Promise<Response | null> {
+    let status: Awaited<ReturnType<BillingService["access"]>> | undefined;
+    try {
+      status = await deps.billing?.access(userId);
+    } catch {
+      // Fall through: a missing status is refused as unavailable below.
+    }
+    const decision = decideRemoteBillingAccess({ enforcementEnabled: true, status });
+    if (decision.allowed) return null;
+    return decision.reason === "subscription_required"
+      ? errorResponse(c, 403, "subscription_required", messages.subscriptionRequired)
+      : errorResponse(c, 503, "billing_unavailable", messages.unavailable);
+  }
+
   // Enrollment is separate from authentication, host ownership and pairing consent.
   async function requireRemoteAccess(c: Context, userId: string): Promise<Response | null> {
     if (deps.remoteBillingEnforced === true) {
-      let status: Awaited<ReturnType<BillingService["access"]>> | undefined;
-      try {
-        status = await deps.billing?.access(userId);
-      } catch {
-        // An outage pauses remote access; it never changes host or device ownership.
-      }
-      const decision = decideRemoteBillingAccess({ enforcementEnabled: true, status });
-      if (decision.allowed) return null;
-      return decision.reason === "subscription_required"
-        ? errorResponse(
-            c,
-            403,
-            "subscription_required",
-            "Remote access requires an active Pro subscription",
-          )
-        : errorResponse(
-            c,
-            503,
-            "billing_unavailable",
-            "Remote access verification is temporarily unavailable",
-          );
+      return requireFreshAltoAccess(c, userId, {
+        subscriptionRequired: "Remote access requires an active Synara Alto subscription",
+        unavailable: "Remote access verification is temporarily unavailable",
+      });
     }
     if (deps.remoteBetaAccessEnabled === true || deps.remoteTestUserIds?.includes(userId) === true)
       return null;
@@ -488,6 +493,28 @@ export function createV1Routes(deps: {
       "not_host_owner",
       "Remote test access is not enabled for this account",
     );
+  }
+
+  // Paid public profiles. Viewing reads only the stored entitlement, so anonymous
+  // page traffic can never drive Polar round trips; publishing is a signed-in
+  // action and gets the same fresh check as remote admission.
+  async function profileOwnerEntitled(userId: string): Promise<boolean> {
+    if (deps.profileBillingEnforced !== true) return true;
+    try {
+      const stored = (await deps.billing?.storedAccess(userId)) ?? null;
+      return isProfileBillingEntitled({ enforcementEnabled: true, stored });
+    } catch {
+      // An unreadable ledger hides the page rather than showing it unpaid.
+      return false;
+    }
+  }
+
+  async function requireProfilePublishAccess(c: Context, userId: string): Promise<Response | null> {
+    if (deps.profileBillingEnforced !== true) return null;
+    return requireFreshAltoAccess(c, userId, {
+      subscriptionRequired: "Public profiles require an active Synara Alto subscription",
+      unavailable: "Subscription verification is temporarily unavailable",
+    });
   }
 
   /**
@@ -608,29 +635,44 @@ export function createV1Routes(deps: {
 
   /**
    * Resolves the caller from an access token. Verification is stateless
-   * (JWKS signature + expiry), followed by our durable session tombstone.
-   * Provider revocation independently prevents subsequent token refresh.
+   * (JWKS signature + expiry), followed by our durable tombstones — the
+   * revoked account session and the account-erasure fence, read together in
+   * one database round trip. Provider revocation independently prevents
+   * subsequent token refresh.
    */
-  async function getDeviceSession(
-    c: Context,
+  async function verifyDeviceSession(
+    token: string,
   ): Promise<{ userId: string; sessionId: string; orgId?: string } | null> {
-    const authorization = c.req.header("authorization");
-    const match = authorization ? /^Bearer\s+(.+)$/i.exec(authorization) : null;
-    const token = match?.[1];
-    if (!token) return null;
     let verified: Awaited<ReturnType<typeof verifier.verifyAccessToken>>;
     try {
       verified = await verifier.verifyAccessToken(token);
-    } catch {
+    } catch (error) {
+      if (error instanceof IdentityProviderError) throw error;
       return null;
     }
     // A database outage must fail closed as a server failure, without telling
     // clients to discard a valid sign-in session.
-    return (await devices.isSessionRevoked(verified.userId, verified.sessionId)) ||
-      (await accountDeletion.isDeleting(verified.userId))
+    return (await accountDeletion.isSessionFenced(verified.userId, verified.sessionId))
       ? null
       : verified;
   }
+
+  async function getDeviceSession(c: Context) {
+    const authorization = c.req.header("authorization");
+    const token = authorization ? /^Bearer\s+(.+)$/i.exec(authorization)?.[1] : undefined;
+    return token ? verifyDeviceSession(token) : null;
+  }
+
+  // Late-bound so a test spying on `verifier.getUser` still sees every lookup.
+  const userLookup: UserCacheDeps = { getUser: (userId) => verifier.getUser(userId) };
+
+  /**
+   * The provider user `requireOrgSession` read, kept for the rest of the same
+   * request. Request-scoped on purpose rather than a field on `OrgSession`:
+   * routes spread the session into service calls, and the email must not ride
+   * along into them.
+   */
+  const requestUsers = new WeakMap<Context, { userId: string; user: IdentityUser }>();
 
   /**
    * An authenticated caller acting inside an organization. Host routes use
@@ -671,12 +713,16 @@ export function createV1Routes(deps: {
    *
    * Returns the session, or a Response that the caller must return as-is.
    *
-   * Freshness: plain reads (`/me`, host listing, profile) accept the
-   * membership cache — a revoked member can retain READ access for up to the
-   * cache TTL (≤60s), the documented read-path SLA. PRIVILEGED/MUTATING
-   * routes (host register, owner host delete, organization rename) pass
-   * `{ freshMembership: true }` so the membership is resolved live and
-   * revocation takes effect immediately on anything that changes state.
+   * Freshness: plain reads (`/me`, host listing, usage, member count) accept
+   * the per-process caches for both the provider user and the membership — a
+   * revoked member, or an account deleted at the provider, can retain READ
+   * access for up to the cache TTL (≤60s), the documented read-path SLA.
+   * PRIVILEGED/MUTATING routes (host register, owner host delete, profile and
+   * organization writes, account deletion) pass `{ freshMembership: true }`,
+   * which reads the user AND the membership live, so revocation and deletion
+   * take effect immediately on anything that changes state. Either way the
+   * user read here is remembered for the rest of this request, so
+   * `loadSessionUser` does not ask the provider a second time.
    */
   async function requireOrgSession(
     c: Context,
@@ -688,8 +734,26 @@ export function createV1Routes(deps: {
     let user: IdentityUser;
     let scope: Awaited<ReturnType<EnvironmentGrantIssuer["resolveEnvironmentScope"]>>;
     try {
-      user = await verifier.getUser(session.userId);
-      scope = await grants.resolveEnvironmentScope(session, user.email, options);
+      if (options?.freshMembership === true) {
+        // Both reads are live and independent; only provisioning a first
+        // workspace needs the email, and it waits for the user read. The
+        // user read keeps precedence: its failure answers even if the
+        // membership read also failed.
+        const userRead = getCachedUser(userLookup, session.userId, { fresh: true });
+        const scopeRead = grants.resolveEnvironmentScope(
+          session,
+          async () => (await userRead).email,
+          options,
+        );
+        scopeRead.catch(() => {});
+        user = await userRead;
+        requestUsers.set(c, { userId: session.userId, user });
+        scope = await scopeRead;
+      } else {
+        user = await getCachedUser(userLookup, session.userId, { fresh: false });
+        requestUsers.set(c, { userId: session.userId, user });
+        scope = await grants.resolveEnvironmentScope(session, user.email, options);
+      }
     } catch (error) {
       if (error instanceof IdentityProviderError && error.status === 404) {
         return errorResponse(c, 401, "unauthorized", "This account no longer exists");
@@ -818,6 +882,7 @@ export function createV1Routes(deps: {
       ...(ssoAvatarUrl ? { image: ssoAvatarUrl } : {}),
       organization,
       profile: row ? toAccountProfile(row, resolvedAvatarUrl(row, ssoAvatarUrl)) : null,
+      publicProfileAvailable: Boolean(row?.public && (await profileOwnerEntitled(user.id))),
     };
   }
 
@@ -825,10 +890,16 @@ export function createV1Routes(deps: {
    * The user behind a session, mapping the two failures that matter: a deleted
    * account is the caller's authentication problem, anything else is ours.
    * Returns the user, or the Response to return as-is.
+   *
+   * Reuses the user `requireOrgSession` already read for this request, at the
+   * freshness that route chose. Without one (routes gated by
+   * `requireUserSession`) it is a live provider read.
    */
   async function loadSessionUser(c: Context, userId: string): Promise<IdentityUser | Response> {
+    const known = requestUsers.get(c);
+    if (known?.userId === userId) return known.user;
     try {
-      return await verifier.getUser(userId);
+      return await getCachedUser(userLookup, userId, { fresh: true });
     } catch (error) {
       // The token verified, so the caller held a valid session — but the
       // provider will not describe the user. A 404 means the account was
@@ -852,19 +923,35 @@ export function createV1Routes(deps: {
     c.header("Cache-Control", "private, no-store");
     await next();
   });
-  async function billingRequest(c: Context, action: (userId: string) => Promise<unknown>) {
-    const session = await requireUserSession(c);
-    if (session instanceof Response) return session;
+  if (deps.webCheckoutOrigin) {
+    v1.use(
+      "/billing/web-checkout/*",
+      cors({
+        origin: deps.webCheckoutOrigin,
+        allowMethods: ["POST"],
+        allowHeaders: ["Content-Type"],
+      }),
+    );
+  }
+  async function billingAction(
+    c: Context,
+    userId: string,
+    action: (userId: string) => Promise<unknown>,
+  ) {
     const limiter = c.req.method === "GET" ? billingLimiter : billingMutationLimiter;
-    if (!limiter.tryConsume(session.userId))
+    if (!limiter.tryConsume(userId))
       return errorResponse(c, 429, "rate_limited", "Too many billing requests");
     try {
-      return c.json(await action(session.userId));
+      return c.json(await action(userId));
     } catch (error) {
       if (error instanceof BillingError)
         return errorResponse(c, error.status, "validation_failed", error.message);
       return errorResponse(c, 503, "internal_error", "Billing is temporarily unavailable");
     }
+  }
+  async function billingRequest(c: Context, action: (userId: string) => Promise<unknown>) {
+    const session = await requireUserSession(c);
+    return session instanceof Response ? session : billingAction(c, session.userId, action);
   }
   v1.get("/billing/status", (c) =>
     billingRequest(
@@ -936,6 +1023,9 @@ export function createV1Routes(deps: {
     if (!accountDeletion.supported)
       return errorResponse(c, 503, "internal_error", "Account deletion is not configured");
     await accountDeletion.request(session.userId);
+    // The durable deletion fence already refuses this account; this only keeps
+    // the process from describing a user it has just asked to erase.
+    invalidateUserCache(session.userId);
     c.header("Cache-Control", "private, no-store");
     return c.json({ status: "pending" }, 202);
   });
@@ -1159,6 +1249,14 @@ export function createV1Routes(deps: {
         "validation_failed",
         "Your profile handle changed. Reload your profile before saving.",
       );
+    }
+
+    // Going public is the paid step. Private saves (onboarding's handle setup)
+    // and edits to an already-public profile stay free; a lapsed owner's page
+    // is hidden at read time by GET /profiles/:handle instead.
+    if (parsed.public === true && existing?.public !== true) {
+      const denied = await requireProfilePublishAccess(c, session.userId);
+      if (denied) return denied;
     }
 
     // Omission preserves the stored pair; explicit null clears both columns.
@@ -1823,17 +1921,33 @@ export function createV1Routes(deps: {
       );
     try {
       return c.json({
-        host: await hostKeys.replaceEndpoints(c.req.header("authorization"), id, parsed.endpoints),
+        host: await hostKeys.replaceEndpoints(
+          c.req.header("authorization"),
+          id,
+          parsed.endpoints,
+          parsed.appVersion,
+        ),
       });
     } catch (error) {
       return hostDomainError(c, error);
     }
   });
 
-  async function requireRemoteHostMembership(host: { ownerUserId: string; ownerOrgId: string }) {
+  /**
+   * Refuses a host whose owner has left its workspace. Freshness is the
+   * caller's explicit choice: admission and publication pass
+   * `freshMembership: true` so removal stops them immediately; the read-only
+   * watch poll passes false and accepts the ≤60s membership cache, the
+   * documented read-path SLA. The authorization snapshot does its own live
+   * read, because the host acts on its `ownerInOrg` answer.
+   */
+  async function requireRemoteHostMembership(
+    host: { ownerUserId: string; ownerOrgId: string },
+    freshness: { freshMembership: boolean },
+  ) {
     let memberships: OrganizationRef[];
     try {
-      memberships = await grants.listUserOrganizations(host.ownerUserId, { freshMembership: true });
+      memberships = await grants.listUserOrganizations(host.ownerUserId, freshness);
     } catch {
       throw new HostAuthDomainError(502, "internal_error", "Identity provider is unavailable");
     }
@@ -1929,19 +2043,26 @@ export function createV1Routes(deps: {
     return c.json({ ok: true });
   });
   v1.get("/hosts/:id/live-activities", async (c) => {
+    c.header("Cache-Control", "no-store");
     if (!deps.liveActivities) return c.json({ turns: [] });
     try {
-      const host = await hostKeys.withAuthenticatedHost(
+      // A read-only poll: the watch list it returns changes nothing, so it
+      // verifies the host without a row lock and takes the cached membership
+      // like every other read.
+      const host = await hostKeys.readAuthenticatedHost(
         c.req.header("authorization"),
         c.req.param("id"),
-        async (host) => host,
       );
-      await requireRemoteHostMembership(host);
+      await requireRemoteHostMembership(host, { freshMembership: false });
       if (deps.remoteBillingEnforced === true) {
         const denied = await requireRemoteAccess(c, host.ownerUserId);
         if (denied) return denied;
       }
-      return c.json({ turns: await deps.liveActivities.watches(host) });
+      const [turns, previews] = await Promise.all([
+        deps.liveActivities.watches(host),
+        deps.liveActivities.previewWatches(host),
+      ]);
+      return c.json({ turns, ...(previews.length > 0 ? { previews } : {}) });
     } catch (error) {
       return hostDomainError(c, error);
     }
@@ -1960,7 +2081,7 @@ export function createV1Routes(deps: {
       );
       if (!liveActivityLimiter.tryConsume(`host:${host.id}`))
         return errorResponse(c, 429, "rate_limited", "Too many snapshots");
-      await requireRemoteHostMembership(host);
+      await requireRemoteHostMembership(host, { freshMembership: true });
       if (deps.remoteBillingEnforced === true) {
         const denied = await requireRemoteAccess(c, host.ownerUserId);
         if (denied) return denied;
@@ -1988,7 +2109,7 @@ export function createV1Routes(deps: {
       if (accessDenied) return accessDenied;
       if (!(await rendezvous.consumeBudget(`publish:${host.id}`, 5)))
         return errorResponse(c, 429, "rate_limited", "Wait before creating another pairing code");
-      await requireRemoteHostMembership(host);
+      await requireRemoteHostMembership(host, { freshMembership: true });
       return c.json(await rendezvous.publish(host, bundle));
     } catch (error) {
       return hostDomainError(c, error);
@@ -2048,7 +2169,7 @@ export function createV1Routes(deps: {
       if (accessDenied) return accessDenied;
       if (!(await rendezvous.consumeBudget(`tunnel:${host.id}`, 10)))
         return errorResponse(c, 429, "rate_limited", "Wait before retrying remote setup");
-      await requireRemoteHostMembership(host);
+      await requireRemoteHostMembership(host, { freshMembership: true });
       return c.json(await deps.tunnels.provision(host, input.originPort));
     } catch (error) {
       if (error instanceof CloudflareError)
@@ -2143,25 +2264,23 @@ export function createV1Routes(deps: {
 
   v1.get("/hosts/:id/authorization", async (c) => {
     try {
-      // The host row lock is released before the provider call: a WorkOS
-      // round trip can take up to its 15s timeout, and holding an exclusive
-      // lock across it would stall every grant/patch/unlink for that host —
-      // and, with a small pool, the whole API. The snapshot is advisory
-      // (the host re-verifies on signal), so a lock-free read is correct.
-      const host = await hostKeys.withAuthenticatedHost(
+      // No host row lock: a WorkOS round trip can take up to its 15s timeout,
+      // and holding an exclusive lock across it would stall every
+      // grant/patch/unlink for that host — and, with a small pool, the whole
+      // API. The snapshot is advisory (the host re-verifies on signal), so a
+      // lock-free verified read is correct.
+      const host = await hostKeys.readAuthenticatedHost(
         c.req.header("authorization"),
         c.req.param("id"),
-        async (authenticated) => authenticated,
       );
-      let organizations: OrganizationRef[];
-      try {
-        organizations = await grants.listUserOrganizations(host.ownerUserId, {
-          freshMembership: true,
-        });
-      } catch (error) {
-        console.error("[api] host authorization membership lookup failed:", error);
-        return errorResponse(c, 502, "internal_error", "Identity provider is unavailable");
-      }
+      // The live membership read and the revocation snapshot are independent,
+      // so they run together. Their results are applied in the old order: a
+      // provider failure answers 502 before a database failure surfaces.
+      // Billing still waits for ownership: a lost owner must never cause a
+      // commercial provider call.
+      const membershipRead = grants.listUserOrganizations(host.ownerUserId, {
+        freshMembership: true,
+      });
       // Device thumbprints revoked within the session-credential lifetime:
       // any older revocation cannot still have a live session to kill, and a
       // host that missed the push event recovers from this list on reconnect.
@@ -2171,9 +2290,32 @@ export function createV1Routes(deps: {
       // the host-scoped event is the safe evidence that this device could have
       // reached THIS host. Combining only those two sources prevents unrelated
       // tenants' churn from leaking or consuming the bounded snapshot.
-      const [revokedOwnerDevices, revokedMemberDevices] = await Promise.all([
+      // One fresh database snapshot and one result description per poll, including
+      // empty feeds. Keep each source's tenant scope, retention and bound intact.
+      const revocationsQuery = unionAll(
         db
-          .select({ jkt: deviceRows.jkt, revokedAt: deviceRows.revokedAt })
+          .select({
+            jkt: sql<string | null>`${deviceRows.jkt}`,
+            revokedAt: sql<Date | string | null>`${deviceRevocationDeliveries.revokedAt}`,
+            source: sql<number>`0`,
+          })
+          .from(deviceRevocationDeliveries)
+          .innerJoin(deviceRows, eq(deviceRows.id, deviceRevocationDeliveries.deviceId))
+          .where(
+            and(
+              eq(deviceRevocationDeliveries.hostId, host.id),
+              eq(deviceRows.userId, host.ownerUserId),
+              isNull(deviceRevocationDeliveries.confirmedAt),
+            ),
+          )
+          .orderBy(desc(deviceRevocationDeliveries.revokedAt))
+          .limit(REVOKED_DEVICE_SNAPSHOT_LIMIT),
+        db
+          .select({
+            jkt: deviceRows.jkt,
+            revokedAt: deviceRows.revokedAt,
+            source: sql<number>`1`,
+          })
           .from(deviceRows)
           .where(
             and(
@@ -2188,6 +2330,7 @@ export function createV1Routes(deps: {
           .select({
             jkt: revocationEvents.subject,
             revokedAt: sql<Date>`max(${revocationEvents.createdAt})`,
+            source: sql<number>`2`,
           })
           .from(revocationEvents)
           .where(
@@ -2201,26 +2344,23 @@ export function createV1Routes(deps: {
           .groupBy(revocationEvents.subject)
           .orderBy(desc(sql`max(${revocationEvents.createdAt})`))
           .limit(REVOKED_DEVICE_SNAPSHOT_LIMIT),
-      ]);
-      const pendingDeliveries = await db
-        .select({ jkt: deviceRows.jkt, revokedAt: deviceRevocationDeliveries.revokedAt })
-        .from(deviceRevocationDeliveries)
-        .innerJoin(deviceRows, eq(deviceRows.id, deviceRevocationDeliveries.deviceId))
-        .where(
-          and(
-            eq(deviceRevocationDeliveries.hostId, host.id),
-            eq(deviceRows.userId, host.ownerUserId),
-            isNull(deviceRevocationDeliveries.confirmedAt),
-          ),
-        )
-        .orderBy(desc(deviceRevocationDeliveries.revokedAt))
-        .limit(REVOKED_DEVICE_SNAPSHOT_LIMIT);
+      );
+      // Drizzle queries are lazy; resolving it starts the statement now.
+      const revocationsRead = Promise.resolve(revocationsQuery);
+      // Awaited below in precedence order; neither may reject unobserved meanwhile.
+      for (const pending of [membershipRead, revocationsRead]) pending.catch(() => {});
+      let organizations: OrganizationRef[];
+      try {
+        organizations = await membershipRead;
+      } catch (error) {
+        console.error("[api] host authorization membership lookup failed:", error);
+        return errorResponse(c, 502, "internal_error", "Identity provider is unavailable");
+      }
+      const revocations = await revocationsRead;
       const revokedDeviceJkts: string[] = [];
       const seenRevokedDevices = new Set<string>();
-      // The two branches disagree on shape: drizzle hydrates the column read
-      // into a Date, while `max(...)` comes back as whatever pg's driver
-      // yields for the aggregate. Normalize before comparing rather than
-      // assuming a Date — calling .getTime() on the aggregate 500s the route.
+      // Raw timestamp/aggregate expressions can arrive as strings, unlike
+      // Drizzle column reads. Normalize before comparing either driver shape.
       const revokedAtMs = (value: unknown): number => {
         if (value instanceof Date) return value.getTime();
         if (typeof value === "string" || typeof value === "number") {
@@ -2229,11 +2369,13 @@ export function createV1Routes(deps: {
         }
         return 0;
       };
-      for (const revoked of [
-        ...pendingDeliveries,
-        ...revokedOwnerDevices,
-        ...revokedMemberDevices,
-      ].toSorted((left, right) => revokedAtMs(right.revokedAt) - revokedAtMs(left.revokedAt))) {
+      // UNION ALL does not promise branch order. Preserve pending -> owner ->
+      // member precedence on equal timestamps before applying the shared cap.
+      const orderedRevocations = revocations.toSorted(
+        (left, right) =>
+          revokedAtMs(right.revokedAt) - revokedAtMs(left.revokedAt) || left.source - right.source,
+      );
+      for (const revoked of orderedRevocations) {
         if (revoked.jkt === null || seenRevokedDevices.has(revoked.jkt)) continue;
         seenRevokedDevices.add(revoked.jkt);
         revokedDeviceJkts.push(revoked.jkt);
@@ -2242,9 +2384,10 @@ export function createV1Routes(deps: {
       const body: HostAuthorizationSnapshot = {
         remoteBillingEnforced: deps.remoteBillingEnforced === true,
         revokedDeviceJkts,
-        pendingRevocationDeviceJkts: pendingDeliveries
+        pendingRevocationDeviceJkts: orderedRevocations
+          .filter((entry) => entry.source === 0)
           .map((entry) => entry.jkt)
-          .filter((jkt) => seenRevokedDevices.has(jkt)),
+          .filter((jkt): jkt is string => jkt !== null && seenRevokedDevices.has(jkt)),
         discoverable: host.discoverable,
         ownerUserId: host.ownerUserId,
         orgId: host.ownerOrgId,
@@ -2666,10 +2809,11 @@ export function createV1Routes(deps: {
     // DELIBERATE cache acceptance, unlike the other mutating routes: pushes
     // are event-driven and frequent (a busy machine sends several per
     // minute), so a live provider round trip per push would put WorkOS on
-    // the hot path for no security gain — the worst a just-revoked member
-    // can do inside the ≤60s TTL is attribute more usage counters to
-    // themselves under the stale workspace, which leaks nothing and grants
-    // nothing.
+    // the hot path for no security gain. Without `freshMembership` both the
+    // provider user and the membership come from the ≤60s caches, so a warm
+    // push makes no provider call at all. The worst a just-revoked member
+    // can do inside the TTL is attribute more usage counters to themselves
+    // under the stale workspace, which leaks nothing and grants nothing.
     const session = await requireOrgSession(c);
     if (session instanceof Response) return session;
 
@@ -2716,22 +2860,27 @@ export function createV1Routes(deps: {
             ),
           );
       }
-      for (const bucket of parsed.models) {
-        await tx.insert(usageModelStats).values({
-          userId: session.userId,
-          orgId: session.orgId,
-          environmentId: parsed.environmentId,
-          minute: new Date(bucket.minute),
-          provider: bucket.provider,
-          model: bucket.model,
-          // '' is the stored spelling of "no reasoning setting": NULL would
-          // be distinct-per-row under the unique index and duplicate the
-          // bucket on every push.
-          reasoning: bucket.reasoning ?? "",
-          tokens: bucket.tokens,
-          turns: bucket.turns,
-          prompts: bucket.prompts,
-        });
+      // One multi-row INSERT per table (at most USAGE_PUSH_MAX_BUCKETS rows,
+      // well under PostgreSQL's bind-parameter limit). A duplicate key in
+      // the payload still fails the whole push, as the per-row inserts did.
+      if (parsed.models.length > 0) {
+        await tx.insert(usageModelStats).values(
+          parsed.models.map((bucket) => ({
+            userId: session.userId,
+            orgId: session.orgId,
+            environmentId: parsed.environmentId,
+            minute: new Date(bucket.minute),
+            provider: bucket.provider,
+            model: bucket.model,
+            // '' is the stored spelling of "no reasoning setting": NULL would
+            // be distinct-per-row under the unique index and duplicate the
+            // bucket on every push.
+            reasoning: bucket.reasoning ?? "",
+            tokens: bucket.tokens,
+            turns: bucket.turns,
+            prompts: bucket.prompts,
+          })),
+        );
       }
       if (skillMinutes.length > 0) {
         await tx
@@ -2744,16 +2893,18 @@ export function createV1Routes(deps: {
             ),
           );
       }
-      for (const bucket of parsed.skills) {
-        await tx.insert(usageSkillStats).values({
-          userId: session.userId,
-          orgId: session.orgId,
-          environmentId: parsed.environmentId,
-          minute: new Date(bucket.minute),
-          name: bucket.name,
-          kind: bucket.kind,
-          runs: bucket.runs,
-        });
+      if (parsed.skills.length > 0) {
+        await tx.insert(usageSkillStats).values(
+          parsed.skills.map((bucket) => ({
+            userId: session.userId,
+            orgId: session.orgId,
+            environmentId: parsed.environmentId,
+            minute: new Date(bucket.minute),
+            name: bucket.name,
+            kind: bucket.kind,
+            runs: bucket.runs,
+          })),
+        );
       }
     });
 
@@ -2934,7 +3085,18 @@ export function createV1Routes(deps: {
     // the public URL spells it that way.
     const handle = c.req.param("handle").replace(/^@/, "").toLowerCase();
     const [row] = await db.select().from(profiles).where(eq(profiles.handle, handle)).limit(1);
-    if (!row || !row.public || (await accountDeletion.isDeleting(row.userId))) {
+    // An unpaid owner's page answers exactly like a private one, so the
+    // response never reveals whether a handle exists or why it is hidden.
+    // The two owner checks are independent reads, so they run together.
+    let visible = false;
+    if (row?.public) {
+      const [deleting, entitled] = await Promise.all([
+        accountDeletion.isDeleting(row.userId),
+        profileOwnerEntitled(row.userId),
+      ]);
+      visible = !deleting && entitled;
+    }
+    if (!row || !visible) {
       return errorResponse(c, 404, "profile_not_found", "No public profile by that handle");
     }
 
@@ -3151,7 +3313,7 @@ export function createV1Routes(deps: {
    * The provider's response contains the code itself; the implementation
    * parses it allowlist-style and the code never reaches this function.
    */
-  v1.post("/auth/otp/send", async (c) => {
+  async function sendOtp(c: Context) {
     if (!otpSendRateLimiter.tryConsume(callerIp(c))) {
       return errorResponse(c, 429, "rate_limited", "Too many code requests — wait a minute");
     }
@@ -3179,7 +3341,8 @@ export function createV1Routes(deps: {
     } catch (error) {
       return authErrorResponse(c, error);
     }
-  });
+  }
+  v1.post("/auth/otp/send", sendOtp);
 
   /**
    * Redeems the emailed 6-digit code for a token pair — the one sign-in AND
@@ -3211,6 +3374,48 @@ export function createV1Routes(deps: {
     } catch (error) {
       return authErrorResponse(c, error);
     }
+  });
+
+  function isWebCheckoutOrigin(c: Context): boolean {
+    return Boolean(deps.webCheckoutOrigin && c.req.header("origin") === deps.webCheckoutOrigin);
+  }
+
+  v1.post("/billing/web-checkout/code", async (c) => {
+    if (!isWebCheckoutOrigin(c))
+      return errorResponse(c, 403, "unauthorized", "Checkout origin is not allowed");
+    if (!deps.billing) return errorResponse(c, 503, "internal_error", "Billing is not configured");
+    return sendOtp(c);
+  });
+
+  v1.post("/billing/web-checkout/start", async (c) => {
+    if (!isWebCheckoutOrigin(c))
+      return errorResponse(c, 403, "unauthorized", "Checkout origin is not allowed");
+    const billing = deps.billing;
+    if (!billing) return errorResponse(c, 503, "internal_error", "Billing is not configured");
+    if (!otpAuthenticateRateLimiter.tryConsume(callerIp(c)))
+      return errorResponse(c, 429, "rate_limited", "Too many attempts — wait a minute and retry");
+    const body = await c.req.json().catch(() => null);
+    if (!Schema.is(AccountWebCheckoutRequest)(body))
+      return errorResponse(c, 400, "validation_failed", "An email, code and plan are required");
+
+    let auth: AuthTokens;
+    try {
+      auth = await verifier.authenticateWithOtp({
+        email: body.email,
+        code: body.code,
+        context: authContext(c),
+      });
+    } catch (error) {
+      return authErrorResponse(c, error);
+    }
+    const session = await verifyDeviceSession(auth.accessToken);
+    if (!session || session.userId !== auth.user.id)
+      return errorResponse(c, 401, "unauthorized", "Not authenticated");
+
+    // The site receives only a checkout redirect. Account credentials stay in this process.
+    return billingAction(c, session.userId, (userId) =>
+      billing.checkout(userId, auth.user.email, body.interval, sanitizeForwardableIp(callerIp(c))),
+    );
   });
 
   /**
@@ -3305,7 +3510,15 @@ export function createV1Routes(deps: {
    */
   v1.post("/auth/refresh", async (c) => {
     if (!refreshRateLimiter.tryConsume(callerIp(c))) {
-      return errorResponse(c, 429, "rate_limited", "Too many refresh attempts — wait a minute");
+      // This token never reached the identity provider. Distinguish this from
+      // an upstream 429, whose rotation outcome the client cannot infer.
+      c.header("Retry-After", "60");
+      return errorResponse(
+        c,
+        429,
+        "refresh_not_attempted",
+        "Too many refresh attempts — wait a minute",
+      );
     }
 
     const json = await c.req.json().catch(() => null);
@@ -3335,10 +3548,9 @@ export function createV1Routes(deps: {
       if (error instanceof RefreshRejectedError) {
         return errorResponse(c, 401, "unauthorized", "The session has expired — sign in again");
       }
-      // 408 and 429 are 4xx by number but transient by meaning, and the
-      // client's grant-rejected check keys on the status it receives — so
-      // they must survive this proxy leg as themselves, not collapse into a
-      // 502 (which would be fine) or, worse, into anything terminal.
+      // Preserve upstream contention/timeouts without implying the refresh
+      // was rejected or never attempted. Only the terminal mapping above
+      // authorizes a client to discard its session.
       if (
         error instanceof IdentityProviderError &&
         (error.status === 408 || error.status === 429)

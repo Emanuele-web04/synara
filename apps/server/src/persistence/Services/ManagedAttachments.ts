@@ -3,7 +3,36 @@ import type { Effect } from "effect";
 
 import type { PersistenceSqlError } from "../Errors.ts";
 
-export type ManagedAttachmentState = "uploading" | "staged" | "claimed" | "deleting" | "deleted";
+// One managed attachment blob, from upload to tombstone.
+//
+//   reserve ─> uploading ─finalizeStaged─> staged ─claimForAcceptedTurn─> claimed
+//   uploading | staged ─cancelStaged, or expiry sweep─> deleting
+//   uploading | staged | claimed ─markCleanupByIds | markCleanupByThread─> deleting
+//   claimed ─markUnreferencedClaimedForCleanup─> deleting
+//   deleting ─completeCleanup (cleanup-job lease owner)─> deleted (terminal; compacted later)
+//
+// The database repeats this table as `trg_managed_attachment_blobs_state_transition`
+// (migration 055), which aborts an illegal write. The per-helper SQL guards decide which
+// legal edge each helper takes; the lifecycle matrix in `ManagedAttachments.test.ts`
+// fails when one of them drifts.
+export const MANAGED_ATTACHMENT_TRANSITIONS = {
+  uploading: ["staged", "deleting"],
+  staged: ["claimed", "deleting"],
+  claimed: ["deleting"],
+  deleting: ["deleted"],
+  deleted: [],
+} as const;
+
+export type ManagedAttachmentState = keyof typeof MANAGED_ATTACHMENT_TRANSITIONS;
+
+export function canTransitionManagedAttachment(
+  from: ManagedAttachmentState,
+  to: ManagedAttachmentState,
+): boolean {
+  return (MANAGED_ATTACHMENT_TRANSITIONS[from] as ReadonlyArray<ManagedAttachmentState>).includes(
+    to,
+  );
+}
 
 export interface ManagedAttachmentBlob {
   readonly attachmentId: string;

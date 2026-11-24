@@ -1,5 +1,5 @@
 import { EventId, MessageId, ThreadId } from "@synara/contracts";
-import type { OrchestrationEvent } from "@synara/contracts";
+import type { OrchestrationEvent, OrchestrationThreadActivity } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -31,6 +31,7 @@ function event<TType extends OrchestrationEvent["type"]>(
 
 function activityEvent(
   kind: string,
+  payload: OrchestrationThreadActivity["payload"] = {},
 ): Extract<OrchestrationEvent, { type: "thread.activity-appended" }> {
   return event("thread.activity-appended", {
     threadId,
@@ -39,7 +40,7 @@ function activityEvent(
       tone: "info",
       kind,
       summary: kind,
-      payload: {},
+      payload,
       turnId: null,
       createdAt,
     },
@@ -87,5 +88,31 @@ describe("thread shell event relevance", () => {
     expect(
       shouldPublishThreadShellForEvent(messageEvent({ role: "assistant", streaming: false })),
     ).toBe(true);
+  });
+
+  it("publishes activities that can change the pending background task count", () => {
+    const backgroundNotice = activityEvent("runtime.warning", {
+      nativeEventType: "background_tasks_changed",
+      data: { tasks: [{ task_id: "task-1" }] },
+    });
+    const taskUpdated = activityEvent("task.updated", { taskId: "task-1", isBackgrounded: true });
+    const taskCompleted = activityEvent("task.completed", { taskId: "task-1" });
+    for (const relevant of [backgroundNotice, taskUpdated, taskCompleted]) {
+      expect(shouldPublishThreadShellForEvent(relevant)).toBe(true);
+      // The count is read from activity rows, not the deferred shell summary.
+      expect(shouldApplyDeferredThreadShellSummary(relevant)).toBe(false);
+    }
+  });
+
+  it("does not publish per-delta task progress or unrelated runtime warnings", () => {
+    expect(
+      shouldPublishThreadShellForEvent(
+        activityEvent("task.progress", { taskId: "task-1", isBackgrounded: true }),
+      ),
+    ).toBe(false);
+    expect(
+      shouldPublishThreadShellForEvent(activityEvent("runtime.warning", { message: "retrying" })),
+    ).toBe(false);
+    expect(shouldPublishThreadShellForEvent(activityEvent("task.started"))).toBe(false);
   });
 });

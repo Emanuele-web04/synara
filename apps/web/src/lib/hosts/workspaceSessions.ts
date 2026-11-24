@@ -21,9 +21,14 @@ export interface WorkspaceSession {
   readonly navigation?: WorkspaceNavigation | undefined;
   readonly resumeConnection?: WorkspaceConnectionRecovery["resume"] | undefined;
   readonly error?: string | undefined;
+  /** Bumped to remount a frame whose bootstrap failed; a failed frame cannot resume itself. */
+  readonly frameGeneration?: number | undefined;
 }
 
 let sessions: readonly WorkspaceSession[] = [];
+/** Automatic remounts of failed frames back off per computer until one becomes ready. */
+const automaticFrameRetries = new Map<string, { count: number; nextAt: number }>();
+const MAX_AUTOMATIC_FRAME_RETRY_MS = 5 * 60_000;
 const listeners = new Set<() => void>();
 let restored = false;
 
@@ -81,6 +86,44 @@ export function restoreWorkspaceSessions(): void {
   }
 }
 
+/**
+ * Retry one computer's workspace. A failed frame is remounted so its bootstrap runs again;
+ * a parked frame resumes its existing connection.
+ */
+export function resumeWorkspaceSession(
+  session: WorkspaceSession,
+  options?: { readonly automatic?: boolean },
+): void {
+  if (!session.error) {
+    session.resumeConnection?.(options);
+    return;
+  }
+  publish(
+    sessions.map((entry) =>
+      entry === session
+        ? {
+            host: entry.host,
+            ...(entry.summary ? { summary: entry.summary } : {}),
+            frameGeneration: (entry.frameGeneration ?? 0) + 1,
+          }
+        : entry,
+    ),
+  );
+}
+
+function retryFailedFrameAutomatically(session: WorkspaceSession): void {
+  const environmentId = session.host.executionScope.environmentId;
+  const previous = automaticFrameRetries.get(environmentId);
+  const now = Date.now();
+  if (previous && previous.nextAt > now) return;
+  const count = (previous?.count ?? 0) + 1;
+  automaticFrameRetries.set(environmentId, {
+    count,
+    nextAt: now + Math.min(MAX_AUTOMATIC_FRAME_RETRY_MS, 5_000 * 2 ** Math.min(count - 1, 6)),
+  });
+  resumeWorkspaceSession(session);
+}
+
 /** Recover verified backend connections when a new window has no saved workspace frames. */
 export function restoreConnectedWorkspaces(
   response: ListHostConnectionsResponse,
@@ -123,7 +166,9 @@ export function restoreConnectedWorkspaces(
         JSON.stringify(existing.host.executionScope) === JSON.stringify(scope) &&
         (connection.state === "connected" || connection.state === "idle")
       ) {
-        existing.resumeConnection?.({ automatic: true });
+        // The controller proved the host reachable, so a failed frame may start again.
+        if (existing.error) retryFailedFrameAutomatically(existing);
+        else existing.resumeConnection?.({ automatic: true });
       }
       continue;
     }
@@ -154,8 +199,8 @@ export function addWorkspaceSession(value: ActiveHost): WorkspaceSession {
       throw new Error(
         "This host's account or identity changed. Disconnect it before connecting again.",
       );
-    previous.resumeConnection?.();
-    return previous;
+    resumeWorkspaceSession(previous);
+    return readWorkspaceSessions().find((entry) => entry.host === previous.host) ?? previous;
   }
   const next = { host };
   publish([...sessions, next], true);
@@ -166,6 +211,7 @@ export function updateWorkspaceSession(
   environmentId: string,
   update: Partial<Omit<WorkspaceSession, "host">>,
 ): void {
+  if (update.navigation) automaticFrameRetries.delete(environmentId);
   publish(
     sessions.map((session) =>
       session.host.executionScope.environmentId === environmentId
@@ -192,6 +238,8 @@ export function prepareWorkspaceSessionRemoval(hostId: string) {
     throw error;
   }
   const complete = () => {
+    for (const session of removed)
+      automaticFrameRetries.delete(session.host.executionScope.environmentId);
     const next = sessions.filter((session) => session.host.hostId !== hostId);
     publish(next);
     try {

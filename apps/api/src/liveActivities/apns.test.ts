@@ -2,7 +2,7 @@ import { EventEmitter } from "node:events";
 import { generateKeyPairSync } from "node:crypto";
 import { importSPKI, jwtVerify } from "jose";
 import { describe, expect, it, vi } from "vitest";
-import { createApnsSender } from "./apns";
+import { createApnsSender, type NotificationDelivery } from "./apns";
 
 const wire = vi.hoisted(() => ({ connect: vi.fn() }));
 vi.mock("node:http2", () => ({ connect: wire.connect }));
@@ -127,6 +127,59 @@ describe("APNs HTTP/2 boundary", () => {
       });
     },
   );
+
+  it("marks only a bounded encrypted completion alert as mutable", async () => {
+    const { privateKey } = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
+    const requests = captureAppleRequests(200, "");
+    const send = createApnsSender({
+      privateKey: privateKey.export({ type: "pkcs8", format: "pem" }).toString(),
+      keyId: "ABCD123456",
+      teamId: "TEAM123456",
+      bundleId: "com.example.synara",
+      environment: "both",
+    });
+    const preview = {
+      v: 1,
+      ephemeralKey: "B" + "z".repeat(86),
+      nonce: "a".repeat(16),
+      ciphertext: "b".repeat(1500),
+      notificationId: "exact-watch",
+      deviceJkt: "watch-device",
+      hostId: "watch-host",
+      sourceThreadId: "raw-thread",
+      sourceTurnId: "source-turn",
+    } as const;
+    const delivery = {
+      environment: "production",
+      token: "a".repeat(64),
+      notificationId: "exact-watch",
+      threadId: "phone-namespaced-thread",
+      turnId: "effective-turn",
+      result: "completed",
+      preview,
+    } satisfies NotificationDelivery;
+
+    await send(delivery);
+    await send({ ...delivery, result: "failed" });
+    await send({
+      ...delivery,
+      threadId: "🧪".repeat(500),
+      turnId: "🧪".repeat(200),
+    });
+
+    const [rich, failed, oversized] = requests.map((request) => JSON.parse(request.payload));
+    expect(rich).toMatchObject({
+      aps: { alert: { title: "Synara", body: "Response ready" }, "mutable-content": 1 },
+      threadId: delivery.threadId,
+      turnId: delivery.turnId,
+      completionPreview: preview,
+    });
+    expect(failed.aps.alert.body).toBe("Run failed");
+    for (const generic of [failed, oversized]) {
+      expect(generic.aps).not.toHaveProperty("mutable-content");
+      expect(generic).not.toHaveProperty("completionPreview");
+    }
+  });
 
   it("signs and caches each environment with its own Apple credential", async () => {
     const sandbox = generateKeyPairSync("ec", { namedCurve: "prime256v1" });

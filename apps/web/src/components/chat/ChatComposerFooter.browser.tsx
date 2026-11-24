@@ -5,7 +5,7 @@ import { render } from "vitest-browser-react";
 import type { SessionPhase } from "../../types";
 import { ChatComposerFooter } from "./ChatComposerFooter";
 
-function mountFooter(input: {
+interface FooterInput {
   phase: SessionPhase;
   connecting: boolean;
   recoveryStopAvailable?: boolean;
@@ -14,8 +14,16 @@ function mountFooter(input: {
   voiceEnabled?: boolean;
   voiceRecording?: boolean;
   onVoiceToggle?: () => void;
-}) {
-  return render(
+  hasContent?: boolean;
+  onResume?: () => void;
+}
+
+function mountFooter(input: FooterInput) {
+  return render(footer(input));
+}
+
+function footer(input: FooterInput) {
+  return (
     <ChatComposerFooter
       isComposerFooterCompact={false}
       leadingControls={null}
@@ -46,14 +54,15 @@ function mountFooter(input: {
         expired: false,
         preparingImages: false,
         preparingWorktree: false,
-        hasContent: false,
+        hasContent: input.hasContent ?? false,
         hasPendingUserInputs: false,
         showPlanFollowUp: false,
         hasPrompt: false,
         onInterrupt: input.onInterrupt ?? vi.fn(),
         onImplementInNewThread: vi.fn(),
+        ...(input.onResume ? { onResume: input.onResume } : {}),
       }}
-    />,
+    />
   );
 }
 
@@ -154,6 +163,60 @@ describe("ChatComposerFooter stop control", () => {
         .toBeVisible();
       expect(document.querySelector('button[aria-label="Stop generation"]')).toBeNull();
       expect(document.querySelector('button[aria-label="Record voice note"]')).toBeNull();
+    } finally {
+      await screen.unmount();
+    }
+  });
+});
+
+describe("ChatComposerFooter resume control", () => {
+  afterEach(() => {
+    document.body.innerHTML = "";
+  });
+
+  it("turns an empty composer's Send into Resume for an interrupted task", async () => {
+    const onResume = vi.fn();
+    const screen = await mountFooter({ phase: "ready", connecting: false, onResume });
+    try {
+      const resume = page.getByRole("button", { name: "Resume task" });
+      await expect.element(resume).toBeEnabled();
+      await expect.element(resume).toHaveAttribute("type", "button");
+      expect(document.querySelector('button[aria-label="Send message"]')).toBeNull();
+      await resume.click();
+      expect(onResume).toHaveBeenCalledOnce();
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("keeps Send once the draft has content", async () => {
+    const onResume = vi.fn();
+    const screen = await mountFooter({
+      phase: "ready",
+      connecting: false,
+      hasContent: true,
+      onResume,
+    });
+    try {
+      await expect.element(page.getByRole("button", { name: "Send message" })).toBeEnabled();
+      expect(document.querySelector('button[aria-label="Resume task"]')).toBeNull();
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("ignores a repeated Stop click that lands on Resume", async () => {
+    const onResume = vi.fn();
+    const screen = await mountFooter({ phase: "running", connecting: false, onResume });
+    try {
+      await expect.element(page.getByRole("button", { name: "Stop generation" })).toBeVisible();
+      await screen.rerender(footer({ phase: "ready", connecting: false, onResume }));
+      const resume = page.getByRole("button", { name: "Resume task" });
+      await resume.click();
+      expect(onResume).not.toHaveBeenCalled();
+      await new Promise((resolve) => setTimeout(resolve, 550));
+      await resume.click();
+      expect(onResume).toHaveBeenCalledOnce();
     } finally {
       await screen.unmount();
     }

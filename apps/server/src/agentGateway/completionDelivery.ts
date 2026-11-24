@@ -1,5 +1,6 @@
-import { CommandId, EventId, ThreadId } from "@synara/contracts";
+import { CommandId, EventId, MessageId, ThreadId, TurnId } from "@synara/contracts";
 import { Effect, Option } from "effect";
+import { threadHasInFlightTurn } from "../orchestration/commandInvariants.ts";
 import type { OrchestrationEngineShape } from "../orchestration/Services/OrchestrationEngine.ts";
 import type { ProjectionSnapshotQueryShape } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import type { ProjectionTurnRepositoryShape } from "../persistence/Services/ProjectionTurns.ts";
@@ -152,6 +153,78 @@ export const deliverGatewayCompletions = (dependencies: CompletionDeliveryDepend
           Effect.logWarning("gateway completion delivery will retry", {
             childThreadId: row.childThreadId,
             error,
+          }),
+        ),
+      );
+    }
+    for (const wake of yield* repository.pendingWakes()) {
+      yield* Effect.gen(function* () {
+        const threadId = ThreadId.makeUnsafe(wake.threadId);
+        const parent = Option.getOrUndefined(yield* snapshotQuery.getThreadShellById(threadId));
+        if (
+          parent === undefined ||
+          parent.archivedAt != null ||
+          parent.snoozedUntil != null ||
+          parent.session?.status === "stopped" ||
+          parent.latestTurn?.turnId !== wake.sourceTurnId ||
+          parent.latestTurn.state === "interrupted" ||
+          parent.latestTurn.state === "error" ||
+          parent.modelSelection.provider !== wake.provider ||
+          parent.modelSelection.instanceId !== (wake.instanceId ?? undefined) ||
+          parent.runtimeMode !== wake.runtimeMode ||
+          (parent.latestUserMessageAt ?? null) !== wake.latestUserMessageAt
+        ) {
+          yield* repository.finishWake(wake.operationId);
+          return;
+        }
+        if (
+          parent.latestTurn.state !== "completed" ||
+          parent.claudeCacheReview != null ||
+          parent.hasPendingApprovals ||
+          parent.hasPendingUserInput ||
+          threadHasInFlightTurn(parent)
+        )
+          return;
+        const childThreadIds = (JSON.parse(wake.childThreadIdsJson) as string[]).toSorted();
+        const commandId = CommandId.makeUnsafe(`gateway-wake:${wake.operationId}`);
+        // The durable command is admitted before provider work starts, with a CAS
+        // against the original parent turn. Only IDs enter the follow-up prompt.
+        yield* orchestrationEngine
+          .dispatch({
+            type: "thread.turn.start",
+            commandId,
+            threadId,
+            dispatchOrigin: "agent",
+            dispatchMode: "queue",
+            runtimeMode: wake.runtimeMode,
+            interactionMode: "default",
+            gatewayCompletionPrecondition: {
+              sourceTurnId: TurnId.makeUnsafe(wake.sourceTurnId),
+              provider: wake.provider,
+              ...(wake.instanceId === null ? {} : { instanceId: wake.instanceId }),
+              runtimeMode: wake.runtimeMode,
+              latestUserMessageAt: wake.latestUserMessageAt,
+            },
+            message: {
+              messageId: MessageId.makeUnsafe(`${commandId}:message`),
+              role: "user",
+              text: `The delegated wave reached a terminal state. Read these initial results with synara_read_thread and continue the original task: ${childThreadIds.join(", ")}.`,
+              attachments: [],
+            },
+            createdAt: wake.createdAt,
+          })
+          .pipe(
+            Effect.catchTags({
+              OrchestrationCommandInvariantError: () => Effect.void,
+              OrchestrationCommandPreviouslyRejectedError: () => Effect.void,
+            }),
+          );
+        yield* repository.finishWake(wake.operationId);
+      }).pipe(
+        Effect.catch((error) =>
+          Effect.logWarning("gateway follow-up will retry", {
+            operationId: wake.operationId,
+            error: error._tag,
           }),
         ),
       );

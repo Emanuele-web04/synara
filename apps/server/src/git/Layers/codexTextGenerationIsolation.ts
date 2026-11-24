@@ -14,6 +14,7 @@ import {
   readCodexPreparedHomeFileSnapshot,
   type CodexPreparedAuthSource,
 } from "../../codexProcessEnv.ts";
+import { decodeJwtClaims } from "../../jwtClaims.ts";
 
 const PRIVATE_DIRECTORY_MODE = 0o700;
 const PRIVATE_FILE_MODE = 0o600;
@@ -671,22 +672,13 @@ function readStableBoundAuthFile(
 }
 
 function jwtClaims(token: string, label: string): UnknownRecord {
-  const segments = token.split(".");
-  if (segments.length !== 3) {
+  const claims = decodeJwtClaims(token);
+  if (claims === undefined) {
     throw new CodexTextGenerationAuthError(
-      `Codex ChatGPT ${label} is not a JWT and cannot be checked safely.`,
+      `Codex ChatGPT ${label} is not a readable JWT and cannot be checked safely.`,
     );
   }
-  try {
-    const claims = JSON.parse(Buffer.from(segments[1]!, "base64url").toString("utf8"));
-    if (!isRecord(claims)) throw new Error("claims are not an object");
-    return claims;
-  } catch (cause) {
-    throw new CodexTextGenerationAuthError(
-      `Codex ChatGPT ${label} is malformed and cannot be checked safely.`,
-      { cause },
-    );
-  }
+  return claims;
 }
 
 function accessTokenExpiryMs(accessToken: string): number {

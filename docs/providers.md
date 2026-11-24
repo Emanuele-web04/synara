@@ -22,6 +22,44 @@ consistent workspace.
 Provider availability can differ between the current stable release and development builds. Use the
 provider settings in your installed Synara version as the authoritative list for that build.
 
+Provider settings report a provider as connected when an enabled account is ready.
+A ready secondary account keeps the provider available when its default account is
+disabled. Implicit new-chat selection prefers a usable configured account from the
+selected provider. Explicit account picks and live sessions keep their exact account.
+
+For Codex, the model picker's Speed menu offers Ultrafast when the selected account's
+Codex CLI catalog advertises it for that model. Availability depends on the account
+and its workspace permissions. [Codex speed modes](https://learn.chatgpt.com/docs/agent-configuration/speed#ultrafast-mode)
+
+A build that encounters a newer server settings format preserves the file and
+provider credentials. Open the same app channel on a build that supports the
+saved format.
+
+When importing legacy browser settings, Synara keeps any configured server provider,
+including its endpoint and vault password. It imports missing provider instances and
+records which provider kinds and instance IDs it handled. A retry cannot recreate an
+instance deleted after import. The browser keeps its existing local credentials until
+the server acknowledges the import. Older builds can discard this receipt metadata
+when rewriting the settings file, so replay protection depends on a supporting build.
+
+## Crash recovery
+
+Crash recovery distinguishes previous-process turns from work started by pending
+command replay during this boot. Capture and restart cleanup use the same
+provider admission lease as turn startup and check the actual native session
+owner. Pending Stop commands still replay before recovery decisions. A later
+turn, including one that has already failed or been interrupted, invalidates an
+older automatic continuation; it must not be submitted again by that record.
+
+At graceful shutdown, provider exit events have a bounded one-second drain
+window to reach the durable journal before the event consumer closes. Only the
+matching root session/provider/lifecycle exit satisfies that drain; a child-task
+exit or an early persisted stop intent does not prove clean completion. If the
+deadline expires, normal crash recovery remains available. This does not prove
+native process cleanup on every platform or survive an immediate process kill.
+Opted-in desktop installations report fixed recovery failure categories through
+the [anonymous reliability lane](diagnostics.md#anonymous-reliability-reports).
+
 ## Usage-limit recovery
 
 **Settings → Providers → Resume after usage limits** enables automatic continuation and defaults to off. Codex and Claude can supply provider-classified terminal quota refusal and a future reset deadline. Synara waits for every blocking window it can verify; missing, stale, unrelated-account or ambiguous reset information leaves recovery manual. Usage panels and percentage warnings alone never schedule work. Other adapters remain manual until they expose equivalent terminal evidence. Native provider retries keep ownership of their active turn. Claude automatic recovery requires a verified native OAuth account profile on macOS or Linux. Windows policy scope, environment-token/API-key/helper authentication, federation profiles, and unreadable or unsupported native settings remain manual. Codex requires its native account ID; rotating tokens alone never establish durable identity.
@@ -55,6 +93,21 @@ blocked, ambiguous delivery results keep their uncertainty, and a surviving chil
 with an error while unrelated tasks remain usable. Persisted Claude compaction reviews with an
 unavailable owner remain held for reconciliation; startup skips their provider recovery instead
 of failing or resending the held message.
+
+If a chat loses a send acknowledgment, Synara keeps the original command identity
+and checks the conversation or the server's command receipt before another attempt.
+An accepted send consumes the matching queued item or unchanged recovered draft.
+An unresolved send keeps its attachments and promoted chat; a confirmed rejection
+allows a fresh attempt. Queue acceptance is persisted before removing the item,
+so a stale queue snapshot cannot resend an already acknowledged item.
+
+Desktop and HTTPS browsers also use a shared browser lock between windows. Plain
+HTTP LAN clients retain same-window coordination, but simultaneous first sends
+from separate tabs do not have that atomic guarantee. An interrupted queued claim
+on HTTP can remain pending until its accepted message appears or a secure client
+can reconcile it. Manual recovery records survive a reload in the same window;
+they do not reconstruct every editable attachment/context after the window closes
+before the live draft rollback finishes.
 
 An uncertain delivery remains blocked after a server restart. **Unblock thread** reconciles
 that delivery; it does not stop a provider process that is still running. For a stalled Claude
@@ -244,6 +297,22 @@ provider feature is supported through Synara.
 5. **Start a small test task.** Use a harmless objective in a test repository before relying on a
    newly configured provider for important work.
 
+### Devin CLI
+
+On the machine running Synara, check the installed CLI with `devin --version` and the default
+CLI account with `devin auth status`. If the CLI is signed out, run `devin auth login`. For a
+separate Synara account profile, use **Sign in** on that profile so Devin saves the login in
+the selected account environment.
+
+If a turn stalls, run `devin update`, then start a new Devin thread in Synara to launch the
+updated executable. Cognition's 3000.14.30821 stable release shortened stalled model stream
+retries from four minutes to 40 seconds. See the [Devin CLI changelog](https://docs.devin.ai/cli/changelog/stable).
+
+Synara passes its thread-scoped orchestration tools and granted connectors through ACP when
+creating or reopening a Devin session. Devin keeps using its own login, skills, and MCP settings.
+On Windows, Synara prepares process tracking before launching Devin so Stop can verify that the
+CLI and its child processes have exited before Synara starts a replacement runtime.
+
 ## Enable or disable providers
 
 In **Settings → Providers → Enabled providers**, turn a provider off to hide it
@@ -267,6 +336,10 @@ Providers expose different selection models:
 
 Synara normalizes these choices into the composer where possible without pretending that every
 provider has identical capabilities.
+
+Antigravity uses the active ACP session's model catalog when available. Its model picker keeps
+planner IDs distinct and shows the thinking levels each model advertises. Older runtimes use
+the CLI catalog. A saved planner that the session no longer offers requires a new selection.
 
 OMP's internal sub-agent roles are not user-selectable models. Synara discovers the runtime's
 model catalog without reading `modelRoles` from repository configuration. A stale saved `role:`
@@ -315,6 +388,12 @@ Partial or fallback catalogs are retried on demand after a thirty-second cooldow
 persisted or substituted for the last complete catalog. The first upgrade to this cache format
 discards the old catalog snapshot once, then rediscovers models on demand with the same shared
 request and failure limits; accounts, saved models, and sessions are unaffected.
+
+Accounts of one provider are told apart by who they are signed in as: a signed-in Claude or Codex
+account reports its email (and, for Claude, its organization) in its Settings editor, in the
+hover text of its picker tab and beside its name in the picker's account entries. The identity
+comes from a fresh login probe on the execution host and is shown only to host owners. Cached
+provider statuses and diagnostics exclude the identity.
 
 The composer model picker has one tab per connected provider and a Starred tab. Starring a model
 saves it together with its current effort, speed, and provider account, so one click (or
@@ -400,7 +479,21 @@ The session may preserve provider-specific behavior such as:
 
 Capabilities vary. Do not assume a control available for one provider exists for all of them.
 
+Antigravity runs Google's official `agy acp` and uses the sign-in saved by the CLI.
+Use **Approval required** to review native permission requests in the conversation.
+**Full access** can grant a request once. Native Plan mode keeps its tool restrictions.
+Google documents personal Google sign-in for interactive, single-user development
+with eligible Gemini models. For automated Gemini workflows, use a Gemini API key
+or Gemini Enterprise. [Google ACP guidance](https://antigravity.google/docs/ide/extensions/acp/)
+
+Antigravity shows native questions in the composer, including in Full Access. For ACP
+sessions that identify Antigravity 1.5.0 or newer, steering sends the message to the active
+session and lets its child work continue. Older or unidentified runtimes use interrupt and queue.
+
 ### Provider-native subagents
+
+Antigravity shows native launch roles and prompts in the transcript. Child details appear when
+the active provider profile records that the child belongs to that launch.
 
 Each subagent a Claude or Codex agent launches gets its own child thread under the task. Its
 brief, and any later message its launcher sends it on resume, opens the child thread as a
@@ -426,18 +519,28 @@ direct app-server input. Finished native children are also read-only. These send
 before adding a user message, preserving the completed outcome. Ordinary delegated task
 conversations keep their independent messaging behavior.
 
-The parent transcript groups adjacent child launches from the same turn in a compact card at
-their launch position; assistant narration separates groups. Cards start collapsed and preserve
-each invocation's status, elapsed time, current step and short result. Their compact headers stay
-visible after the parent turn ends, including while background children continue working.
+The parent transcript groups adjacent child launches from the same turn in one compact row at
+their launch position; assistant narration separates groups. The row reads like a tool row: the
+children's avatars and "Created subagent" or "Created N subagents", with a shimmering running
+count while they work. It starts collapsed and preserves each invocation's status, elapsed time,
+current step and short result. A row with a child still at work stays visible after the parent
+turn ends, including while background children continue working, at the end of the answer just
+above its actions and time; once every child settles, it folds into the turn's "Worked for"
+disclosure with the rest of that turn's work. Work rows stack 14px apart and keep the same 14px
+from the text around them.
 While agents are active, an “N agents running” capsule above the composer counts them during
-and after the turn; selecting it brings the newest available running card or task into view.
+and after the turn; selecting it opens the Subagents list on the right, the same list the
+Environment panel opens.
 It replaces the duplicate floating running-card chip. In a child thread, it counts that child’s
 nested agents, not its siblings. Background commands and monitors remain in the transcript
 and sidebar background-work status; they do not count as agents. Stop all stays visible on a live header;
 expanded rows show per-child controls, with Message on hover or keyboard focus. The header counts direct children and labels additional nested
 subagents separately; their rows start collapsed. The sidebar lists top-level threads only;
-child threads are reached from the card, Environment and the Subagents dock. Child threads link back to
+child threads are reached from the card, Environment and the Subagents dock. Opening one shows it
+in a split to the right of the chat that launched it, in place of the Subagents list, so that chat
+keeps its width. If the adjacent column already contains two chats, the child opens below its
+launcher. Opening another subagent swaps the available subagent pane, and a subagent already on
+screen gets focus. Child threads link back to
 their launcher, show agent-sent briefs as cards and mark the completed answer delivered to it.
 
 After a successfully completed Codex turn, Synara retires that turn's internal tool credential.
@@ -517,9 +620,10 @@ the native resume cursor and incorporates native resume metadata when the runtim
 Compare equivalent CLI, SDK, and Synara runs before attributing a cache miss to the wrapper;
 transcript file size and base64 image size are not model token counts.
 
-Like embedded Claude Code, Synara sends after a long pause without asking by default; the first
-request then re-caches the full history once. Turning on **Ask before resuming a long idle session** in
-Settings → Providers → Claude adds Claude Code's interactive resume prompt (checked against Claude Code
+Embedded Claude Code sends after a long pause without asking, and the first request then re-caches
+the full history once, which on a large session can take several percent of a usage window. Synara
+therefore asks by default: **Ask before resuming a long idle session** in Settings → Providers → Claude
+is on unless you turn it off, and adds Claude Code's interactive resume prompt (checked against Claude Code
 2.1.296): when Claude's context is at least 100,000 tokens and its last response is at least 70 minutes
 old, whatever the cache state, Synara holds the next message a person sends before delivering it to the runtime.
 The composer uses Claude Code's wording and choices: **Resume from summary (recommended)** compacts
@@ -572,6 +676,18 @@ locations (`~/.opencode/bin`, `~/.bun/bin`, npm/pnpm/yarn global bins, Homebrew,
 Volta, asdf, mise, proto, Deno, nvm/fnm). Set an explicit binary path in
 provider settings only when the install lives somewhere else entirely.
 
+### Claude turn plan
+
+Claude Code no longer offers its own task-list tools (`TodoWrite`, `TaskCreate`, `TaskUpdate`) to
+models newer than Opus 4.7, Sonnet 4.6, and Haiku 4.5, so those sessions never reported a plan.
+Synara gives Claude sessions its own `synara_update_plan` tool instead, the same way Claude Desktop
+offers `update_plan`. Its schema is always loaded rather than deferred behind tool search, and its
+description tells the model when to keep a plan; Synara adds nothing to the system prompt. Each
+accepted call replaces the turn's task list, and a turn that ends normally checks off the steps
+still open. An interrupted or failed turn keeps them as they were. Only Claude sessions are offered
+the tool: providers with a native plan, such as Codex, keep their own. Older Claude models that
+still use the native task-list tools keep working as before.
+
 ### Claude Artifacts, `/design` and `/slides`
 
 Claude Code keeps [Artifacts](https://code.claude.com/docs/en/artifacts) off by default for Agent
@@ -586,6 +702,12 @@ link in its reply.
 ## Provider profiles and terminal commands
 
 Provider settings can define multiple independently routed instances of any supported provider.
+
+The one-time import from older browser settings adds missing explicit provider
+instances. Existing server records keep their name, enablement, launch
+overrides, and credentials. Use Settings to edit or remove the server's
+instances.
+
 Each enabled instance receives a stable command in newly opened or restarted Synara terminals, for
 example `claude-work`, `codex-personal`, or `pi-team`. The command is an executable shim on `PATH`,
 not a zsh or bash function, so it behaves consistently from zsh, bash, fish, shell scripts, and
@@ -654,6 +776,9 @@ same account as the login. Imported directories and explicit environment values 
 These account environments block ambient API credentials; explicitly configured secrets remain
 available to managed sessions and the selected login process, and are never written into terminal shims.
 
+Antigravity account limits appear in **Settings → Usage**. Synara runs the official CLI quota
+report in the background with the selected account, using the sign-in already managed by Antigravity.
+
 On macOS, managed Claude accounts keep the system home and username for Keychain access.
 Separate `CLAUDE_CONFIG_DIR` and `CLAUDE_SECURESTORAGE_CONFIG_DIR` values isolate each account;
 login, chats, health checks, and usage use the same resolved account directories. Explicit home
@@ -695,7 +820,7 @@ launch tests use disposable CLI fixtures and do not authenticate personal accoun
 A [provider handoff](https://www.trysynara.com/docs/workflows/handoffs) allows another provider to
 continue the task and work in the same environment with the context Synara passes to it.
 
-Continue task, workflow resumes, and plan follow-ups use the same handoff eligibility checks
+Continue task, Resume task, workflow resumes, and plan follow-ups use the same handoff eligibility checks
 as Send. A refused plan handoff keeps the thread's runtime and interaction modes; a refusal
 caused by background tasks uses the existing stop-or-wait notice. Editing a queued message
 after a handoff restores the current provider and an access mode it supports.
@@ -790,9 +915,21 @@ Sources: [OpenAI app-server documentation](https://developers.openai.com/codex/a
 
 ## Passive results from delegated tasks
 
+Use `synara_capabilities` with `instanceId` for a specific provider account's catalog. The
+response lists `runtimeModes` and `compatibleRuntimeModes` for the caller. The Agent Gateway
+requires Full access to delegate to Antigravity. The gateway enforces this before creating
+a thread or worktree. An external OpenCode
+server configured by URL does not receive the thread-scoped Synara MCP credential.
+
+Ordinary Synara threads may submit successive creation batches in the same active turn, up
+to 20 tasks across all batches on that destination. Use a new `requestId` for each phase and
+repeat the exact ID and arguments for a retry. Hub work continues to use its existing durable
+task keys and worker queue.
+
 When an orchestrator needs delegated results to finish the user's request, it must keep calling
 `synara_wait_for_threads` with the returned `runIds` until `allTerminal` is true, then read and
-synthesize the results. A timeout reports progress; it is not completion. Native provider
+synthesize the results, or use the explicitly requested asynchronous continuation described
+below. A timeout reports progress; it is not completion. Native provider
 subagents use their provider's own completion mechanism. Neither launching work nor opting
 into passive receipts is a substitute for collecting required results before ending the turn.
 
@@ -819,6 +956,16 @@ set during the initial run, Synara reports that limitation rather than claiming
 the goal finished at an intermediate turn. Later conversational turns do not
 produce further notifications. External MCP integrations cannot opt in because
 they have no authenticated creating task.
+
+For asynchronous continuation on a local, ordinary thread, use `resumeCreatorOnComplete: true`
+when the user asks the creator to continue automatically. Synara durably collects a receipt
+for each initial run in the batch. It starts one agent-originated follow-up only if the
+original creator turn completed and still owns an idle, eligible thread. A newer message,
+changed account or approval mode, interruption, Stop, snooze, or archive can supersede the
+follow-up. Synara passes child thread IDs to the creator so it can read the results as untrusted
+reference data. Remote creation and Hub work use their existing result delivery.
+Only a human-started turn can arm a follow-up. A resumed agent can delegate and wait
+within its own turn.
 
 Delivery survives restart and duplicate events. An archived or deleted creator
 is not reopened; the result remains in the child and delivery is recorded as

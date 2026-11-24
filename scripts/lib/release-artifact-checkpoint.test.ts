@@ -17,13 +17,15 @@ afterEach(() => roots.splice(0).forEach((root) => rmSync(root, { recursive: true
 function checkpoint(
   platform: "linux" | "mac" | "win" = "linux",
   flavor: "production" | "beta" | "remote" = "production",
+  archOverride?: "arm64" | "x64",
 ) {
   const assetsDirectory = mkdtempSync(join(tmpdir(), "synara-checkpoint-"));
   roots.push(assetsDirectory);
   const version = flavor === "production" ? "1.2.3" : `1.2.3-${flavor}.1`;
-  const arch = flavor === "remote" && platform === "mac" ? "arm64" : "x64";
-  // Electron Builder's AppImage target emits x86_64 while provenance records x64.
-  const nativeFileArch = platform === "linux" ? "x86_64" : arch;
+  const arch = archOverride ?? (flavor === "remote" && platform === "mac" ? "arm64" : "x64");
+  // Electron Builder's AppImage target emits x86_64 for Intel while provenance
+  // records the matrix spelling; other targets keep the matrix spelling.
+  const nativeFileArch = platform === "linux" && arch === "x64" ? "x86_64" : arch;
   const productName = { production: "Synara", beta: "Synara-Beta", remote: "Synara-Remote" }[
     flavor
   ];
@@ -33,10 +35,12 @@ function checkpoint(
     platform === "mac"
       ? arch === "arm64"
         ? "latest-mac.yml"
-        : "latest-mac-x64.yml"
+        : `latest-mac-${arch}.yml`
       : platform === "win"
         ? "latest.yml"
-        : "latest-linux.yml";
+        : arch === "x64"
+          ? "latest-linux.yml"
+          : `latest-linux-${arch}.yml`;
   const files = platform === "mac" ? [payload, `${stem}.zip`, updater] : [payload, updater];
   const signing: ReleaseArtifactProvenanceManifest["signing"] =
     platform === "mac"
@@ -176,6 +180,52 @@ describe("same-run release artifact checkpoint", () => {
     await expect(verifyReleaseArtifactCheckpoint(input)).rejects.toThrow(
       "unexpected or duplicate artifact name",
     );
+  });
+
+  it("accepts an arm64 Linux checkpoint with its own payload and feed", async () => {
+    const { input } = checkpoint("linux", "production", "arm64");
+    expect(input.arch).toBe("arm64");
+    await expect(verifyReleaseArtifactCheckpoint(input)).resolves.toMatchObject({
+      platform: "linux",
+      arch: "arm64",
+    });
+    // The x86_64 alias belongs to Intel checkpoints only.
+    const aliased = checkpoint("linux", "production", "arm64");
+    renameSync(
+      aliased.payloadPath,
+      join(aliased.input.assetsDirectory, "Synara-1.2.3-x86_64.AppImage"),
+    );
+    aliased.changeManifest((manifest) => {
+      manifest.artifacts[0].fileName = "Synara-1.2.3-x86_64.AppImage";
+    });
+    await expect(verifyReleaseArtifactCheckpoint(aliased.input)).rejects.toThrow(
+      "unexpected or duplicate artifact name",
+    );
+  });
+
+  it("rejects the x86_64 Linux feed name on an arm64 checkpoint", async () => {
+    const { input, changeManifest } = checkpoint("linux", "production", "arm64");
+    renameSync(
+      join(input.assetsDirectory, "latest-linux-arm64.yml"),
+      join(input.assetsDirectory, "latest-linux.yml"),
+    );
+    changeManifest((manifest) => {
+      manifest.artifacts[1].fileName = "latest-linux.yml";
+    });
+    await expect(verifyReleaseArtifactCheckpoint(input)).rejects.toThrow(
+      "unexpected or duplicate artifact name",
+    );
+  });
+
+  it("rejects architectures that this platform does not package", async () => {
+    for (const { input } of [
+      checkpoint("win", "production", "arm64"),
+      checkpoint("linux", "remote", "arm64"),
+    ]) {
+      await expect(verifyReleaseArtifactCheckpoint(input)).rejects.toThrow(
+        "Invalid expected release checkpoint identity",
+      );
+    }
   });
 
   it.each([

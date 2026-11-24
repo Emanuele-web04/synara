@@ -12,12 +12,10 @@ export function FitStage(props: {
   /** Design canvas size in CSS pixels. */
   readonly width: number;
   readonly height: number;
-  /** `bottom` pins the canvas to the stage's bottom edge (devices rising out of it). */
-  readonly align?: "center" | "bottom";
   readonly className?: string;
   readonly children: ReactNode;
 }) {
-  const { width, height, align = "center" } = props;
+  const { width, height } = props;
   const frameRef = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(1);
 
@@ -37,14 +35,11 @@ export function FitStage(props: {
   return (
     <div ref={frameRef} className={cn("relative size-full overflow-hidden", props.className)}>
       <div
-        className={cn(
-          "absolute left-1/2",
-          align === "center" ? "top-1/2 origin-center" : "bottom-0 origin-bottom",
-        )}
+        className="absolute top-1/2 left-1/2 origin-center"
         style={{
           width,
           height,
-          transform: `translate(-50%, ${align === "center" ? "-50%" : "0"}) scale(${scale})`,
+          transform: `translate(-50%, -50%) scale(${scale})`,
         }}
       >
         {props.children}

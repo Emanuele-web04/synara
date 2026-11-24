@@ -11,6 +11,7 @@ import fs from "node:fs/promises";
 import nodePath from "node:path";
 import { promisify } from "node:util";
 
+import { decodeJwtClaims } from "../jwtClaims";
 import { fetchJson } from "./http";
 
 const execFileAsync = promisify(execFile);
@@ -234,23 +235,6 @@ export function decodeKeychainJson(value: string): unknown | null {
 
 /** Decode a JWT's `exp` claim into epoch milliseconds, or null when not parseable. */
 export function decodeJwtExpMs(jwt: string | undefined): number | null {
-  if (!jwt) {
-    return null;
-  }
-  const parts = jwt.split(".");
-  const payloadPart = parts[1];
-  if (!payloadPart) {
-    return null;
-  }
-  try {
-    const base64 = payloadPart.replace(/-/gu, "+").replace(/_/gu, "/");
-    const payload = JSON.parse(Buffer.from(base64, "base64").toString("utf8")) as {
-      exp?: unknown;
-    };
-    return typeof payload.exp === "number" && Number.isFinite(payload.exp)
-      ? payload.exp * 1000
-      : null;
-  } catch {
-    return null;
-  }
+  const exp = decodeJwtClaims(jwt)?.exp;
+  return typeof exp === "number" && Number.isFinite(exp) ? exp * 1000 : null;
 }

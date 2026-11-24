@@ -1,10 +1,13 @@
 import type pg from "pg";
-import type {
-  RegisterLiveActivity,
-  RegisterTurnNotification,
-  RemoveTurnNotifications,
+import { Schema } from "effect";
+import {
   LiveActivityHostSnapshot,
-  LiveActivitySource,
+  type CompletionPreviewRecipient,
+  type CompletionPreviewWatch,
+  type RegisterLiveActivity,
+  type RegisterTurnNotification,
+  type RemoveTurnNotifications,
+  type LiveActivitySource,
 } from "@synara/contracts";
 import { HostAuthDomainError, type HostRecord } from "../identity/interfaces";
 import type { ActivityDelivery, NotificationDelivery, ApnsResult } from "./apns";
@@ -23,6 +26,7 @@ type ActivityRow = {
     hostGenerations?: Record<string, number>;
     sourcesRegisteredAt?: Record<string, number>;
     deliveredSource?: Pick<LiveActivitySource, "hostId" | "threadId" | "turnId">;
+    preview?: CompletionPreviewRecipient;
   };
   created_at: Date;
   expires_at: Date;
@@ -39,6 +43,14 @@ const key = (source: { threadId: string; turnId: string }) =>
 const sourceIdentity = ({ hostId, threadId, turnId }: LiveActivitySource) =>
   JSON.stringify([hostId, threadId, turnId]);
 const swiftEpoch = 978307200;
+/**
+ * How old a membership or billing read made before the row transaction may be
+ * when it is used to decide the send, counted from that read's own answer. The
+ * reads normally precede it by milliseconds; one that aged past this (a slow
+ * sibling read, a transaction that waited for a pooled connection) is made
+ * again inside, so removal still stops a push as promptly as it did.
+ */
+const PROVIDER_READ_MAX_AGE_MS = 2_000;
 
 /** Durable, coalescing outbox: each activity owns the newest desired snapshot.
  * APNs is at-least-once. A row lock serializes sends, revision fences registration,
@@ -72,6 +84,7 @@ export function createLiveActivityService(options: {
     owner: Owner,
     request: RegisterLiveActivity,
     kind: ActivityRow["delivery_kind"],
+    preview?: CompletionPreviewRecipient,
   ) {
     const notificationSource =
       kind === "notification"
@@ -110,6 +123,7 @@ export function createLiveActivityService(options: {
         revision: request.revision,
         token: request.token,
         environment: request.environment,
+        ...(preview ? { preview: { key: preview.key, proof: preview.proof } } : {}),
         sources: request.sources.map(({ hostId, threadId, turnId, displayId }) => ({
           hostId,
           threadId,
@@ -171,9 +185,17 @@ export function createLiveActivityService(options: {
               previous.request.sourcesRegisteredAt?.[identity] ?? previous.created_at.getTime();
           }
         }
+        // A key proof is signed over the canonical watch ID; a duplicate UUID
+        // can refresh the generic watch but cannot authorize its preview.
+        const { preview, ...genericRequest } = boundRequest;
+        const nextRequest = {
+          ...genericRequest,
+          ...(previous.id === request.activityId && preview ? { preview } : {}),
+          activityId: previous.id,
+        };
         await db.query(
           `UPDATE live_activities SET request=$2, dirty=true, attempts=0, next_attempt_at=now() WHERE id=$1`,
-          [previous.id, JSON.stringify({ ...boundRequest, activityId: previous.id })],
+          [previous.id, JSON.stringify(nextRequest)],
         );
       } else {
         const count = (
@@ -220,6 +242,7 @@ export function createLiveActivityService(options: {
         sources: [request.source],
       },
       "notification",
+      request.preview,
     );
   }
 
@@ -230,7 +253,7 @@ export function createLiveActivityService(options: {
   ) {
     // Keep a tombstone until expiry; a late registration cannot resurrect a dismissed activity.
     await pool.query(
-      `UPDATE live_activities SET ended=true, request=jsonb_set(request,'{token}','""')
+      `UPDATE live_activities SET ended=true, request=jsonb_set(request-'preview','{token}','""')
       WHERE id=$1 AND user_id=$2 AND org_id=$3 AND session_id=$4 AND delivery_kind=$5`,
       [id, owner.userId, owner.orgId, owner.sessionId, kind],
     );
@@ -240,7 +263,7 @@ export function createLiveActivityService(options: {
   // exact turns the phone watched before suspension.
   async function removeNotifications(owner: Owner, request: RemoveTurnNotifications) {
     await pool.query(
-      `UPDATE live_activities a SET ended=true,request=jsonb_set(request,'{token}','""')
+      `UPDATE live_activities a SET ended=true,request=jsonb_set(request-'preview','{token}','""')
       WHERE a.delivery_kind='notification' AND a.user_id=$1 AND a.org_id=$2 AND a.session_id=$3
       AND a.device_id IN (SELECT d.id FROM devices d JOIN device_account_sessions s ON s.device_id=d.id
         WHERE d.user_id=$1 AND d.jkt=$4 AND s.user_id=$1 AND s.session_id=$3)
@@ -269,7 +292,38 @@ export function createLiveActivityService(options: {
     return rows.rows.map(({ source }) => ({ threadId: source.threadId, turnId: source.turnId }));
   }
 
+  async function previewWatches(host: HostRecord): Promise<readonly CompletionPreviewWatch[]> {
+    const rows = await pool.query<{
+      id: string;
+      device_jkt: string;
+      source: LiveActivitySource;
+      preview: CompletionPreviewRecipient;
+    }>(
+      `SELECT a.id,d.jkt AS device_jkt,a.request->'sources'->0 AS source,a.request->'preview' AS preview
+      FROM live_activities a
+      JOIN devices d ON d.id=a.device_id AND d.user_id=a.user_id AND d.revoked_at IS NULL
+      JOIN device_account_sessions s ON s.device_id=a.device_id AND s.user_id=a.user_id
+        AND s.session_id=a.session_id AND s.revoked_at IS NULL
+      WHERE NOT a.ended AND a.expires_at>now() AND a.user_id=$1 AND a.org_id=$2
+        AND a.delivery_kind='notification' AND a.request ? 'preview'
+        AND a.request->'sources'->0->>'hostId'=$3
+        AND a.request->'hostGenerations'->>$3=$4
+      ORDER BY a.created_at,a.id LIMIT 64`,
+      [host.ownerUserId, host.ownerOrgId, host.id, String(host.keyGeneration)],
+    );
+    return rows.rows.map(({ id, device_jkt, source, preview }) => ({
+      notificationId: id,
+      deviceJkt: device_jkt,
+      threadId: source.threadId,
+      turnId: source.turnId,
+      displayId: source.displayId,
+      preview,
+    }));
+  }
+
   async function publish(host: HostRecord, snapshot: LiveActivityHostSnapshot) {
+    // Keep unknown fields, including any accidental cleartext, out of durable snapshots.
+    const validatedSnapshot = Schema.decodeUnknownSync(LiveActivityHostSnapshot)(snapshot);
     await transaction(async (db) => {
       // Recheck the verified generation under this transaction's host lock; the
       // proof verifier uses a separate transaction, so never hold its lock here.
@@ -283,7 +337,12 @@ export function createLiveActivityService(options: {
         `INSERT INTO live_activity_hosts(host_id,key_generation,snapshot)
       VALUES($1,$2,$3) ON CONFLICT(host_id) DO UPDATE SET key_generation=$2,snapshot=$3,updated_at=now()
       WHERE live_activity_hosts.key_generation<>$2 OR (live_activity_hosts.snapshot->>'sequence')::bigint <= $4`,
-        [host.id, host.keyGeneration, JSON.stringify(snapshot), snapshot.sequence],
+        [
+          host.id,
+          host.keyGeneration,
+          JSON.stringify(validatedSnapshot),
+          validatedSnapshot.sequence,
+        ],
       );
       await db.query(
         `UPDATE live_activities SET dirty=true,next_attempt_at=CASE WHEN attempts=0 THEN now() ELSE next_attempt_at END WHERE NOT ended AND user_id=$1 AND org_id=$2
@@ -293,7 +352,28 @@ export function createLiveActivityService(options: {
     });
   }
 
-  async function deliver(id: string) {
+  async function deliver(due: { id: string; user_id: string; org_id: string }) {
+    const { id } = due;
+    // Provider reads (live membership, billing) run before the row transaction,
+    // so a slow WorkOS or Polar answer never holds a pooled connection and the
+    // row lock. Their results are applied below at the same points and with
+    // the same precedence as before; the send and its bookkeeping stay inside
+    // the row-locked transaction, serialized per activity.
+    const [membership, remoteAccess] = await Promise.all([
+      Promise.resolve()
+        .then(() => options.isMember(due.user_id, due.org_id))
+        .then(
+          (value) => ({ ok: true as const, value, at: performance.now() }),
+          (error: unknown) => ({ ok: false as const, error, at: performance.now() }),
+        ),
+      // Commercial outages must not send with a stale entitlement.
+      options.isRemoteAccessAllowed
+        ? Promise.resolve()
+            .then(() => options.isRemoteAccessAllowed!(due.user_id))
+            .catch(() => false)
+            .then((allowed) => ({ allowed, at: performance.now() }))
+        : undefined,
+    ]);
     await transaction(async (db) => {
       const activity = (
         await db.query<ActivityRow>(
@@ -303,9 +383,22 @@ export function createLiveActivityService(options: {
         )
       ).rows[0];
       if (!activity) return;
+      // Reads made for another owner do not apply, and a read is not fresh
+      // enough to send on once it has aged: each one from its own answer, up
+      // to the moment it is used, so neither a slow sibling read nor a wait
+      // for a connection is overlooked. Ask again in both cases, as before.
+      const sameOwner = activity.user_id === due.user_id && activity.org_id === due.org_id;
+      const usable = (read: { readonly at: number }) =>
+        sameOwner && performance.now() - read.at <= PROVIDER_READ_MAX_AGE_MS;
+      const isMember = async () => {
+        if (!usable(membership)) return options.isMember(activity.user_id, activity.org_id);
+        // A membership lookup failure still fails this attempt, after the device check.
+        if (!membership.ok) throw membership.error;
+        return membership.value;
+      };
       const stop = () =>
         db.query(
-          `UPDATE live_activities SET ended=true,request=jsonb_set(request,'{token}','""') WHERE id=$1`,
+          `UPDATE live_activities SET ended=true,request=jsonb_set(request-'preview','{token}','""') WHERE id=$1`,
           [id],
         );
       const authorized = await db.query(
@@ -313,7 +406,7 @@ export function createLiveActivityService(options: {
         WHERE d.id=$1 AND d.user_id=$2 AND d.revoked_at IS NULL AND s.session_id=$3 AND s.user_id=$2 AND s.revoked_at IS NULL`,
         [activity.device_id, activity.user_id, activity.session_id],
       );
-      if (!authorized.rowCount || !(await options.isMember(activity.user_id, activity.org_id))) {
+      if (!authorized.rowCount || !(await isMember())) {
         await stop();
         return;
       }
@@ -345,7 +438,10 @@ export function createLiveActivityService(options: {
       if (options.isRemoteAccessAllowed) {
         let allowed = false;
         try {
-          allowed = await options.isRemoteAccessAllowed(activity.user_id);
+          allowed =
+            remoteAccess && usable(remoteAccess)
+              ? remoteAccess.allowed
+              : await options.isRemoteAccessAllowed(activity.user_id);
         } catch {
           // Commercial outages must not send with a stale entitlement.
         }
@@ -415,6 +511,20 @@ export function createLiveActivityService(options: {
           await stop();
           return;
         }
+        const recipientKey = activity.request.preview?.key;
+        const preview =
+          turn.state === "ready" && recipientKey
+            ? host.snapshot?.previews?.find(
+                (item) =>
+                  item.notificationId === id &&
+                  item.deviceJkt === activity.request.deviceJkt &&
+                  item.recipientKey === recipientKey &&
+                  item.threadId === source.threadId &&
+                  item.turnId === source.turnId &&
+                  item.effectiveTurnId === deliveredSource.turnId &&
+                  item.displayId === source.displayId,
+              )?.preview
+            : undefined;
         const result = await options.sendNotification?.({
           environment: activity.request.environment,
           token: activity.request.token,
@@ -422,6 +532,18 @@ export function createLiveActivityService(options: {
           threadId: source.displayId,
           turnId: deliveredSource.turnId,
           result: turn.state === "ready" ? "completed" : "failed",
+          ...(preview
+            ? {
+                preview: {
+                  ...preview,
+                  notificationId: id,
+                  deviceJkt: activity.request.deviceJkt,
+                  hostId: source.hostId,
+                  sourceThreadId: source.threadId,
+                  sourceTurnId: source.turnId,
+                },
+              }
+            : {}),
         });
         if (result === "delivered") {
           await db.query(
@@ -517,12 +639,13 @@ export function createLiveActivityService(options: {
   function flush(): Promise<void> {
     if (flushing) return flushing;
     flushing = (async () => {
-      const due = await pool.query<{ id: string }>(
-        `SELECT id FROM live_activities WHERE NOT ended AND next_attempt_at<=now() ORDER BY next_attempt_at LIMIT 32`,
+      const due = await pool.query<{ id: string; user_id: string; org_id: string }>(
+        `SELECT id,user_id,org_id FROM live_activities WHERE NOT ended AND next_attempt_at<=now() ORDER BY next_attempt_at LIMIT 32`,
       );
-      for (const { id } of due.rows) {
+      for (const activity of due.rows) {
+        const { id } = activity;
         try {
-          await deliver(id);
+          await deliver(activity);
         } catch {
           // A failed membership lookup or transient database/send failure for one
           // account must not starve other recipients. Keep data out of logs.
@@ -532,13 +655,30 @@ export function createLiveActivityService(options: {
           );
         }
       }
-      await pool.query("DELETE FROM live_activities WHERE expires_at<now()-interval '1 day'");
-      await pool.query("DELETE FROM live_activity_hosts WHERE updated_at<now()-interval '1 day'");
     })().finally(() => {
       flushing = undefined;
     });
     return flushing;
   }
-  return { register, registerNotification, remove, removeNotifications, watches, publish, flush };
+  /**
+   * Retention, a day past expiry or the last host report. Not part of the
+   * 5 s push sweep: these rows are long dead, so the 30 s maintenance sweep
+   * removes them without two extra statements every few seconds.
+   */
+  async function prune(): Promise<void> {
+    await pool.query("DELETE FROM live_activities WHERE expires_at<now()-interval '1 day'");
+    await pool.query("DELETE FROM live_activity_hosts WHERE updated_at<now()-interval '1 day'");
+  }
+  return {
+    register,
+    registerNotification,
+    remove,
+    removeNotifications,
+    watches,
+    previewWatches,
+    publish,
+    flush,
+    prune,
+  };
 }
 export type LiveActivityService = ReturnType<typeof createLiveActivityService>;

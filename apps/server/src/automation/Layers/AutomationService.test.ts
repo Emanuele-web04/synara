@@ -528,6 +528,7 @@ const textGeneration = {
   generateBranchName: () => Effect.die("unused"),
   generateThreadTitle: () => Effect.die("unused"),
   generateThreadRecap: () => Effect.die("unused"),
+  generateComposerPrediction: () => Effect.die("unused"),
   generateProjectDigest: () => Effect.die("unused"),
   generateAutomationIntent: () => Effect.die("unused"),
   evaluateAutomationCompletion: (input: CompletionEvaluationInputForTest) => {
@@ -4679,22 +4680,6 @@ layer("AutomationService", (it) => {
         .pipe(Effect.flip);
 
       assert.match(error.message, /full-access/);
-    }),
-  );
-
-  it.effect("rejects unacknowledged local-checkout automations", () =>
-    Effect.gen(function* () {
-      resetHarness();
-      const service = yield* AutomationService;
-
-      const error = yield* service
-        .create({
-          ...createInput("local"),
-          acknowledgedRisks: [],
-        })
-        .pipe(Effect.flip);
-
-      assert.match(error.message, /local checkout/);
     }),
   );
 

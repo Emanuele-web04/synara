@@ -106,6 +106,7 @@ import { ensureIsolatedScratchWorkspace, resolveScratchWorkspaceCwd } from "./sc
 import { createLogger } from "./logger";
 import {
   classifyCodexStderr,
+  isCodexMultiAgentDeprecationWarning,
   normalizeCodexProcessLine,
   isIgnorableCodexProcessLine,
   normalizeCodexUserVisibleErrorMessage,
@@ -215,6 +216,9 @@ type CodexSessionApprovalOverride = {
 export class CodexSessionAuthInvalidatedError extends Error {}
 
 interface CodexSessionContext {
+  reportedMultiAgentDeprecation?: boolean;
+  reportedMcpSubscriptionErrors?: Set<string>;
+  mcpStartupServers?: Set<string>;
   authInvalidation?: string;
   readonly autoApproveSynaraTools?: boolean;
   readonly enableComputerControl?: boolean;
@@ -1031,8 +1035,13 @@ export function parseCodexUserInputQuestions(
 }
 
 // The same classifier also filters diagnostics persisted by older hosts in the web transcript.
-export function classifyCodexStderrLine(rawLine: string): { message: string } | null {
-  const diagnostic = classifyCodexStderr(rawLine);
+export function classifyCodexStderrLine(
+  rawLine: string,
+  mirroredUserConfigPath?: string,
+): { message: string; configWarning?: true; mcpSubscriptionError?: string } | null {
+  const diagnostic = classifyCodexStderr(rawLine, mirroredUserConfigPath, {
+    errorLikePlainLinesOnly: true,
+  });
   if (diagnostic?.kind === "user-mcp-oauth") {
     if (!loggedUserMcpOAuthServers.has(diagnostic.server)) {
       loggedUserMcpOAuthServers.add(diagnostic.server);
@@ -1042,7 +1051,15 @@ export function classifyCodexStderrLine(rawLine: string): { message: string } | 
     }
     return null;
   }
-  return diagnostic ? { message: diagnostic.message } : null;
+  return diagnostic
+    ? {
+        message: diagnostic.message,
+        ...(diagnostic.configWarning ? { configWarning: diagnostic.configWarning } : {}),
+        ...(diagnostic.mcpSubscriptionError
+          ? { mcpSubscriptionError: diagnostic.mcpSubscriptionError }
+          : {}),
+      }
+    : null;
 }
 
 export function isRecoverableThreadResumeError(error: unknown): boolean {
@@ -1751,9 +1768,13 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         turnStartParams.summary = "none";
       }
     }
-    if (input.serviceTier !== undefined) {
-      turnStartParams.serviceTier = input.serviceTier;
-    }
+    const switchingAwayFromUltrafast =
+      context.serviceTier === "ultrafast" &&
+      normalizedModel !== undefined &&
+      normalizedModel !== context.session.model;
+    const serviceTier =
+      input.serviceTier === undefined && switchingAwayFromUltrafast ? "default" : input.serviceTier;
+    if (serviceTier !== undefined) turnStartParams.serviceTier = serviceTier;
     if (input.effort) {
       turnStartParams.effort = input.effort;
     }
@@ -1778,7 +1799,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     }
     const turnId = TurnId.makeUnsafe(turnIdRaw);
 
-    if (input.serviceTier !== undefined) context.serviceTier = input.serviceTier;
+    if (serviceTier !== undefined) context.serviceTier = serviceTier;
 
     this.updateSession(context, {
       status: "running",
@@ -4210,9 +4231,23 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       const raw = chunk.toString();
       const lines = raw.split(/\r?\n/g);
       for (const rawLine of lines) {
-        const classified = classifyCodexStderrLine(rawLine);
+        const classified = classifyCodexStderrLine(rawLine, context.authTracking?.sourceConfigPath);
         if (!classified) {
           continue;
+        }
+
+        if (classified.configWarning) {
+          this.handleServerNotification(context, {
+            method: "configWarning",
+            params: { summary: classified.message, details: null },
+          });
+          continue;
+        }
+        if (classified.mcpSubscriptionError) {
+          const reported = (context.reportedMcpSubscriptionErrors ??= new Set());
+          if (reported.has(classified.mcpSubscriptionError)) continue;
+          // Bound retained server-provided strings; an unrecognized error is never suppressed.
+          if (reported.size < 32) reported.add(classified.mcpSubscriptionError);
         }
 
         this.emitErrorEvent(context, "process/stderr", classified.message);
@@ -4355,6 +4390,42 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     context: CodexSessionContext,
     notification: JsonRpcNotification,
   ): void {
+    const configSummary =
+      notification.method === "configWarning"
+        ? this.readString(notification.params, "summary")
+        : notification.method === "warning"
+          ? this.readString(notification.params, "message")
+          : undefined;
+    if (
+      configSummary &&
+      isCodexMultiAgentDeprecationWarning(configSummary) &&
+      !this.readString(notification.params, "details") &&
+      !this.readString(notification.params, "path") &&
+      this.readObject(notification.params)?.range == null
+    ) {
+      if (context.reportedMultiAgentDeprecation) return;
+      context.reportedMultiAgentDeprecation = true;
+      // All three Codex channels describe one configuration issue, regardless of arrival order.
+      const threadId = this.readString(notification.params, "threadId");
+      notification = {
+        method: "configWarning",
+        params: { summary: configSummary, details: null, ...(threadId ? { threadId } : {}) },
+      };
+    }
+    if (notification.method === "mcpServer/startupStatus/updated") {
+      const name = this.readString(notification.params, "name");
+      const status = this.readString(notification.params, "status");
+      if (name && status) {
+        const servers = (context.mcpStartupServers ??= new Set());
+        const key = `${this.readString(notification.params, "threadId") ?? ""}:${name}`;
+        // Initial stdout can arrive after stderr from that same attempt. Only a
+        // known server restarting (or becoming ready) releases the duplicate guard.
+        if (status === "ready" || (status === "starting" && servers.has(key))) {
+          context.reportedMcpSubscriptionErrors?.clear();
+        }
+        if (servers.size < 32) servers.add(key);
+      }
+    }
     const rawRoute = this.readRouteFields(notification.params);
     this.rememberCollabReceiverTurns(context, notification.params, rawRoute.turnId);
     const resolvedCollaborationRoute = this.resolveCollaborationRoute(context, notification.params);

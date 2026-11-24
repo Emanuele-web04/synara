@@ -1,5 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
-import { setLanguagePreference } from "~/i18n";
+import { describe, expect, it } from "vitest";
 
 import {
   getComposerTraitSelection,
@@ -8,8 +7,6 @@ import {
   resolveComposerEffortLadderIndex,
   resolveComposerTraitStatusLabel,
 } from "./composerTraits";
-
-afterEach(() => setLanguagePreference("system"));
 
 describe("planComposerEffortCycle", () => {
   it.each([
@@ -275,40 +272,32 @@ describe("CLI-discovered Claude effort", () => {
   });
 });
 
-describe("localized composer trait presentation", () => {
-  it.each([
-    ["en", "Medium"],
-    ["zh-CN", "中"],
-  ] as const)(
-    "shows generated effort labels in %s while committing unchanged option IDs",
-    (locale, label) => {
-      setLanguagePreference(locale);
-      const selection = getComposerTraitSelection(
-        "codex",
-        "custom-model",
-        "Keep this prompt",
-        undefined,
-        {
-          slug: "custom-model",
-          name: "Custom model",
-          supportedReasoningEfforts: [{ value: "medium" }, { value: "high" }],
-          defaultReasoningEffort: "medium",
-        },
-      );
-      expect(resolveComposerTraitStatusLabel(selection)).toBe(label);
-      expect(
-        planComposerEffortChange({
-          provider: "codex",
-          selection,
-          prompt: "Keep this prompt",
-          value: "high",
-        }),
-      ).toEqual({ kind: "options", patch: { reasoningEffort: "high" } });
-    },
-  );
+describe("composer trait presentation", () => {
+  it("shows generated effort labels while committing unchanged option IDs", () => {
+    const selection = getComposerTraitSelection(
+      "codex",
+      "custom-model",
+      "Keep this prompt",
+      undefined,
+      {
+        slug: "custom-model",
+        name: "Custom model",
+        supportedReasoningEfforts: [{ value: "medium" }, { value: "high" }],
+        defaultReasoningEffort: "medium",
+      },
+    );
+    expect(resolveComposerTraitStatusLabel(selection)).toBe("Medium");
+    expect(
+      planComposerEffortChange({
+        provider: "codex",
+        selection,
+        prompt: "Keep this prompt",
+        value: "high",
+      }),
+    ).toEqual({ kind: "options", patch: { reasoningEffort: "high" } });
+  });
 
   it("preserves explicit provider effort labels and descriptions even when they resemble UI copy", () => {
-    setLanguagePreference("zh-CN");
     const selection = getComposerTraitSelection("codex", "custom-model", "", undefined, {
       slug: "custom-model",
       name: "Custom model",
@@ -341,8 +330,7 @@ describe("localized composer trait presentation", () => {
     expect(resolveComposerTraitStatusLabel(descriptorSelection)).toBe("Provider medium");
   });
 
-  it("localizes canonical labels constructed by the Claude adapter while preserving custom overrides", () => {
-    setLanguagePreference("zh-CN");
+  it("preserves custom overrides beside canonical labels constructed by the Claude adapter", () => {
     const selection = getComposerTraitSelection("claudeAgent", "custom-model", "", undefined, {
       slug: "custom-model",
       name: "Custom model",
@@ -362,35 +350,17 @@ describe("localized composer trait presentation", () => {
         { value: "high", label: "Provider deep work" },
       ],
     });
-    expect(resolveComposerTraitStatusLabel(selection)).toBe("中");
     expect(selection.effortLevels.find((option) => option.value === "high")?.label).toBe(
       "Provider deep work",
     );
   });
 
-  it("localizes thinking and automatic context labels without changing context values or prompt modes", () => {
-    setLanguagePreference("zh-CN");
-    const thinking = getComposerTraitSelection(
-      "codex",
-      "custom-model",
-      "",
-      { thinking: false },
-      {
-        slug: "custom-model",
-        name: "Custom model",
-        supportsThinkingToggle: true,
-      },
-    );
-    expect(resolveComposerTraitStatusLabel(thinking)).toBe("思考已关闭");
+  it("keeps automatic context values and prompt modes", () => {
     const prompt = "Ultrathink:\nKeep this prompt";
     const claude = getComposerTraitSelection("claudeAgent", "claude-opus-4-8", prompt, {
       effort: "low",
     });
-    expect(claude.contextWindowDescriptor?.label).toBe("自动压缩");
-    expect(claude.contextWindowOptions[0]).toMatchObject({
-      value: "auto",
-      label: "自动（Claude Code）",
-    });
+    expect(claude.contextWindowOptions[0]).toMatchObject({ value: "auto" });
     expect(
       planComposerEffortCycle({ provider: "claudeAgent", selection: claude, prompt }),
     ).toBeNull();

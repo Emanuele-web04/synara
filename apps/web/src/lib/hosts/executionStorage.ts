@@ -15,6 +15,12 @@ export function createExecutionStorage(storage: Storage): Storage {
   const local = claimLegacyExecutionStorage(storage);
   const physical = (key: string) => `${prefix}${key}`;
   const marker = (key: string) => `${prefix}migration:${key}`;
+  const markedKeys = new Set<string>();
+  const ensureMarked = (key: string) => {
+    if (!prefix || !local || markedKeys.has(key)) return;
+    storage.setItem(marker(key), "copied");
+    markedKeys.add(key);
+  };
   const keys = () =>
     Array.from({ length: storage.length }, (_, i) => storage.key(i)).filter(
       (key): key is string =>
@@ -27,24 +33,28 @@ export function createExecutionStorage(storage: Storage): Storage {
     key: (index) => keys()[index]?.slice(prefix.length) ?? null,
     getItem: (key) => {
       const value = storage.getItem(physical(key));
-      if (value !== null || !prefix || !local || storage.getItem(marker(key)) !== null)
+      if (value !== null) return value;
+      if (!prefix || !local) return value;
+      if (markedKeys.has(key) || storage.getItem(marker(key)) !== null) {
+        markedKeys.add(key);
         return value;
+      }
       const legacy = storage.getItem(key);
       if (legacy !== null) storage.setItem(physical(key), legacy);
-      storage.setItem(marker(key), "copied");
+      ensureMarked(key);
       return legacy;
     },
     setItem: (key, value) => {
       storage.setItem(physical(key), value);
-      if (prefix && local) storage.setItem(marker(key), "copied");
+      ensureMarked(key);
     },
     removeItem: (key) => {
-      if (prefix && local) storage.setItem(marker(key), "copied");
+      ensureMarked(key);
       storage.removeItem(physical(key));
     },
     clear: () => {
       for (const key of keys()) {
-        if (prefix && local) storage.setItem(marker(key.slice(prefix.length)), "copied");
+        ensureMarked(key.slice(prefix.length));
         storage.removeItem(key);
       }
     },

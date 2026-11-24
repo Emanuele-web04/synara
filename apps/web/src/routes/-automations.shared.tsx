@@ -1,4 +1,5 @@
 import { readExecutionContext } from "~/lib/hosts/executionContext";
+import { FOCUS_RING_CLASS_NAME } from "~/touchTargetStyles";
 import { automationDraftWarningPresentation } from "~/lib/automationDraft";
 import {
   type AutomationCreateInput,
@@ -19,6 +20,10 @@ import {
   type ThreadId,
 } from "@synara/contracts";
 import { automationRequiresTargetThread } from "@synara/shared/automationMode";
+import {
+  type ActiveAutomationRunStatus,
+  isActiveAutomationRunStatus,
+} from "@synara/shared/automationRunLifecycle";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
@@ -200,32 +205,22 @@ export function formatRelativeTime(iso: string | null, locale = getFormatLocale(
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return "";
   const seconds = Math.max(0, Math.round((Date.now() - date.getTime()) / 1000));
-  const spanish = locale?.toLowerCase().startsWith("es") === true;
-  if (seconds < 60) {
-    return spanish
-      ? new Intl.RelativeTimeFormat(locale, { numeric: "auto", style: "short" }).format(0, "second")
-      : "now";
-  }
+  if (seconds < 60) return "now";
   const minutes = Math.floor(seconds / 60);
   const hours = Math.floor(minutes / 60);
   const days = Math.floor(hours / 24);
   const weeks = Math.floor(days / 7);
-  const [value, unit, suffix]: [number, Intl.RelativeTimeFormatUnit, string] =
+  const [value, suffix]: [number, string] =
     minutes < 60
-      ? [minutes, "minute", "m"]
+      ? [minutes, "m"]
       : hours < 24
-        ? [hours, "hour", "h"]
+        ? [hours, "h"]
         : days < 7
-          ? [days, "day", "d"]
+          ? [days, "d"]
           : weeks < 4
-            ? [weeks, "week", "w"]
-            : [Math.floor(days / 30), "month", "mo"];
-  return spanish
-    ? new Intl.RelativeTimeFormat(locale, { numeric: "always", style: "short" }).format(
-        -value,
-        unit,
-      )
-    : `${new Intl.NumberFormat(locale).format(value)}${suffix}`;
+            ? [weeks, "w"]
+            : [Math.floor(days / 30), "mo"];
+  return `${new Intl.NumberFormat(locale).format(value)}${suffix}`;
 }
 
 export function runStatusVariant(
@@ -384,12 +379,7 @@ export function runResultTitle(run: AutomationRun): string | null {
 }
 
 export function canCancelAutomationRun(run: AutomationRun): boolean {
-  return (
-    run.status === "pending" ||
-    run.status === "claimed" ||
-    run.status === "running" ||
-    run.status === "waiting-for-approval"
-  );
+  return isActiveAutomationRunStatus(run.status);
 }
 
 /**
@@ -413,16 +403,11 @@ export function automationAttentionLabel(run: AutomationRun): string | null {
 }
 
 type LiveAutomationRun = AutomationRun & {
-  readonly status: "pending" | "claimed" | "running" | "waiting-for-approval";
+  readonly status: ActiveAutomationRunStatus;
 };
 
 export function isLiveRun(run: AutomationRun | null): run is LiveAutomationRun {
-  return (
-    run?.status === "pending" ||
-    run?.status === "claimed" ||
-    run?.status === "running" ||
-    run?.status === "waiting-for-approval"
-  );
+  return run !== null && isActiveAutomationRunStatus(run.status);
 }
 
 /**
@@ -1198,7 +1183,7 @@ export function AutomationDialog({
                         type="checkbox"
                         checked={acknowledgedWarningIds.has(warning.id)}
                         onChange={(event) => onToggleWarning?.(warning.id, event.target.checked)}
-                        className="mt-0.5"
+                        className={cn("mt-0.5 rounded-sm", FOCUS_RING_CLASS_NAME)}
                       />
                     ) : (
                       <span className="mt-1 size-1.5 shrink-0 rounded-full bg-amber-500" />
@@ -1382,7 +1367,7 @@ export function AutomationDialog({
                       >
                         {[0, 1, 2, 3, 4, 5, 6].map((value) => (
                           <MenuRadioItem key={value} value={String(value)}>
-                            {weekdayLabel(value, formatLocale)}
+                            {weekdayLabel(value)}
                           </MenuRadioItem>
                         ))}
                       </MenuRadioGroup>

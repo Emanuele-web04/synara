@@ -1,11 +1,25 @@
 import { randomUUID } from "node:crypto";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { ResultSchema } from "@modelcontextprotocol/sdk/types.js";
-import { JSONRPCMessageSchema } from "@modelcontextprotocol/sdk/types.js";
+import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import type { McpConnectorTransport } from "@synara/contracts";
 import { McpStdioTransport } from "../platform/mcpStdioTransport.ts";
 import { jsonRpcErrorResult, type McpConnectorProxyResult } from "./proxy.ts";
 import type { McpConnectorForwardRequest } from "./runtime.ts";
+import { lazyModule } from "../lazyModule.ts";
+
+// The MCP client and its schemas (with their validators, about 200 modules) are needed
+// only once a local MCP server is actually used, so they load on first use instead of
+// at every backend start.
+const loadMcpSdk = lazyModule(async () => {
+  const [client, types] = await Promise.all([
+    import("@modelcontextprotocol/sdk/client/index.js"),
+    import("@modelcontextprotocol/sdk/types.js"),
+  ]);
+  return {
+    Client: client.Client,
+    ResultSchema: types.ResultSchema,
+    JSONRPCMessageSchema: types.JSONRPCMessageSchema,
+  };
+});
 
 type StdioConfig = Extract<McpConnectorTransport, { transport: "stdio" }>;
 class StdioUnavailable extends Error {}
@@ -25,12 +39,18 @@ interface StdioSession {
   readonly requests: Map<string, AbortController>;
 }
 
+type McpClientConstructor = typeof Client;
+
+// Takes the already-loaded client class: nothing may be awaited between the caller's
+// retirement checks and `owned.add`, or a disconnect could finish in between and the
+// connection would start after its connector was reported removed.
 async function open(
   config: StdioConfig,
   owned: Set<StdioConnection>,
   connectorId: string | null,
+  McpClient: McpClientConstructor,
 ): Promise<StdioConnection> {
-  const client = new Client({ name: "Synara", version: "1.0.0" }, { capabilities: {} });
+  const client = new McpClient({ name: "Synara", version: "1.0.0" }, { capabilities: {} });
   const transport = new McpStdioTransport(config);
   const connection = { client, transport, connectorId };
   owned.add(connection);
@@ -60,9 +80,11 @@ export class StdioConnectorSessions {
   ) {}
 
   async probe(config: StdioConfig, connectorId: string | null = null): Promise<boolean> {
+    // Before the checks, so they see the state as it is once the library has loaded.
+    const { Client: McpClient } = await loadMcpSdk();
     if (this.disposed) throw new StdioUnavailable("The connector runtime is closed.");
     if (connectorId && this.retired.has(connectorId)) return false;
-    const pending = this.probeConnection(config, connectorId);
+    const pending = this.probeConnection(config, connectorId, McpClient);
     this.probes.add(pending);
     try {
       return await pending;
@@ -71,10 +93,14 @@ export class StdioConnectorSessions {
     }
   }
 
-  private async probeConnection(config: StdioConfig, connectorId: string | null): Promise<boolean> {
+  private async probeConnection(
+    config: StdioConfig,
+    connectorId: string | null,
+    McpClient: McpClientConstructor,
+  ): Promise<boolean> {
     let connection: Awaited<ReturnType<typeof open>>;
     try {
-      connection = await open(config, this.owned, connectorId);
+      connection = await open(config, this.owned, connectorId, McpClient);
     } catch (error) {
       if (error instanceof StdioUnavailable) return false;
       throw error;
@@ -91,6 +117,8 @@ export class StdioConnectorSessions {
     config: StdioConfig,
     request: McpConnectorForwardRequest,
   ): Promise<McpConnectorProxyResult> {
+    // Before any check, so every decision below sees the state as it is after the load.
+    const { Client: McpClient, JSONRPCMessageSchema, ResultSchema } = await loadMcpSdk();
     const owner = request.ownerToken;
     if (!owner || !this.ownerActive(owner) || this.disposed || this.retired.has(connectorId))
       return jsonRpcErrorResult(request.body, "The MCP session is unavailable.", 403);
@@ -118,7 +146,7 @@ export class StdioConnectorSessions {
       params?: Record<string, unknown>;
     };
     if (message.method === "initialize") {
-      const pending = this.initialize(connectorId, config, request, message, owner);
+      const pending = this.initialize(connectorId, config, request, message, owner, McpClient);
       const starts = this.starting.get(connectorId) ?? new Set();
       this.starting.set(connectorId, starts);
       starts.add(pending);
@@ -181,6 +209,7 @@ export class StdioConnectorSessions {
     request: McpConnectorForwardRequest,
     message: { id?: string | number },
     owner: string,
+    McpClient: McpClientConstructor,
   ): Promise<McpConnectorProxyResult> {
     const body = request.body;
     if (this.sessions.size + this.opening >= 64)
@@ -188,7 +217,7 @@ export class StdioConnectorSessions {
     this.opening += 1;
     let connection: Awaited<ReturnType<typeof open>>;
     try {
-      connection = await open(config, this.owned, connectorId);
+      connection = await open(config, this.owned, connectorId, McpClient);
     } catch (error) {
       if (error instanceof StdioUnavailable) await this.statusChanged(connectorId, false);
       throw error;

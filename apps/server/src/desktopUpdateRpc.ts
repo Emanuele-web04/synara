@@ -18,6 +18,7 @@ import {
 import { Effect, ServiceMap } from "effect";
 
 import { desktopUpdateBridgeAvailable, requestDesktopUpdate } from "./desktopUpdateBridge";
+import { isUnsettledPendingInteraction } from "./orchestration/stalePendingInteractions";
 import type { ProviderServiceShape } from "./provider/Services/ProviderService";
 
 type DesktopUpdateThreadWork = Pick<
@@ -42,8 +43,7 @@ export function hasDesktopUpdateThreadWork(thread: DesktopUpdateThreadWork): boo
       thread.latestTurn?.state === "running" ||
       thread.hasPendingApprovals === true ||
       thread.hasPendingUserInput === true ||
-      thread.pendingInteractions?.some((interaction) => interaction.status !== "confirmed") ===
-        true ||
+      thread.pendingInteractions?.some(isUnsettledPendingInteraction) === true ||
       (thread.claudeCacheReview != null && thread.claudeCacheReview.status !== "failed"))
   );
 }
@@ -137,7 +137,8 @@ export function makeDesktopUpdateRpcHandlers<E, R>(readBusy: Effect.Effect<boole
         supported: false,
         state: null,
         busy: isBusy,
-        message: "Remote updates require the packaged Synara Remote app on macOS.",
+        message:
+          "Updates from iOS require the packaged Synara Desktop app on macOS with its updater enabled.",
       } satisfies ServerDesktopUpdateStatus;
     const result = yield* request({ action: "status", authority: caller });
     return {

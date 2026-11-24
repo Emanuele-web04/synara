@@ -313,6 +313,7 @@ export function ProjectImportPanel(props: {
               ? t("workspace:selectedConversationsProjects", {
                   conversations: queue.filter((item) => item.input.threadKey !== null).length,
                   projects: projectCount,
+                  count: projectCount,
                 })
               : null}
             {t("workspace:historyShowsTextMessagesToolDetailsAndAttachmentsMay")}

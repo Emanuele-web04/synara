@@ -613,6 +613,87 @@ describe("production Effect HTTP routes", () => {
     });
   });
 
+  it("keeps serving a preferred sidecar after a lower-ranked body was cached", async () => {
+    const staticDir = makeTempDir("synara-effect-static-");
+    mkdirSync(path.join(staticDir, "assets"), { recursive: true });
+    const source = "globalThis.synara = true;".repeat(64);
+    writeFileSync(path.join(staticDir, "assets", "app-abc123.js"), source);
+    writeFileSync(path.join(staticDir, "assets", "app-abc123.js.gz"), zlib.gzipSync(source));
+    writeFileSync(
+      path.join(staticDir, "assets", "app-abc123.js.br"),
+      zlib.brotliCompressSync(source),
+    );
+    writeFileSync(path.join(staticDir, "assets", "plain-def456.js"), source);
+
+    await withEffectServer(makeConfig({ staticDir }), { kind: "static" }, async (origin) => {
+      // A client without compression caches the identity body first.
+      const identity = await fetch(`${origin}/assets/app-abc123.js`, {
+        headers: { "accept-encoding": "identity" },
+      });
+      expect(identity.headers.get("content-encoding")).toBeNull();
+      await identity.arrayBuffer();
+
+      // Later clients still get their best encoding, cold and from the cache.
+      for (const attempt of ["cold", "cached"]) {
+        const brotli = await fetch(`${origin}/assets/app-abc123.js`, {
+          headers: { "accept-encoding": "gzip, br" },
+        });
+        expect(brotli.headers.get("content-encoding"), attempt).toBe("br");
+        await expect(brotli.text()).resolves.toBe(source);
+      }
+      const gzipOnly = await fetch(`${origin}/assets/app-abc123.js`, {
+        headers: { "accept-encoding": "gzip" },
+      });
+      expect(gzipOnly.headers.get("content-encoding")).toBe("gzip");
+      await gzipOnly.arrayBuffer();
+
+      // Sidecars known to be absent do not block the cached identity body.
+      for (const attempt of ["cold", "cached"]) {
+        const noSidecar = await fetch(`${origin}/assets/plain-def456.js`, {
+          headers: { "accept-encoding": "gzip, br" },
+        });
+        expect(noSidecar.status, attempt).toBe(200);
+        expect(noSidecar.headers.get("content-encoding"), attempt).toBeNull();
+        await expect(noSidecar.text()).resolves.toBe(source);
+      }
+    });
+  });
+
+  it("serves the current build when a symlinked static root appears or changes", async () => {
+    const parentDir = makeTempDir("synara-effect-static-");
+    const realDir = path.join(parentDir, "build");
+    const staticDir = path.join(parentDir, "current");
+    // Dangling until the build lands: the root cannot be canonicalized yet.
+    symlinkSync(realDir, staticDir);
+
+    await withEffectServer(makeConfig({ staticDir }), { kind: "static" }, async (origin) => {
+      const early = await fetch(`${origin}/assets/app-abc123.js`);
+      expect(early.status).toBe(404);
+      await early.arrayBuffer();
+
+      mkdirSync(path.join(realDir, "assets"), { recursive: true });
+      writeFileSync(path.join(realDir, "index.html"), "<main>Synara shell</main>");
+      writeFileSync(path.join(realDir, "assets", "app-abc123.js"), "globalThis.synara = true;");
+
+      const asset = await fetch(`${origin}/assets/app-abc123.js`);
+      expect(asset.status).toBe(200);
+      await expect(asset.text()).resolves.toContain("globalThis.synara");
+      const shell = await fetch(`${origin}/`);
+      expect(shell.status).toBe(200);
+      await expect(shell.text()).resolves.toContain("Synara shell");
+
+      const nextBuild = path.join(parentDir, "next-build");
+      mkdirSync(path.join(nextBuild, "assets"), { recursive: true });
+      writeFileSync(path.join(nextBuild, "assets", "app-abc123.js"), "globalThis.newBuild = true;");
+      rmSync(staticDir);
+      symlinkSync(nextBuild, staticDir);
+
+      const updatedAsset = await fetch(`${origin}/assets/app-abc123.js`);
+      expect(updatedAsset.status).toBe(200);
+      await expect(updatedAsset.text()).resolves.toBe("globalThis.newBuild = true;");
+    });
+  });
+
   it("returns 406 when no acceptable encoding exists and identity is excluded", async () => {
     const staticDir = makeTempDir("synara-effect-static-");
     mkdirSync(path.join(staticDir, "assets"), { recursive: true });

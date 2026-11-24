@@ -19,7 +19,7 @@ import {
 } from "./desktopIdentity";
 
 describe("isBetaFeatureEnabled", () => {
-  it.each(["inbox", "pull-request-auto-fix", "tasks"])(
+  it.each(["inbox", "pull-request-auto-fix", "tasks", "accountProfileSync", "accountInbox"])(
     "offers %s in Stable and Beta",
     (feature) => {
       expect(isBetaFeatureEnabled(feature, "production")).toBe(true);

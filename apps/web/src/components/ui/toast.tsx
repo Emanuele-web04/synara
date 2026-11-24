@@ -640,10 +640,9 @@ function Toasts({ position: positionProp }: { position: ToastPosition }) {
     <Toast.Portal data-slot="toast-portal">
       <Toast.Viewport
         className={cn(
-          "fixed z-[200] mx-auto flex w-[calc(100%-var(--toast-inset)*2)] max-w-sm [--toast-inset:--spacing(4)] sm:[--toast-inset:--spacing(8)]",
-          // Vertical positioning; corner toasts clear the top bar
-          // (CHAT_SURFACE_HEADER_HEIGHT_PX, literal so Tailwind can scan it).
-          "data-[position=top-center]:top-4",
+          "fixed z-[300] mx-auto flex w-[calc(100%-var(--toast-inset)*2)] max-w-sm [--toast-inset:--spacing(4)] sm:[--toast-inset:--spacing(8)]",
+          // 44px is CHAT_SURFACE_HEADER_HEIGHT_PX, literal so Tailwind can scan it.
+          "data-[position=top-center]:top-[calc(--spacing(2)+44px)]",
           "data-[position=top-left]:top-[calc(var(--toast-inset)+44px)]",
           "data-[position=top-right]:top-[calc(var(--toast-inset)+44px)]",
           "data-[position*=bottom]:bottom-(--toast-inset)",

@@ -80,7 +80,13 @@ it.each(["unchanged", "replaced"] as const)(
         { operation: "redeem-code", code: "ABCD-2345" },
         new AbortController().signal,
       ).catch((error: unknown) => error);
-      await entered.promise;
+      // An early rejection must fail fast rather than wait for a dial that never happens.
+      await Promise.race([
+        entered.promise,
+        attempted.then((error) => {
+          throw error;
+        }),
+      ]);
       if (accountState === "replaced") await writeAccountCredentials(baseDir, replacement);
       release.resolve();
       expect(await attempted).toBeInstanceOf(Error);

@@ -1,0 +1,13 @@
+#!/bin/sh
+# Formats, lints and type-checks the files this push changes (oxfmt, oxlint,
+# tsrs). CI still checks the whole tree. Installed by `bun install`
+# (scripts/install-git-hooks.ts); see CONTRIBUTING.md.
+# Skip once with `git push --no-verify`.
+
+if ! command -v node >/dev/null 2>&1; then
+  echo "pre-push: node is not on PATH; run \`bun install\` with the toolchain in .mise.toml." >&2
+  exit 1
+fi
+
+cd "$(git rev-parse --show-toplevel)" || exit 1
+exec node scripts/pre-push-check.ts

@@ -399,11 +399,43 @@ function createMockOpenCodeRuntime(options?: {
   };
 }
 
-function makeOpenCodeAdapterTestLayer(runtime: OpenCodeRuntimeShape) {
-  return makeOpenCodeAdapterLive({ runtime }).pipe(
+function makeAdapterTestLayer(
+  options: Parameters<typeof makeOpenCodeAdapterLive>[0],
+  credentials?: AgentGatewayCredentialsShape,
+) {
+  const adapter = makeOpenCodeAdapterLive(options);
+  return (
+    credentials
+      ? adapter.pipe(Layer.provide(Layer.succeed(AgentGatewayCredentials, credentials)))
+      : adapter
+  ).pipe(
     Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" })),
     Layer.provideMerge(NodeServices.layer),
   );
+}
+
+function makeOpenCodeAdapterTestLayer(runtime: OpenCodeRuntimeShape) {
+  return makeAdapterTestLayer({ runtime });
+}
+
+type TestAdapter = Pick<OpenCodeAdapterShape, "sendTurn" | "startSession">;
+
+function sendTestTurn(
+  adapter: TestAdapter,
+  threadId: ThreadId,
+  input: string,
+  model = "openai/gpt-5.4",
+) {
+  return adapter.sendTurn({
+    threadId,
+    input,
+    attachments: [],
+    modelSelection: { provider: "opencode", model },
+  });
+}
+
+function startFullAccess(adapter: TestAdapter, threadId: ThreadId) {
+  return adapter.startSession({ provider: "opencode", threadId, runtimeMode: "full-access" });
 }
 
 function promptContainsHarnessPolicy(prompt: Record<string, unknown> | undefined): boolean {
@@ -509,6 +541,30 @@ function createSubscribedEventQueue() {
     },
   };
 }
+
+type MockOpenCodeRuntime = ReturnType<typeof createMockOpenCodeRuntime>;
+type SubscribedEventQueue = ReturnType<typeof createSubscribedEventQueue>;
+
+/** Feeds the queue to every event subscription the mock SDK client opens. */
+function routeEventsTo(runtime: MockOpenCodeRuntime, queue: SubscribedEventQueue) {
+  const client = runtime.runtime.createOpenCodeSdkClient({
+    baseUrl: "http://127.0.0.1:4099",
+    directory: process.cwd(),
+  }) as unknown as {
+    event: { subscribe: () => Promise<{ stream: AsyncIterable<unknown> }> };
+  };
+  client.event.subscribe = async () => ({ stream: queue.stream });
+}
+
+const assistantRoleKnown = (id: string) => ({
+  type: "message.updated",
+  properties: { sessionID: "opencode-session-1", info: { id, role: "assistant" } },
+});
+
+const sessionIdle = () => ({
+  type: "session.status",
+  properties: { sessionID: "opencode-session-1", status: { type: "idle" } },
+});
 
 function makeInventoryWithContextLimit(input: {
   readonly providerId?: string;
@@ -659,11 +715,7 @@ describe("OpenCode host policy delivery", () => {
     await Effect.runPromise(
       Effect.gen(function* () {
         const adapter = yield* OpenCodeAdapter;
-        yield* adapter.startSession({
-          provider: "opencode",
-          threadId: asThreadId("thread-managed-server-auth"),
-          runtimeMode: "full-access",
-        });
+        yield* startFullAccess(adapter, asThreadId("thread-managed-server-auth"));
       }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
     );
 
@@ -677,11 +729,7 @@ describe("OpenCode host policy delivery", () => {
     const cursors = await Effect.runPromise(
       Effect.gen(function* () {
         const adapter = yield* OpenCodeAdapter;
-        yield* adapter.startSession({
-          provider: "opencode",
-          threadId,
-          runtimeMode: "full-access",
-        });
+        yield* startFullAccess(adapter, threadId);
         const first = yield* adapter.sendTurn({
           threadId,
           input: "first turn",
@@ -737,15 +785,7 @@ describe("OpenCode host policy delivery", () => {
         }
         yield* adapter.stopSession(threadId);
       }).pipe(
-        Effect.provide(
-          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
-            Layer.provide(Layer.succeed(AgentGatewayCredentials, gateway.credentials)),
-            Layer.provideMerge(
-              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-computer-context-" }),
-            ),
-            Layer.provideMerge(NodeServices.layer),
-          ),
-        ),
+        Effect.provide(makeAdapterTestLayer({ runtime: runtime.runtime }, gateway.credentials)),
       ),
     );
     expect(runtime.promptCalls.map(promptContainsHarnessPolicy)).toEqual([true, true, false, true]);
@@ -763,11 +803,7 @@ describe("OpenCode host policy delivery", () => {
     const resumedSession = await Effect.runPromise(
       Effect.gen(function* () {
         const adapter = yield* OpenCodeAdapter;
-        yield* adapter.startSession({
-          provider: "opencode",
-          threadId,
-          runtimeMode: "full-access",
-        });
+        yield* startFullAccess(adapter, threadId);
         const first = yield* adapter.sendTurn({
           threadId,
           input: "first turn",
@@ -801,6 +837,49 @@ describe("OpenCode host policy delivery", () => {
     });
   });
 
+  it("rehydrates host policy state after adapter teardown and recreation", async () => {
+    const runtime = createMockOpenCodeRuntime();
+    const threadId = asThreadId("thread-host-policy-adapter-recreation");
+
+    const resumeCursor = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId,
+          runtimeMode: "full-access",
+        });
+        const first = yield* adapter.sendTurn({
+          threadId,
+          input: "before teardown",
+          attachments: [],
+          modelSelection,
+        });
+        return first.resumeCursor;
+      }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
+    );
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId,
+          runtimeMode: "full-access",
+          resumeCursor,
+        });
+        yield* adapter.sendTurn({
+          threadId,
+          input: "after recreation",
+          attachments: [],
+          modelSelection,
+        });
+      }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
+    );
+
+    expect(runtime.promptCalls.map(promptContainsHarnessPolicy)).toEqual([true, false]);
+  });
+
   it("retries host policy delivery after the first prompt is rejected", async () => {
     let promptAttempt = 0;
     const runtime = createMockOpenCodeRuntime({
@@ -817,11 +896,7 @@ describe("OpenCode host policy delivery", () => {
     const result = await Effect.runPromise(
       Effect.gen(function* () {
         const adapter = yield* OpenCodeAdapter;
-        yield* adapter.startSession({
-          provider: "opencode",
-          threadId,
-          runtimeMode: "full-access",
-        });
+        yield* startFullAccess(adapter, threadId);
         const firstExit = yield* Effect.exit(
           adapter.sendTurn({
             threadId,
@@ -869,11 +944,7 @@ describe("OpenCode host policy delivery", () => {
     const secondCursor = await Effect.runPromise(
       Effect.gen(function* () {
         const adapter = yield* OpenCodeAdapter;
-        yield* adapter.startSession({
-          provider: "opencode",
-          threadId,
-          runtimeMode: "full-access",
-        });
+        yield* startFullAccess(adapter, threadId);
         const first = yield* adapter.sendTurn({
           threadId,
           input: "first turn",
@@ -926,11 +997,7 @@ describe("OpenCode host policy delivery", () => {
     const secondCursor = await Effect.runPromise(
       Effect.gen(function* () {
         const adapter = yield* OpenCodeAdapter;
-        yield* adapter.startSession({
-          provider: "opencode",
-          threadId,
-          runtimeMode: "full-access",
-        });
+        yield* startFullAccess(adapter, threadId);
         const first = yield* adapter.sendTurn({
           threadId,
           input: "first turn",
@@ -967,49 +1034,6 @@ describe("OpenCode host policy delivery", () => {
       },
     });
   });
-
-  it("rehydrates host policy state after adapter teardown and recreation", async () => {
-    const runtime = createMockOpenCodeRuntime();
-    const threadId = asThreadId("thread-host-policy-adapter-recreation");
-
-    const resumeCursor = await Effect.runPromise(
-      Effect.gen(function* () {
-        const adapter = yield* OpenCodeAdapter;
-        yield* adapter.startSession({
-          provider: "opencode",
-          threadId,
-          runtimeMode: "full-access",
-        });
-        const first = yield* adapter.sendTurn({
-          threadId,
-          input: "before teardown",
-          attachments: [],
-          modelSelection,
-        });
-        return first.resumeCursor;
-      }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
-    );
-
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const adapter = yield* OpenCodeAdapter;
-        yield* adapter.startSession({
-          provider: "opencode",
-          threadId,
-          runtimeMode: "full-access",
-          resumeCursor,
-        });
-        yield* adapter.sendTurn({
-          threadId,
-          input: "after recreation",
-          attachments: [],
-          modelSelection,
-        });
-      }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
-    );
-
-    expect(runtime.promptCalls.map(promptContainsHarnessPolicy)).toEqual([true, false]);
-  });
 });
 
 describe("OpenCodeAdapter runtime lifecycle", () => {
@@ -1038,17 +1062,8 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
             Effect.forkChild,
           );
           const threadId = asThreadId("v2-reconnect-output");
-          yield* adapter.startSession({
-            provider: "opencode",
-            threadId,
-            runtimeMode: "full-access",
-          });
-          yield* adapter.sendTurn({
-            threadId,
-            input: "inspect",
-            attachments: [],
-            modelSelection: { provider: "opencode", model: "local/model" },
-          });
+          yield* startFullAccess(adapter, threadId);
+          yield* sendTestTurn(adapter, threadId, "inspect", "local/model");
           snapshots = [
             {
               info: { id: "msg-missed", role: "assistant", time: { completed: 3 }, finish: "stop" },
@@ -1101,16 +1116,104 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
     },
   );
 
+  it("marks provider retries with a constant message so repeats can merge", async () => {
+    const queue = createSubscribedEventQueue();
+    const runtime = createMockOpenCodeRuntime({ eventSubscriptions: [queue.stream] });
+    const events = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        const collected = yield* adapter.streamEvents.pipe(
+          Stream.takeUntil((event) => event.type === "turn.completed"),
+          Stream.runCollect,
+          Effect.forkChild,
+        );
+        const threadId = asThreadId("v2-retry-warnings");
+        yield* startFullAccess(adapter, threadId);
+        yield* sendTestTurn(adapter, threadId, "hello", "local/model");
+        for (const attempt of [1, 2]) {
+          queue.push({
+            id: `retry-status-${attempt}`,
+            type: "session.status",
+            properties: {
+              sessionID: "opencode-session-1",
+              status: {
+                type: "retry",
+                attempt,
+                message: `Overloaded (attempt ${attempt})`,
+                next: 1,
+              },
+            },
+          });
+        }
+        queue.push({
+          id: "retried-next",
+          type: "session.next.retried",
+          properties: {
+            sessionID: "opencode-session-1",
+            timestamp: 1,
+            attempt: 3,
+            error: { message: "Overloaded (attempt 3)" },
+          },
+        });
+        queue.push({
+          id: "end",
+          type: "synara.opencode.execution",
+          properties: { sessionID: "opencode-session-1", outcome: "succeeded" },
+        });
+        const result = yield* Fiber.join(collected);
+        queue.close();
+        yield* adapter.stopSession(threadId);
+        return result;
+      }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
+    );
+    const warnings = Array.from(events).filter((event) => event.type === "runtime.warning");
+    expect(warnings).toHaveLength(3);
+    expect(new Set(warnings.map((event) => event.payload.message))).toEqual(
+      new Set(["OpenCode is retrying the request."]),
+    );
+    expect(warnings.every((event) => event.payload.willRetry === true)).toBe(true);
+  });
+
+  it("emits the reconnect warning only from the second consecutive failed attempt", async () => {
+    const first = createSubscribedEventQueue();
+    const second = createSubscribedEventQueue();
+    const third = createSubscribedEventQueue();
+    const runtime = createMockOpenCodeRuntime({
+      eventSubscriptions: [first.stream, second.stream, third.stream],
+    });
+    const events = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        const collected = yield* adapter.streamEvents.pipe(
+          Stream.takeUntil((event) => event.type === "turn.completed"),
+          Stream.runCollect,
+          Effect.forkChild,
+        );
+        const threadId = asThreadId("v2-reconnect-warning");
+        yield* startFullAccess(adapter, threadId);
+        yield* sendTestTurn(adapter, threadId, "hello", "local/model");
+        first.close();
+        second.close();
+        third.push({
+          id: "end",
+          type: "synara.opencode.execution",
+          properties: { sessionID: "opencode-session-1", outcome: "succeeded" },
+        });
+        const result = yield* Fiber.join(collected);
+        third.close();
+        yield* adapter.stopSession(threadId);
+        return result;
+      }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
+    );
+    const warnings = Array.from(events).filter((event) => event.type === "runtime.warning");
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]?.payload.message).toBe("OpenCode event stream disconnected; reconnecting.");
+  });
+
   it("projects a native background continuation as a new turn without submitting another prompt", async () => {
     const queue = createSubscribedEventQueue();
     const runtime = createMockOpenCodeRuntime();
-    const client = runtime.runtime.createOpenCodeSdkClient({
-      baseUrl: "http://127.0.0.1:4099",
-      directory: process.cwd(),
-    });
-    client.event.subscribe = (async () => ({
-      stream: queue.stream,
-    })) as typeof client.event.subscribe;
+    routeEventsTo(runtime, queue);
     const events = await Effect.runPromise(
       Effect.gen(function* () {
         const adapter = yield* OpenCodeAdapter;
@@ -1121,13 +1224,8 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           Effect.forkChild,
         );
         const threadId = asThreadId("v2-continuation");
-        yield* adapter.startSession({ provider: "opencode", threadId, runtimeMode: "full-access" });
-        yield* adapter.sendTurn({
-          threadId,
-          input: "hello",
-          attachments: [],
-          modelSelection: { provider: "opencode", model: "local/model" },
-        });
+        yield* startFullAccess(adapter, threadId);
+        yield* sendTestTurn(adapter, threadId, "hello", "local/model");
         queue.push({
           id: "first-end",
           type: "synara.opencode.execution",
@@ -1163,13 +1261,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
     async (outcome, expected) => {
       const queue = createSubscribedEventQueue();
       const runtime = createMockOpenCodeRuntime();
-      const client = runtime.runtime.createOpenCodeSdkClient({
-        baseUrl: "http://127.0.0.1:4099",
-        directory: process.cwd(),
-      });
-      client.event.subscribe = (async () => ({
-        stream: queue.stream,
-      })) as typeof client.event.subscribe;
+      routeEventsTo(runtime, queue);
       const events = await Effect.runPromise(
         Effect.gen(function* () {
           const adapter = yield* OpenCodeAdapter;
@@ -1179,17 +1271,8 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
             Effect.forkChild,
           );
           const threadId = asThreadId("v2-outcome");
-          yield* adapter.startSession({
-            provider: "opencode",
-            threadId,
-            runtimeMode: "full-access",
-          });
-          yield* adapter.sendTurn({
-            threadId,
-            input: "hello",
-            attachments: [],
-            modelSelection: { provider: "opencode", model: "local/model" },
-          });
+          yield* startFullAccess(adapter, threadId);
+          yield* sendTestTurn(adapter, threadId, "hello", "local/model");
           queue.push({
             id: "evt_end",
             type: "synara.opencode.execution",
@@ -1299,12 +1382,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
               id: "openai",
               name: "OpenAI",
               source: "api",
-              models: {
-                "gpt-5": {
-                  id: "gpt-5",
-                  name: "GPT-5",
-                },
-              },
+              models: { "gpt-5": { id: "gpt-5", name: "GPT-5" } },
             } as unknown as Provider,
           ],
         },
@@ -1325,16 +1403,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           binaryPath: "opencode",
           cwd: "/repo/model-discovery-config",
         });
-      }).pipe(
-        Effect.provide(
-          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
-            Layer.provideMerge(
-              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
-            ),
-            Layer.provideMerge(NodeServices.layer),
-          ),
-        ),
-      ),
+      }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
     );
 
     expect(result).toMatchObject({
@@ -1396,16 +1465,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
             serverUrl,
             ...(discoveryEnvironment !== undefined ? { environment: discoveryEnvironment } : {}),
           });
-        }).pipe(
-          Effect.provide(
-            makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
-              Layer.provideMerge(
-                ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
-              ),
-              Layer.provideMerge(NodeServices.layer),
-            ),
-          ),
-        ),
+        }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
       );
 
       expect(runtime.connectCalls).toHaveLength(2);
@@ -1431,16 +1491,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           cwd: "/repo/external-import",
           providerInstanceId,
         });
-      }).pipe(
-        Effect.provide(
-          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
-            Layer.provideMerge(
-              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
-            ),
-            Layer.provideMerge(NodeServices.layer),
-          ),
-        ),
-      ),
+      }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
     );
 
     expect(runtime.connectCalls).toHaveLength(1);
@@ -1540,16 +1591,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           binaryPath: "opencode",
           cwd: "/repo/model-discovery-config",
         });
-      }).pipe(
-        Effect.provide(
-          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
-            Layer.provideMerge(
-              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
-            ),
-            Layer.provideMerge(NodeServices.layer),
-          ),
-        ),
-      ),
+      }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
     );
 
     expect(result?.models.map((model) => model.slug)).toEqual([
@@ -1588,16 +1630,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           binaryPath: "opencode",
           cwd: "/repo/server-startup-fails",
         });
-      }).pipe(
-        Effect.provide(
-          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
-            Layer.provideMerge(
-              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
-            ),
-            Layer.provideMerge(NodeServices.layer),
-          ),
-        ),
-      ),
+      }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
     );
 
     expect(result).toMatchObject({
@@ -1670,16 +1703,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           binaryPath: "opencode",
           cwd: "/repo/agent-discovery-config",
         });
-      }).pipe(
-        Effect.provide(
-          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
-            Layer.provideMerge(
-              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
-            ),
-            Layer.provideMerge(NodeServices.layer),
-          ),
-        ),
-      ),
+      }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
     );
 
     expect(result).toMatchObject({
@@ -1710,26 +1734,13 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           throw new Error("Expected OpenCode adapter to support command listing.");
         }
 
-        yield* adapter.startSession({
-          provider: "opencode",
-          threadId: asThreadId("thread-active"),
-          runtimeMode: "full-access",
-        });
+        yield* startFullAccess(adapter, asThreadId("thread-active"));
 
         return yield* listCommands({
           provider: "opencode",
           cwd: process.cwd(),
         });
-      }).pipe(
-        Effect.provide(
-          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
-            Layer.provideMerge(
-              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
-            ),
-            Layer.provideMerge(NodeServices.layer),
-          ),
-        ),
-      ),
+      }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
     );
 
     expect(result).toEqual({
@@ -1756,29 +1767,11 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
             cwd: "/computer/repo",
             enableComputerControl,
           });
-          yield* adapter.sendTurn({
-            threadId,
-            input: "inspect",
-            attachments: [],
-            modelSelection: { provider: "opencode", model: "openai/gpt-4o" },
-          });
-          yield* adapter.sendTurn({
-            threadId,
-            input: "continue",
-            attachments: [],
-            modelSelection: { provider: "opencode", model: "openai/gpt-4o" },
-          });
+          yield* sendTestTurn(adapter, threadId, "inspect", "openai/gpt-4o");
+          yield* sendTestTurn(adapter, threadId, "continue", "openai/gpt-4o");
           yield* adapter.stopSession(threadId);
         }).pipe(
-          Effect.provide(
-            makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
-              Layer.provide(Layer.succeed(AgentGatewayCredentials, gateway.credentials)),
-              Layer.provideMerge(
-                ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
-              ),
-              Layer.provideMerge(NodeServices.layer),
-            ),
-          ),
+          Effect.provide(makeAdapterTestLayer({ runtime: runtime.runtime }, gateway.credentials)),
         ),
       );
 
@@ -1808,27 +1801,14 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
             runtimeMode: "full-access",
             cwd: "/same/repo",
           });
-          yield* adapter.sendTurn({
-            threadId,
-            input: "coordinate work",
-            attachments: [],
-            modelSelection: { provider: "opencode", model: "openai/gpt-5" },
-          });
+          yield* sendTestTurn(adapter, threadId, "coordinate work", "openai/gpt-5");
         }
         yield* adapter.stopSession(firstThread);
         expect(gateway.ownerByToken.has("gateway-token-1")).toBe(false);
         expect(gateway.ownerByToken.get("gateway-token-2")).toBe(secondThread);
         yield* adapter.stopSession(secondThread);
       }).pipe(
-        Effect.provide(
-          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
-            Layer.provide(Layer.succeed(AgentGatewayCredentials, gateway.credentials)),
-            Layer.provideMerge(
-              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
-            ),
-            Layer.provideMerge(NodeServices.layer),
-          ),
-        ),
+        Effect.provide(makeAdapterTestLayer({ runtime: runtime.runtime }, gateway.credentials)),
       ),
     );
 
@@ -1934,20 +1914,13 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
             },
           });
         }
-        yield* adapter.sendTurn({
-          threadId: firstThread,
-          input: "coordinate first",
-          attachments: [],
-          modelSelection: { provider: "opencode", model: "openai/gpt-5" },
-        });
-        const secondTurn = yield* adapter
-          .sendTurn({
-            threadId: secondThread,
-            input: "coordinate second",
-            attachments: [],
-            modelSelection: { provider: "opencode", model: "openai/gpt-5" },
-          })
-          .pipe(Effect.forkChild);
+        yield* sendTestTurn(adapter, firstThread, "coordinate first", "openai/gpt-5");
+        const secondTurn = yield* sendTestTurn(
+          adapter,
+          secondThread,
+          "coordinate second",
+          "openai/gpt-5",
+        ).pipe(Effect.forkChild);
         yield* Effect.sleep(20);
         expect(runtime.promptCalls).toHaveLength(2);
         expect(
@@ -1965,15 +1938,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
         expect(gateway.ownerByToken.has("gateway-token-2")).toBe(false);
         yield* adapter.stopSession(secondThread);
       }).pipe(
-        Effect.provide(
-          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
-            Layer.provide(Layer.succeed(AgentGatewayCredentials, gateway.credentials)),
-            Layer.provideMerge(
-              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
-            ),
-            Layer.provideMerge(NodeServices.layer),
-          ),
-        ),
+        Effect.provide(makeAdapterTestLayer({ runtime: runtime.runtime }, gateway.credentials)),
       ),
     );
 
@@ -2030,16 +1995,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
         const exitEvents = events.filter((event) => event.type === "session.exited");
         expect(exitEvents).toHaveLength(1);
         expect(exitEvents[0]?.payload).toMatchObject({ exitKind: "graceful" });
-      }).pipe(
-        Effect.provide(
-          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
-            Layer.provideMerge(
-              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
-            ),
-            Layer.provideMerge(NodeServices.layer),
-          ),
-        ),
-      ),
+      }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
     );
 
     expect(runtime.abortCalls).toHaveLength(1);
@@ -2087,12 +2043,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
         expect(yield* adapter.hasSession(threadId)).toBe(true);
         expect(closeScope).toHaveBeenCalledTimes(1);
 
-        const turn = yield* adapter.sendTurn({
-          threadId,
-          input: "recovered turn",
-          attachments: [],
-          modelSelection: { provider: "opencode", model: "openai/gpt-5" },
-        });
+        const turn = yield* sendTestTurn(adapter, threadId, "recovered turn", "openai/gpt-5");
         expect(turn.threadId).toBe(threadId);
         expect(runtime.createCalls).toHaveLength(1);
         expect(runtime.updateCalls.some((call) => call.sessionID === "opencode-session-1")).toBe(
@@ -2100,16 +2051,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
         );
         expect(runtime.promptCalls).toHaveLength(1);
         expect(runtime.promptCalls[0]?.sessionID).toBe("opencode-session-1");
-      }).pipe(
-        Effect.provide(
-          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
-            Layer.provideMerge(
-              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
-            ),
-            Layer.provideMerge(NodeServices.layer),
-          ),
-        ),
-      ),
+      }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
     );
   });
 
@@ -2127,13 +2069,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
         const guardedOps = (threadId: ThreadId) => [
           {
             name: "sendTurn",
-            run: () =>
-              adapter.sendTurn({
-                threadId,
-                input: "probe",
-                attachments: [],
-                modelSelection: { provider: "opencode", model: "openai/gpt-5" },
-              }),
+            run: () => sendTestTurn(adapter, threadId, "probe", "openai/gpt-5"),
           },
           { name: "interruptTurn", run: () => adapter.interruptTurn(threadId) },
           {
@@ -2193,16 +2129,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
             });
           }
         }).pipe(Effect.ensuring(Effect.sync(() => Deferred.doneUnsafe(abortBarrier, Effect.void))));
-      }).pipe(
-        Effect.provide(
-          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
-            Layer.provideMerge(
-              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
-            ),
-            Layer.provideMerge(NodeServices.layer),
-          ),
-        ),
-      ),
+      }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
     );
   });
 
@@ -2236,36 +2163,18 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           },
         });
 
-        const failed = yield* adapter
-          .sendTurn({
-            threadId,
-            input: "first attempt",
-            attachments: [],
-            modelSelection: { provider: "opencode", model: "openai/gpt-5" },
-          })
-          .pipe(Effect.exit);
+        const failed = yield* sendTestTurn(adapter, threadId, "first attempt", "openai/gpt-5").pipe(
+          Effect.exit,
+        );
         expect(Exit.isFailure(failed)).toBe(false);
         expect(runtime.promptCalls).toHaveLength(1);
 
-        yield* adapter.sendTurn({
-          threadId,
-          input: "second attempt",
-          attachments: [],
-          modelSelection: { provider: "opencode", model: "openai/gpt-5" },
-        });
+        yield* sendTestTurn(adapter, threadId, "second attempt", "openai/gpt-5");
         expect(runtime.promptCalls).toHaveLength(2);
         yield* adapter.interruptTurn(threadId);
         yield* adapter.stopSession(threadId);
       }).pipe(
-        Effect.provide(
-          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
-            Layer.provide(Layer.succeed(AgentGatewayCredentials, gateway.credentials)),
-            Layer.provideMerge(
-              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
-            ),
-            Layer.provideMerge(NodeServices.layer),
-          ),
-        ),
+        Effect.provide(makeAdapterTestLayer({ runtime: runtime.runtime }, gateway.credentials)),
       ),
     );
 
@@ -2285,27 +2194,10 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
       Effect.gen(function* () {
         const adapter = yield* OpenCodeAdapter;
         const threadId = asThreadId("thread-gateway-setup-failed");
-        yield* adapter.startSession({
-          provider: "opencode",
-          threadId,
-          runtimeMode: "full-access",
-        });
-        yield* adapter.sendTurn({
-          threadId,
-          input: "coordinate work",
-          attachments: [],
-          modelSelection: { provider: "opencode", model: "openai/gpt-5" },
-        });
+        yield* startFullAccess(adapter, threadId);
+        yield* sendTestTurn(adapter, threadId, "coordinate work", "openai/gpt-5");
       }).pipe(
-        Effect.provide(
-          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
-            Layer.provide(Layer.succeed(AgentGatewayCredentials, gateway.credentials)),
-            Layer.provideMerge(
-              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
-            ),
-            Layer.provideMerge(NodeServices.layer),
-          ),
-        ),
+        Effect.provide(makeAdapterTestLayer({ runtime: runtime.runtime }, gateway.credentials)),
       ),
     );
 
@@ -2344,15 +2236,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           });
           expect(yield* adapter.hasSession(threadId)).toBe(false);
         }).pipe(
-          Effect.provide(
-            makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
-              Layer.provide(Layer.succeed(AgentGatewayCredentials, gateway.credentials)),
-              Layer.provideMerge(
-                ServerConfig.layerTest(process.cwd(), { prefix: "opencode-computer-setup-test-" }),
-              ),
-              Layer.provideMerge(NodeServices.layer),
-            ),
-          ),
+          Effect.provide(makeAdapterTestLayer({ runtime: runtime.runtime }, gateway.credentials)),
         ),
       );
       expect(runtime.createCalls).toEqual([]);
@@ -2369,12 +2253,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
     async (unavailable) => {
       const runtime = createMockOpenCodeRuntime();
       const gateway = makeGatewayCredentials();
-      const layer = makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
-        Layer.provideMerge(
-          ServerConfig.layerTest(process.cwd(), { prefix: "opencode-computer-unavailable-test-" }),
-        ),
-        Layer.provideMerge(NodeServices.layer),
-      );
+      const layer = makeAdapterTestLayer({ runtime: runtime.runtime });
       await Effect.runPromise(
         Effect.gen(function* () {
           const adapter = yield* OpenCodeAdapter;
@@ -2451,27 +2330,14 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
             expect(gateway.revoked).toEqual(["gateway-token-1"]);
           } else {
             expect(started).toMatchObject({ _tag: "Success", value: { status: "ready" } });
-            yield* adapter.sendTurn({
-              threadId,
-              input: "hello",
-              attachments: [],
-              modelSelection: { provider: "opencode", model: "openai/gpt-5" },
-            });
+            yield* sendTestTurn(adapter, threadId, "hello", "openai/gpt-5");
             yield* adapter.stopSession(threadId);
             expect(JSON.stringify(runtime.promptCalls[0])).toContain(
               "Synara MCP control is unavailable",
             );
           }
         }).pipe(
-          Effect.provide(
-            makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
-              Layer.provide(Layer.succeed(AgentGatewayCredentials, gateway.credentials)),
-              Layer.provideMerge(
-                ServerConfig.layerTest(process.cwd(), { prefix: "opencode-gateway-timeout-test-" }),
-              ),
-              Layer.provideMerge(NodeServices.layer),
-            ),
-          ),
+          Effect.provide(makeAdapterTestLayer({ runtime: runtime.runtime }, gateway.credentials)),
           Effect.provide(TestClock.layer()),
           Effect.scoped,
         ),
@@ -2497,23 +2363,9 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           runtimeMode: "full-access",
           cwd: "/repo",
         });
-        yield* adapter.sendTurn({
-          threadId,
-          input: "perform a long-running task",
-          attachments: [],
-          modelSelection: { provider: "opencode", model: "openai/gpt-5" },
-        });
+        yield* sendTestTurn(adapter, threadId, "perform a long-running task", "openai/gpt-5");
         yield* adapter.stopSession(threadId);
-      }).pipe(
-        Effect.provide(
-          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
-            Layer.provideMerge(
-              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
-            ),
-            Layer.provideMerge(NodeServices.layer),
-          ),
-        ),
-      ),
+      }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
     );
 
     expect(runtime.promptCallKinds).toEqual(["async"]);
@@ -2531,11 +2383,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
     await Effect.runPromise(
       Effect.gen(function* () {
         const adapter = yield* OpenCodeAdapter;
-        yield* adapter.startSession({
-          provider: "opencode",
-          threadId,
-          runtimeMode: "full-access",
-        });
+        yield* startFullAccess(adapter, threadId);
         expect(gateway.ownerByToken.get("gateway-token-1")).toBe(threadId);
 
         Deferred.doneUnsafe(serverExit, Effect.succeed(17));
@@ -2545,15 +2393,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
         expect(yield* adapter.hasSession(threadId)).toBe(false);
         expect((yield* adapter.listSessions()).some((s) => s.threadId === threadId)).toBe(false);
       }).pipe(
-        Effect.provide(
-          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
-            Layer.provide(Layer.succeed(AgentGatewayCredentials, gateway.credentials)),
-            Layer.provideMerge(
-              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
-            ),
-            Layer.provideMerge(NodeServices.layer),
-          ),
-        ),
+        Effect.provide(makeAdapterTestLayer({ runtime: runtime.runtime }, gateway.credentials)),
       ),
     );
 
@@ -2571,22 +2411,10 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
       Effect.gen(function* () {
         const adapter = yield* OpenCodeAdapter;
         return yield* Effect.exit(
-          adapter.startSession({
-            provider: "opencode",
-            threadId: asThreadId("thread-gateway-failed-start"),
-            runtimeMode: "full-access",
-          }),
+          startFullAccess(adapter, asThreadId("thread-gateway-failed-start")),
         );
       }).pipe(
-        Effect.provide(
-          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
-            Layer.provide(Layer.succeed(AgentGatewayCredentials, gateway.credentials)),
-            Layer.provideMerge(
-              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
-            ),
-            Layer.provideMerge(NodeServices.layer),
-          ),
-        ),
+        Effect.provide(makeAdapterTestLayer({ runtime: runtime.runtime }, gateway.credentials)),
       ),
     );
 
@@ -2620,15 +2448,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
 
         yield* Fiber.interrupt(startFiber);
       }).pipe(
-        Effect.provide(
-          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
-            Layer.provide(Layer.succeed(AgentGatewayCredentials, gateway.credentials)),
-            Layer.provideMerge(
-              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
-            ),
-            Layer.provideMerge(NodeServices.layer),
-          ),
-        ),
+        Effect.provide(makeAdapterTestLayer({ runtime: runtime.runtime }, gateway.credentials)),
       ),
     );
 
@@ -2668,17 +2488,14 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
         expect(yield* adapter.hasSession(threadId)).toBe(false);
       }).pipe(
         Effect.provide(
-          makeOpenCodeAdapterLive({
-            runtime: runtime.runtime,
-            beforeSessionInstall: Effect.sync(() =>
-              Deferred.doneUnsafe(beforeInstallEntered, Effect.void),
-            ).pipe(Effect.andThen(Deferred.await(installBarrier))),
-          }).pipe(
-            Layer.provide(Layer.succeed(AgentGatewayCredentials, gateway.credentials)),
-            Layer.provideMerge(
-              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
-            ),
-            Layer.provideMerge(NodeServices.layer),
+          makeAdapterTestLayer(
+            {
+              runtime: runtime.runtime,
+              beforeSessionInstall: Effect.sync(() =>
+                Deferred.doneUnsafe(beforeInstallEntered, Effect.void),
+              ).pipe(Effect.andThen(Deferred.await(installBarrier))),
+            },
+            gateway.credentials,
           ),
         ),
       ),
@@ -2701,16 +2518,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           runtimeMode: "full-access",
           resumeCursor: { openCodeSessionId: "existing-session-1", cwd: "/repo/resume" },
         });
-      }).pipe(
-        Effect.provide(
-          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
-            Layer.provideMerge(
-              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
-            ),
-            Layer.provideMerge(NodeServices.layer),
-          ),
-        ),
-      ),
+      }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
     );
 
     expect(runtime.createCalls).toEqual([]);
@@ -2737,16 +2545,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
         };
         const session = yield* adapter.startSession(input);
         return adapter.didResumeSession?.(input, session) ?? false;
-      }).pipe(
-        Effect.provide(
-          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
-            Layer.provideMerge(
-              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
-            ),
-            Layer.provideMerge(NodeServices.layer),
-          ),
-        ),
-      ),
+      }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
     );
 
     expect(confirmed).toBe(false);
@@ -2774,16 +2573,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           interactionMode: "default",
           modelSelection: { provider: "opencode", model: "openai/gpt-5.4" },
         });
-      }).pipe(
-        Effect.provide(
-          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
-            Layer.provideMerge(
-              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
-            ),
-            Layer.provideMerge(NodeServices.layer),
-          ),
-        ),
-      ),
+      }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
     );
 
     expect(runtime.createCalls).toEqual([]);
@@ -2816,16 +2606,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
             runtimeMode: "full-access",
             resumeCursor: { openCodeSessionId: "existing-session-1", cwd: "/repo/resume" },
           });
-        }).pipe(
-          Effect.provide(
-            makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
-              Layer.provideMerge(
-                ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
-              ),
-              Layer.provideMerge(NodeServices.layer),
-            ),
-          ),
-        ),
+        }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
       ),
     ).rejects.toMatchObject({
       _tag: "ProviderAdapterRequestError",
@@ -2860,16 +2641,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
             cwd: "/repo/target",
             runtimeMode: "full-access",
           });
-        }).pipe(
-          Effect.provide(
-            makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
-              Layer.provideMerge(
-                ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
-              ),
-              Layer.provideMerge(NodeServices.layer),
-            ),
-          ),
-        ),
+        }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
       ),
     ).rejects.toThrow("native fork cannot cross cwd boundaries");
 
@@ -2894,16 +2666,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           sourceCwd: "/repo/source",
           runtimeMode: "full-access",
         });
-      }).pipe(
-        Effect.provide(
-          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
-            Layer.provideMerge(
-              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
-            ),
-            Layer.provideMerge(NodeServices.layer),
-          ),
-        ),
-      ),
+      }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
     );
 
     expect(runtime.forkCalls).toEqual([{ sessionID: "source-session-1" }]);
@@ -2931,27 +2694,14 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           throw new Error("Expected OpenCode adapter to support command listing.");
         }
 
-        yield* adapter.startSession({
-          provider: "opencode",
-          threadId,
-          runtimeMode: "full-access",
-        });
+        yield* startFullAccess(adapter, threadId);
 
         return yield* listCommands({
           provider: "opencode",
           threadId,
           cwd: process.cwd(),
         });
-      }).pipe(
-        Effect.provide(
-          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
-            Layer.provideMerge(
-              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
-            ),
-            Layer.provideMerge(NodeServices.layer),
-          ),
-        ),
-      ),
+      }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
     );
 
     expect(result.commands.map((command) => command.name)).toEqual(["active-thread-command"]);
@@ -2976,16 +2726,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           provider: "opencode",
           cwd: process.cwd(),
         });
-      }).pipe(
-        Effect.provide(
-          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
-            Layer.provideMerge(
-              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
-            ),
-            Layer.provideMerge(NodeServices.layer),
-          ),
-        ),
-      ),
+      }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
     );
 
     expect(result).toEqual({
@@ -3014,16 +2755,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
             },
           },
         });
-      }).pipe(
-        Effect.provide(
-          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
-            Layer.provideMerge(
-              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
-            ),
-            Layer.provideMerge(NodeServices.layer),
-          ),
-        ),
-      ),
+      }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
     );
 
     expect(runtime.createCalls[0]).toMatchObject({
@@ -3075,16 +2807,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
         const events = Array.from(yield* Fiber.join(eventsFiber));
 
         return { events, readySession, runningSession };
-      }).pipe(
-        Effect.provide(
-          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
-            Layer.provideMerge(
-              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
-            ),
-            Layer.provideMerge(NodeServices.layer),
-          ),
-        ),
-      ),
+      }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
     );
 
     expect(runtime.promptCalls).toHaveLength(1);
@@ -3141,17 +2864,8 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
     await Effect.runPromise(
       Effect.gen(function* () {
         const adapter = yield* OpenCodeAdapter;
-        yield* adapter.startSession({
-          provider: "opencode",
-          threadId,
-          runtimeMode: "full-access",
-        });
-        const turn = yield* adapter.sendTurn({
-          threadId,
-          input: "wait in the visible browser",
-          attachments: [],
-          modelSelection: { provider: "opencode", model: "openai/gpt-5.4" },
-        });
+        yield* startFullAccess(adapter, threadId);
+        const turn = yield* sendTestTurn(adapter, threadId, "wait in the visible browser");
 
         const interruptFiber = yield* adapter
           .interruptTurn(threadId, turn.turnId)
@@ -3174,15 +2888,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
         expect(gateway.cancelledTurns).toHaveLength(1);
         yield* adapter.stopSession(threadId);
       }).pipe(
-        Effect.provide(
-          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
-            Layer.provide(Layer.succeed(AgentGatewayCredentials, gateway.credentials)),
-            Layer.provideMerge(
-              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
-            ),
-            Layer.provideMerge(NodeServices.layer),
-          ),
-        ),
+        Effect.provide(makeAdapterTestLayer({ runtime: runtime.runtime }, gateway.credentials)),
       ),
     );
   });
@@ -3190,15 +2896,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
   it("replays assistant text when OpenCode sends delta before part snapshot and assistant role", async () => {
     const eventQueue = createSubscribedEventQueue();
     const runtime = createMockOpenCodeRuntime();
-    const client = runtime.runtime.createOpenCodeSdkClient({
-      baseUrl: "http://127.0.0.1:4099",
-      directory: process.cwd(),
-    }) as unknown as {
-      event: {
-        subscribe: () => Promise<{ stream: AsyncIterable<unknown> }>;
-      };
-    };
-    client.event.subscribe = async () => ({ stream: eventQueue.stream });
+    routeEventsTo(runtime, eventQueue);
 
     const result = await Effect.runPromise(
       Effect.gen(function* () {
@@ -3207,21 +2905,9 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           Effect.forkChild,
         );
 
-        yield* adapter.startSession({
-          provider: "opencode",
-          threadId: asThreadId("thread-ordered-events"),
-          runtimeMode: "full-access",
-        });
+        yield* startFullAccess(adapter, asThreadId("thread-ordered-events"));
 
-        const turn = yield* adapter.sendTurn({
-          threadId: asThreadId("thread-ordered-events"),
-          input: "hello",
-          attachments: [],
-          modelSelection: {
-            provider: "opencode",
-            model: "openai/gpt-5.4",
-          },
-        });
+        const turn = yield* sendTestTurn(adapter, asThreadId("thread-ordered-events"), "hello");
 
         eventQueue.push({
           type: "message.part.delta",
@@ -3247,16 +2933,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
             },
           },
         });
-        eventQueue.push({
-          type: "message.updated",
-          properties: {
-            sessionID: "opencode-session-1",
-            info: {
-              id: "assistant-message-1",
-              role: "assistant",
-            },
-          },
-        });
+        eventQueue.push(assistantRoleKnown("assistant-message-1"));
         eventQueue.push({
           type: "message.part.updated",
           properties: {
@@ -3273,30 +2950,13 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
             },
           },
         });
-        eventQueue.push({
-          type: "session.status",
-          properties: {
-            sessionID: "opencode-session-1",
-            status: {
-              type: "idle",
-            },
-          },
-        });
+        eventQueue.push(sessionIdle());
 
         const events = Array.from(yield* Fiber.join(eventsFiber));
         eventQueue.close();
 
         return { events, turn };
-      }).pipe(
-        Effect.provide(
-          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
-            Layer.provideMerge(
-              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
-            ),
-            Layer.provideMerge(NodeServices.layer),
-          ),
-        ),
-      ),
+      }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
     );
 
     expect(result.turn.turnId).toBeDefined();
@@ -3327,15 +2987,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
   it("keeps a delta buffered after a role-unknown snapshot even when its suffix matches", async () => {
     const eventQueue = createSubscribedEventQueue();
     const runtime = createMockOpenCodeRuntime();
-    const client = runtime.runtime.createOpenCodeSdkClient({
-      baseUrl: "http://127.0.0.1:4099",
-      directory: process.cwd(),
-    }) as unknown as {
-      event: {
-        subscribe: () => Promise<{ stream: AsyncIterable<unknown> }>;
-      };
-    };
-    client.event.subscribe = async () => ({ stream: eventQueue.stream });
+    routeEventsTo(runtime, eventQueue);
 
     const result = await Effect.runPromise(
       Effect.gen(function* () {
@@ -3344,21 +2996,9 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           Effect.forkChild,
         );
 
-        yield* adapter.startSession({
-          provider: "opencode",
-          threadId: asThreadId("thread-role-late-delta"),
-          runtimeMode: "full-access",
-        });
+        yield* startFullAccess(adapter, asThreadId("thread-role-late-delta"));
 
-        yield* adapter.sendTurn({
-          threadId: asThreadId("thread-role-late-delta"),
-          input: "hello",
-          attachments: [],
-          modelSelection: {
-            provider: "opencode",
-            model: "openai/gpt-5.4",
-          },
-        });
+        yield* sendTestTurn(adapter, asThreadId("thread-role-late-delta"), "hello");
 
         eventQueue.push({
           type: "message.part.updated",
@@ -3381,16 +3021,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
             delta: "lo",
           },
         });
-        eventQueue.push({
-          type: "message.updated",
-          properties: {
-            sessionID: "opencode-session-1",
-            info: {
-              id: "assistant-message-role-late",
-              role: "assistant",
-            },
-          },
-        });
+        eventQueue.push(assistantRoleKnown("assistant-message-role-late"));
         eventQueue.push({
           type: "message.part.updated",
           properties: {
@@ -3404,27 +3035,12 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
             },
           },
         });
-        eventQueue.push({
-          type: "session.status",
-          properties: {
-            sessionID: "opencode-session-1",
-            status: { type: "idle" },
-          },
-        });
+        eventQueue.push(sessionIdle());
 
         const events = Array.from(yield* Fiber.join(eventsFiber));
         eventQueue.close();
         return events;
-      }).pipe(
-        Effect.provide(
-          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
-            Layer.provideMerge(
-              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
-            ),
-            Layer.provideMerge(NodeServices.layer),
-          ),
-        ),
-      ),
+      }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
     );
 
     expect(result.map((event) => event.type)).toEqual([
@@ -3448,15 +3064,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
   it("filters synthetic and ignored text parts from assistant transcript", async () => {
     const eventQueue = createSubscribedEventQueue();
     const runtime = createMockOpenCodeRuntime();
-    const client = runtime.runtime.createOpenCodeSdkClient({
-      baseUrl: "http://127.0.0.1:4099",
-      directory: process.cwd(),
-    }) as unknown as {
-      event: {
-        subscribe: () => Promise<{ stream: AsyncIterable<unknown> }>;
-      };
-    };
-    client.event.subscribe = async () => ({ stream: eventQueue.stream });
+    routeEventsTo(runtime, eventQueue);
 
     const result = await Effect.runPromise(
       Effect.gen(function* () {
@@ -3465,32 +3073,11 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           Effect.forkChild,
         );
 
-        yield* adapter.startSession({
-          provider: "opencode",
-          threadId: asThreadId("thread-synthetic-parts"),
-          runtimeMode: "full-access",
-        });
+        yield* startFullAccess(adapter, asThreadId("thread-synthetic-parts"));
 
-        yield* adapter.sendTurn({
-          threadId: asThreadId("thread-synthetic-parts"),
-          input: "hello",
-          attachments: [],
-          modelSelection: {
-            provider: "opencode",
-            model: "openai/gpt-5.4",
-          },
-        });
+        yield* sendTestTurn(adapter, asThreadId("thread-synthetic-parts"), "hello");
 
-        eventQueue.push({
-          type: "message.updated",
-          properties: {
-            sessionID: "opencode-session-1",
-            info: {
-              id: "assistant-message-filtered",
-              role: "assistant",
-            },
-          },
-        });
+        eventQueue.push(assistantRoleKnown("assistant-message-filtered"));
         eventQueue.push({
           type: "message.part.updated",
           properties: {
@@ -3539,29 +3126,12 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
             },
           },
         });
-        eventQueue.push({
-          type: "session.status",
-          properties: {
-            sessionID: "opencode-session-1",
-            status: {
-              type: "idle",
-            },
-          },
-        });
+        eventQueue.push(sessionIdle());
 
         const events = Array.from(yield* Fiber.join(eventsFiber));
         eventQueue.close();
         return events;
-      }).pipe(
-        Effect.provide(
-          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
-            Layer.provideMerge(
-              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
-            ),
-            Layer.provideMerge(NodeServices.layer),
-          ),
-        ),
-      ),
+      }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
     );
 
     expect(result.map((event) => event.type)).toEqual([
@@ -3586,15 +3156,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
   it("sends plan-mode prompt instructions and captures tagged markdown as a proposed plan", async () => {
     const eventQueue = createSubscribedEventQueue();
     const runtime = createMockOpenCodeRuntime();
-    const client = runtime.runtime.createOpenCodeSdkClient({
-      baseUrl: "http://127.0.0.1:4099",
-      directory: process.cwd(),
-    }) as unknown as {
-      event: {
-        subscribe: () => Promise<{ stream: AsyncIterable<unknown> }>;
-      };
-    };
-    client.event.subscribe = async () => ({ stream: eventQueue.stream });
+    routeEventsTo(runtime, eventQueue);
 
     const result = await Effect.runPromise(
       Effect.gen(function* () {
@@ -3603,11 +3165,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           Effect.forkChild,
         );
 
-        yield* adapter.startSession({
-          provider: "opencode",
-          threadId: asThreadId("thread-plan-events"),
-          runtimeMode: "full-access",
-        });
+        yield* startFullAccess(adapter, asThreadId("thread-plan-events"));
 
         yield* adapter.sendTurn({
           threadId: asThreadId("thread-plan-events"),
@@ -3620,16 +3178,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           },
         });
 
-        eventQueue.push({
-          type: "message.updated",
-          properties: {
-            sessionID: "opencode-session-1",
-            info: {
-              id: "assistant-message-plan",
-              role: "assistant",
-            },
-          },
-        });
+        eventQueue.push(assistantRoleKnown("assistant-message-plan"));
         eventQueue.push({
           type: "message.part.updated",
           properties: {
@@ -3650,16 +3199,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
         const events = Array.from(yield* Fiber.join(eventsFiber));
         eventQueue.close();
         return events;
-      }).pipe(
-        Effect.provide(
-          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
-            Layer.provideMerge(
-              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
-            ),
-            Layer.provideMerge(NodeServices.layer),
-          ),
-        ),
-      ),
+      }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
     );
 
     expect(runtime.promptCalls[0]).toMatchObject({ agent: "plan" });
@@ -3691,11 +3231,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
     await Effect.runPromise(
       Effect.gen(function* () {
         const adapter = yield* OpenCodeAdapter;
-        yield* adapter.startSession({
-          provider: "opencode",
-          threadId: asThreadId("thread-docx-attachment"),
-          runtimeMode: "full-access",
-        });
+        yield* startFullAccess(adapter, asThreadId("thread-docx-attachment"));
 
         yield* adapter.sendTurn({
           threadId: asThreadId("thread-docx-attachment"),
@@ -3715,16 +3251,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
             model: "openai/gpt-5.4",
           },
         });
-      }).pipe(
-        Effect.provide(
-          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
-            Layer.provideMerge(
-              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
-            ),
-            Layer.provideMerge(NodeServices.layer),
-          ),
-        ),
-      ),
+      }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
     );
 
     const parts = runtime.promptCalls[0]?.parts as Array<Record<string, unknown>> | undefined;
@@ -3740,104 +3267,38 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
     expect(parts?.[0]?.text).toEqual(expect.stringContaining(".docx"));
   });
 
-  it("ignores a stale plan agent option when Synara interaction mode is default", async () => {
+  it.each([
+    ["ignores a stale plan agent option in default interaction mode", "plan", "build"],
+    ["preserves an explicitly selected agent", "reviewer", "reviewer"],
+  ])("%s", async (_name, selectedAgent, expectedAgent) => {
     const runtime = createMockOpenCodeRuntime();
 
     await Effect.runPromise(
       Effect.gen(function* () {
         const adapter = yield* OpenCodeAdapter;
-
-        yield* adapter.startSession({
-          provider: "opencode",
-          threadId: asThreadId("thread-stale-plan-agent"),
-          runtimeMode: "full-access",
-        });
-
+        const threadId = asThreadId("thread-agent-selection");
+        yield* startFullAccess(adapter, threadId);
         yield* adapter.sendTurn({
-          threadId: asThreadId("thread-stale-plan-agent"),
+          threadId,
           input: "implement this",
           interactionMode: "default",
           attachments: [],
           modelSelection: {
             provider: "opencode",
             model: "openai/gpt-5.4",
-            options: {
-              agent: "plan",
-            },
+            options: { agent: selectedAgent },
           },
         });
-      }).pipe(
-        Effect.provide(
-          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
-            Layer.provideMerge(
-              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
-            ),
-            Layer.provideMerge(NodeServices.layer),
-          ),
-        ),
-      ),
+      }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
     );
 
-    expect(runtime.promptCalls[0]).toMatchObject({
-      agent: "build",
-    });
-  });
-
-  it("preserves explicitly selected OpenCode agents", async () => {
-    const runtime = createMockOpenCodeRuntime();
-
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const adapter = yield* OpenCodeAdapter;
-
-        yield* adapter.startSession({
-          provider: "opencode",
-          threadId: asThreadId("thread-explicit-agent"),
-          runtimeMode: "full-access",
-        });
-
-        yield* adapter.sendTurn({
-          threadId: asThreadId("thread-explicit-agent"),
-          input: "use custom agent",
-          interactionMode: "default",
-          attachments: [],
-          modelSelection: {
-            provider: "opencode",
-            model: "openai/gpt-5.4",
-            options: {
-              agent: "reviewer",
-            },
-          },
-        });
-      }).pipe(
-        Effect.provide(
-          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
-            Layer.provideMerge(
-              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
-            ),
-            Layer.provideMerge(NodeServices.layer),
-          ),
-        ),
-      ),
-    );
-
-    expect(runtime.promptCalls[0]).toMatchObject({
-      agent: "reviewer",
-    });
+    expect(runtime.promptCalls[0]).toMatchObject({ agent: expectedAgent });
   });
 
   it("does not capture tagged markdown as a proposed plan outside plan mode", async () => {
     const eventQueue = createSubscribedEventQueue();
     const runtime = createMockOpenCodeRuntime();
-    const client = runtime.runtime.createOpenCodeSdkClient({
-      baseUrl: "http://127.0.0.1:4099",
-      directory: process.cwd(),
-    }) as unknown as {
-      event: {
-        subscribe: () => Promise<{ stream: AsyncIterable<unknown> }>;
-      };
-    };
-    client.event.subscribe = async () => ({ stream: eventQueue.stream });
+    routeEventsTo(runtime, eventQueue);
 
     const result = await Effect.runPromise(
       Effect.gen(function* () {
@@ -3846,33 +3307,15 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           Effect.forkChild,
         );
 
-        yield* adapter.startSession({
-          provider: "opencode",
-          threadId: asThreadId("thread-default-tagged-plan"),
-          runtimeMode: "full-access",
-        });
+        yield* startFullAccess(adapter, asThreadId("thread-default-tagged-plan"));
 
-        yield* adapter.sendTurn({
-          threadId: asThreadId("thread-default-tagged-plan"),
-          input: "show an example tagged block",
-          interactionMode: "default",
-          attachments: [],
-          modelSelection: {
-            provider: "opencode",
-            model: "openai/gpt-5.4",
-          },
-        });
+        yield* sendTestTurn(
+          adapter,
+          asThreadId("thread-default-tagged-plan"),
+          "show an example tagged block",
+        );
 
-        eventQueue.push({
-          type: "message.updated",
-          properties: {
-            sessionID: "opencode-session-1",
-            info: {
-              id: "assistant-message-default-plan",
-              role: "assistant",
-            },
-          },
-        });
+        eventQueue.push(assistantRoleKnown("assistant-message-default-plan"));
         eventQueue.push({
           type: "message.part.updated",
           properties: {
@@ -3893,16 +3336,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
         const events = Array.from(yield* Fiber.join(eventsFiber));
         eventQueue.close();
         return events;
-      }).pipe(
-        Effect.provide(
-          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
-            Layer.provideMerge(
-              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
-            ),
-            Layer.provideMerge(NodeServices.layer),
-          ),
-        ),
-      ),
+      }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
     );
 
     expect(result.map((event) => event.type)).toEqual([
@@ -3921,63 +3355,62 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
     });
   });
 
-  it("emits context usage from OpenCode assistant message updates", async () => {
+  it("projects context usage once for identical assistant message updates", async () => {
+    const sentinelText = "usage-dedup-observation-complete";
     const eventQueue = createSubscribedEventQueue();
     const runtime = createMockOpenCodeRuntime({
       inventory: makeInventoryWithContextLimit({ contextLimit: 200_000 }),
     });
-    const client = runtime.runtime.createOpenCodeSdkClient({
-      baseUrl: "http://127.0.0.1:4099",
-      directory: process.cwd(),
-    }) as unknown as {
-      event: {
-        subscribe: () => Promise<{ stream: AsyncIterable<unknown> }>;
-      };
-    };
-    client.event.subscribe = async () => ({ stream: eventQueue.stream });
+    routeEventsTo(runtime, eventQueue);
 
     const result = await Effect.runPromise(
       Effect.gen(function* () {
         const adapter = yield* OpenCodeAdapter;
-        const eventsFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 4)).pipe(
+        const eventsFiber = yield* adapter.streamEvents.pipe(
+          Stream.takeUntil(
+            (event) => event.type === "content.delta" && event.payload.delta === sentinelText,
+          ),
+          Stream.runCollect,
           Effect.forkChild,
         );
 
-        yield* adapter.startSession({
-          provider: "opencode",
-          threadId: asThreadId("thread-usage-events"),
-          runtimeMode: "full-access",
-        });
+        yield* startFullAccess(adapter, asThreadId("thread-usage-dedup"));
 
-        const turn = yield* adapter.sendTurn({
-          threadId: asThreadId("thread-usage-events"),
-          input: "count tokens",
-          attachments: [],
-          modelSelection: {
-            provider: "opencode",
-            model: "openai/gpt-5.4",
+        const turn = yield* sendTestTurn(adapter, asThreadId("thread-usage-dedup"), "count tokens");
+
+        const message = assistantMessageUpdated();
+        eventQueue.push(message);
+        eventQueue.push(message);
+        // This later text proves both usage updates passed through the serial event pump.
+        eventQueue.push({
+          type: "message.part.updated",
+          properties: {
+            sessionID: "opencode-session-1",
+            part: {
+              id: "usage-dedup-sentinel-part",
+              messageID: message.properties.info.id,
+              type: "text",
+              text: sentinelText,
+              time: { start: 1 },
+            },
           },
         });
 
-        eventQueue.push(assistantMessageUpdated());
-
-        const events = Array.from(yield* Fiber.join(eventsFiber));
+        const runtimeEvents = Array.from(yield* Fiber.join(eventsFiber));
         eventQueue.close();
-        return { events, turn };
-      }).pipe(
-        Effect.provide(
-          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
-            Layer.provideMerge(
-              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
-            ),
-            Layer.provideMerge(NodeServices.layer),
-          ),
-        ),
-      ),
+        return { events: runtimeEvents, turn };
+      }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
     );
 
-    const usageEvent = result.events.find((event) => event.type === "thread.token-usage.updated");
-    expect(usageEvent).toMatchObject({
+    expect(result.events.at(-1)).toMatchObject({
+      type: "content.delta",
+      payload: { streamKind: "assistant_text", delta: sentinelText },
+    });
+    const usageEvents = result.events.filter(
+      (event) => event.type === "thread.token-usage.updated",
+    );
+    expect(usageEvents).toHaveLength(1);
+    expect(usageEvents[0]).toMatchObject({
       type: "thread.token-usage.updated",
       turnId: result.turn.turnId,
       payload: {
@@ -4002,101 +3435,10 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
     });
   });
 
-  it("does not emit duplicate usage for identical assistant message updates", async () => {
-    const sentinelText = "usage-dedup-observation-complete";
-    const eventQueue = createSubscribedEventQueue();
-    const runtime = createMockOpenCodeRuntime({
-      inventory: makeInventoryWithContextLimit({ contextLimit: 200_000 }),
-    });
-    const client = runtime.runtime.createOpenCodeSdkClient({
-      baseUrl: "http://127.0.0.1:4099",
-      directory: process.cwd(),
-    }) as unknown as {
-      event: {
-        subscribe: () => Promise<{ stream: AsyncIterable<unknown> }>;
-      };
-    };
-    client.event.subscribe = async () => ({ stream: eventQueue.stream });
-
-    const events = await Effect.runPromise(
-      Effect.gen(function* () {
-        const adapter = yield* OpenCodeAdapter;
-        const eventsFiber = yield* adapter.streamEvents.pipe(
-          Stream.takeUntil(
-            (event) => event.type === "content.delta" && event.payload.delta === sentinelText,
-          ),
-          Stream.runCollect,
-          Effect.forkChild,
-        );
-
-        yield* adapter.startSession({
-          provider: "opencode",
-          threadId: asThreadId("thread-usage-dedup"),
-          runtimeMode: "full-access",
-        });
-
-        yield* adapter.sendTurn({
-          threadId: asThreadId("thread-usage-dedup"),
-          input: "count tokens",
-          attachments: [],
-          modelSelection: {
-            provider: "opencode",
-            model: "openai/gpt-5.4",
-          },
-        });
-
-        const message = assistantMessageUpdated();
-        eventQueue.push(message);
-        eventQueue.push(message);
-        // This later text proves both usage updates passed through the serial event pump.
-        eventQueue.push({
-          type: "message.part.updated",
-          properties: {
-            sessionID: "opencode-session-1",
-            part: {
-              id: "usage-dedup-sentinel-part",
-              messageID: message.properties.info.id,
-              type: "text",
-              text: sentinelText,
-              time: { start: 1 },
-            },
-          },
-        });
-
-        const runtimeEvents = Array.from(yield* Fiber.join(eventsFiber));
-        eventQueue.close();
-        return runtimeEvents;
-      }).pipe(
-        Effect.provide(
-          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
-            Layer.provideMerge(
-              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
-            ),
-            Layer.provideMerge(NodeServices.layer),
-          ),
-        ),
-      ),
-    );
-
-    expect(events.at(-1)).toMatchObject({
-      type: "content.delta",
-      payload: { streamKind: "assistant_text", delta: sentinelText },
-    });
-    expect(events.filter((event) => event.type === "thread.token-usage.updated")).toHaveLength(1);
-  });
-
   it("maps OpenCode todo updates into shared turn tasks", async () => {
     const eventQueue = createSubscribedEventQueue();
     const runtime = createMockOpenCodeRuntime();
-    const client = runtime.runtime.createOpenCodeSdkClient({
-      baseUrl: "http://127.0.0.1:4099",
-      directory: process.cwd(),
-    }) as unknown as {
-      event: {
-        subscribe: () => Promise<{ stream: AsyncIterable<unknown> }>;
-      };
-    };
-    client.event.subscribe = async () => ({ stream: eventQueue.stream });
+    routeEventsTo(runtime, eventQueue);
 
     const events = await Effect.runPromise(
       Effect.gen(function* () {
@@ -4105,21 +3447,9 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           Effect.forkChild,
         );
 
-        yield* adapter.startSession({
-          provider: "opencode",
-          threadId: asThreadId("thread-todo-updated"),
-          runtimeMode: "full-access",
-        });
+        yield* startFullAccess(adapter, asThreadId("thread-todo-updated"));
 
-        yield* adapter.sendTurn({
-          threadId: asThreadId("thread-todo-updated"),
-          input: "work through todos",
-          attachments: [],
-          modelSelection: {
-            provider: "opencode",
-            model: "openai/gpt-5.4",
-          },
-        });
+        yield* sendTestTurn(adapter, asThreadId("thread-todo-updated"), "work through todos");
 
         eventQueue.push({
           type: "todo.updated",
@@ -4136,16 +3466,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
         const runtimeEvents = Array.from(yield* Fiber.join(eventsFiber));
         eventQueue.close();
         return runtimeEvents;
-      }).pipe(
-        Effect.provide(
-          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
-            Layer.provideMerge(
-              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
-            ),
-            Layer.provideMerge(NodeServices.layer),
-          ),
-        ),
-      ),
+      }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
     );
 
     const taskEvent = events.find((event) => event.type === "turn.tasks.updated");
@@ -4159,119 +3480,6 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
     }
   });
 
-  it("streams and completes turns from newer OpenCode session.next events", async () => {
-    const eventQueue = createSubscribedEventQueue();
-    const runtime = createMockOpenCodeRuntime();
-    const client = runtime.runtime.createOpenCodeSdkClient({
-      baseUrl: "http://127.0.0.1:4099",
-      directory: process.cwd(),
-    }) as unknown as {
-      event: {
-        subscribe: () => Promise<{ stream: AsyncIterable<unknown> }>;
-      };
-    };
-    client.event.subscribe = async () => ({ stream: eventQueue.stream });
-
-    const result = await Effect.runPromise(
-      Effect.gen(function* () {
-        const adapter = yield* OpenCodeAdapter;
-        const eventsFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 6)).pipe(
-          Effect.forkChild,
-        );
-
-        yield* adapter.startSession({
-          provider: "opencode",
-          threadId: asThreadId("thread-next-events"),
-          runtimeMode: "full-access",
-        });
-
-        yield* adapter.sendTurn({
-          threadId: asThreadId("thread-next-events"),
-          input: "hello",
-          attachments: [],
-          modelSelection: {
-            provider: "opencode",
-            model: "openai/gpt-5.4",
-          },
-        });
-
-        eventQueue.push({
-          id: "evt-next-text-delta",
-          type: "session.next.text.delta",
-          properties: {
-            timestamp: 1,
-            sessionID: "opencode-session-1",
-            delta: "Hello",
-          },
-        });
-        eventQueue.push({
-          id: "evt-next-text-ended",
-          type: "session.next.text.ended",
-          properties: {
-            timestamp: 2,
-            sessionID: "opencode-session-1",
-            text: "Hello",
-          },
-        });
-        eventQueue.push({
-          id: "evt-next-step-ended",
-          type: "session.next.step.ended",
-          properties: {
-            timestamp: 3,
-            sessionID: "opencode-session-1",
-            finish: "stop",
-            cost: 0.025,
-            tokens: {
-              input: 0,
-              output: 0,
-              reasoning: 0,
-              cache: {
-                read: 0,
-                write: 0,
-              },
-            },
-          },
-        });
-
-        const events = Array.from(yield* Fiber.join(eventsFiber));
-        eventQueue.close();
-        return events;
-      }).pipe(
-        Effect.provide(
-          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
-            Layer.provideMerge(
-              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
-            ),
-            Layer.provideMerge(NodeServices.layer),
-          ),
-        ),
-      ),
-    );
-
-    expect(result.map((event) => event.type)).toEqual([
-      "session.started",
-      "thread.started",
-      "turn.started",
-      "content.delta",
-      "item.completed",
-      "turn.completed",
-    ]);
-    expect(result[3]).toMatchObject({
-      type: "content.delta",
-      payload: {
-        streamKind: "assistant_text",
-        delta: "Hello",
-      },
-    });
-    expect(result[4]).toMatchObject({
-      type: "item.completed",
-      payload: {
-        itemType: "assistant_message",
-        detail: "Hello",
-      },
-    });
-  });
-
   it("enforces Plan permissions under full access and restores them for Debug", async () => {
     const runtime = createMockOpenCodeRuntime();
 
@@ -4279,7 +3487,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
       Effect.gen(function* () {
         const adapter = yield* OpenCodeAdapter;
         const threadId = asThreadId("thread-plan-permissions");
-        yield* adapter.startSession({ provider: "opencode", threadId, runtimeMode: "full-access" });
+        yield* startFullAccess(adapter, threadId);
         yield* adapter.sendTurn({
           threadId,
           input: "Plan the change",
@@ -4295,16 +3503,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           interactionMode: "debug",
           modelSelection: { provider: "opencode", model: "openai/gpt-5.4" },
         });
-      }).pipe(
-        Effect.provide(
-          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
-            Layer.provideMerge(
-              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
-            ),
-            Layer.provideMerge(NodeServices.layer),
-          ),
-        ),
-      ),
+      }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
     );
 
     expect(runtime.updateCalls).toEqual([
@@ -4326,25 +3525,14 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
         "opencode-session-1": [{ id: "opencode-child-1" }],
       },
     });
-    const client = runtime.runtime.createOpenCodeSdkClient({
-      baseUrl: "http://127.0.0.1:4099",
-      directory: process.cwd(),
-    }) as unknown as {
-      event: { subscribe: () => Promise<{ stream: AsyncIterable<unknown> }> };
-    };
-    client.event.subscribe = async () => ({ stream: eventQueue.stream });
+    routeEventsTo(runtime, eventQueue);
 
     await Effect.runPromise(
       Effect.gen(function* () {
         const adapter = yield* OpenCodeAdapter;
         const threadId = asThreadId("thread-child-permission");
-        yield* adapter.startSession({ provider: "opencode", threadId, runtimeMode: "full-access" });
-        yield* adapter.sendTurn({
-          threadId,
-          input: "Delegate a read-only check",
-          attachments: [],
-          modelSelection: { provider: "opencode", model: "openai/gpt-5.4" },
-        });
+        yield* startFullAccess(adapter, threadId);
+        yield* sendTestTurn(adapter, threadId, "Delegate a read-only check");
         eventQueue.push({
           type: "permission.asked",
           properties: {
@@ -4358,16 +3546,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
         });
         yield* Effect.sleep(20);
         eventQueue.close();
-      }).pipe(
-        Effect.provide(
-          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
-            Layer.provideMerge(
-              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
-            ),
-            Layer.provideMerge(NodeServices.layer),
-          ),
-        ),
-      ),
+      }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
     );
 
     expect(runtime.permissionReplyCalls).toContainEqual({
@@ -4403,16 +3582,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           resumeCursor: { openCodeSessionId: "existing-session-1", cwd: process.cwd() },
         });
         yield* Effect.sleep(20);
-      }).pipe(
-        Effect.provide(
-          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
-            Layer.provideMerge(
-              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
-            ),
-            Layer.provideMerge(NodeServices.layer),
-          ),
-        ),
-      ),
+      }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
     );
 
     expect(runtime.permissionReplyCalls).toContainEqual({
@@ -4454,58 +3624,13 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
         });
         yield* Effect.sleep(20);
         eventQueue.close();
-      }).pipe(
-        Effect.provide(
-          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
-            Layer.provideMerge(
-              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
-            ),
-            Layer.provideMerge(NodeServices.layer),
-          ),
-        ),
-      ),
+      }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
     );
 
     expect(runtime.permissionReplyCalls).toContainEqual({
       requestID: "resumed-root-permission",
       reply: "reject",
     });
-  });
-
-  it("re-subscribes when the OpenCode event stream ends cleanly", async () => {
-    const connectedQueue = createSubscribedEventQueue();
-    const endedStream = {
-      async *[Symbol.asyncIterator]() {
-        return;
-      },
-    };
-    const runtime = createMockOpenCodeRuntime({
-      eventSubscriptions: [endedStream, connectedQueue.stream],
-    });
-
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const adapter = yield* OpenCodeAdapter;
-        yield* adapter.startSession({
-          provider: "opencode",
-          threadId: asThreadId("thread-event-reconnect"),
-          runtimeMode: "full-access",
-        });
-        yield* Effect.sleep(300);
-        connectedQueue.close();
-      }).pipe(
-        Effect.provide(
-          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
-            Layer.provideMerge(
-              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
-            ),
-            Layer.provideMerge(NodeServices.layer),
-          ),
-        ),
-      ),
-    );
-
-    expect(runtime.eventSubscribeCallCount).toBeGreaterThanOrEqual(2);
   });
 
   it("fails a full-access turn instead of falling back to a visible approval", async () => {
@@ -4515,13 +3640,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
         throw new Error("permission endpoint unavailable");
       },
     });
-    const client = runtime.runtime.createOpenCodeSdkClient({
-      baseUrl: "http://127.0.0.1:4099",
-      directory: process.cwd(),
-    }) as unknown as {
-      event: { subscribe: () => Promise<{ stream: AsyncIterable<unknown> }> };
-    };
-    client.event.subscribe = async () => ({ stream: eventQueue.stream });
+    routeEventsTo(runtime, eventQueue);
 
     const eventTypes = await Effect.runPromise(
       Effect.gen(function* () {
@@ -4530,13 +3649,8 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           Effect.forkChild,
         );
         const threadId = asThreadId("thread-full-access-reply-failure");
-        yield* adapter.startSession({ provider: "opencode", threadId, runtimeMode: "full-access" });
-        yield* adapter.sendTurn({
-          threadId,
-          input: "Run a command",
-          attachments: [],
-          modelSelection: { provider: "opencode", model: "openai/gpt-5.4" },
-        });
+        yield* startFullAccess(adapter, threadId);
+        yield* sendTestTurn(adapter, threadId, "Run a command");
         eventQueue.push({
           type: "permission.asked",
           properties: {
@@ -4551,16 +3665,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
         const events = Array.from(yield* Fiber.join(eventsFiber));
         eventQueue.close();
         return events.map((event) => event.type);
-      }).pipe(
-        Effect.provide(
-          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
-            Layer.provideMerge(
-              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
-            ),
-            Layer.provideMerge(NodeServices.layer),
-          ),
-        ),
-      ),
+      }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
     );
 
     expect(eventTypes).toEqual([
@@ -4575,15 +3680,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
   it("auto-approves OpenCode permission asks in full access without surfacing approvals", async () => {
     const eventQueue = createSubscribedEventQueue();
     const runtime = createMockOpenCodeRuntime();
-    const client = runtime.runtime.createOpenCodeSdkClient({
-      baseUrl: "http://127.0.0.1:4099",
-      directory: process.cwd(),
-    }) as unknown as {
-      event: {
-        subscribe: () => Promise<{ stream: AsyncIterable<unknown> }>;
-      };
-    };
-    client.event.subscribe = async () => ({ stream: eventQueue.stream });
+    routeEventsTo(runtime, eventQueue);
 
     const result = await Effect.runPromise(
       Effect.gen(function* () {
@@ -4592,21 +3689,9 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           Effect.forkChild,
         );
 
-        yield* adapter.startSession({
-          provider: "opencode",
-          threadId: asThreadId("thread-full-access-permission"),
-          runtimeMode: "full-access",
-        });
+        yield* startFullAccess(adapter, asThreadId("thread-full-access-permission"));
 
-        yield* adapter.sendTurn({
-          threadId: asThreadId("thread-full-access-permission"),
-          input: "hello",
-          attachments: [],
-          modelSelection: {
-            provider: "opencode",
-            model: "openai/gpt-5.4",
-          },
-        });
+        yield* sendTestTurn(adapter, asThreadId("thread-full-access-permission"), "hello");
 
         eventQueue.push({
           id: "evt-permission-asked",
@@ -4670,16 +3755,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
         const events = Array.from(yield* Fiber.join(eventsFiber));
         eventQueue.close();
         return events;
-      }).pipe(
-        Effect.provide(
-          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
-            Layer.provideMerge(
-              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
-            ),
-            Layer.provideMerge(NodeServices.layer),
-          ),
-        ),
-      ),
+      }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
     );
 
     expect(result.map((event) => event.type)).toEqual([
@@ -4690,21 +3766,21 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
       "item.completed",
       "turn.completed",
     ]);
+    expect(result[3]).toMatchObject({
+      type: "content.delta",
+      payload: { streamKind: "assistant_text", delta: "Hello" },
+    });
+    expect(result[4]).toMatchObject({
+      type: "item.completed",
+      payload: { itemType: "assistant_message", detail: "Hello" },
+    });
     expect(runtime.permissionReplyCalls).toEqual([{ requestID: "permission-1", reply: "once" }]);
   });
 
   it("suppresses a permission.replied echo that arrives after turn teardown", async () => {
     const eventQueue = createSubscribedEventQueue();
     const runtime = createMockOpenCodeRuntime();
-    const client = runtime.runtime.createOpenCodeSdkClient({
-      baseUrl: "http://127.0.0.1:4099",
-      directory: process.cwd(),
-    }) as unknown as {
-      event: {
-        subscribe: () => Promise<{ stream: AsyncIterable<unknown> }>;
-      };
-    };
-    client.event.subscribe = async () => ({ stream: eventQueue.stream });
+    routeEventsTo(runtime, eventQueue);
 
     const result = await Effect.runPromise(
       Effect.gen(function* () {
@@ -4713,21 +3789,9 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           Effect.forkChild,
         );
 
-        yield* adapter.startSession({
-          provider: "opencode",
-          threadId: asThreadId("thread-late-permission-echo"),
-          runtimeMode: "full-access",
-        });
+        yield* startFullAccess(adapter, asThreadId("thread-late-permission-echo"));
 
-        yield* adapter.sendTurn({
-          threadId: asThreadId("thread-late-permission-echo"),
-          input: "hello",
-          attachments: [],
-          modelSelection: {
-            provider: "opencode",
-            model: "openai/gpt-5.4",
-          },
-        });
+        yield* sendTestTurn(adapter, asThreadId("thread-late-permission-echo"), "hello");
 
         // Auto-approved ask at the tail of the turn; the reply echo has not arrived yet
         // when the turn completes and active-turn state is torn down.
@@ -4815,16 +3879,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
         const events = Array.from(yield* Fiber.join(eventsFiber));
         eventQueue.close();
         return events;
-      }).pipe(
-        Effect.provide(
-          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
-            Layer.provideMerge(
-              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
-            ),
-            Layer.provideMerge(NodeServices.layer),
-          ),
-        ),
-      ),
+      }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
     );
 
     expect(result.map((event) => event.type)).toEqual([
@@ -4841,157 +3896,62 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
     ]);
   });
 
-  it("surfaces OpenCode permission asks as approvals in approval-required mode", async () => {
-    const eventQueue = createSubscribedEventQueue();
-    const runtime = createMockOpenCodeRuntime();
-    const client = runtime.runtime.createOpenCodeSdkClient({
-      baseUrl: "http://127.0.0.1:4099",
-      directory: process.cwd(),
-    }) as unknown as {
-      event: {
-        subscribe: () => Promise<{ stream: AsyncIterable<unknown> }>;
-      };
-    };
-    client.event.subscribe = async () => ({ stream: eventQueue.stream });
-
-    const result = await Effect.runPromise(
-      Effect.gen(function* () {
-        const adapter = yield* OpenCodeAdapter;
-        const eventsFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 4)).pipe(
-          Effect.forkChild,
-        );
-
-        yield* adapter.startSession({
-          provider: "opencode",
-          threadId: asThreadId("thread-approval-required-permission"),
-          runtimeMode: "approval-required",
-        });
-
-        yield* adapter.sendTurn({
-          threadId: asThreadId("thread-approval-required-permission"),
-          input: "hello",
-          attachments: [],
-          modelSelection: {
-            provider: "opencode",
-            model: "openai/gpt-5.4",
-          },
-        });
-
-        eventQueue.push({
-          id: "evt-permission-asked",
-          type: "permission.asked",
-          properties: {
-            id: "permission-1",
-            sessionID: "opencode-session-1",
-            permission: "bash",
-            patterns: ["rm -rf *"],
-            metadata: {},
-            always: [],
-          },
-        });
-
-        const events = Array.from(yield* Fiber.join(eventsFiber));
-        eventQueue.close();
-        return events;
-      }).pipe(
-        Effect.provide(
-          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
-            Layer.provideMerge(
-              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
-            ),
-            Layer.provideMerge(NodeServices.layer),
-          ),
-        ),
-      ),
-    );
-
-    expect(result.map((event) => event.type)).toEqual([
-      "session.started",
-      "thread.started",
-      "turn.started",
-      "request.opened",
-    ]);
-    expect(result[3]).toMatchObject({
-      type: "request.opened",
-      payload: {
-        requestType: "command_execution_approval",
-        detail: "rm -rf *",
-      },
-    });
-    expect(runtime.permissionReplyCalls).toEqual([]);
-  });
-
   // Permissions outside bash/read/edit used to be classified as "unknown", which
   // maps to no approval kind: the card never rendered and the turn hung forever.
-  it("classifies non-file, non-command OpenCode permissions as tool approvals", async () => {
-    const eventQueue = createSubscribedEventQueue();
-    const runtime = createMockOpenCodeRuntime();
-    const client = runtime.runtime.createOpenCodeSdkClient({
-      baseUrl: "http://127.0.0.1:4099",
-      directory: process.cwd(),
-    }) as unknown as {
-      event: {
-        subscribe: () => Promise<{ stream: AsyncIterable<unknown> }>;
-      };
-    };
-    client.event.subscribe = async () => ({ stream: eventQueue.stream });
+  it.each([
+    ["bash", "rm -rf *", "command_execution_approval"],
+    ["webfetch", "https://example.com", "tool_approval"],
+  ])(
+    "surfaces OpenCode %s permission asks as %s approvals in approval-required mode",
+    async (permission, pattern, requestType) => {
+      const eventQueue = createSubscribedEventQueue();
+      const runtime = createMockOpenCodeRuntime();
+      routeEventsTo(runtime, eventQueue);
 
-    const result = await Effect.runPromise(
-      Effect.gen(function* () {
-        const adapter = yield* OpenCodeAdapter;
-        const eventsFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 4)).pipe(
-          Effect.forkChild,
-        );
-
-        yield* adapter.startSession({
-          provider: "opencode",
-          threadId: asThreadId("thread-tool-permission"),
-          runtimeMode: "approval-required",
-        });
-
-        yield* adapter.sendTurn({
-          threadId: asThreadId("thread-tool-permission"),
-          input: "hello",
-          attachments: [],
-          modelSelection: {
+      const result = await Effect.runPromise(
+        Effect.gen(function* () {
+          const adapter = yield* OpenCodeAdapter;
+          const eventsFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 4)).pipe(
+            Effect.forkChild,
+          );
+          const threadId = asThreadId("thread-approval-required-permission");
+          yield* adapter.startSession({
             provider: "opencode",
-            model: "openai/gpt-5.4",
-          },
-        });
+            threadId,
+            runtimeMode: "approval-required",
+          });
+          yield* sendTestTurn(adapter, threadId, "hello");
+          eventQueue.push({
+            id: "evt-permission-asked",
+            type: "permission.asked",
+            properties: {
+              id: "permission-1",
+              sessionID: "opencode-session-1",
+              permission,
+              patterns: [pattern],
+              metadata: {},
+              always: [],
+            },
+          });
+          const events = Array.from(yield* Fiber.join(eventsFiber));
+          eventQueue.close();
+          return events;
+        }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
+      );
 
-        eventQueue.push({
-          id: "evt-permission-asked-tool",
-          type: "permission.asked",
-          properties: {
-            id: "permission-tool-1",
-            sessionID: "opencode-session-1",
-            permission: "webfetch",
-            patterns: ["https://example.com"],
-            metadata: {},
-            always: [],
-          },
-        });
-
-        const events = Array.from(yield* Fiber.join(eventsFiber));
-        eventQueue.close();
-        return events;
-      }).pipe(
-        Effect.provide(
-          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
-            Layer.provideMerge(
-              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
-            ),
-            Layer.provideMerge(NodeServices.layer),
-          ),
-        ),
-      ),
-    );
-
-    expect(result[3]).toMatchObject({
-      type: "request.opened",
-      payload: { requestType: "tool_approval" },
-    });
-  });
+      expect(result.map((event) => event.type)).toEqual([
+        "session.started",
+        "thread.started",
+        "turn.started",
+        "request.opened",
+      ]);
+      expect(result[3]).toMatchObject({
+        type: "request.opened",
+        payload: { requestType, detail: pattern },
+      });
+      expect(runtime.permissionReplyCalls).toEqual([]);
+    },
+  );
 
   it("confirms a human permission reply from permission.list and continues the same turn", async () => {
     const eventQueue = createSubscribedEventQueue();
@@ -5003,13 +3963,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
       },
       permissionList: async () => ({ data: [] }),
     });
-    const client = runtime.runtime.createOpenCodeSdkClient({
-      baseUrl: "http://127.0.0.1:4099",
-      directory: process.cwd(),
-    }) as unknown as {
-      event: { subscribe: () => Promise<{ stream: AsyncIterable<unknown> }> };
-    };
-    client.event.subscribe = async () => ({ stream: eventQueue.stream });
+    routeEventsTo(runtime, eventQueue);
 
     const result = await Effect.runPromise(
       Effect.gen(function* () {
@@ -5020,12 +3974,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           threadId,
           runtimeMode: "approval-required",
         });
-        yield* adapter.sendTurn({
-          threadId,
-          input: "Search the web",
-          attachments: [],
-          modelSelection: { provider: "opencode", model: "openai/gpt-5.4" },
-        });
+        yield* sendTestTurn(adapter, threadId, "Search the web");
 
         const openedFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 4)).pipe(
           Effect.forkChild,
@@ -5110,15 +4059,10 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
         return [...opened, ...continued];
       }).pipe(
         Effect.provide(
-          makeOpenCodeAdapterLive({
+          makeAdapterTestLayer({
             runtime: runtime.runtime,
             permissionReplyAckDelaysMs: [],
-          }).pipe(
-            Layer.provideMerge(
-              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
-            ),
-            Layer.provideMerge(NodeServices.layer),
-          ),
+          }),
         ),
       ),
     );
@@ -5177,13 +4121,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
         return { data: [permission] };
       },
     });
-    const client = runtime.runtime.createOpenCodeSdkClient({
-      baseUrl: "http://127.0.0.1:4099",
-      directory: process.cwd(),
-    }) as unknown as {
-      event: { subscribe: () => Promise<{ stream: AsyncIterable<unknown> }> };
-    };
-    client.event.subscribe = async () => ({ stream: eventQueue.stream });
+    routeEventsTo(runtime, eventQueue);
 
     const result = await Effect.runPromise(
       Effect.gen(function* () {
@@ -5194,12 +4132,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           threadId,
           runtimeMode: "approval-required",
         });
-        yield* adapter.sendTurn({
-          threadId,
-          input: "Inspect status",
-          attachments: [],
-          modelSelection: { provider: "opencode", model: "openai/gpt-5.4" },
-        });
+        yield* sendTestTurn(adapter, threadId, "Inspect status");
         const openedFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 4)).pipe(
           Effect.forkChild,
         );
@@ -5235,15 +4168,10 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
         return { conflictingResponse, resolved };
       }).pipe(
         Effect.provide(
-          makeOpenCodeAdapterLive({
+          makeAdapterTestLayer({
             runtime: runtime.runtime,
             permissionReplyAckDelaysMs: [],
-          }).pipe(
-            Layer.provideMerge(
-              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
-            ),
-            Layer.provideMerge(NodeServices.layer),
-          ),
+          }),
         ),
       ),
     );
@@ -5274,13 +4202,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
       always: [],
     } satisfies PermissionRequest;
     const runtime = createMockOpenCodeRuntime();
-    const client = runtime.runtime.createOpenCodeSdkClient({
-      baseUrl: "http://127.0.0.1:4099",
-      directory: process.cwd(),
-    }) as unknown as {
-      event: { subscribe: () => Promise<{ stream: AsyncIterable<unknown> }> };
-    };
-    client.event.subscribe = async () => ({ stream: eventQueue.stream });
+    routeEventsTo(runtime, eventQueue);
 
     const exit = await Effect.runPromiseExit(
       Effect.gen(function* () {
@@ -5294,12 +4216,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           threadId,
           runtimeMode: "approval-required",
         });
-        yield* adapter.sendTurn({
-          threadId,
-          input: "Inspect status",
-          attachments: [],
-          modelSelection: { provider: "opencode", model: "openai/gpt-5.4" },
-        });
+        yield* sendTestTurn(adapter, threadId, "Inspect status");
         eventQueue.push({ type: "permission.asked", properties: permission });
         yield* Fiber.join(openedFiber);
 
@@ -5324,15 +4241,10 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
         yield* Effect.sleep(25);
       }).pipe(
         Effect.provide(
-          makeOpenCodeAdapterLive({
+          makeAdapterTestLayer({
             runtime: runtime.runtime,
             runtimeEventBufferCapacity: 1,
-          }).pipe(
-            Layer.provideMerge(
-              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
-            ),
-            Layer.provideMerge(NodeServices.layer),
-          ),
+          }),
         ),
         Effect.timeout("1 second"),
       ),
@@ -5341,205 +4253,95 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
     expect(exit).toMatchObject({ _tag: "Success" });
   });
 
-  it("fails acknowledgement without consuming a permission that the runtime still lists", async () => {
-    const eventQueue = createSubscribedEventQueue();
-    let replySubmitted = false;
-    let keepPending = true;
-    const permission = {
-      id: "permission-still-pending-1",
-      sessionID: "opencode-session-1",
-      permission: "bash",
-      patterns: ["git status"],
-      metadata: {},
-      always: [],
-    } satisfies PermissionRequest;
-    const runtime = createMockOpenCodeRuntime({
-      permissionReply: async () => {
-        replySubmitted = true;
-        return { data: null };
-      },
-      permissionList: async () => ({
-        data: replySubmitted && keepPending ? [permission] : [],
-      }),
-    });
-    const client = runtime.runtime.createOpenCodeSdkClient({
-      baseUrl: "http://127.0.0.1:4099",
-      directory: process.cwd(),
-    }) as unknown as {
-      event: { subscribe: () => Promise<{ stream: AsyncIterable<unknown> }> };
-    };
-    client.event.subscribe = async () => ({ stream: eventQueue.stream });
+  it.each(["still lists the permission", "fails to list permissions"] as const)(
+    "keeps a permission actionable when acknowledgement %s",
+    async (ackProblem) => {
+      const eventQueue = createSubscribedEventQueue();
+      let replySubmitted = false;
+      let ackBroken = true;
+      const permission = {
+        id: "permission-ack-failure-1",
+        sessionID: "opencode-session-1",
+        permission: "bash",
+        patterns: ["git status"],
+        metadata: {},
+        always: [],
+      } satisfies PermissionRequest;
+      const runtime = createMockOpenCodeRuntime({
+        permissionReply: async () => {
+          replySubmitted = true;
+          return { data: null };
+        },
+        permissionList: async () => {
+          if (replySubmitted && ackBroken) {
+            if (ackProblem === "fails to list permissions") {
+              throw new Error("permission.list unavailable");
+            }
+            return { data: [permission] };
+          }
+          return { data: [] };
+        },
+      });
+      routeEventsTo(runtime, eventQueue);
 
-    const result = await Effect.runPromise(
-      Effect.gen(function* () {
-        const adapter = yield* OpenCodeAdapter;
-        const threadId = asThreadId("thread-human-permission-still-pending");
-        yield* adapter.startSession({
-          provider: "opencode",
-          threadId,
-          runtimeMode: "approval-required",
-        });
-        yield* adapter.sendTurn({
-          threadId,
-          input: "Inspect status",
-          attachments: [],
-          modelSelection: { provider: "opencode", model: "openai/gpt-5.4" },
-        });
-        const openedFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 4)).pipe(
-          Effect.forkChild,
-        );
-        eventQueue.push({ type: "permission.asked", properties: permission });
-        yield* Fiber.join(openedFiber);
+      const result = await Effect.runPromise(
+        Effect.gen(function* () {
+          const adapter = yield* OpenCodeAdapter;
+          const threadId = asThreadId("thread-human-permission-ack-failure");
+          yield* adapter.startSession({
+            provider: "opencode",
+            threadId,
+            runtimeMode: "approval-required",
+          });
+          yield* sendTestTurn(adapter, threadId, "Inspect status");
+          const openedFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 4)).pipe(
+            Effect.forkChild,
+          );
+          eventQueue.push({ type: "permission.asked", properties: permission });
+          yield* Fiber.join(openedFiber);
 
-        const firstResponse = yield* adapter
-          .respondToRequest(threadId, ApprovalRequestId.makeUnsafe(permission.id), "accept")
-          .pipe(Effect.result);
-        keepPending = false;
-        const resolvedFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 1)).pipe(
-          Effect.forkChild,
-        );
-        yield* adapter.respondToRequest(
-          threadId,
-          ApprovalRequestId.makeUnsafe(permission.id),
-          "accept",
-        );
-        const resolved = Array.from(yield* Fiber.join(resolvedFiber));
-        eventQueue.close();
-        return { firstResponse, resolved };
-      }).pipe(
-        Effect.provide(
-          makeOpenCodeAdapterLive({
-            runtime: runtime.runtime,
-            permissionReplyAckDelaysMs: [],
-          }).pipe(
-            Layer.provideMerge(
-              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
-            ),
-            Layer.provideMerge(NodeServices.layer),
+          const firstResponse = yield* adapter
+            .respondToRequest(threadId, ApprovalRequestId.makeUnsafe(permission.id), "accept")
+            .pipe(Effect.result);
+          ackBroken = false;
+          const resolvedFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 1)).pipe(
+            Effect.forkChild,
+          );
+          yield* adapter.respondToRequest(
+            threadId,
+            ApprovalRequestId.makeUnsafe(permission.id),
+            "accept",
+          );
+          const resolved = Array.from(yield* Fiber.join(resolvedFiber));
+          eventQueue.close();
+          return { firstResponse, resolved };
+        }).pipe(
+          Effect.provide(
+            makeAdapterTestLayer({ runtime: runtime.runtime, permissionReplyAckDelaysMs: [] }),
           ),
         ),
-      ),
-    );
+      );
 
-    expect(result.firstResponse._tag).toBe("Failure");
-    if (result.firstResponse._tag === "Failure") {
-      expect(result.firstResponse.failure).toMatchObject({
-        _tag: "ProviderAdapterRequestError",
-        method: "permission.reply.acknowledge",
-      });
-    }
-    expect(result.resolved).toHaveLength(1);
-    expect(result.resolved[0]?.type).toBe("request.resolved");
-    expect(runtime.permissionReplyCalls).toEqual([
-      { requestID: permission.id, reply: "once" },
-      { requestID: permission.id, reply: "once" },
-    ]);
-  });
-
-  it("keeps a permission actionable when acknowledgement listing fails", async () => {
-    const eventQueue = createSubscribedEventQueue();
-    let replySubmitted = false;
-    let listFails = true;
-    const permission = {
-      id: "permission-list-failure-1",
-      sessionID: "opencode-session-1",
-      permission: "websearch",
-      patterns: ["Synara"],
-      metadata: {},
-      always: [],
-    } satisfies PermissionRequest;
-    const runtime = createMockOpenCodeRuntime({
-      permissionReply: async () => {
-        replySubmitted = true;
-        return { data: null };
-      },
-      permissionList: async () => {
-        if (replySubmitted && listFails) {
-          throw new Error("permission.list unavailable");
-        }
-        return { data: [] };
-      },
-    });
-    const client = runtime.runtime.createOpenCodeSdkClient({
-      baseUrl: "http://127.0.0.1:4099",
-      directory: process.cwd(),
-    }) as unknown as {
-      event: { subscribe: () => Promise<{ stream: AsyncIterable<unknown> }> };
-    };
-    client.event.subscribe = async () => ({ stream: eventQueue.stream });
-
-    const result = await Effect.runPromise(
-      Effect.gen(function* () {
-        const adapter = yield* OpenCodeAdapter;
-        const threadId = asThreadId("thread-human-permission-list-failure");
-        yield* adapter.startSession({
-          provider: "opencode",
-          threadId,
-          runtimeMode: "approval-required",
+      expect(result.firstResponse._tag).toBe("Failure");
+      if (result.firstResponse._tag === "Failure") {
+        expect(result.firstResponse.failure).toMatchObject({
+          _tag: "ProviderAdapterRequestError",
+          method: "permission.reply.acknowledge",
         });
-        yield* adapter.sendTurn({
-          threadId,
-          input: "Search docs",
-          attachments: [],
-          modelSelection: { provider: "opencode", model: "openai/gpt-5.4" },
-        });
-        const openedFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 4)).pipe(
-          Effect.forkChild,
-        );
-        eventQueue.push({ type: "permission.asked", properties: permission });
-        yield* Fiber.join(openedFiber);
-
-        const firstResponse = yield* adapter
-          .respondToRequest(threadId, ApprovalRequestId.makeUnsafe(permission.id), "accept")
-          .pipe(Effect.result);
-        listFails = false;
-        const resolvedFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 1)).pipe(
-          Effect.forkChild,
-        );
-        yield* adapter.respondToRequest(
-          threadId,
-          ApprovalRequestId.makeUnsafe(permission.id),
-          "accept",
-        );
-        yield* Fiber.join(resolvedFiber);
-        eventQueue.close();
-        return firstResponse;
-      }).pipe(
-        Effect.provide(
-          makeOpenCodeAdapterLive({
-            runtime: runtime.runtime,
-            permissionReplyAckDelaysMs: [],
-          }).pipe(
-            Layer.provideMerge(
-              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
-            ),
-            Layer.provideMerge(NodeServices.layer),
-          ),
-        ),
-      ),
-    );
-
-    expect(result._tag).toBe("Failure");
-    if (result._tag === "Failure") {
-      expect(result.failure).toMatchObject({
-        _tag: "ProviderAdapterRequestError",
-        method: "permission.reply.acknowledge",
-      });
-    }
-  });
+      }
+      expect(result.resolved).toHaveLength(1);
+      expect(result.resolved[0]?.type).toBe("request.resolved");
+      expect(runtime.permissionReplyCalls).toEqual([
+        { requestID: permission.id, reply: "once" },
+        { requestID: permission.id, reply: "once" },
+      ]);
+    },
+  );
 
   it("keeps newer OpenCode tool-call steps attached to the active turn", async () => {
     const eventQueue = createSubscribedEventQueue();
     const runtime = createMockOpenCodeRuntime();
-    const client = runtime.runtime.createOpenCodeSdkClient({
-      baseUrl: "http://127.0.0.1:4099",
-      directory: process.cwd(),
-    }) as unknown as {
-      event: {
-        subscribe: () => Promise<{ stream: AsyncIterable<unknown> }>;
-      };
-    };
-    client.event.subscribe = async () => ({ stream: eventQueue.stream });
+    routeEventsTo(runtime, eventQueue);
 
     const result = await Effect.runPromise(
       Effect.gen(function* () {
@@ -5548,21 +4350,9 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           Effect.forkChild,
         );
 
-        yield* adapter.startSession({
-          provider: "opencode",
-          threadId: asThreadId("thread-next-tool-call"),
-          runtimeMode: "full-access",
-        });
+        yield* startFullAccess(adapter, asThreadId("thread-next-tool-call"));
 
-        yield* adapter.sendTurn({
-          threadId: asThreadId("thread-next-tool-call"),
-          input: "inspect files",
-          attachments: [],
-          modelSelection: {
-            provider: "opencode",
-            model: "openai/gpt-5.4",
-          },
-        });
+        yield* sendTestTurn(adapter, asThreadId("thread-next-tool-call"), "inspect files");
 
         eventQueue.push({
           id: "evt-next-step-tool-calls",
@@ -5603,16 +4393,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
         const events = Array.from(yield* Fiber.join(eventsFiber));
         eventQueue.close();
         return events;
-      }).pipe(
-        Effect.provide(
-          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
-            Layer.provideMerge(
-              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
-            ),
-            Layer.provideMerge(NodeServices.layer),
-          ),
-        ),
-      ),
+      }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
     );
 
     expect(result.map((event) => event.type)).toEqual([
@@ -5634,15 +4415,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
   it("forwards OpenCode child-session tool activity created by task parts", async () => {
     const eventQueue = createSubscribedEventQueue();
     const runtime = createMockOpenCodeRuntime();
-    const client = runtime.runtime.createOpenCodeSdkClient({
-      baseUrl: "http://127.0.0.1:4099",
-      directory: process.cwd(),
-    }) as unknown as {
-      event: {
-        subscribe: () => Promise<{ stream: AsyncIterable<unknown> }>;
-      };
-    };
-    client.event.subscribe = async () => ({ stream: eventQueue.stream });
+    routeEventsTo(runtime, eventQueue);
 
     const result = await Effect.runPromise(
       Effect.gen(function* () {
@@ -5651,21 +4424,9 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           Effect.forkChild,
         );
 
-        yield* adapter.startSession({
-          provider: "opencode",
-          threadId: asThreadId("thread-child-session-tools"),
-          runtimeMode: "full-access",
-        });
+        yield* startFullAccess(adapter, asThreadId("thread-child-session-tools"));
 
-        yield* adapter.sendTurn({
-          threadId: asThreadId("thread-child-session-tools"),
-          input: "inspect files",
-          attachments: [],
-          modelSelection: {
-            provider: "opencode",
-            model: "openai/gpt-5.4",
-          },
-        });
+        yield* sendTestTurn(adapter, asThreadId("thread-child-session-tools"), "inspect files");
 
         eventQueue.push({
           type: "message.part.updated",
@@ -5723,16 +4484,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
         const events = Array.from(yield* Fiber.join(eventsFiber));
         eventQueue.close();
         return events;
-      }).pipe(
-        Effect.provide(
-          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
-            Layer.provideMerge(
-              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
-            ),
-            Layer.provideMerge(NodeServices.layer),
-          ),
-        ),
-      ),
+      }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
     );
 
     expect(result.map((event) => event.type)).toEqual([
@@ -5764,15 +4516,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
   it("projects newer OpenCode shell step events as command executions", async () => {
     const eventQueue = createSubscribedEventQueue();
     const runtime = createMockOpenCodeRuntime();
-    const client = runtime.runtime.createOpenCodeSdkClient({
-      baseUrl: "http://127.0.0.1:4099",
-      directory: process.cwd(),
-    }) as unknown as {
-      event: {
-        subscribe: () => Promise<{ stream: AsyncIterable<unknown> }>;
-      };
-    };
-    client.event.subscribe = async () => ({ stream: eventQueue.stream });
+    routeEventsTo(runtime, eventQueue);
 
     const result = await Effect.runPromise(
       Effect.gen(function* () {
@@ -5781,21 +4525,9 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           Effect.forkChild,
         );
 
-        yield* adapter.startSession({
-          provider: "opencode",
-          threadId: asThreadId("thread-next-shell"),
-          runtimeMode: "full-access",
-        });
+        yield* startFullAccess(adapter, asThreadId("thread-next-shell"));
 
-        yield* adapter.sendTurn({
-          threadId: asThreadId("thread-next-shell"),
-          input: "inspect files",
-          attachments: [],
-          modelSelection: {
-            provider: "opencode",
-            model: "openai/gpt-5.4",
-          },
-        });
+        yield* sendTestTurn(adapter, asThreadId("thread-next-shell"), "inspect files");
 
         eventQueue.push({
           id: "evt-next-shell-started",
@@ -5821,16 +4553,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
         const events = Array.from(yield* Fiber.join(eventsFiber));
         eventQueue.close();
         return events;
-      }).pipe(
-        Effect.provide(
-          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
-            Layer.provideMerge(
-              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
-            ),
-            Layer.provideMerge(NodeServices.layer),
-          ),
-        ),
-      ),
+      }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
     );
 
     expect(result.map((event) => event.type)).toEqual([
@@ -5883,30 +4606,12 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
       Effect.gen(function* () {
         const adapter = yield* OpenCodeAdapter;
         return yield* Effect.gen(function* () {
-          const session = yield* adapter.startSession({
-            provider: "opencode",
-            threadId: asThreadId("thread-stalled-inventory"),
-            runtimeMode: "full-access",
-          });
-          const turn = yield* adapter.sendTurn({
-            threadId: session.threadId,
-            input: "hello",
-            attachments: [],
-            modelSelection: { provider: "opencode", model: "openai/gpt-5.4" },
-          });
+          const session = yield* startFullAccess(adapter, asThreadId("thread-stalled-inventory"));
+          const turn = yield* sendTestTurn(adapter, session.threadId, "hello");
           yield* adapter.stopSession(session.threadId);
           return { session, turn };
         }).pipe(Effect.timeoutOption("1 second"));
-      }).pipe(
-        Effect.provide(
-          makeOpenCodeAdapterLive({ runtime: stalledRuntime }).pipe(
-            Layer.provideMerge(
-              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-inventory-test-" }),
-            ),
-            Layer.provideMerge(NodeServices.layer),
-          ),
-        ),
-      ),
+      }).pipe(Effect.provide(makeAdapterTestLayer({ runtime: stalledRuntime }))),
     );
 
     expect(Option.isSome(result)).toBe(true);
@@ -6041,15 +4746,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
     const eventQueue = createSubscribedEventQueue();
     const runtime = createMockOpenCodeRuntime();
     const gateway = makeGatewayCredentials();
-    const client = runtime.runtime.createOpenCodeSdkClient({
-      baseUrl: "http://127.0.0.1:4099",
-      directory: process.cwd(),
-    }) as unknown as {
-      event: {
-        subscribe: () => Promise<{ stream: AsyncIterable<unknown> }>;
-      };
-    };
-    client.event.subscribe = async () => ({ stream: eventQueue.stream });
+    routeEventsTo(runtime, eventQueue);
 
     const result = await Effect.runPromise(
       Effect.gen(function* () {
@@ -6147,13 +4844,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
         return { data: messageSnapshot };
       },
     });
-    const client = runtime.runtime.createOpenCodeSdkClient({
-      baseUrl: "http://127.0.0.1:4099",
-      directory: process.cwd(),
-    }) as unknown as {
-      event: { subscribe: () => Promise<{ stream: AsyncIterable<unknown> }> };
-    };
-    client.event.subscribe = async () => ({ stream: eventQueue.stream });
+    routeEventsTo(runtime, eventQueue);
 
     const eventTypes = await Effect.runPromise(
       Effect.gen(function* () {
@@ -6278,13 +4969,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
         };
       },
     });
-    const client = runtime.runtime.createOpenCodeSdkClient({
-      baseUrl: "http://127.0.0.1:4099",
-      directory: process.cwd(),
-    }) as unknown as {
-      event: { subscribe: () => Promise<{ stream: AsyncIterable<unknown> }> };
-    };
-    client.event.subscribe = async () => ({ stream: eventQueue.stream });
+    routeEventsTo(runtime, eventQueue);
 
     const eventTypes = await Effect.runPromise(
       Effect.gen(function* () {
@@ -6372,13 +5057,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
       // while several final text parts are arriving over SSE.
       messages: async () => ({ data: [] }),
     });
-    const client = runtime.runtime.createOpenCodeSdkClient({
-      baseUrl: "http://127.0.0.1:4099",
-      directory: process.cwd(),
-    }) as unknown as {
-      event: { subscribe: () => Promise<{ stream: AsyncIterable<unknown> }> };
-    };
-    client.event.subscribe = async () => ({ stream: eventQueue.stream });
+    routeEventsTo(runtime, eventQueue);
 
     const events = await Effect.runPromise(
       Effect.gen(function* () {
@@ -6496,13 +5175,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
     const runtime = createMockOpenCodeRuntime({
       messages: async () => ({ data: messageSnapshot }),
     });
-    const client = runtime.runtime.createOpenCodeSdkClient({
-      baseUrl: "http://127.0.0.1:4099",
-      directory: process.cwd(),
-    }) as unknown as {
-      event: { subscribe: () => Promise<{ stream: AsyncIterable<unknown> }> };
-    };
-    client.event.subscribe = async () => ({ stream: eventQueue.stream });
+    routeEventsTo(runtime, eventQueue);
 
     const result = await Effect.runPromise(
       Effect.gen(function* () {
@@ -6638,13 +5311,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
         });
       },
     });
-    const client = runtime.runtime.createOpenCodeSdkClient({
-      baseUrl: "http://127.0.0.1:4099",
-      directory: process.cwd(),
-    }) as unknown as {
-      event: { subscribe: () => Promise<{ stream: AsyncIterable<unknown> }> };
-    };
-    client.event.subscribe = async () => ({ stream: eventQueue.stream });
+    routeEventsTo(runtime, eventQueue);
 
     const result = await Effect.runPromise(
       Effect.gen(function* () {
@@ -6808,13 +5475,7 @@ describe("OpenCode background subagent tasks", () => {
     eventQueue: ReturnType<typeof createSubscribedEventQueue>,
     program: (adapter: OpenCodeAdapterShape, threadId: ThreadId) => Effect.Effect<A, E>,
   ): Promise<A> {
-    const client = runtime.runtime.createOpenCodeSdkClient({
-      baseUrl: "http://127.0.0.1:4099",
-      directory: process.cwd(),
-    }) as unknown as {
-      event: { subscribe: () => Promise<{ stream: AsyncIterable<unknown> }> };
-    };
-    client.event.subscribe = async () => ({ stream: eventQueue.stream });
+    routeEventsTo(runtime, eventQueue);
     return await Effect.runPromise(
       Effect.gen(function* () {
         const adapter = yield* OpenCodeAdapter;
@@ -7045,59 +5706,6 @@ describe("OpenCode background subagent tasks", () => {
     });
     expect(events[4]).toMatchObject({ payload: { status: "running", isBackgrounded: true } });
     expect(events[5]).toMatchObject({ payload: { status: "stopped" } });
-  });
-
-  it("settles the background task as failed from a synthetic parent text part", async () => {
-    const eventQueue = createSubscribedEventQueue();
-    const runtime = createMockOpenCodeRuntime();
-
-    const events = await runWithAdapter(runtime, eventQueue, (adapter, threadId) =>
-      Effect.gen(function* () {
-        const eventsFiber = yield* Stream.runCollect(
-          Stream.take(Stream.filter(adapter.streamEvents, onlyTaskEvents), 3),
-        ).pipe(Effect.forkChild);
-
-        yield* adapter.startSession({
-          provider: "opencode",
-          threadId,
-          runtimeMode: "full-access",
-        });
-        yield* adapter.sendTurn({
-          threadId,
-          input: "spawn a background agent",
-          attachments: [],
-          modelSelection: { provider: "opencode", model: "openai/gpt-5.4" },
-        });
-
-        pushOpenCodePart(eventQueue, backgroundTaskToolPart("child-session-1"));
-        pushOpenCodePart(eventQueue, {
-          id: "part-synthetic-1",
-          messageID: "user-message-synthetic",
-          sessionID: "opencode-session-1",
-          type: "text",
-          synthetic: true,
-          text: '<task id="child-session-1" state="error"><summary>Background task failed: exploded</summary><task_error>boom</task_error></task>',
-          time: { start: 1 },
-        } as unknown as Part);
-
-        const collected = Array.from(yield* Fiber.join(eventsFiber));
-        eventQueue.close();
-        return collected;
-      }),
-    );
-
-    expect(events.map((event) => event.type)).toEqual([
-      "task.started",
-      "task.updated",
-      "task.completed",
-    ]);
-    expect(events[2]).toMatchObject({
-      payload: {
-        taskId: "child-session-1",
-        status: "failed",
-        summary: "Background task failed: exploded",
-      },
-    });
   });
 
   it("preserves a background failure reported after the child went idle", async () => {

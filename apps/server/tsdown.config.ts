@@ -21,6 +21,40 @@ const migrationRuntimeSourceDigest = createHash("sha256")
   .update(migrationRuntimeSource, "utf8")
   .digest("hex");
 
+// Effect and its platform packages are bundled: loading them file by file was about 270
+// modules and 70 ms of every backend start, and bundling lets unused modules drop out.
+// This is safe only because nothing left in node_modules imports Effect at runtime
+// (@opencode/client is used through its promise entry, which does not). Two copies of
+// Effect would break service identity, so a new runtime dependency that imports Effect
+// must be added here too. Packages that an unbundled SDK also loads (undici, yaml, ws,
+// zod, the Pi and MCP SDKs) and anything native (node-pty, msgpackr's optional
+// accelerator) stay external.
+const BUNDLED_RUNTIME_PACKAGES = [
+  "effect",
+  "@effect/platform-node",
+  "@effect/platform-node-shared",
+  "@effect/sql-sqlite-bun",
+  // Pure-JS dependencies of the packages above.
+  "@standard-schema/spec",
+  "fast-check",
+  "find-my-way-ts",
+  "ini",
+  "mime",
+  "multipasta",
+  "pure-rand",
+  "toml",
+  "uuid",
+  // Inline @pierre/diffs (only parsePatchFiles is used; Shiki is tree-shaken away)
+  // and @opencode/client (its Promise client does not load @opencode/{protocol,schema}
+  // or their duplicate nested effect@4.0.0-rc.* trees).
+  "@pierre/diffs",
+  "@opencode/client",
+];
+
+function isBundledRuntimePackage(id: string): boolean {
+  return BUNDLED_RUNTIME_PACKAGES.some((name) => id === name || id.startsWith(`${name}/`));
+}
+
 export default defineConfig({
   entry: {
     index: "src/index.ts",
@@ -33,18 +67,16 @@ export default defineConfig({
   outDir: "dist",
   // Bun builtins only resolve at runtime under Bun; MigrationBackup.ts guards
   // the import behind a `process.versions.bun` check.
-  external: [/^bun:/u],
+  // The Pi SDK stays out of the bundle: the provider resolves it from the
+  // user's `pi` CLI install at runtime (piSdkImports.ts).
+  external: [/^bun:/u, /^@earendil-works\//u],
   minify: true,
   sourcemap: buildSourcemap,
   define: {
     __SYNARA_MIGRATION_RUNTIME_SOURCE_DIGEST__: JSON.stringify(migrationRuntimeSourceDigest),
   },
   clean: true,
-  // Inline @pierre/diffs (only parsePatchFiles is used; Shiki is tree-shaken away)
-  // and @opencode/client (its Promise client does not load @opencode/{protocol,schema}
-  // or their duplicate nested effect@4.0.0-rc.* trees).
-  noExternal: (id) =>
-    id.startsWith("@synara/") || id === "@pierre/diffs" || id === "@opencode/client",
+  noExternal: (id) => id.startsWith("@synara/") || isBundledRuntimePackage(id),
   inlineOnly: false,
   banner: {
     js: "#!/usr/bin/env node\n",

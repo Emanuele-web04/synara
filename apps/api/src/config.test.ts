@@ -62,6 +62,37 @@ describe("loadApiConfig", () => {
     }
   });
 
+  it("requires explicit configured billing for paid public profiles", () => {
+    expect(loadApiConfig(base).profileBillingEnforced).toBe(false);
+    expect(
+      loadApiConfig({ ...base, POLAR_PROFILE_ACCESS_ENFORCED: "false" }).profileBillingEnforced,
+    ).toBe(false);
+    for (const invalid of ["", "1", "yes", "TRUE"]) {
+      expect(() => loadApiConfig({ ...base, POLAR_PROFILE_ACCESS_ENFORCED: invalid })).toThrow(
+        "POLAR_PROFILE_ACCESS_ENFORCED",
+      );
+    }
+    expect(() => loadApiConfig({ ...base, POLAR_PROFILE_ACCESS_ENFORCED: "true" })).toThrow(
+      "requires configured Polar billing",
+    );
+    const config = loadApiConfig({
+      ...base,
+      POLAR_PROFILE_ACCESS_ENFORCED: "true",
+      POLAR_BILLING_ENABLED: "true",
+      POLAR_ENVIRONMENT: "sandbox",
+      POLAR_ACCESS_TOKEN: "test-only-token",
+      POLAR_WEBHOOK_SECRET: "test-only-secret",
+      POLAR_ORGANIZATION_ID: randomUUID(),
+      POLAR_MONTHLY_PRODUCT_ID: randomUUID(),
+      POLAR_YEARLY_PRODUCT_ID: randomUUID(),
+      POLAR_DESKTOP_BENEFIT_ID: randomUUID(),
+      POLAR_CHECKOUT_SUCCESS_URL: "http://127.0.0.1:8788/billing/return",
+      POLAR_PORTAL_RETURN_URL: "http://127.0.0.1:8788/settings",
+    });
+    // Independent of the remote switch: either can roll out alone.
+    expect(config).toMatchObject({ profileBillingEnforced: true, remoteBillingEnforced: false });
+  });
+
   it("opens remote beta access only through an explicit valid deployment setting", () => {
     expect(loadWorkosConfig(base).remoteBetaAccessEnabled).not.toBe(true);
     for (const value of ["true", "false"]) {

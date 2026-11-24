@@ -89,11 +89,3 @@ describe("buildFileDiffTree", () => {
     expect(names(tree)).toEqual(["File1.ts", "file2.ts", "file10.ts"]);
   });
 });
-
-describe("search → tree pipeline", () => {
-  const files = [
-    createFileDiff("apps/server/src/codex.ts"),
-    createFileDiff("apps/web/src/ChatView.tsx"),
-    createFileDiff("packages/shared/src/model.ts"),
-  ];
-});

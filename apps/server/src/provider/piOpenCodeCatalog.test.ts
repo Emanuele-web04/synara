@@ -1,3 +1,4 @@
+import { importTestPiPackage } from "./testing/piSdkFixture.ts";
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -85,7 +86,7 @@ describe("Pi OpenCode catalog", () => {
     );
     const modelRuntime = await runtime(dir);
     const fetch = publicFetch();
-    await refreshPiOpenCodeCatalog(modelRuntime, { request: fetch });
+    await refreshPiOpenCodeCatalog(modelRuntime, importTestPiPackage, { request: fetch });
     const registry = new ModelRegistry(modelRuntime);
     const discovered = getPiDiscoverableModels(registry).filter(
       (model) => model.provider === "opencode",
@@ -112,7 +113,7 @@ describe("Pi OpenCode catalog", () => {
       JSON.stringify({ opencode: { type: "api_key", key: "synthetic-dispatch-key" } }),
     );
     const modelRuntime = await runtime(dir);
-    await refreshPiOpenCodeCatalog(modelRuntime, { request: publicFetch() });
+    await refreshPiOpenCodeCatalog(modelRuntime, importTestPiPackage, { request: publicFetch() });
     const requests: Array<{ url: string; headers: Headers; body: string }> = [];
     vi.stubGlobal(
       "fetch",
@@ -174,7 +175,7 @@ describe("Pi OpenCode catalog", () => {
     const first = await runtime(dir);
     const second = await runtime();
     const baseline = second.getModels("opencode");
-    await refreshPiOpenCodeCatalog(first, { request: publicFetch() });
+    await refreshPiOpenCodeCatalog(first, importTestPiPackage, { request: publicFetch() });
     expect(first.getModel("opencode", "custom-only")).toMatchObject({
       baseUrl: "https://custom.example/v1",
       api: "openai-completions",
@@ -198,7 +199,7 @@ describe("Pi OpenCode catalog", () => {
     }`,
     );
     const modelRuntime = await runtime(dir);
-    await refreshPiOpenCodeCatalog(modelRuntime, { request: publicFetch() });
+    await refreshPiOpenCodeCatalog(modelRuntime, importTestPiPackage, { request: publicFetch() });
     const services = await createAgentSessionServices({ cwd: dir, agentDir: dir, modelRuntime });
     expect(services.resourceLoader.getExtensions().runtime.pendingProviderRegistrations).toEqual(
       [],
@@ -214,7 +215,7 @@ describe("Pi OpenCode catalog", () => {
 
   it("rejects missing Zen metadata but retains custom endpoint fallbacks", async () => {
     const modelRuntime = await runtime();
-    await refreshPiOpenCodeCatalog(modelRuntime, { request: publicFetch() });
+    await refreshPiOpenCodeCatalog(modelRuntime, importTestPiPackage, { request: publicFetch() });
     const registry = new ModelRegistry(modelRuntime);
     expect(findModelInRegistry(registry, "opencode/retired-or-unknown")).toBeUndefined();
     registry.registerProvider("opencode", {
@@ -245,7 +246,7 @@ describe("Pi OpenCode catalog", () => {
     writeFileSync(path.join(dir, "auth.json"), "{}");
     const modelRuntime = await runtime(dir);
     const request = publicFetch();
-    await refreshPiOpenCodeCatalog(modelRuntime, { request });
+    await refreshPiOpenCodeCatalog(modelRuntime, importTestPiPackage, { request });
     expect(request).not.toHaveBeenCalled();
   });
 
@@ -276,17 +277,17 @@ describe("Pi OpenCode catalog", () => {
   it("preserves discovered protocol metadata across fresh runtimes when catalog networking is unavailable", async () => {
     const dir = directory();
     const first = await runtime(dir);
-    await refreshPiOpenCodeCatalog(first, { request: publicFetch() });
+    await refreshPiOpenCodeCatalog(first, importTestPiPackage, { request: publicFetch() });
     const restarted = await runtime(dir);
     const request = vi.fn<typeof outboundHttp.request>().mockRejectedValue(new Error("offline"));
-    await refreshPiOpenCodeCatalog(restarted, { request });
+    await refreshPiOpenCodeCatalog(restarted, importTestPiPackage, { request });
     for (const model of fixtures) expect(restarted.getModel("opencode", model.id)).toEqual(model);
   });
 
   it("does not confuse opencode-go with Zen", async () => {
     const modelRuntime = await runtime();
     const before = modelRuntime.getModels("opencode-go");
-    await refreshPiOpenCodeCatalog(modelRuntime, { request: publicFetch() });
+    await refreshPiOpenCodeCatalog(modelRuntime, importTestPiPackage, { request: publicFetch() });
     expect(modelRuntime.getModels("opencode-go")).toEqual(before);
   });
 
@@ -298,7 +299,7 @@ describe("Pi OpenCode catalog", () => {
       Response.json({ data: [] }),
       Response.json(null),
     ]) {
-      await refreshPiOpenCodeCatalog(modelRuntime, {
+      await refreshPiOpenCodeCatalog(modelRuntime, importTestPiPackage, {
         request: vi.fn(async () => ({
           status: response.status,
           url: "https://pi.dev",
@@ -322,14 +323,20 @@ describe("Pi OpenCode catalog", () => {
           signal.addEventListener("abort", () => reject(signal.reason), { once: true });
         }),
     );
-    await refreshPiOpenCodeCatalog(modelRuntime, { request: fetch, timeoutMs: 10 });
+    await refreshPiOpenCodeCatalog(modelRuntime, importTestPiPackage, {
+      request: fetch,
+      timeoutMs: 10,
+    });
     expect(signals).toHaveLength(2);
     expect(signals.every((signal) => signal.aborted)).toBe(true);
     expect(modelRuntime.getModels("opencode")).toEqual(before);
     const controller = new AbortController();
     controller.abort();
     fetch.mockClear();
-    await refreshPiOpenCodeCatalog(modelRuntime, { request: fetch, signal: controller.signal });
+    await refreshPiOpenCodeCatalog(modelRuntime, importTestPiPackage, {
+      request: fetch,
+      signal: controller.signal,
+    });
     expect(fetch).not.toHaveBeenCalled();
   });
 
@@ -337,7 +344,7 @@ describe("Pi OpenCode catalog", () => {
     const modelRuntime = await runtime();
     vi.stubEnv("PI_OFFLINE", "1");
     const fetch = publicFetch();
-    await refreshPiOpenCodeCatalog(modelRuntime, { request: fetch });
+    await refreshPiOpenCodeCatalog(modelRuntime, importTestPiPackage, { request: fetch });
     expect(fetch).not.toHaveBeenCalled();
   });
 
@@ -345,7 +352,7 @@ describe("Pi OpenCode catalog", () => {
     const modelRuntime = await runtime();
     vi.stubEnv("PI_OFFLINE", undefined);
     const fetch = publicFetch();
-    await refreshPiOpenCodeCatalog(modelRuntime, {
+    await refreshPiOpenCodeCatalog(modelRuntime, importTestPiPackage, {
       request: fetch,
       environment: { PI_OFFLINE: "1" },
     });

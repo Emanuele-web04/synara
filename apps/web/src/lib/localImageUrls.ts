@@ -1,11 +1,14 @@
 // FILE: localImageUrls.ts
-// Purpose: Builds authenticated local-image URLs for markdown image previews and downloads.
+// Purpose: Builds authenticated local-image URLs for markdown image/video previews and downloads.
 // Layer: Web utility
-// Exports: local image URL detection and builders
+// Exports: local image/video URL detection and builders
 // Depends on: wsHttpUrl (so desktop requests carry the legacy startup token used by attachments)
 //             and @synara/shared/localPreviewFiles for the canonical route + extension allowlist.
 
-import { SUPPORTED_LOCAL_IMAGE_EXTENSION_REGEX } from "@synara/shared/localPreviewFiles";
+import {
+  SUPPORTED_LOCAL_IMAGE_EXTENSION_REGEX,
+  SUPPORTED_LOCAL_VIDEO_EXTENSION_REGEX,
+} from "@synara/shared/localPreviewFiles";
 import { isWindowsAbsolutePath } from "@synara/shared/path";
 
 import { resolveExecutionResource } from "./wsHttpUrl";
@@ -14,7 +17,9 @@ export function normalizeMarkdownImagePath(src: string): string {
   const trimmed = src.trim();
   if (trimmed.startsWith("file://")) {
     try {
-      return decodeURIComponent(new URL(trimmed).pathname);
+      const pathname = decodeURIComponent(new URL(trimmed).pathname);
+      // `file:///C:/dir` parses to `/C:/dir`; drop the slash so the drive path stays native.
+      return /^\/[A-Za-z]:[\\/]/.test(pathname) ? pathname.slice(1) : pathname;
     } catch {
       return trimmed;
     }
@@ -26,15 +31,17 @@ export function normalizeMarkdownImagePath(src: string): string {
   }
 }
 
-export function isLocalImageMarkdownSrc(src: string | undefined): src is string {
+// Shared locality rule for markdown media: the extension must match the kind's
+// allowlist and the source must be a filesystem path, not a URL with a scheme.
+function isLocalMarkdownMediaSrc(src: string | undefined, extensionRegex: RegExp): src is string {
   if (!src) {
     return false;
   }
   const normalized = normalizeMarkdownImagePath(src);
-  if (!SUPPORTED_LOCAL_IMAGE_EXTENSION_REGEX.test(normalized)) {
+  if (!extensionRegex.test(normalized)) {
     return false;
   }
-  // Treat Windows-style absolute paths (e.g. `C:\foo\bar.png`) as local images even though
+  // Treat Windows-style absolute paths (e.g. `C:\foo\bar.png`) as local even though
   // their drive prefix would otherwise look like a URI scheme.
   if (isWindowsAbsolutePath(normalized)) {
     return true;
@@ -45,6 +52,14 @@ export function isLocalImageMarkdownSrc(src: string | undefined): src is string 
     normalized.startsWith("../") ||
     !/^[a-z][a-z0-9+.-]*:/i.test(normalized)
   );
+}
+
+export function isLocalImageMarkdownSrc(src: string | undefined): src is string {
+  return isLocalMarkdownMediaSrc(src, SUPPORTED_LOCAL_IMAGE_EXTENSION_REGEX);
+}
+
+export function isLocalVideoMarkdownSrc(src: string | undefined): src is string {
+  return isLocalMarkdownMediaSrc(src, SUPPORTED_LOCAL_VIDEO_EXTENSION_REGEX);
 }
 
 export function buildLocalImageUrl(input: {

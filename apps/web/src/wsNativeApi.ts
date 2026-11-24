@@ -405,6 +405,22 @@ export function onServerWelcome(listener: (payload: WsWelcomePayload) => void): 
  * Subscribe to server config update events. Replays the latest update for
  * late subscribers to avoid missing config validation feedback.
  */
+export function readLatestServerConfigSnapshot() {
+  return instance?.transport.getLatestServerConfigSnapshot() ?? null;
+}
+
+export function waitForInitialServerConfigSnapshot(timeoutMs?: number) {
+  return instance?.transport.waitForInitialServerConfigSnapshot(timeoutMs) ?? null;
+}
+
+export function readLatestServerSettingsSnapshot() {
+  return instance?.transport.getLatestServerSettingsSnapshot() ?? null;
+}
+
+export function waitForInitialServerSettingsSnapshot(timeoutMs?: number) {
+  return instance?.transport.waitForInitialServerSettingsSnapshot(timeoutMs) ?? null;
+}
+
 export function onServerConfigUpdated(
   listener: (payload: ServerConfigUpdatedPayload) => void,
 ): () => void {
@@ -858,6 +874,13 @@ export function createWsNativeApi(): NativeApi {
         executionRequest(WS_METHODS.serverGenerateThreadRecap, input, {
           timeoutMs: null,
         }),
+      // The server bounds generation itself; aborting interrupts it there too.
+      generateComposerPrediction: (input, options) =>
+        executionRequest(
+          WS_METHODS.serverGenerateComposerPrediction,
+          input,
+          options?.signal ? { signal: options.signal } : undefined,
+        ),
       generateAutomationIntent: (input) =>
         executionRequest(WS_METHODS.serverGenerateAutomationIntent, input, {
           timeoutMs: null,
@@ -881,6 +904,7 @@ export function createWsNativeApi(): NativeApi {
       getProfileTokenStats: (input) =>
         executionRequest(WS_METHODS.statsGetProfileTokenStats, input),
       getRecap: (input) => executionRequest(WS_METHODS.statsGetRecap, input),
+      getUsageAnalytics: (input) => executionRequest(WS_METHODS.statsGetUsageAnalytics, input),
     },
     provider: {
       getComposerCapabilities: (input) =>
@@ -908,6 +932,8 @@ export function createWsNativeApi(): NativeApi {
           command: omitNullUserInputAnswers(command),
         });
       },
+      settleTurnDispatch: (input) =>
+        executionRequest(ORCHESTRATION_WS_METHODS.settleTurnDispatch, input),
       importThread: (input) => executionRequest(ORCHESTRATION_WS_METHODS.importThread, input),
       listProjectImports: (input) =>
         executionRequest(ORCHESTRATION_WS_METHODS.listProjectImports, input),

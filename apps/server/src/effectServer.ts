@@ -1,5 +1,6 @@
 import { remoteConnectionsUnavailableReason } from "./remoteFeaturePolicy";
 import { ProjectionPendingInteractionRepositoryLive } from "./persistence/Layers/ProjectionPendingInteractions";
+import { ProjectionTurnRepositoryLive } from "./persistence/Layers/ProjectionTurns";
 import { ProviderSessionRuntimeRepositoryLive } from "./persistence/Layers/ProviderSessionRuntime";
 import http from "node:http";
 
@@ -37,6 +38,7 @@ import {
   type OrchestrationReactorShape,
 } from "./orchestration/Services/OrchestrationReactor";
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery";
+import { ProviderCommandReactor } from "./orchestration/Services/ProviderCommandReactor";
 import { ProjectionPendingInteractionRepository } from "./persistence/Services/ProjectionPendingInteractions";
 import { ThreadDeletionReactor } from "./orchestration/Services/ThreadDeletionReactor";
 import { ThreadSnoozeReactor } from "./orchestration/Services/ThreadSnoozeReactor";
@@ -94,6 +96,7 @@ export interface ServerShape {
     | OrchestrationReactor
     | ProjectionPendingInteractionRepository
     | ProjectionSnapshotQuery
+    | ProviderCommandReactor
     | ProviderSessionReaper
     | ProviderRuntimeReconciler
     | ProviderService
@@ -301,6 +304,7 @@ export const createEffectServer = Effect.fn(function* (
       yield* reconcileRestartStuckTurns;
     }).pipe(
       Effect.provide(ProjectionPendingInteractionRepositoryLive),
+      Effect.provide(ProjectionTurnRepositoryLive),
       Effect.provide(ProviderSessionRuntimeRepositoryLive),
     ),
     reactors: [

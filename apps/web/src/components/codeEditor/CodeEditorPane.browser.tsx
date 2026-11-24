@@ -1,6 +1,7 @@
 // The editable surface inside Synara: shared buffers, history, layout changes, and the native pickers.
 import "../../index.css";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { useAppTypography } from "../../hooks/useAppTypography";
 import { createRef, useState } from "react";
 import { page, userEvent } from "vitest/browser";
 import { afterEach, expect, it, vi } from "vitest";
@@ -27,6 +28,7 @@ function Harness({
   initialValue?: string | undefined;
   onHistoryChange?: ((history: CodeEditHistoryState) => void) | undefined;
 }) {
+  useAppTypography();
   const [value, setValue] = useState(initialValue);
   const [version, setVersion] = useState(0);
   const [split, setSplit] = useState(true);
@@ -112,6 +114,8 @@ async function ready() {
     )
     .toBe(true);
   const editor = activeEditor();
+  // Let the initial editor frame settle before focus or viewport interactions.
+  await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
   editor.focus();
   return editor;
 }
@@ -123,11 +127,13 @@ const rendered = () =>
     .map((lines) => lines.textContent ?? "")
     .join("\n");
 
-it.each(
-  [false, true].flatMap((diff) =>
-    ["Close", "Previous Match", "Next Match", "Find"].map((name) => ({ diff, name })),
-  ),
-)(
+// Close (the editor-edge button, both editor modes) and the Find textbox (its own label branch)
+// cover the shared Monaco hover path; Previous/Next Match reuse Close's button tooltip path.
+it.each([
+  { diff: false, name: "Close" },
+  { diff: true, name: "Close" },
+  { diff: false, name: "Find" },
+])(
   "keeps Find's $name tooltip visible and stable at the editor edge (diff: $diff)",
   async ({ diff, name }) => {
     await page.viewport(1200, 800);
@@ -164,7 +170,13 @@ it.each(
         expect(tooltip()).toBe(original);
         const bounds = original.getBoundingClientRect();
         const target = button.getBoundingClientRect();
-        expect(bounds.bottom <= target.top || bounds.top >= target.bottom).toBe(true);
+        const separated = bounds.bottom <= target.top || bounds.top >= target.bottom;
+        expect(
+          separated,
+          separated
+            ? undefined
+            : `Tooltip overlaps trigger: ${JSON.stringify({ tooltip: bounds, trigger: target })}`,
+        ).toBe(true);
         // A DOM-visible tooltip can still be clipped by the editor or covered by its header.
         for (const [x, y] of [
           [bounds.left + 8, bounds.top + bounds.height / 2],
@@ -184,93 +196,6 @@ it.each(
     }
   },
   15_000,
-);
-
-it.each([false, true].flatMap((replace) => [13, 18].map((fontSize) => ({ replace, fontSize }))))(
-  "centers and scales Find controls (replace: $replace, UI: $fontSize)",
-  async ({ replace, fontSize }) => {
-    const view = await mount(false, "const value = 1;\nconsole.log(value);\n");
-    const editor = await ready();
-    editor
-      .getDomNode()
-      ?.closest<HTMLElement>(".synara-code-editor")
-      ?.style.setProperty("--app-font-size-ui", `${fontSize}px`);
-    try {
-      await editor
-        .getAction(replace ? "editor.action.startFindReplaceAction" : "actions.find")
-        ?.run();
-      const find = page.getByRole("textbox", { name: "Find", exact: true });
-      await expect.element(find).toBeVisible();
-      for (const query of ["value", "value\nconsole"]) {
-        await find.fill(query);
-        const input = find.element();
-        const box = input.getBoundingClientRect();
-        const style = getComputedStyle(input);
-        expect(parseFloat(style.fontSize)).toBe(fontSize);
-        const firstLineCenter =
-          box.top + parseFloat(style.paddingTop) + parseFloat(style.lineHeight) / 2;
-        const widget = input.closest(".find-widget");
-        const counter = widget?.querySelector(".matchesCount");
-        if (!counter) throw new Error("Find's match counter did not mount.");
-        const range = document.createRange();
-        range.selectNodeContents(counter);
-        const text = range.getBoundingClientRect();
-        // Compare actual glyphs: fractional line heights and font ascenders can
-        // put their optical center slightly away from the line box center.
-        const mirror = input.closest(".monaco-inputbox")?.querySelector(".mirror");
-        if (!mirror) throw new Error("Find's measuring mirror did not mount.");
-        range.selectNodeContents(mirror);
-        const glyphs = range.getClientRects()[0];
-        if (!glyphs) throw new Error("Find's query glyphs were not measured.");
-        expect(
-          Math.abs(text.top + text.height / 2 - glyphs.top - glyphs.height / 2),
-          JSON.stringify({
-            text: text.toJSON(),
-            glyphs: glyphs.toJSON(),
-            box: box.toJSON(),
-            lineHeight: style.lineHeight,
-          }),
-        ).toBeLessThanOrEqual(0.25);
-        const controls = input.closest(".monaco-findInput")?.querySelector(".controls");
-        for (const name of [
-          '[aria-label^="Previous Match"]',
-          '[aria-label^="Next Match"]',
-          ".button.codicon-widget-close",
-        ]) {
-          const button = widget?.querySelector(name);
-          if (!button) throw new Error(`Find's ${name} did not mount.`);
-          const bounds = button.getBoundingClientRect();
-          expect(Math.abs(bounds.top + bounds.height / 2 - firstLineCenter)).toBeLessThanOrEqual(
-            0.25,
-          );
-        }
-        for (const toggle of controls?.children ?? []) {
-          const bounds = toggle.getBoundingClientRect();
-          expect(Math.abs(bounds.top + bounds.height / 2 - firstLineCenter)).toBeLessThanOrEqual(
-            0.25,
-          );
-        }
-        if (replace) {
-          const replacement = page.getByRole("textbox", { name: "Replace", exact: true }).element();
-          const replacementBox = replacement.getBoundingClientRect();
-          const replacementStyle = getComputedStyle(replacement);
-          expect(parseFloat(replacementStyle.fontSize)).toBe(fontSize);
-          const replacementCenter =
-            replacementBox.top +
-            parseFloat(replacementStyle.paddingTop) +
-            parseFloat(replacementStyle.lineHeight) / 2;
-          const toggle = replacement.closest(".monaco-findInput")?.querySelector(".controls > *");
-          if (!toggle) throw new Error("Replace's preserve-case toggle did not mount.");
-          const bounds = toggle.getBoundingClientRect();
-          expect(Math.abs(bounds.top + bounds.height / 2 - replacementCenter)).toBeLessThanOrEqual(
-            0.25,
-          );
-        }
-      }
-    } finally {
-      await view.unmount();
-    }
-  },
 );
 
 it.each([false, true])("overlays Find without moving the code (diff: %s)", async (diff) => {

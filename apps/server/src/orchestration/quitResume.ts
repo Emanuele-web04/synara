@@ -21,8 +21,9 @@
  * before commands are admitted (so no new quit can race it; atomic rename then
  * delete — a crash in between loses the resume rather than doubling it), then
  * `resumeQuitInterruptedChats` filters out threads that moved on since the record
- * was written and dispatches one ordinary user turn per remaining thread with the
- * recorded continuation prompt. Each turn carries a `resumePrecondition` so the
+ * was written and dispatches one `thread.turn.resume` per remaining thread: the
+ * recorded continuation prompt goes to the provider without a chat message (an
+ * undelivered request is resent instead). Each carries a `resumePrecondition` so the
  * decider re-checks the same conditions atomically inside the serialized
  * dispatch — a client command landing between the plan and the dispatch cannot
  * slip a stale continuation through. No record → one `exists` check and nothing
@@ -46,17 +47,18 @@ import type {
 import {
   CommandId,
   IsoDateTime,
-  MessageId,
   QUIT_RESUME_MAX_PROMPT_CHARS,
   QUIT_RESUME_MAX_THREADS,
   ThreadId,
   TrimmedNonEmptyString,
   TurnId,
 } from "@synara/contracts";
+import { TURN_RESUME_MESSAGE_ID_PREFIX } from "@synara/shared/turnResume";
 import { Duration, Effect, FileSystem, Option, Schema } from "effect";
 import { randomUUID } from "node:crypto";
 
 import { writeFileStringAtomically } from "../atomicWrite";
+import { reportReliabilityIssue } from "../reliability";
 import { ServerConfig } from "../config";
 import {
   threadHasInFlightTurn,
@@ -65,7 +67,9 @@ import {
 } from "./commandInvariants.ts";
 import { OrchestrationEngineService } from "./Services/OrchestrationEngine.ts";
 import { ProjectionPendingInteractionRepository } from "../persistence/Services/ProjectionPendingInteractions.ts";
+import { ProjectionTurnRepository } from "../persistence/Services/ProjectionTurns.ts";
 import { ProjectionSnapshotQuery } from "./Services/ProjectionSnapshotQuery.ts";
+import { ProviderCommandReactor } from "./Services/ProviderCommandReactor.ts";
 
 /**
  * A quit normally stops this process within seconds (desktop shutdown timeout is
@@ -103,7 +107,10 @@ export type QuitResumeRecord = typeof QuitResumeRecord.Type;
 
 const decodeQuitResumeRecord = Schema.decodeUnknownEffect(Schema.fromJsonString(QuitResumeRecord));
 
-type ThreadTurnStartCommand = Extract<OrchestrationCommand, { readonly type: "thread.turn.start" }>;
+type ThreadTurnResumeCommand = Extract<
+  OrchestrationCommand,
+  { readonly type: "thread.turn.resume" }
+>;
 type ThreadTurnInterruptCommand = Extract<
   OrchestrationCommand,
   { readonly type: "thread.turn.interrupt" }
@@ -136,7 +143,7 @@ export type QuitResumeSkipReason =
   | ThreadResumePreconditionViolation;
 
 export interface QuitResumePlan {
-  readonly commands: ReadonlyArray<ThreadTurnStartCommand>;
+  readonly commands: ReadonlyArray<ThreadTurnResumeCommand>;
   readonly skipped: ReadonlyArray<{
     readonly threadId: ThreadId;
     readonly reason: QuitResumeSkipReason;
@@ -194,6 +201,8 @@ export const captureCrashResumeRecord = Effect.gen(function* () {
   const engine = yield* OrchestrationEngineService;
   const interactions = yield* ProjectionPendingInteractionRepository;
   const snapshots = yield* ProjectionSnapshotQuery;
+  const projectionTurns = yield* ProjectionTurnRepository;
+  const providerCommands = yield* ProviderCommandReactor;
   const now = new Date().toISOString();
   const pending = yield* interactions.listUnsettled({});
   const blocked = new Set(pending.map((entry) => entry.threadId));
@@ -202,14 +211,45 @@ export const captureCrashResumeRecord = Effect.gen(function* () {
   // candidates' durable details before deciding whether an automation owns them.
   const details = yield* Effect.forEach(
     readModel.threads.filter(
-      (thread) => thread.latestTurn?.state === "running" && thread.session?.status === "running",
+      (thread) =>
+        thread.parentThreadId == null &&
+        thread.latestTurn?.state === "running" &&
+        thread.session?.status === "running",
     ),
-    // The stored user request can have a null turnId even after its turn starts.
-    // The detail snapshot links requests to turns through pending_message_id.
-    (thread) => snapshots.getThreadDetailSnapshotById(thread.id),
+    (candidate) =>
+      providerCommands.withRestartOrphanedThread(
+        candidate.id,
+        Effect.gen(function* () {
+          const detail = yield* snapshots.getThreadDetailSnapshotById(candidate.id);
+          if (Option.isNone(detail)) return undefined;
+          const { thread } = detail.value;
+          const turnId = thread.latestTurn?.turnId;
+          if (turnId === undefined) return undefined;
+          // The detail projection links ordinary user messages to their provider turns.
+          const message = thread.messages.findLast(
+            (message) => message.role === "user" && message.turnId === turnId,
+          );
+          if (message !== undefined) {
+            // Previously shipped quit resumes used a visible automation-origin row.
+            const recoverable =
+              message.dispatchOrigin !== "agent" &&
+              (message.dispatchOrigin !== "automation" || message.id.startsWith("quit-resume:"));
+            return recoverable ? thread : undefined;
+          }
+          // Hidden manual/quit resumes bind the same durable turn request without a chat row.
+          const turn = yield* projectionTurns.getByTurnId({ threadId: thread.id, turnId });
+          return Option.getOrUndefined(turn)?.pendingMessageId?.startsWith(
+            TURN_RESUME_MESSAGE_ID_PREFIX,
+          )
+            ? thread
+            : undefined;
+        }),
+      ),
     { concurrency: 4 },
   );
-  const threads = details.flatMap((detail) => (Option.isSome(detail) ? [detail.value.thread] : []));
+  const threads = details.flatMap((detail) =>
+    Option.isSome(detail) && detail.value !== undefined ? [detail.value] : [],
+  );
   const record = buildCrashResumeRecord({ readModel: { ...readModel, threads }, blocked, now });
   return record.threads.length > 0
     ? ({ kind: "record", record } as const)
@@ -217,6 +257,9 @@ export const captureCrashResumeRecord = Effect.gen(function* () {
 }).pipe(
   Effect.catchCause((cause) =>
     Effect.logWarning("could not capture interrupted chats for crash recovery", { cause }).pipe(
+      Effect.tap(() =>
+        Effect.sync(() => reportReliabilityIssue("recovery.restart_reconciliation_failed")),
+      ),
       Effect.as({ kind: "absent" } as const),
     ),
   ),
@@ -233,15 +276,7 @@ function buildCrashResumeRecord(input: {
       .map((project) => project.id),
   );
   const threads = input.readModel.threads.filter((thread) => {
-    const message = thread.messages.findLast(
-      (message) => message.role === "user" && message.turnId === thread.latestTurn?.turnId,
-    );
-    // Resume turns also use automation origin to preserve human recency. They
-    // remain ordinary chat work when another unexpected shutdown interrupts them.
-    const isScheduledTurn =
-      message?.dispatchOrigin === "automation" && !message.id.startsWith("quit-resume:");
     return (
-      message !== undefined &&
       thread.archivedAt == null &&
       thread.parentThreadId == null &&
       !thread.goal &&
@@ -250,8 +285,6 @@ function buildCrashResumeRecord(input: {
       thread.creationSource !== "provider_native" &&
       thread.creationSource !== "synara_mcp" &&
       thread.creationSource !== "external_mcp" &&
-      !isScheduledTurn &&
-      message.dispatchOrigin !== "agent" &&
       !thread.hasPendingApprovals &&
       !thread.hasPendingUserInput &&
       !input.blocked.has(thread.id) &&
@@ -291,13 +324,13 @@ export function buildQuitInterruptCommand(input: {
  * Pure: map a consumed record onto the current read model. A thread is resumed
  * only when it still exists, is not deleted, its project exists, and
  * `threadResumePreconditionViolation` is clear (not archived, nothing in flight,
- * no turn completed on its own since the record). The automatic continuation
- * uses the thread's own runtime/interaction settings (model omitted → provider
- * reactor uses the thread's current selection) and carries
- * the same precondition for the decider to enforce atomically.
+ * no replacement moved it on or turn completed on its own since the record).
+ * The automatic continuation is a `thread.turn.resume` (no chat message) that
+ * uses the thread's own settings and current model selection and carries the
+ * same precondition for the decider to enforce atomically.
  *
- * Command and message ids derive from the record so an accidental re-run
- * collides with the engine's receipt dedup instead of starting a second turn.
+ * Command ids derive from the record so an accidental re-run collides with the
+ * engine's receipt dedup instead of starting a second turn.
  */
 export function planQuitResumeTurns(input: {
   readonly record: QuitResumeRecord;
@@ -309,7 +342,7 @@ export function planQuitResumeTurns(input: {
   const liveProjectIds = new Set(
     input.projects.filter((project) => project.deletedAt === null).map((project) => project.id),
   );
-  const commands: ThreadTurnStartCommand[] = [];
+  const commands: ThreadTurnResumeCommand[] = [];
   const skipped: Array<{ threadId: ThreadId; reason: QuitResumeSkipReason }> = [];
   const skip = (threadId: ThreadId, reason: QuitResumeSkipReason) => {
     skipped.push({ threadId, reason });
@@ -339,20 +372,13 @@ export function planQuitResumeTurns(input: {
       continue;
     }
     const key = `quit-resume:${input.record.recordId}:${entry.threadId}`;
+    // Same hidden continuation as the composer's Resume: no chat message, and a
+    // request that never reached the provider is delivered again instead.
     commands.push({
-      type: "thread.turn.start",
+      type: "thread.turn.resume",
       commandId: CommandId.makeUnsafe(key),
       threadId: entry.threadId,
-      message: {
-        messageId: MessageId.makeUnsafe(key),
-        role: "user",
-        text: input.record.continuationPrompt,
-        attachments: [],
-      },
-      dispatchMode: "queue",
-      dispatchOrigin: "automation",
-      runtimeMode: thread.runtimeMode,
-      interactionMode: thread.interactionMode,
+      continuationPrompt: input.record.continuationPrompt,
       resumePrecondition,
       createdAt: input.now,
     });
@@ -611,6 +637,9 @@ export const resumeQuitInterruptedChats = (
     });
 
     if (plan.skipped.length > 0) {
+      if (record.recordId.startsWith("crash:"))
+        for (let index = 0; index < plan.skipped.length; index++)
+          reportReliabilityIssue("recovery.crash_resume_skipped");
       yield* Effect.logInfo("skipping quit-resume for threads that moved on", {
         recordId: record.recordId,
         skipped: plan.skipped,
@@ -630,23 +659,52 @@ export const resumeQuitInterruptedChats = (
       plan.commands,
       (command) =>
         engine.dispatch(command).pipe(
+          Effect.tap(() =>
+            Effect.sync(() => {
+              if (record.recordId.startsWith("crash:"))
+                reportReliabilityIssue("recovery.crash_resume_accepted");
+            }),
+          ),
           // The decider re-checks the resume precondition atomically; a rejection
           // here means the thread moved on between the plan and the dispatch.
           Effect.catchTag("OrchestrationCommandInvariantError", (error) =>
             Effect.logInfo("quit-resume turn was not accepted", {
               threadId: command.threadId,
               detail: error.detail,
-            }),
+            }).pipe(
+              Effect.tap(() =>
+                Effect.sync(() => {
+                  if (record.recordId.startsWith("crash:"))
+                    reportReliabilityIssue("recovery.crash_resume_skipped");
+                }),
+              ),
+            ),
           ),
           Effect.catchCause((cause) =>
             Effect.logWarning("quit-resume turn failed to dispatch", {
               threadId: command.threadId,
               cause,
-            }),
+            }).pipe(
+              Effect.tap(() =>
+                Effect.sync(() => {
+                  if (record.recordId.startsWith("crash:"))
+                    reportReliabilityIssue("recovery.crash_resume_failed");
+                }),
+              ),
+            ),
           ),
         ),
       { discard: true },
     );
   }).pipe(
-    Effect.catchCause((cause) => Effect.logWarning("resuming chats after quit failed", { cause })),
+    Effect.catchCause((cause) =>
+      Effect.logWarning("resuming chats after quit failed", { cause }).pipe(
+        Effect.tap(() =>
+          Effect.sync(() => {
+            if (claimed.kind === "record" && claimed.record.recordId.startsWith("crash:"))
+              reportReliabilityIssue("recovery.crash_resume_failed");
+          }),
+        ),
+      ),
+    ),
   );

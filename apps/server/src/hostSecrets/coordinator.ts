@@ -85,6 +85,7 @@ export class HostSecretsCoordinator {
       readonly userId: string;
       readonly deviceId: string;
       readonly syncKeyFilePath: string;
+      readonly persistForAccount: (write: () => Promise<void>) => Promise<void>;
       readonly api: HostSecretsCoordinatorApi;
     },
   ) {}
@@ -97,26 +98,30 @@ export class HostSecretsCoordinator {
     });
   }
 
-  async #writeSyncKey(syncKey: CryptoKey): Promise<void> {
-    await writeHostSecretsSyncKey({
-      filePath: this.options.syncKeyFilePath,
-      accountUrl: this.options.accountUrl,
-      userId: this.options.userId,
-      syncKey,
-    });
+  #writeSyncKey(syncKey: CryptoKey): Promise<void> {
+    return this.options.persistForAccount(() =>
+      writeHostSecretsSyncKey({
+        filePath: this.options.syncKeyFilePath,
+        accountUrl: this.options.accountUrl,
+        userId: this.options.userId,
+        syncKey,
+      }),
+    );
   }
 
-  async #writePendingRotation(
+  #writePendingRotation(
     syncKey: CryptoKey,
     pendingRotation: HostSecretsPendingRotation,
   ): Promise<void> {
-    await writeHostSecretsPendingRotation({
-      filePath: this.options.syncKeyFilePath,
-      accountUrl: this.options.accountUrl,
-      userId: this.options.userId,
-      syncKey,
-      pendingRotation,
-    });
+    return this.options.persistForAccount(() =>
+      writeHostSecretsPendingRotation({
+        filePath: this.options.syncKeyFilePath,
+        accountUrl: this.options.accountUrl,
+        userId: this.options.userId,
+        syncKey,
+        pendingRotation,
+      }),
+    );
   }
 
   /** New-device half: create the single-use ECDH request handed to an existing device. */

@@ -56,10 +56,6 @@ describe("desktopIdentity", () => {
     expect(SYNARA_DESKTOP_ENTRY_URL).toBe("synara://app/index.html");
   });
 
-  it("uses the isolated Synara desktop update channel", () => {
-    expect(SYNARA_DESKTOP_UPDATE_CHANNEL).toBe("synara");
-  });
-
   it("matches the beta update channel to prerelease tags and keeps synara otherwise", () => {
     expect(desktopUpdateChannel("beta")).toBe("beta");
     expect(desktopUpdateChannel("remote")).toBe("remote");

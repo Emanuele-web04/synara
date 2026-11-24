@@ -220,3 +220,16 @@ it("draws losses to the left and gains to the right of the zero axis", async () 
   const gain = rows[1]!.querySelector<HTMLElement>('span[style*="width"]')!.getBoundingClientRect();
   expect(gain.left).toBeCloseTo(loss.right, 1);
 });
+
+it("preserves the visual choices layout on the left-to-right transcript", async () => {
+  const { screen } = await mountBlocks({
+    blocks: [{ type: "choices", options: [{ label: "أكد الاختيار" }] }],
+  });
+
+  const button = screen.getByRole("button", { name: /أكد الاختيار/ });
+  await expect.element(button).toBeVisible();
+  const row = button.element();
+  expect(row.firstElementChild!.getBoundingClientRect().right).toBeLessThan(
+    row.getBoundingClientRect().left + row.getBoundingClientRect().width / 2,
+  );
+});

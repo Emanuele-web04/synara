@@ -20,7 +20,6 @@ import {
   serverProfileStatsQueryOptions,
   serverProfileTokenStatsQueryOptions,
 } from "~/lib/serverReactQuery";
-import { accountUsageSummaryQueryOptions } from "~/lib/accountReactQuery";
 import {
   type AccountUsageView,
   localDayKey,
@@ -56,7 +55,11 @@ import {
   toDisplayName,
 } from "../profile/profileFormatting";
 import { SettingsSegmentedControl } from "./SettingControls";
+import { useSynaraPlan } from "./BillingSettingsPanel";
+import { SettingsRow, SettingsSection } from "./SettingsPanelPrimitives";
+import { accountUsageSummaryQueryOptions } from "~/lib/accountReactQuery";
 import { profileShareUrl } from "~/lib/accountLogic";
+import { signOutWithToast } from "../account/signOutWithToast";
 import { openExternalLink } from "~/lib/linkChips";
 import { ExternalLinkIcon } from "~/lib/icons";
 import { getFormatLocale, t, useTranslation } from "~/i18n";
@@ -156,6 +159,7 @@ function ProfileContent({
     avatarImage,
     ssoImage,
     accountProfile,
+    publicProfileAvailable,
     canEdit,
     save,
     uploadAvatarPhoto,
@@ -164,7 +168,7 @@ function ProfileContent({
     name: defaultName,
     handle: stats.identity.defaultHandle,
   });
-  const publicUrl = profileShareUrl(accountProfile);
+  const publicUrl = profileShareUrl(accountProfile, publicProfileAvailable);
 
   return (
     <div className="flex min-w-0 flex-col gap-7">
@@ -249,12 +253,13 @@ function ProfileContent({
           avatarColor={avatarColor}
           avatarImage={avatarImage}
           accountProfile={accountProfile}
+          publicProfileAvailable={publicProfileAvailable}
           open={shareOpen}
           onOpenChange={setShareOpen}
         />
       )}
 
-      <DeleteAccountControl />
+      {userId ? <SynaraAccountSection /> : null}
       <EditProfileDialog
         open={editOpen}
         onOpenChange={setEditOpen}
@@ -721,4 +726,43 @@ function ProfileSkeleton() {
 
 function capitalize(value: string): string {
   return value.length > 0 ? value[0]!.toUpperCase() + value.slice(1) : value;
+}
+
+// Signed-in account actions grouped in one card: identity + sign out, plan, delete.
+function SynaraAccountSection() {
+  const { t } = useTranslation();
+  const account = useAccount();
+  const plan = useSynaraPlan();
+  return (
+    <SettingsSection title="settings:profile_synaraAccount">
+      <SettingsRow
+        title={t("settings:profile_signedIn")}
+        description={account.me?.email ?? ""}
+        control={
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={account.signOut.isPending}
+            onClick={() => void signOutWithToast(account)}
+          >
+            {t("settings:signOut")}
+          </Button>
+        }
+      />
+      {plan ? (
+        <SettingsRow
+          title={t("settings:profile_plan")}
+          description={
+            plan.granted ? t("settings:altoProPlan") : t("settings:profile_planDescriptionFree")
+          }
+          control={
+            <Button variant="outline" size="sm" onClick={plan.open}>
+              {t("settings:profile_seePlans")}
+            </Button>
+          }
+        />
+      ) : null}
+      <DeleteAccountControl />
+    </SettingsSection>
+  );
 }

@@ -74,7 +74,7 @@ test.afterAll(async () => {
 async function dismissStartupSurfaces(page: Page) {
   for (let round = 0; round < 6; round++) {
     let dismissed = false;
-    for (const label of ["Skip setup", "Not now", "Skip tour", "Dismiss toast"]) {
+    for (const label of ["Skip setup", "Not now", "Close tour", "Dismiss toast"]) {
       for (const button of await page.getByRole("button", { name: label, exact: true }).all()) {
         if (await button.isVisible().catch(() => false)) {
           await button.click({ timeout: 2_000 }).catch(() => undefined);

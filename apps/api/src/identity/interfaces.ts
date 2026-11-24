@@ -179,7 +179,7 @@ export type InstanceAuthInfo = Omit<InstanceInfo, "version">;
  * implementation a drop-in rather than a client change.
  */
 export type AccountIdentityVerifier = {
-  /** Rejects on any invalid, expired, or unverifiable token; callers answer 401. */
+  /** Invalid/expired tokens reject; verification-service faults use IdentityProviderError. */
   verifyAccessToken(token: string): Promise<VerifiedAccessToken>;
   getUser(userId: string): Promise<IdentityUser>;
   revokeSession(sessionId: string): Promise<void>;
@@ -300,7 +300,8 @@ export type EnvironmentGrantIssuer = {
    */
   resolveEnvironmentScope(
     session: VerifiedAccessToken,
-    email: string,
+    /** Needed only to name a first workspace; a function is called only then. */
+    email: string | (() => Promise<string>),
     options?: { freshMembership?: boolean },
   ): Promise<EnvironmentScopeResolution>;
   /**
@@ -358,18 +359,33 @@ export type HostKeyRegistry = {
     expectedHostId: string,
     action: (host: HostRecord) => Promise<T>,
   ): Promise<T>;
+  /**
+   * The same proof verification and key-generation check as
+   * `withAuthenticatedHost`, without a transaction or `FOR UPDATE`. Only for
+   * read-only routes that produce no effect, ticket or signature; every
+   * mutating route keeps the locked path.
+   */
+  readAuthenticatedHost(
+    authorization: string | undefined | null,
+    expectedHostId: string,
+  ): Promise<HostRecord>;
   replaceEndpoints(
     authorization: string | undefined | null,
     hostId: string,
     endpoints: readonly AccountHostEndpoint[],
+    appVersion?: string,
   ): Promise<AccountHost>;
   unlink(hostId: string): Promise<AccountHost>;
   unlinkWithProof(authorization: string | undefined | null, hostId: string): Promise<AccountHost>;
+  /**
+   * Maintenance: retires a bounded batch of old Remote 1.0.6 host identities
+   * that have a recent replacement or a long-idle managed tunnel.
+   */
+  retireStaleHosts(): Promise<{ superseded: number; abandoned: number }>;
 };
 
 export type DeviceRegistry = {
   register(userId: string, proof: string, verifiedSessionId: string): Promise<AccountDevice>;
-  isSessionRevoked(userId: string, sessionId: string): Promise<boolean>;
   revokeSessions(
     userId: string,
     deviceId: string,

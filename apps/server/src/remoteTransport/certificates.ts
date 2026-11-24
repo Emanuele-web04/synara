@@ -1,6 +1,4 @@
 import { withCredentialFileLock } from "../accountCredentialLock";
-import "reflect-metadata";
-import * as x509 from "@peculiar/x509";
 import {
   createHash,
   createPrivateKey,
@@ -13,11 +11,21 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { Effect } from "effect";
 import { createFileStringExclusively, writeFileStringAtomically } from "../atomicWrite";
+import { lazyModule } from "../lazyModule";
 
 const DAY = 86_400_000;
 const KEY_ALGORITHM = { name: "ECDSA", namedCurve: "P-256" };
 const SIGN_ALGORITHM = { name: "ECDSA", hash: "SHA-256" };
-x509.cryptoProvider.set(webcrypto as unknown as Crypto);
+
+// Certificates are generated only when a remote identity is created or its leaf is
+// renewed. The library and its ASN.1 schemas are about 200 modules, so they load on
+// first use instead of at every backend start. reflect-metadata must load first.
+const loadX509 = lazyModule(async () => {
+  await import("reflect-metadata");
+  const x509 = await import("@peculiar/x509");
+  x509.cryptoProvider.set(webcrypto as unknown as Crypto);
+  return x509;
+});
 
 export interface RemoteTlsIdentity {
   readonly version: 2;
@@ -44,7 +52,9 @@ export function remoteTlsServerName(environmentId: string): string {
   return `host-${environmentId.toLowerCase()}.synara.invalid`;
 }
 
-export function remoteTlsAnchor(identity: RemoteTlsIdentity): RemoteTlsAnchor {
+export function remoteTlsAnchor(
+  identity: Pick<RemoteTlsIdentity, "environmentId" | "rootCertificate">,
+): RemoteTlsAnchor {
   const root = new X509Certificate(identity.rootCertificate);
   return {
     environmentId: identity.environmentId,
@@ -66,6 +76,34 @@ export function validateRemoteTlsAnchor(anchor: RemoteTlsAnchor): void {
   }
 }
 
+/** Read the current public pairing root without initializing or renewing TLS credentials. */
+export async function readRemoteTlsTrustAnchor(
+  filePath: string,
+  environmentId: string,
+  now = Date.now(),
+): Promise<RemoteTlsAnchor> {
+  const saved: unknown = JSON.parse(await fs.readFile(filePath, "utf8"));
+  if (
+    typeof saved !== "object" ||
+    saved === null ||
+    !("version" in saved) ||
+    saved.version !== 2 ||
+    !("environmentId" in saved) ||
+    saved.environmentId !== environmentId ||
+    !("rootCertificate" in saved) ||
+    typeof saved.rootCertificate !== "string"
+  ) {
+    throw new Error("Remote TLS root belongs to another installation or is missing");
+  }
+  const anchor = remoteTlsAnchor({ environmentId, rootCertificate: saved.rootCertificate });
+  validateRemoteTlsAnchor(anchor);
+  const root = new X509Certificate(anchor.rootCertificate);
+  if (Date.parse(root.validFrom) > now || Date.parse(root.validTo) <= now) {
+    throw new Error("Remote TLS root is outside its validity period");
+  }
+  return anchor;
+}
+
 export function remoteTlsRootNeedsRepair(identity: RemoteTlsIdentity, now = Date.now()): boolean {
   return Date.parse(new X509Certificate(identity.rootCertificate).validTo) - now <= 180 * DAY;
 }
@@ -83,6 +121,7 @@ async function issueLeaf(
   environmentId: string,
   now: number,
 ) {
+  const x509 = await loadX509();
   const keys = await webcrypto.subtle.generateKey(KEY_ALGORITHM, true, ["sign", "verify"]);
   const root = new x509.X509Certificate(rootCertificate);
   const rootKey = await webcrypto.subtle.importKey(
@@ -129,6 +168,7 @@ async function initializeIdentity(
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
+  const x509 = await loadX509();
   const keys = await webcrypto.subtle.generateKey(KEY_ALGORITHM, true, ["sign", "verify"]);
   const root = await x509.X509CertificateGenerator.createSelfSigned({
     serialNumber: randomBytes(16).toString("hex"),

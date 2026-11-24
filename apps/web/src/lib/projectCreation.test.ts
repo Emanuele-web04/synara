@@ -7,11 +7,13 @@ import {
   type NativeApi,
   type OrchestrationShellSnapshot,
   type ProjectId,
+  ProviderInstanceId,
   SpaceId,
 } from "@synara/contracts";
 import { getDefaultModel } from "@synara/shared/model";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { newChatDefaultForProvider } from "../appSettings";
 import { useSpacesUiStore } from "../spacesUiStore";
 import {
   createOrRecoverProjectFromPath,
@@ -19,6 +21,7 @@ import {
 } from "./projectCreation";
 
 const NOW_ISO = "2026-06-26T20:00:00.000Z";
+const CODEX_NEW_CHAT_DEFAULT = newChatDefaultForProvider("codex");
 const WORKSPACE_ROOT = "/Users/tester/Developer/synara";
 
 function makeProject(id: string, workspaceRoot = WORKSPACE_ROOT) {
@@ -66,6 +69,7 @@ describe("createOrRecoverProjectFromPath", () => {
     const dispatchCommand = vi.fn().mockResolvedValue({ sequence: 2 });
     await createOrRecoverProjectFromPath({
       api: makeApi(dispatchCommand),
+      newChatDefault: CODEX_NEW_CHAT_DEFAULT,
       workspaceRoot: WORKSPACE_ROOT,
       name: "  My workspace  ",
       maxAttempts: 1,
@@ -88,6 +92,7 @@ describe("createOrRecoverProjectFromPath", () => {
 
     const result = await createOrRecoverProjectFromPath({
       api: makeApi(dispatchCommand),
+      newChatDefault: CODEX_NEW_CHAT_DEFAULT,
       workspaceRoot: WORKSPACE_ROOT,
       loadSnapshot,
     });
@@ -120,6 +125,7 @@ describe("createOrRecoverProjectFromPath", () => {
 
     const result = await createOrRecoverProjectFromPath({
       api: makeApi(dispatchCommand),
+      newChatDefault: CODEX_NEW_CHAT_DEFAULT,
       workspaceRoot: WORKSPACE_ROOT,
       loadSnapshot,
     });
@@ -140,6 +146,7 @@ describe("createOrRecoverProjectFromPath", () => {
 
     await createOrRecoverProjectFromPath({
       api: makeApi(dispatchCommand),
+      newChatDefault: CODEX_NEW_CHAT_DEFAULT,
       workspaceRoot: WORKSPACE_ROOT,
       additionalFolders: ["/Users/tester/Developer/api", " "],
       loadSnapshot: async () =>
@@ -165,11 +172,38 @@ describe("createOrRecoverProjectFromPath", () => {
     await expect(
       createOrRecoverProjectFromPath({
         api: makeApi(dispatchCommand),
+        newChatDefault: CODEX_NEW_CHAT_DEFAULT,
         workspaceRoot: WORKSPACE_ROOT,
         additionalFolders: ["/Users/tester/Developer/api"],
         loadSnapshot: async () => makeSnapshot([makeProject("project-existing")]),
       }),
     ).rejects.toThrow(PROJECT_CREATE_MULTI_FOLDER_DUPLICATE_ERROR);
+  });
+
+  it("seeds the new project's default model selection with the default account", async () => {
+    let createdProjectId: ProjectId | null = null;
+    const dispatchCommand = vi.fn(async (command: { projectId?: ProjectId }) => {
+      createdProjectId = command.projectId ?? null;
+      return { sequence: 2 };
+    });
+
+    await createOrRecoverProjectFromPath({
+      api: makeApi(dispatchCommand),
+      workspaceRoot: WORKSPACE_ROOT,
+      newChatDefault: {
+        defaultProvider: "devin",
+        defaultProviderInstanceId: ProviderInstanceId.makeUnsafe("devin_work"),
+      },
+      loadSnapshot: async () =>
+        makeSnapshot(createdProjectId ? [makeProject(createdProjectId)] : []),
+    });
+
+    expect(dispatchCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "project.create",
+        defaultModelSelection: { provider: "devin", instanceId: "devin_work", model: "adaptive" },
+      }),
+    );
   });
 
   it("seeds the new project's default model selection from the persisted default provider (Devin)", async () => {
@@ -182,7 +216,7 @@ describe("createOrRecoverProjectFromPath", () => {
     await createOrRecoverProjectFromPath({
       api: makeApi(dispatchCommand),
       workspaceRoot: WORKSPACE_ROOT,
-      defaultProvider: "devin",
+      newChatDefault: newChatDefaultForProvider("devin"),
       loadSnapshot: async () =>
         makeSnapshot(createdProjectId ? [makeProject(createdProjectId)] : []),
     });
@@ -208,7 +242,7 @@ describe("createOrRecoverProjectFromPath", () => {
     await createOrRecoverProjectFromPath({
       api: makeApi(dispatchCommand),
       workspaceRoot: WORKSPACE_ROOT,
-      defaultProvider: "omp",
+      newChatDefault: newChatDefaultForProvider("omp"),
       loadSnapshot: async () =>
         makeSnapshot(createdProjectId ? [makeProject(createdProjectId)] : []),
     });
@@ -235,6 +269,7 @@ describe("createOrRecoverProjectFromPath", () => {
 
     await createOrRecoverProjectFromPath({
       api: makeApi(dispatchCommand),
+      newChatDefault: CODEX_NEW_CHAT_DEFAULT,
       workspaceRoot: WORKSPACE_ROOT,
       loadSnapshot: async () =>
         makeSnapshot(createdProjectId ? [makeProject(createdProjectId)] : []),

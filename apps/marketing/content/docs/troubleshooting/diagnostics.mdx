@@ -5,6 +5,18 @@ description: Collect bounded thread evidence, understand source coverage, and sh
 
 Diagnostics should answer a specific question: what state was projected, what durable event was recorded, what the provider emitted, or which delivery or operational incident blocked progress. Collect the smallest evidence set that can answer that question.
 
+## Automatic analytics and release diagnostics
+
+The diagnostic tools below are explicit reads of workspace evidence. They are separate from automatic product analytics and Beta/Remote release diagnostics.
+
+Product analytics use a random installation identifier unrelated to login or billing. They exclude prompts, chat content, files, paths, project/repository names, credentials and free text. Stable and Beta default to off. Synara Remote from version **1.0.6-remote.18** and iPhone/iPad from **build 139** default to on, with a local **Share usage and diagnostics** switch; an existing off choice is preserved. Active counts represent installations in rolling 24-hour, 7-day and 30-day windows, not people or calendar periods.
+
+Turning product sharing off stops collection, cancels active sends and deletes unsent events and the local analytics identifier. Re-enabling creates a fresh random identifier without linking it through an account. Switching off cannot recall events already received. Raw product events are scheduled for deletion 30 days after receipt; capped daily cleanup can take longer when there is a large backlog.
+
+Beta crash and release diagnostics are separate and always on, but follow the same content-exclusion rule as other telemetry. Beta and Remote send fixed error/issue categories, numeric source positions, release health and bounded usage counts; neither sends error prose, function/file names, log excerpts or raw crash memory. Remote desktop diagnostics follow the sharing switch. Older installed clients used broader diagnostics; the receiving service rejects raw dumps and strips legacy text. Historical storage cleanup is a separate operator task, and new code is not proof that it has run. Extracted provider/turn rows are scheduled for deletion 90 days after receipt with capped cleanup. Host usage reports sample a rolling 24 hours and are separate from account and billing records.
+
+See [Privacy](/privacy) for local storage, provider, account and transport boundaries, and the [automatic diagnostics field and storage reference](https://github.com/Emanuele-web04/synara/blob/main/docs/diagnostics.md) for the detailed allowlists and retention rules.
+
 ## Diagnostic sources
 
 Authorized Agent Gateway sessions can expose four complementary tools:
@@ -203,3 +215,7 @@ For most task-runtime problems, collect:
 - [ ] The report distinguishes evidence from inference
 
 Continue with [Report a problem](/docs/troubleshooting/report-a-problem) when the evidence is ready.
+
+The account-free upgrade replaces any legacy product analytics identifier and
+discards its unsent telemetry before replay; your consent choice and workspace
+history are preserved.

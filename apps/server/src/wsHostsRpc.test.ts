@@ -100,6 +100,10 @@ function spySession(): { session: HostsAccountSession; calls: () => string[] } {
       publicJwk: { kty: "EC" as const, crv: "P-256" as const, x: "eA", y: "eQ" },
       jkt: "jkt",
     }),
+    recoverDeviceRegistration: record("recoverDeviceRegistration", {
+      deviceId: "00000000-0000-4000-8000-000000000002",
+      jkt: "replacement-jkt",
+    }),
   };
   return { session, calls: () => calls };
 }

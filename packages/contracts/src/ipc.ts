@@ -1,4 +1,3 @@
-import { UiLanguagePreference } from "./uiLocale";
 import type {
   AccountSaveInboxRecapInput,
   SavedInboxRecap,
@@ -335,6 +334,8 @@ import type {
   ServerReadThreadDiagnosticsResult,
   ServerGenerateAutomationIntentInput,
   ServerGenerateAutomationIntentResult,
+  ServerGenerateComposerPredictionInput,
+  ServerGenerateComposerPredictionResult,
   ServerGenerateThreadRecapInput,
   ServerGenerateThreadRecapResult,
   ServerGetEnvironmentResult,
@@ -376,6 +377,8 @@ import type {
 } from "./terminal";
 import type {
   ClientOrchestrationCommand,
+  OrchestrationSettleTurnDispatchInput,
+  OrchestrationSettleTurnDispatchResult,
   OrchestrationGetFullThreadDiffInput,
   OrchestrationGetFullThreadDiffResult,
   OrchestrationGetThreadDetailSnapshotInput,
@@ -430,6 +433,8 @@ import type {
   StatsGetProfileTokenStatsResult,
   StatsGetRecapInput,
   StatsGetRecapResult,
+  StatsGetUsageAnalyticsInput,
+  StatsGetUsageAnalyticsResult,
 } from "./stats";
 import type { BrowserAnnotationMethods } from "./browserAnnotations";
 import { type KeybindingCommand, MAX_KEYBINDING_VALUE_LENGTH } from "./keybindings";
@@ -469,8 +474,6 @@ export type DesktopUpdateStatus =
 
 export type DesktopRuntimeArch = "arm64" | "x64" | "other";
 export type DesktopTheme = "light" | "dark" | "system";
-export const DesktopLanguagePreference = UiLanguagePreference;
-export type DesktopLanguagePreference = typeof DesktopLanguagePreference.Type;
 
 /** Largest desktop blur radius the translucent window shell accepts, in points. */
 export const DESKTOP_WINDOW_BLUR_RADIUS_MAX = 64;
@@ -1046,10 +1049,6 @@ export type DesktopDiagnosticReportStatus = "queued" | "sent" | "unavailable";
 
 export interface DesktopBridge {
   productAnalytics?: DesktopProductAnalyticsBridge;
-  /** Mirrors the renderer language onto native menus and startup dialogs; absent on older builds. */
-  setLanguagePreference?: (preference: DesktopLanguagePreference) => Promise<void>;
-  /** Current OS preference order; synchronous so bootstrap copy and native menus agree. */
-  getSystemLanguages?: () => readonly string[];
   /** Present only when the desktop main process enables baked-in Beta diagnostics. */
   betaDiagnostics?: {
     rendererReady: () => void;
@@ -1064,6 +1063,8 @@ export interface DesktopBridge {
     revealApp: () => Promise<boolean>;
   };
   getWsUrl: () => string | null;
+  /** Resolves once the desktop has seen its backend become ready, or stop trying. */
+  whenBackendReady?: () => Promise<void>;
   remoteResourceUrl?: (hostId: string, reference: RemoteResourceReference) => string | null;
   /**
    * Absolute filesystem path for a File from drag/drop or file inputs.
@@ -1465,6 +1466,10 @@ export interface NativeApi {
     generateThreadRecap: (
       input: ServerGenerateThreadRecapInput,
     ) => Promise<ServerGenerateThreadRecapResult>;
+    generateComposerPrediction: (
+      input: ServerGenerateComposerPredictionInput,
+      options?: { readonly signal?: AbortSignal },
+    ) => Promise<ServerGenerateComposerPredictionResult>;
     generateAutomationIntent: (
       input: ServerGenerateAutomationIntentInput,
     ) => Promise<ServerGenerateAutomationIntentResult>;
@@ -1481,6 +1486,9 @@ export interface NativeApi {
       input: StatsGetProfileTokenStatsInput,
     ) => Promise<StatsGetProfileTokenStatsResult>;
     getRecap: (input: StatsGetRecapInput) => Promise<StatsGetRecapResult>;
+    getUsageAnalytics: (
+      input: StatsGetUsageAnalyticsInput,
+    ) => Promise<StatsGetUsageAnalyticsResult>;
   };
   provider: {
     getComposerCapabilities: (
@@ -1505,6 +1513,9 @@ export interface NativeApi {
       input: OrchestrationSearchThreadsInput,
     ) => Promise<OrchestrationSearchThreadsResult>;
     dispatchCommand: (command: ClientOrchestrationCommand) => Promise<{ sequence: number }>;
+    settleTurnDispatch?: (
+      input: typeof OrchestrationSettleTurnDispatchInput.Type,
+    ) => Promise<OrchestrationSettleTurnDispatchResult>;
     importThread: (
       input: OrchestrationImportThreadInput,
     ) => Promise<OrchestrationImportThreadResult>;

@@ -71,6 +71,30 @@ describe("shared question form with blocking prompts", () => {
       .toEqual([[{ question: { selectedOptionLabels: ["Second"] } }]]);
   });
 
+  it("submits the selected opaque value when two options share a label", async () => {
+    const callbacks = props();
+    const duplicateLabels = {
+      ...prompt,
+      questions: [
+        {
+          ...prompt.questions[0]!,
+          allowCustomAnswer: false,
+          options: [
+            { label: "Continue", description: "First planner", value: "planner-a" },
+            { label: "Continue", description: "Second planner", value: " planner-b " },
+          ],
+        },
+      ],
+    };
+    const screen = await render(
+      <ComposerPendingUserInputPanel {...callbacks} pendingUserInputs={[duplicateLabels]} />,
+    );
+    await screen.getByRole("button", { name: /Second planner/ }).click();
+    await expect
+      .poll(() => callbacks.onAdvance.mock.calls)
+      .toEqual([[{ question: { selectedOptionLabels: [" planner-b "] } }]]);
+  });
+
   it("cancels delayed choice advancement when a response starts", async () => {
     const callbacks = props();
     const screen = await render(<ComposerPendingUserInputPanel {...callbacks} />);
@@ -100,4 +124,55 @@ describe("shared question form with blocking prompts", () => {
     await userEvent.keyboard("2");
     expect(callbacks.onToggleOption).not.toHaveBeenCalled();
   });
+});
+
+it("lays out Arabic and Hebrew questions from the right while keeping navigation left-to-right", async () => {
+  const callbacks = props();
+  const arabic = {
+    ...prompt.questions[0]!,
+    question: "أي خيار تفضّل؟",
+    options: [
+      { label: "الخيار الأول", description: "وصف قصير" },
+      { label: "English option", description: "Description" },
+    ],
+  };
+  const hebrew = { ...arabic, id: "hebrew", question: "איזו אפשרות עדיפה?" };
+  const screen = await render(
+    <div dir="ltr" className="w-[28rem]">
+      <ComposerPendingUserInputPanel
+        {...callbacks}
+        pendingUserInputs={[{ ...prompt, questions: [arabic, hebrew] }]}
+      />
+    </div>,
+  );
+  const question = screen.getByText(arabic.question).element();
+  const previous = screen.getByRole("button", { name: "Previous question" }).element();
+  const next = screen.getByRole("button", { name: "Next question" }).element();
+  expect(getComputedStyle(question).direction).toBe("rtl");
+  expect(getComputedStyle(previous).direction).toBe("ltr");
+  expect(question.getBoundingClientRect().left).toBeGreaterThan(next.getBoundingClientRect().right);
+  expect(previous.getBoundingClientRect().left).toBeLessThan(next.getBoundingClientRect().left);
+
+  const rtlOption = screen.getByRole("button", { name: /الخيار الأول/ }).element();
+  const english = screen.getByRole("button", { name: /English option/ }).element();
+  expect(getComputedStyle(rtlOption).direction).toBe("rtl");
+  expect(getComputedStyle(english).direction).toBe("ltr");
+  expect(rtlOption.firstElementChild!.getBoundingClientRect().left).toBeGreaterThan(
+    rtlOption.getBoundingClientRect().left + rtlOption.getBoundingClientRect().width / 2,
+  );
+  expect(english.firstElementChild!.getBoundingClientRect().right).toBeLessThan(
+    english.getBoundingClientRect().left + english.getBoundingClientRect().width / 2,
+  );
+  expect(getComputedStyle(screen.getByRole("button", { name: "Cancel" }).element()).direction).toBe(
+    "ltr",
+  );
+
+  await screen.rerender(
+    <ComposerPendingUserInputPanel
+      {...callbacks}
+      questionIndex={1}
+      pendingUserInputs={[{ ...prompt, questions: [arabic, hebrew] }]}
+    />,
+  );
+  expect(getComputedStyle(screen.getByText(hebrew.question).element()).direction).toBe("rtl");
 });

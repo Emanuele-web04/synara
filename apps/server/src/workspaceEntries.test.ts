@@ -4,10 +4,13 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 
+import { FilesystemBrowseResult } from "@synara/contracts";
+import { Schema } from "effect";
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
 
 import * as ProcessRunner from "./processRunner";
 import {
+  browseWorkspaceEntries,
   clearWorkspaceIndexCache,
   discoverProjectScripts,
   listWorkspaceDirectories,
@@ -469,6 +472,37 @@ describe("searchLocalEntries", () => {
       pathResult.entries.map((entry) => entry.name),
       "projects",
     );
+  });
+});
+
+describe("browseWorkspaceEntries", () => {
+  afterEach(() => {
+    for (const dir of tempDirs.splice(0, tempDirs.length)) {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps folder names with surrounding whitespace encodable over RPC", async () => {
+    const root = makeTempDir("synara-filesystem-browse-");
+    fs.mkdirSync(path.join(root, "Photos ", "2026"), { recursive: true });
+    fs.mkdirSync(path.join(root, " Archive"));
+    writeFile(root, "notes.txt");
+    const encode = Schema.encodeUnknownSync(FilesystemBrowseResult);
+
+    const listing = await browseWorkspaceEntries({ partialPath: `${root}/` });
+    expect(encode(listing)).toEqual({
+      parentPath: root,
+      entries: [
+        { name: " Archive", fullPath: path.join(root, " Archive") },
+        { name: "Photos ", fullPath: path.join(root, "Photos ") },
+      ],
+    });
+
+    const nested = await browseWorkspaceEntries({ partialPath: `${path.join(root, "Photos ")}/` });
+    expect(encode(nested)).toEqual({
+      parentPath: path.join(root, "Photos "),
+      entries: [{ name: "2026", fullPath: path.join(root, "Photos ", "2026") }],
+    });
   });
 });
 

@@ -389,6 +389,7 @@ export type ThreadRealtimeClosedPayload = typeof ThreadRealtimeClosedPayload.Typ
 const TurnStartedPayload = Schema.Struct({
   model: Schema.optional(TrimmedNonEmptyStringSchema),
   effort: Schema.optional(TrimmedNonEmptyStringSchema),
+  supportsNativeTurnSteering: Schema.optional(Schema.Boolean),
 });
 export type TurnStartedPayload = typeof TurnStartedPayload.Type;
 
@@ -411,6 +412,8 @@ const TurnCompletedPayload = Schema.Struct({
   cumulativeCostUsd: Schema.optional(Schema.Number),
   errorMessage: Schema.optional(TrimmedNonEmptyStringSchema),
   errorCode: Schema.optional(TrimmedNonEmptyStringSchema),
+  // HTTP status of the provider request that failed the turn, when the provider reports it.
+  httpStatus: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 100, maximum: 599 }))),
 });
 export type TurnCompletedPayload = typeof TurnCompletedPayload.Type;
 
@@ -493,6 +496,8 @@ const RequestResolvedPayload = Schema.Struct({
 export type RequestResolvedPayload = typeof RequestResolvedPayload.Type;
 
 const UserInputQuestionOption = Schema.Struct({
+  // Some provider protocols identify choices independently of their display labels.
+  value: Schema.optional(Schema.String),
   label: TrimmedNonEmptyStringSchema,
   description: TrimmedNonEmptyStringSchema,
 });
@@ -503,6 +508,7 @@ export const UserInputQuestion = Schema.Struct({
   header: TrimmedNonEmptyStringSchema,
   question: TrimmedNonEmptyStringSchema,
   options: Schema.Array(UserInputQuestionOption),
+  allowCustomAnswer: Schema.optional(Schema.Boolean),
   multiSelect: Schema.optional(Schema.Boolean).pipe(
     Schema.withConstructorDefault(() => Option.some(false)),
   ),

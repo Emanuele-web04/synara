@@ -54,12 +54,12 @@ describe("Claude cache review client commands", () => {
 });
 
 describe("Claude resume review setting", () => {
-  it("is off by default, like embedded Claude Code, and can be turned on", () => {
-    expect(DEFAULT_SERVER_SETTINGS_VIEW.providers.claudeAgent.confirmColdCacheResume).toBe(false);
+  it("is on by default and can be turned off", () => {
+    expect(DEFAULT_SERVER_SETTINGS_VIEW.providers.claudeAgent.confirmColdCacheResume).toBe(true);
     expect(
       Schema.decodeUnknownSync(ServerSettings)({
-        providers: { claudeAgent: { confirmColdCacheResume: true } },
+        providers: { claudeAgent: { confirmColdCacheResume: false } },
       }).providers.claudeAgent.confirmColdCacheResume,
-    ).toBe(true);
+    ).toBe(false);
   });
 });

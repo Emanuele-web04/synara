@@ -156,7 +156,7 @@ export const APP_RAIL_GLYPH_CLASS_NAME = "size-5";
  *  Idle glyphs rest on the section-label grey; hover and the active item are full ink. */
 export function appRailButtonClassName(active: boolean): string {
   return cn(
-    "size-9 rounded-lg",
+    "size-9 rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--color-border-focus)]",
     active
       ? SIDEBAR_ROW_ACTIVE_CLASS_NAME
       : cn(SIDEBAR_SECTION_LABEL_TONE_CLASS_NAME, SIDEBAR_ROW_HOVER_CLASS_NAME),
@@ -205,7 +205,8 @@ function AppRailButton({ item }: { item: AppRailItem }) {
     />
   );
   return (
-    <div className="relative shrink-0">
+    // The app tour finds rail destinations by their item id.
+    <div className="relative shrink-0" data-app-tour={item.id}>
       {item.id === "tasks" ? <TasksCoachmark tooltip={label}>{button}</TasksCoachmark> : button}
       {/* Same corner dot as the Activity bell's unread marker; the count is in the tooltip. */}
       {item.badge ? (

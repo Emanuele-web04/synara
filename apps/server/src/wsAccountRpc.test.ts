@@ -3,6 +3,7 @@
 // client-role session must neither read nor replace it. These tests iterate
 // the handler map, so a newly added account RPC is covered by construction.
 import { WS_METHODS, type SavedInboxRecap } from "@synara/contracts";
+import { AccountApiError } from "@synara/shared/account";
 import { Effect } from "effect";
 import { describe, expect, it, vi } from "vitest";
 
@@ -193,6 +194,25 @@ describe("account RPC owner boundary", () => {
     );
     expect(result.message).toMatch(/owner authorization/i);
     expect(calls()).toEqual([]);
+  });
+
+  it("returns a request-scoped failure when account status cannot renew yet", async () => {
+    const { session } = spySession();
+    const status = handlersFor({
+      ...session,
+      status: async () => {
+        throw new AccountApiError({
+          code: "refresh_not_attempted",
+          status: 429,
+          message: "Too many refresh attempts — wait a minute",
+        });
+      },
+    })[WS_METHODS.accountStatus];
+
+    const result = await Effect.runPromise(
+      provideWsConnectionSession(status().pipe(Effect.flip), OWNER_SESSION),
+    );
+    expect(result).toMatchObject({ code: "refresh_not_attempted" });
   });
 
   it.each(methodNames)("admits an owner-role session on %s", async (method) => {

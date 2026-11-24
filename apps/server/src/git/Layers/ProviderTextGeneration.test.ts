@@ -49,6 +49,9 @@ function createTextGenerationDouble(label: string) {
       recap: `${label} recap`,
     }),
   );
+  const generateComposerPrediction = vi.fn<TextGenerationShape["generateComposerPrediction"]>(() =>
+    Effect.succeed({ suggestion: `${label} suggestion` }),
+  );
   const generateProjectDigest = vi.fn<TextGenerationShape["generateProjectDigest"]>(() =>
     Effect.succeed({
       summary: `${label} digest`,
@@ -87,6 +90,7 @@ function createTextGenerationDouble(label: string) {
       generateBranchName,
       generateThreadTitle,
       generateThreadRecap,
+      generateComposerPrediction,
       generateProjectDigest,
       generateAutomationIntent,
       evaluateAutomationCompletion,
@@ -97,6 +101,7 @@ function createTextGenerationDouble(label: string) {
     generateBranchName,
     generateThreadTitle,
     generateThreadRecap,
+    generateComposerPrediction,
     generateAutomationIntent,
     evaluateAutomationCompletion,
   };
@@ -636,5 +641,66 @@ describe("ProviderTextGenerationLive", () => {
       ),
     ).rejects.toThrow("Provider instance 'claude_disabled' is disabled.");
     expect(claude.generateThreadTitle).not.toHaveBeenCalled();
+  });
+  it("routes composer predictions by the chat's exact provider instance", async () => {
+    const { layer, claude, codex } = makeProviderTextGenerationTestLayer({
+      providerInstances: {
+        claude_work: {
+          driver: "claudeAgent",
+          enabled: true,
+          config: { binaryPath: "/opt/claude" },
+        },
+      },
+    });
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const textGeneration = yield* TextGeneration;
+        return yield* textGeneration.generateComposerPrediction({
+          cwd: "/repo",
+          conversation: "User: Investigate CI\n\nAssistant: The fixture is stale.",
+          modelSelection: {
+            provider: "claudeAgent",
+            instanceId: "claude_work",
+            model: "claude-sonnet-4",
+            options: { effort: "low" },
+          },
+        });
+      }).pipe(Effect.provide(layer)),
+    );
+
+    expect(result).toEqual({ suggestion: "claude suggestion" });
+    expect(claude.generateComposerPrediction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        modelSelection: expect.objectContaining({
+          provider: "claudeAgent",
+          instanceId: "claude_work",
+          options: { effort: "low" },
+        }),
+        providerOptions: { claudeAgent: { binaryPath: "/opt/claude" } },
+      }),
+    );
+    expect(codex.generateComposerPrediction).not.toHaveBeenCalled();
+  });
+
+  it("never borrows the configured Git-writing fallback for composer predictions", async () => {
+    const { layer, codex, cursor } = makeProviderTextGenerationTestLayer({
+      textGenerationModelSelection: { provider: "cursor", model: "composer-2" },
+    });
+
+    await expect(
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const textGeneration = yield* TextGeneration;
+          return yield* textGeneration.generateComposerPrediction({
+            cwd: "/repo",
+            conversation: "User: Continue\n\nAssistant: Done with step one.",
+            modelSelection: { provider: "antigravity", model: "Gemini 3.5 Flash" },
+          });
+        }).pipe(Effect.provide(layer)),
+      ),
+    ).rejects.toThrow("no supported fallback is enabled");
+    expect(cursor.generateComposerPrediction).not.toHaveBeenCalled();
+    expect(codex.generateComposerPrediction).not.toHaveBeenCalled();
   });
 });

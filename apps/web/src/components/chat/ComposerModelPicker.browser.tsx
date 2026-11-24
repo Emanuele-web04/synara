@@ -91,11 +91,13 @@ type HarnessProps = {
     typeof ComposerModelPicker
   >["modelOptionsByProviderInstance"];
   lockedProvider?: ProviderKind | null;
-  boundProviderInstance?: React.ComponentProps<typeof ComposerModelPicker>["boundProviderInstance"];
   modelOptionsByProvider?: React.ComponentProps<
     typeof ComposerModelPicker
   >["modelOptionsByProvider"];
   effortControl?: "menu" | "slider";
+  runtimeModelsByProviderInstance?: React.ComponentProps<
+    typeof ComposerModelPicker
+  >["runtimeModelsByProviderInstance"];
   onProviderModelChange?: React.ComponentProps<typeof ComposerModelPicker>["onProviderModelChange"];
   onRefreshModels?: React.ComponentProps<typeof ComposerModelPicker>["onRefreshModels"];
 };
@@ -115,7 +117,6 @@ function Harness(props: HarnessProps) {
       provider="codex"
       model={(selectedModel ?? GPT_5_5) as ModelSlug}
       lockedProvider={props.lockedProvider ?? null}
-      boundProviderInstance={props.boundProviderInstance ?? null}
       effortControl={props.effortControl ?? "menu"}
       providers={props.providers ?? [readyProvider("codex"), readyProvider("claudeAgent")]}
       {...(props.providerInstances ? { providerInstances: props.providerInstances } : {})}
@@ -126,6 +127,12 @@ function Harness(props: HarnessProps) {
         ? { modelOptionsByProviderInstance: props.modelOptionsByProviderInstance }
         : {})}
       modelOptionsByProvider={props.modelOptionsByProvider ?? MODEL_OPTIONS_BY_PROVIDER}
+      {...(props.runtimeModelsByProviderInstance
+        ? { runtimeModelsByProviderInstance: props.runtimeModelsByProviderInstance }
+        : {})}
+      runtimeModel={props.runtimeModelsByProviderInstance?.[
+        props.selectedProviderInstanceId ?? "codex"
+      ]?.find((model) => model.slug === (selectedModel ?? GPT_5_5))}
       onProviderModelChange={props.onProviderModelChange ?? vi.fn()}
       {...(props.onRefreshModels ? { onRefreshModels: props.onRefreshModels } : {})}
       threadId={THREAD_ID}
@@ -334,24 +341,35 @@ describe("ComposerModelPicker", () => {
     }
   });
 
-  it("opens on starred presets and restores model + traits in one click", async () => {
-    const onProviderModelChange = vi.fn();
-    const screen = await mountPicker({ onProviderModelChange }, { reasoningEffort: "medium" }, [
-      { provider: "codex", model: GPT_5_4, effort: "low", fastMode: true, thinking: null },
-    ]);
-    try {
-      await expect
-        .element(page.getByRole("tab", { name: "Starred" }))
-        .toHaveAttribute("aria-selected", "true");
-      await page.getByRole("menuitem", { name: /GPT-5\.4.*Low · Fast/u }).click();
-      expect(onProviderModelChange).toHaveBeenCalledWith("codex", GPT_5_4, {
-        modelOptions: { reasoningEffort: "low", fastMode: true },
-        instanceId: "codex",
-      });
-    } finally {
-      await screen.unmount();
-    }
-  });
+  it.each(["menu", "slider"] as const)(
+    "restores a starred preset and keeps the picker open only in slider mode (%s)",
+    async (effortControl) => {
+      const onProviderModelChange = vi.fn();
+      const screen = await mountPicker(
+        { effortControl, onProviderModelChange },
+        { reasoningEffort: "medium" },
+        [{ provider: "codex", model: GPT_5_4, effort: "low", fastMode: true, thinking: null }],
+      );
+      try {
+        const starred = page.getByRole("tab", { name: "Starred" });
+        await expect.element(starred).toHaveAttribute("aria-selected", "true");
+        await page.getByRole("menuitem", { name: /GPT-5\.4.*Low · Fast/u }).click();
+        expect(onProviderModelChange).toHaveBeenCalledWith("codex", GPT_5_4, {
+          modelOptions: { reasoningEffort: "low", fastMode: true },
+          instanceId: "codex",
+        });
+        if (effortControl === "slider") {
+          await expect
+            .element(page.getByRole("slider", { name: "Reasoning effort" }))
+            .toBeVisible();
+        } else {
+          await expect.element(starred).not.toBeInTheDocument();
+        }
+      } finally {
+        await screen.unmount();
+      }
+    },
+  );
 
   it("shows the star on every starred model of the provider tab, whatever its traits", async () => {
     const screen = await mountPicker({}, { reasoningEffort: "medium" }, [
@@ -551,6 +569,104 @@ describe("ComposerModelPicker", () => {
     }
   });
 
+  it("offers Ultrafast only for the selected account's model and saves the chosen speed", async () => {
+    const model = { slug: GPT_5_5, name: "GPT-5.5", supportsFastMode: true };
+    const props: HarnessProps = {
+      effortControl: "slider",
+      providers: [readyProvider("codex"), WORK_ACCOUNT_STATUS],
+      providerInstances: CODEX_ACCOUNTS,
+      runtimeModelsByProviderInstance: {
+        codex: [
+          {
+            ...model,
+            supportsUltrafastMode: true,
+            fastModeDescription: "2x speed, increased usage",
+          },
+        ],
+        codex_work: [model],
+      },
+    };
+    const screen = await mountPicker(props);
+    try {
+      const speed = page.getByRole("menuitem", { name: "Speed", exact: true });
+      await speed.click();
+      await expect.element(page.getByText("2x speed, increased usage")).toBeVisible();
+      const ultrafast = page.getByRole("menuitemradio", { name: "Ultrafast", exact: true });
+      await ultrafast.click();
+      await expect.element(speed).toHaveAttribute("aria-description", "Ultrafast");
+
+      await speed.click();
+      await expect.element(ultrafast).toHaveAttribute("aria-checked", "true");
+      await page.getByRole("menuitemradio", { name: "Standard", exact: true }).click();
+      await expect.element(speed).toHaveAttribute("aria-description", "Standard");
+
+      await screen.rerender(<Harness {...props} selectedProviderInstanceId="codex_work" />);
+      await expect.element(page.getByRole("button", { name: "Fast mode" })).toBeVisible();
+      await expect.element(speed).not.toBeInTheDocument();
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("shows the Ultrafast badge on the trigger when Ultrafast is selected", async () => {
+    const screen = await mountPicker(
+      {
+        runtimeModelsByProviderInstance: {
+          codex: [
+            { slug: GPT_5_5, name: "GPT-5.5", supportsFastMode: true, supportsUltrafastMode: true },
+          ],
+        },
+      },
+      { serviceTier: "ultrafast" },
+    );
+    try {
+      await expect
+        .element(page.getByRole("button", { name: "Change model and reasoning" }))
+        .toHaveTextContent(/Ultrafast/u);
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("restores a Standard preset when the model offers Ultrafast without Fast", async () => {
+    const onProviderModelChange = vi.fn();
+    const screen = await mountPicker({
+      effortControl: "slider",
+      runtimeModelsByProviderInstance: {
+        codex: [
+          {
+            slug: GPT_5_5,
+            name: "GPT-5.5",
+            supportsFastMode: false,
+            supportsUltrafastMode: true,
+          },
+        ],
+      },
+      onProviderModelChange,
+    });
+    try {
+      await page
+        .getByRole("button", { name: "Star GPT-5.5 with its current effort and speed" })
+        .click();
+      const speed = page.getByRole("menuitem", { name: "Speed", exact: true });
+      await speed.click();
+      await page.getByRole("menuitemradio", { name: "Ultrafast", exact: true }).click();
+      await expect.element(speed).toHaveAttribute("aria-description", "Ultrafast");
+
+      await page.getByRole("tab", { name: "Starred" }).click();
+      await page.getByRole("menuitem", { name: /GPT-5\.5/u }).click();
+      expect(onProviderModelChange).toHaveBeenCalledWith("codex", GPT_5_5, {
+        instanceId: "codex",
+        modelOptions: expect.objectContaining({ fastMode: false }),
+      });
+      expect(onProviderModelChange.mock.lastCall?.[2].modelOptions).not.toHaveProperty(
+        "serviceTier",
+      );
+    } finally {
+      await screen.unmount();
+    }
+  });
+
   it("keeps a started thread on its provider", async () => {
     const screen = await mountPicker({ lockedProvider: "codex" }, undefined, [
       { provider: "claudeAgent", model: SONNET, effort: null, fastMode: null, thinking: null },
@@ -634,31 +750,16 @@ describe("ComposerModelPicker with several accounts", () => {
     }
   });
 
-  it("names the composer's account on the trigger and dots it with its accent color", async () => {
+  it("names the composer's account on the trigger", async () => {
     const screen = await mountPicker({
       ...multiAccount,
       selectedProviderInstanceId: "codex_work",
-      providerInstances: [CODEX_ACCOUNTS[0]!, { ...CODEX_ACCOUNTS[1]!, accentColor: "#16a34a" }],
+      providerInstances: CODEX_ACCOUNTS,
     });
     try {
       const trigger = page.getByRole("button", { name: "Change model and reasoning" }).element();
-      const dot = trigger.querySelector<HTMLElement>("[data-accent]");
-      expect(dot?.dataset.accent).toBe("#16a34a");
       // The account's name is written before the model.
       expect(trigger.textContent).toContain("Work");
-    } finally {
-      await screen.unmount();
-    }
-  });
-
-  it("dots a lone account that has an accent color without naming it", async () => {
-    const screen = await mountPicker({
-      providerInstances: [{ ...CODEX_ACCOUNTS[0]!, accentColor: "#2563eb" }],
-    });
-    try {
-      const tab = page.getByRole("tab", { name: "Codex", exact: true }).element();
-      expect(tab.textContent).toBe("");
-      expect(tab.querySelector<HTMLElement>("[data-accent]")?.dataset.accent).toBe("#2563eb");
     } finally {
       await screen.unmount();
     }
@@ -682,25 +783,6 @@ describe("ComposerModelPicker with several accounts", () => {
         .element(page.getByRole("tab", { name: "Codex", exact: true }))
         .toHaveAttribute("aria-selected", "true");
       expect(page.getByRole("tab", { name: "Claude" }).elements()).toHaveLength(0);
-    } finally {
-      await screen.unmount();
-    }
-  });
-
-  it("opens other providers for a handoff but keeps the thread's account", async () => {
-    const screen = await mountPicker({
-      ...multiAccount,
-      boundProviderInstance: { provider: "codex", instanceId: "codex" },
-    });
-    try {
-      // Another provider is pickable: choosing it hands the thread off.
-      await expect
-        .element(page.getByRole("tab", { name: "Claude" }))
-        .not.toHaveAttribute("aria-disabled", "true");
-      // A sibling account of the thread's own provider stays closed.
-      await expect
-        .element(page.getByRole("tab", { name: "Codex · Work", exact: true }))
-        .toHaveAttribute("aria-disabled", "true");
     } finally {
       await screen.unmount();
     }
@@ -755,6 +837,76 @@ describe("ComposerModelPicker with several accounts", () => {
     }
   });
 
+  it("loads the starred Pi account on open and makes its dynamic preset selectable", async () => {
+    const piModel = "pi:example" as ModelSlug;
+    const otherPiModel = "pi:another" as ModelSlug;
+    const piInstanceId = "pi_work";
+    const onRefreshModels = vi.fn().mockResolvedValue(undefined);
+    const onProviderModelChange = vi.fn();
+    const props: HarnessProps = {
+      onRefreshModels,
+      onProviderModelChange,
+      providers: [
+        readyProvider("codex"),
+        readyProvider("claudeAgent"),
+        readyProvider("pi"),
+        { ...readyProvider("pi"), instanceId: piInstanceId },
+      ],
+      providerInstances: [
+        CODEX_ACCOUNTS[0]!,
+        { instanceId: "pi", provider: "pi", label: "Pi", enabled: true, isDefault: true },
+        {
+          instanceId: piInstanceId,
+          provider: "pi",
+          label: "Work",
+          enabled: true,
+          isDefault: false,
+        },
+      ],
+    };
+    localStorage.setItem(
+      STARRED_MODELS_STORAGE_KEY,
+      JSON.stringify(
+        [piModel, otherPiModel].map((model) => ({
+          provider: "pi",
+          instanceId: piInstanceId,
+          model,
+          effort: null,
+          fastMode: null,
+          thinking: null,
+        })),
+      ),
+    );
+    const screen = await render(<Harness {...props} />);
+    try {
+      expect(onRefreshModels).not.toHaveBeenCalled();
+      await page.getByRole("button", { name: "Change model and reasoning" }).click();
+      await expect
+        .element(page.getByRole("tab", { name: "Starred" }))
+        .toHaveAttribute("aria-selected", "true");
+      await vi.waitFor(() =>
+        expect(onRefreshModels).toHaveBeenCalledExactlyOnceWith("pi", piInstanceId, "if-stale"),
+      );
+      await screen.rerender(
+        <Harness
+          {...props}
+          modelOptionsByProviderInstance={{
+            [piInstanceId]: [{ slug: piModel, name: "Example Pi" }],
+          }}
+        />,
+      );
+      await page.getByRole("menuitem", { name: /Example Pi/u }).click();
+      expect(onProviderModelChange).toHaveBeenCalledWith(
+        "pi",
+        piModel,
+        expect.objectContaining({ instanceId: piInstanceId }),
+      );
+      expect(onRefreshModels).toHaveBeenCalledTimes(1);
+    } finally {
+      await screen.unmount();
+    }
+  });
+
   it("offers a started thread only its own account's starred presets", async () => {
     const screen = await mountPicker({ ...multiAccount, lockedProvider: "codex" }, undefined, [
       { provider: "codex", model: GPT_5_4, effort: null, fastMode: null, thinking: null },
@@ -776,7 +928,7 @@ describe("ComposerModelPicker with several accounts", () => {
     }
   });
 
-  it("invites the user to set up an account that is not signed in", async () => {
+  it("offers sign-in in place for an account that is not signed in", async () => {
     const screen = await mountPicker({
       ...multiAccount,
       providers: [
@@ -791,10 +943,12 @@ describe("ComposerModelPicker with several accounts", () => {
     });
     try {
       await page.getByRole("tab", { name: "Codex · Work", exact: true }).click();
+      // The picker signs the account in itself instead of sending the user to Settings.
+      await expect.element(page.getByText("Sign in to Codex · Work")).toBeVisible();
       await expect
-        .element(page.getByText("Open provider setup to sign in to this account."))
+        .element(page.getByRole("button", { name: "Sign in", exact: true }))
         .toBeVisible();
-      await expect.element(page.getByRole("button", { name: "Open provider setup" })).toBeVisible();
+      expect(page.getByRole("button", { name: "Open provider setup" }).elements()).toHaveLength(0);
       // Its catalog is not offered while it cannot run.
       expect(page.getByRole("menuitem", { name: /GPT-5 Work/u }).elements()).toHaveLength(0);
     } finally {

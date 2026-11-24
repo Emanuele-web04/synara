@@ -1,4 +1,17 @@
+// Product analytics carries only closed categories and installation-local identity.
+// Login and billing identifiers do not belong in this cross-process contract.
 import * as Schema from "effect/Schema";
+import { STATIC_KEYBINDING_COMMANDS } from "./keybindings";
+import { ReliabilityCode } from "./reliability";
+
+export const ANONYMOUS_PRODUCT_EVENTS = [
+  "remote.pairing-approved",
+  "remote.connection-succeeded",
+  "remote.reconnection-succeeded",
+  "remote.connection-timeout",
+  "app.crash",
+] as const;
+export const ANONYMOUS_PRODUCT_RETRY_DAYS = 7;
 
 export const ProductAnalyticsEvent = Schema.Literals([
   "app.open",
@@ -10,9 +23,11 @@ export const ProductAnalyticsEvent = Schema.Literals([
   "connection.pair",
   "connection.connect",
   "connection.reconnect",
+  ...ANONYMOUS_PRODUCT_EVENTS,
   "chat.request",
   "turn.completed",
   "performance.startup",
+  "reliability.issue",
 ]);
 export type ProductAnalyticsEvent = typeof ProductAnalyticsEvent.Type;
 
@@ -56,18 +71,108 @@ export const ProductAnalyticsReason = Schema.Literals([
 ]);
 export type ProductAnalyticsReason = typeof ProductAnalyticsReason.Type;
 /**
- * `shortcut:<built-in command>` or `slash:<built-in command>`; anything a user
- * defined is reported as `custom`, so no free text enters this field.
+ * Why a turn failed or was interrupted by an error. A fixed category derived from the
+ * provider's error code, never error text. `edge_blocked` is the provider's network edge
+ * (e.g. Cloudflare) refusing a request, distinct from a real `auth` failure.
  */
-export const PRODUCT_ANALYTICS_COMMAND_PATTERN = /^(shortcut|slash):[a-z][A-Za-z0-9.-]{0,47}$/;
-const ProductAnalyticsCommand = Schema.String.check(
-  Schema.isPattern(PRODUCT_ANALYTICS_COMMAND_PATTERN),
-);
+export const PRODUCT_TURN_FAILURES = [
+  "edge_blocked",
+  "auth",
+  "account",
+  "billing",
+  "rate_limit",
+  "usage_limit",
+  "overloaded",
+  "server_error",
+  "network",
+  "invalid_request",
+  "model_unavailable",
+  "context_limit",
+  "output_limit",
+  "other",
+] as const;
+export const ProductAnalyticsTurnFailure = Schema.Literals(PRODUCT_TURN_FAILURES);
+export type ProductAnalyticsTurnFailure = typeof ProductAnalyticsTurnFailure.Type;
+
+/** Events that describe a remote connection attempt and may carry connection detail. */
+export const PRODUCT_CONNECTION_EVENTS = [
+  "connection.pair",
+  "connection.connect",
+  "connection.reconnect",
+] as const;
+/**
+ * Where a failed connection attempt stopped. A fixed category the native client
+ * derives from its own connection stage, never error text, hostnames or identifiers.
+ */
+export const PRODUCT_CONNECTION_FAILURES = [
+  "account_unavailable",
+  "subscription_required",
+  "billing_unavailable",
+  "host_unlinked",
+  "identity_mismatch",
+  "no_route",
+  "route_connect",
+  "route_upgrade",
+  "tls_handshake",
+  "inner_upgrade",
+  "session_mint",
+  "session_authorize",
+  "incompatible",
+  "timeout",
+  "other",
+] as const;
+export const ProductAnalyticsConnectionFailure = Schema.Literals(PRODUCT_CONNECTION_FAILURES);
+export type ProductAnalyticsConnectionFailure = typeof ProductAnalyticsConnectionFailure.Type;
+/** The client's network kind during a connection attempt. */
+export const PRODUCT_CONNECTION_NETWORKS = ["wifi", "cellular", "wired", "other", "none"] as const;
+export const ProductAnalyticsNetwork = Schema.Literals(PRODUCT_CONNECTION_NETWORKS);
+export type ProductAnalyticsNetwork = typeof ProductAnalyticsNetwork.Type;
+/**
+ * The path a connection attempt used: `local` is the LAN pairing path, `direct` an
+ * account-published direct endpoint, `tunnel` the managed Cloudflare tunnel.
+ */
+export const PRODUCT_CONNECTION_ROUTES = ["local", "direct", "tunnel"] as const;
+export const ProductAnalyticsRoute = Schema.Literals(PRODUCT_CONNECTION_ROUTES);
+export type ProductAnalyticsRoute = typeof ProductAnalyticsRoute.Type;
+import { BUILT_IN_COMPOSER_SLASH_COMMANDS } from "./composerSlashCommands";
+
+export const PRODUCT_ANALYTICS_COMMANDS = [
+  ...new Set(
+    STATIC_KEYBINDING_COMMANDS.map((command) => `shortcut:${command.replace(/\.\d+$/, "")}`),
+  ),
+  "shortcut:custom",
+  ...BUILT_IN_COMPOSER_SLASH_COMMANDS.map((command) => `slash:${command}`),
+  "slash:custom",
+];
+const productCommands = new Set(PRODUCT_ANALYTICS_COMMANDS);
+export function isProductAnalyticsCommand(value: unknown): value is string {
+  return typeof value === "string" && productCommands.has(value);
+}
+const ProductAnalyticsCommand = Schema.Literals(PRODUCT_ANALYTICS_COMMANDS);
 
 const DurationMs = Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 86_400_000 }));
+const HttpStatus = Schema.Int.check(Schema.isBetween({ minimum: 100, maximum: 599 }));
 const TokenCount = Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 1_000_000_000_000 }));
 export const ProductAnalyticsChannel = Schema.Literals(["stable", "beta", "remote"]);
 export type ProductAnalyticsChannel = typeof ProductAnalyticsChannel.Type;
+
+/** A random receipt deduplicates delivery and has no installation or account scope. */
+export const AnonymousProductRecord = Schema.Struct({
+  id: Schema.String.check(Schema.isUUID(4)),
+  // The queue uses ts for expiry. On this wire it carries only a UTC day.
+  ts: Schema.String.check(
+    Schema.isPattern(/^\d{4}-\d{2}-\d{2}$/),
+    Schema.makeFilter((day) => {
+      const date = new Date(day);
+      return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === day;
+    }),
+  ),
+  event: Schema.Literals(ANONYMOUS_PRODUCT_EVENTS),
+  channel: ProductAnalyticsChannel,
+}).annotate({ parseOptions: { onExcessProperty: "error" } });
+export type AnonymousProductRecord = typeof AnonymousProductRecord.Type;
+export const decodeAnonymousProductRecord = Schema.decodeUnknownSync(AnonymousProductRecord);
+
 export const ProductAnalyticsSurface = Schema.Literals(["desktop", "ios", "ipados"]);
 export type ProductAnalyticsSurface = typeof ProductAnalyticsSurface.Type;
 export const ProductAnalyticsPlatform = Schema.Literals([
@@ -83,10 +188,13 @@ export type ProductAnalyticsPlatform = typeof ProductAnalyticsPlatform.Type;
 export const ProductAnalyticsInput = Schema.Struct({
   event: ProductAnalyticsEvent,
   outcome: ProductAnalyticsOutcome,
+  reliabilityCode: Schema.optional(ReliabilityCode),
   feature: Schema.optional(ProductAnalyticsFeature),
   mode: Schema.optional(ProductAnalyticsMode),
   provider: Schema.optional(ProductAnalyticsProvider),
   reason: Schema.optional(ProductAnalyticsReason),
+  failure: Schema.optional(ProductAnalyticsTurnFailure),
+  httpStatus: Schema.optional(HttpStatus),
   command: Schema.optional(ProductAnalyticsCommand),
   durationMs: Schema.optional(DurationMs),
   inputTokens: Schema.optional(TokenCount),
@@ -95,18 +203,18 @@ export const ProductAnalyticsInput = Schema.Struct({
 });
 export type ProductAnalyticsInput = typeof ProductAnalyticsInput.Type;
 
-/**
- * Counts people across their devices without naming them: the first 32 hex
- * characters of SHA-256("synara-usage-v1:" + account user id).
- */
-export const PRODUCT_ANALYTICS_ACCOUNT_HASH_PREFIX = "synara-usage-v1:";
+// Cohort metadata is generated by the installation sender, never the renderer input.
+export const PRODUCT_COHORT_WINDOWS = { new: [0, 0], week1: [7, 13], month1: [30, 36] } as const;
+export const ProductAnalyticsCohortStage = Schema.Literals(["new", "week1", "month1"]);
+export type ProductAnalyticsCohortStage = typeof ProductAnalyticsCohortStage.Type;
 
 export const ProductAnalyticsEnvelope = Schema.Struct({
   v: Schema.Literal(1),
   id: Schema.String,
   ts: Schema.String,
   installId: Schema.String,
-  accountHash: Schema.optional(Schema.String),
+  cohortDay: Schema.optional(Schema.String),
+  cohortStage: Schema.optional(ProductAnalyticsCohortStage),
   channel: ProductAnalyticsChannel,
   surface: ProductAnalyticsSurface,
   platform: ProductAnalyticsPlatform,
@@ -117,6 +225,13 @@ export const ProductAnalyticsEnvelope = Schema.Struct({
   mode: Schema.optional(ProductAnalyticsMode),
   provider: Schema.optional(ProductAnalyticsProvider),
   reason: Schema.optional(ProductAnalyticsReason),
+  // Turn failures on `turn.completed`; connection failures on PRODUCT_CONNECTION_EVENTS.
+  failure: Schema.optional(
+    Schema.Union([ProductAnalyticsTurnFailure, ProductAnalyticsConnectionFailure]),
+  ),
+  httpStatus: Schema.optional(HttpStatus),
+  network: Schema.optional(ProductAnalyticsNetwork),
+  route: Schema.optional(ProductAnalyticsRoute),
   command: Schema.optional(ProductAnalyticsCommand),
   durationMs: Schema.optional(DurationMs),
   inputTokens: Schema.optional(TokenCount),
@@ -133,6 +248,4 @@ export interface DesktopProductAnalyticsBridge {
   getState: () => Promise<ProductAnalyticsConsentState>;
   setEnabled: (enabled: boolean) => Promise<ProductAnalyticsConsentState>;
   track: (input: ProductAnalyticsInput) => void;
-  /** The signed-in account's user id, or null after sign-out; only its hash is kept. */
-  setAccount?: (userId: string | null) => void;
 }

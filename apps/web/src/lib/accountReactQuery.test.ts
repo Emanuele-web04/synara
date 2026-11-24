@@ -6,14 +6,21 @@
 
 import type { AccountStatus } from "@synara/contracts";
 import { QueryClient } from "@tanstack/react-query";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { remoteHostQueryKeys } from "./hosts/queries";
+import { readWorkspaceSessions } from "./hosts/workspaceSessions";
 
 import {
   accountQueryKeys,
+  accountStatusQueryOptions,
   accountUsageSummaryQueryOptions,
   watchAccountIdentityChanges,
 } from "./accountReactQuery";
+
+vi.mock("./hosts/workspaceSessions", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./hosts/workspaceSessions")>()),
+  readWorkspaceSessions: vi.fn(() => []),
+}));
 
 vi.mock("~/nativeApi", () => ({
   ensureNativeApi: () => {
@@ -30,6 +37,38 @@ const signedIn = (userId: string): AccountStatus => ({
     organization: { id: "org_1", name: "Ada's Workspace" },
     profile: null,
   },
+});
+
+describe("accountStatusQueryOptions polling", () => {
+  afterEach(() => {
+    vi.mocked(readWorkspaceSessions).mockReturnValue([]);
+  });
+
+  function refetchIntervalMs(): unknown {
+    const { refetchInterval } = accountStatusQueryOptions();
+    return typeof refetchInterval === "function"
+      ? refetchInterval(undefined as never)
+      : refetchInterval;
+  }
+
+  it("re-reads the account every 10 minutes, not every minute", () => {
+    expect(refetchIntervalMs()).toBe(10 * 60_000);
+  });
+
+  // An account change elsewhere must still close remote workspace frames promptly.
+  it("keeps the 1-minute read while a remote workspace is open", () => {
+    vi.mocked(readWorkspaceSessions).mockReturnValue([
+      {} as ReturnType<typeof readWorkspaceSessions>[number],
+    ]);
+    expect(refetchIntervalMs()).toBe(60_000);
+  });
+
+  it("keeps the focus and reconnect re-reads", () => {
+    expect(accountStatusQueryOptions()).toMatchObject({
+      refetchOnWindowFocus: true,
+      refetchOnReconnect: true,
+    });
+  });
 });
 
 describe("accountUsageSummaryQueryOptions", () => {

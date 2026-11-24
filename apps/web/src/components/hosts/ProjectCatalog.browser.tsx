@@ -75,7 +75,6 @@ it.each(["light", "dark"])(
       .element(page.getByRole("textbox", { name: "Group name", exact: true }))
       .toHaveValue("Synara across my computers");
     expect(fixture.open).not.toHaveBeenCalled();
-    await page.screenshot({ path: `./__screenshots__/project-catalog-${theme}.png` });
     await page.getByRole("button", { name: "Switch and open", exact: true }).click();
     expect(fixture.open).toHaveBeenCalledWith(second);
   },

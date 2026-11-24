@@ -1,10 +1,14 @@
 import { randomUUID } from "node:crypto";
 import pg from "pg";
-import { beforeAll, beforeEach, afterAll, describe, it, expect } from "vitest";
+import { beforeAll, beforeEach, afterAll, describe, it, expect, vi } from "vitest";
 import { createIsolatedTestDatabase } from "../testing/isolatedDatabase";
 import { createLiveActivityService } from "./service";
 import type { ActivityDelivery, NotificationDelivery, ApnsResult } from "./apns";
-import type { RegisterLiveActivity, RegisterTurnNotification } from "@synara/contracts";
+import type {
+  CompletionPreviewHostReport,
+  RegisterLiveActivity,
+  RegisterTurnNotification,
+} from "@synara/contracts";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 describe.skipIf(!databaseUrl)("Live Activity durable delivery", () => {
@@ -69,16 +73,22 @@ describe.skipIf(!databaseUrl)("Live Activity durable delivery", () => {
     const sent: ActivityDelivery[] = [];
     const notifications: NotificationDelivery[] = [];
     let result: ApnsResult = "delivered";
-    let member = true;
+    let member: boolean | "unavailable" = true;
     let remoteAccess: boolean | "unavailable" = true;
+    let providerRead: (() => Promise<void>) | undefined;
     const service = () =>
       createLiveActivityService({
         pool,
         environment: deployment,
-        isMember: async () => member,
+        isMember: async () => {
+          await providerRead?.();
+          if (member === "unavailable") throw new Error("Membership unavailable");
+          return member;
+        },
         ...(enforceBilling
           ? {
               isRemoteAccessAllowed: async () => {
+                await providerRead?.();
                 if (remoteAccess === "unavailable") throw new Error("Billing unavailable");
                 return remoteAccess;
               },
@@ -133,6 +143,12 @@ describe.skipIf(!databaseUrl)("Live Activity durable delivery", () => {
       },
       revokeMembership: () => {
         member = false;
+      },
+      setMembership: (value: boolean | "unavailable") => {
+        member = value;
+      },
+      onProviderRead: (read: () => Promise<void>) => {
+        providerRead = read;
       },
       setRemoteAccess: (value: boolean | "unavailable") => {
         remoteAccess = value;
@@ -469,6 +485,196 @@ describe.skipIf(!databaseUrl)("Live Activity durable delivery", () => {
     ).toEqual({ ended: true, token: "" });
     expect(f.notifications).toHaveLength(0);
   });
+
+  it("leaves retention to the maintenance sweep instead of every push flush", async () => {
+    const f = await fixture();
+    await f.live.register(f.owner, f.request);
+    await f.publish(0, 1, "running");
+    const [old, fresh] = [f.hosts[0]!.id, f.hosts[1]!.id];
+    await f.publish(1, 1, "running");
+    await pool.query(
+      "UPDATE live_activities SET ended=true, expires_at=now()-interval '25 hours' WHERE id=$1",
+      [f.request.activityId],
+    );
+    await pool.query(
+      "UPDATE live_activity_hosts SET updated_at=now()-interval '25 hours' WHERE host_id=$1",
+      [old],
+    );
+    const remaining = async () => ({
+      activities: Number(
+        (
+          await pool.query("SELECT count(*) FROM live_activities WHERE id=$1", [
+            f.request.activityId,
+          ])
+        ).rows[0].count,
+      ),
+      hosts: (
+        await pool.query(
+          "SELECT host_id FROM live_activity_hosts WHERE host_id=ANY($1::uuid[]) ORDER BY host_id",
+          [[old, fresh]],
+        )
+      ).rows.map((row: { host_id: string }) => row.host_id),
+    });
+    await f.live.flush();
+    expect(await remaining()).toEqual({ activities: 1, hosts: [old, fresh].toSorted() });
+    await f.live.prune();
+    expect(await remaining()).toEqual({ activities: 0, hosts: [fresh] });
+  });
+
+  it("reads membership and billing without holding the activity row lock", async () => {
+    const f = await fixture("sandbox", "sandbox", true);
+    await f.live.register(f.owner, f.request);
+    const observed: boolean[] = [];
+    f.onProviderRead(async () => {
+      // FOR SHARE conflicts with the delivery's FOR UPDATE, not with the other read's probe.
+      const lockFree = await pool
+        .query("SELECT id FROM live_activities WHERE id=$1 FOR SHARE NOWAIT", [
+          f.request.activityId,
+        ])
+        .then(
+          () => true,
+          () => false,
+        );
+      observed.push(lockFree);
+    });
+    await f.live.flush();
+    expect(observed).toEqual([true, true]);
+    expect(f.sent).toHaveLength(1);
+  });
+
+  it("re-reads a billing decision that aged while the membership lookup was slow", async () => {
+    const f = await fixture("sandbox", "sandbox", true);
+    await f.live.register(f.owner, f.request);
+    vi.useFakeTimers({ toFake: ["performance"] });
+    try {
+      let reads = 0;
+      f.onProviderRead(async () => {
+        reads += 1;
+        if (reads !== 1) return;
+        // The membership lookup stalls after billing has already answered;
+        // the entitlement lapses meanwhile.
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        f.setRemoteAccess(false);
+        vi.advanceTimersByTime(2_001);
+      });
+      await f.live.flush();
+      // Membership, billing, then billing again inside the row transaction.
+      expect(reads).toBe(3);
+      expect(f.sent).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the device check ahead of a failed membership lookup", async () => {
+    const f = await fixture();
+    await f.live.register(f.owner, f.request);
+    f.setMembership("unavailable");
+    await f.live.flush();
+    const row = async () =>
+      (
+        await pool.query(
+          "SELECT ended, next_attempt_at > now() + interval '20 seconds' AS postponed FROM live_activities WHERE id=$1",
+          [f.request.activityId],
+        )
+      ).rows[0];
+    // An authorized device waits for membership to be known; nothing is sent.
+    expect(await row()).toEqual({ ended: false, postponed: true });
+    expect(f.sent).toHaveLength(0);
+    // A revoked device retires the watch whatever membership says.
+    await pool.query("UPDATE devices SET revoked_at=now() WHERE id=$1", [f.deviceId]);
+    await f.due();
+    await f.live.flush();
+    expect((await row()).ended).toBe(true);
+    expect(f.sent).toHaveLength(0);
+  });
+
+  it.each(["match", "key replacement", "opt out", "wrong recovered turn"] as const)(
+    "keeps encrypted previews scoped to the exact eligible watch: %s",
+    async (scenario) => {
+      const f = await fixture("production", "both");
+      const { source, notificationId, deviceJkt } = f.notification;
+      const recipient = { key: "B" + "a".repeat(86), proof: "header.payload.signature" };
+      const preview = {
+        v: 1,
+        ephemeralKey: "B" + "b".repeat(86),
+        nonce: "a".repeat(16),
+        ciphertext: "c".repeat(50),
+      } as const;
+      const effectiveTurnId = randomUUID();
+      const report = {
+        notificationId,
+        deviceJkt,
+        threadId: source.threadId,
+        turnId: source.turnId,
+        effectiveTurnId: scenario === "wrong recovered turn" ? randomUUID() : effectiveTurnId,
+        displayId: source.displayId,
+        recipientKey: recipient.key,
+        preview,
+      } satisfies CompletionPreviewHostReport;
+
+      await f.live.registerNotification(f.owner, { ...f.notification, preview: recipient });
+      expect(await f.live.previewWatches(f.hosts[1]!)).toEqual([]);
+      expect(await f.live.previewWatches(f.hosts[0]!)).toEqual([
+        {
+          notificationId,
+          deviceJkt,
+          threadId: source.threadId,
+          turnId: source.turnId,
+          displayId: source.displayId,
+          preview: recipient,
+        },
+      ]);
+      if (scenario === "key replacement" || scenario === "opt out") {
+        await f.live.registerNotification(f.owner, {
+          ...f.notification,
+          revision: f.notification.revision + 1,
+          ...(scenario === "key replacement"
+            ? { preview: { key: "B" + "d".repeat(86), proof: recipient.proof } }
+            : {}),
+        });
+      }
+      const snapshot = {
+        sequence: 1,
+        turns: [
+          {
+            threadId: source.threadId,
+            turnId: source.turnId,
+            effectiveTurnId,
+            state: "ready" as const,
+          },
+        ],
+        previews: [{ ...report, preview: { ...preview, title: "accidental cleartext" } }],
+      };
+      await f.live.publish(f.hosts[0]!, snapshot);
+      const { rows } = await pool.query(
+        "SELECT snapshot FROM live_activity_hosts WHERE host_id=$1",
+        [f.hosts[0]!.id],
+      );
+      expect(rows[0].snapshot.previews).toEqual([report]);
+      await f.service().flush();
+
+      expect(f.notifications).toHaveLength(1);
+      expect(f.notifications[0]).toMatchObject({ notificationId, turnId: effectiveTurnId });
+      if (scenario === "match") {
+        expect(f.notifications[0]?.preview).toEqual({
+          ...preview,
+          notificationId,
+          deviceJkt,
+          hostId: source.hostId,
+          sourceThreadId: source.threadId,
+          sourceTurnId: source.turnId,
+        });
+      } else {
+        expect(f.notifications[0]).not.toHaveProperty("preview");
+      }
+      expect(await f.live.previewWatches(f.hosts[0]!)).toEqual([]);
+      const retired = await pool.query("SELECT request FROM live_activities WHERE id=$1", [
+        notificationId,
+      ]);
+      expect(retired.rows[0].request).not.toHaveProperty("preview");
+    },
+  );
 
   it.each(["ready", "failed"] as const)(
     "delivers %s exact-turn alerts once across restart without ActivityKit payloads",

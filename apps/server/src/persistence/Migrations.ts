@@ -165,6 +165,10 @@ import Migration0134 from "./Migrations/134_ProjectionThreadsForkSourceMessage.t
 import Migration0135 from "./Migrations/135_ProjectionMessageTurnActivityIndex.ts";
 // Slots 136–140 are already released in the Remote lineage; new common migrations follow them.
 import Migration0141 from "./Migrations/141_ProjectionThreadsUsageLimitRecovery.ts";
+import Migration0143 from "./Migrations/143_UsageAnalyticsDeletedTokens.ts";
+import Migration0144 from "./Migrations/144_ProjectionThreadsPullRequestLinks.ts";
+import Migration0145 from "./Migrations/145_ProjectionThreadSessionSteering.ts";
+import Migration0146 from "./Migrations/146_AgentGatewayOperationWaves.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -323,6 +327,10 @@ export const migrationEntries = [
   [140, "RemoteAccessControls", Migration0140],
   [141, "ProjectionThreadsUsageLimitRecovery", Migration0141],
   [142, "AuthAccessOrigin", Migration0142],
+  [143, "UsageAnalyticsDeletedTokens", Migration0143],
+  [144, "ProjectionThreadsPullRequestLinks", Migration0144],
+  [145, "ProjectionThreadSessionSteering", Migration0145],
+  [146, "AgentGatewayOperationWaves", Migration0146],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>
@@ -353,6 +361,17 @@ export const LATEST_MIGRATION_ID = Math.max(...migrationEntries.map(([id]) => id
 const canonicalMigrationNamesById: ReadonlyMap<number, string> = new Map(
   migrationEntries.map(([id, name]) => [id, name] as const),
 );
+
+/** Released main (including v1.1.0) reserved 136–140 and recorded the common migration at 141. */
+export const isReleasedMainMigrationGap = (
+  recordedNamesById: ReadonlyMap<number, string>,
+): boolean => {
+  const releasedEntries = migrationEntries.filter(([id]) => id <= 135 || id === 141);
+  return (
+    recordedNamesById.size === releasedEntries.length &&
+    releasedEntries.every(([id, name]) => recordedNamesById.get(id) === name)
+  );
+};
 
 export const planAccountMigrationRepair = (rows: readonly MigrationIdentity[]) =>
   classifyAccountMigrationLineage(rows, canonicalMigrationNamesById);

@@ -108,6 +108,12 @@ export type FakeWorkos = {
   /** Every request the server has seen, oldest first. */
   requests: FakeWorkosRequest[];
   failNextSessionRevocation(): void;
+  /**
+   * Holds the next request with this method and path until `release` is
+   * called. `arrived` settles once it is held — how a test proves that other
+   * work runs while a provider read is still outstanding.
+   */
+  holdNext(method: string, path: string): { arrived: Promise<void>; release(): void };
   close(): Promise<void>;
 };
 
@@ -172,6 +178,12 @@ export async function startFakeWorkos(options: StartFakeWorkosOptions = {}): Pro
   const refreshTokens = new Map<string, { userId: string; sessionId: string }>();
   const revokedSessions = new Set<string>();
   let failSessionRevocation = false;
+  const holds: Array<{
+    method: string;
+    path: string;
+    arrive: () => void;
+    released: Promise<void>;
+  }> = [];
   /**
    * Live Magic Auth codes by email — what WorkOS would have emailed, and when
    * it stops working. Held in clear only because this is an in-process double
@@ -317,6 +329,14 @@ export async function startFakeWorkos(options: StartFakeWorkosOptions = {}): Pro
       authorization: c.req.header("authorization"),
       body: c.req.method === "GET" ? "" : await c.req.raw.clone().text(),
     });
+    const hold = holds.findIndex(
+      (entry) => entry.method === c.req.method && entry.path === c.req.path,
+    );
+    if (hold !== -1) {
+      const [entry] = holds.splice(hold, 1);
+      entry!.arrive();
+      await entry!.released;
+    }
     await next();
   });
 
@@ -647,6 +667,18 @@ export async function startFakeWorkos(options: StartFakeWorkosOptions = {}): Pro
     requests,
     failNextSessionRevocation: () => {
       failSessionRevocation = true;
+    },
+    holdNext(method, path) {
+      let arrive!: () => void;
+      let release!: () => void;
+      const arrived = new Promise<void>((resolve) => {
+        arrive = resolve;
+      });
+      const released = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      holds.push({ method, path, arrive, released });
+      return { arrived, release };
     },
     addUser,
     addOrganization,

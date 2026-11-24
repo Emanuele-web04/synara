@@ -5,7 +5,6 @@
 // Layer: Web account feature (sidebar footer).
 
 import { useNavigate } from "@tanstack/react-router";
-import { toastManager } from "~/components/ui/toast";
 import {
   Menu,
   MenuGroup,
@@ -26,9 +25,12 @@ import { ExternalLinkIcon, GlobeIcon, SettingsIcon, UsageGaugeIcon, UserIcon } f
 import { openExternalLink } from "~/lib/linkChips";
 import { isMacPlatform } from "~/lib/utils";
 import { useAccount } from "~/hooks/useAccount";
-import { accountErrorMessage, accountInitial, publicProfileUrl } from "~/lib/accountLogic";
+import { useTranslation } from "~/i18n";
+import { accountInitial, profileShareUrl } from "~/lib/accountLogic";
 import { PROFILE_AVATAR_COLORS } from "~/components/profile/useProfileAvatarColor";
 import { useAccountDialogStore } from "./accountDialogStore";
+import { signOutWithToast } from "./signOutWithToast";
+import { RemoteConnectionsCoachmark } from "../hosts/RemoteConnectionsAnnouncement";
 
 const DEFAULT_MENU_AVATAR_COLOR = PROFILE_AVATAR_COLORS[0] ?? "#22c55e";
 
@@ -43,12 +45,14 @@ export function AccountFooterControl() {
 
 function SignedInFooter() {
   const account = useAccount();
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const openSignIn = useAccountDialogStore((state) => state.openSignIn);
   const me = account.me;
   if (!me) return null;
 
   const profile = me.profile ?? null;
+  const publicUrl = profileShareUrl(profile, me.publicProfileAvailable);
   const displayName = profile?.displayName ?? me.name;
   const avatarColor = profile?.avatarColor ?? DEFAULT_MENU_AVATAR_COLOR;
   // With a profile, its resolved avatarUrl is the one source of truth (it
@@ -57,36 +61,24 @@ function SignedInFooter() {
   // profile yet, so the provider picture is the best available image.
   const avatarImage = profile ? (profile.avatarUrl ?? null) : (me.image ?? null);
 
-  const handleSignOut = async () => {
-    try {
-      await account.signOut.mutateAsync();
-    } catch (cause) {
-      toastManager.add({
-        type: "error",
-        title: "Could not sign out",
-        description: accountErrorMessage(cause, "Try again in a moment."),
-      });
-    }
-  };
-
   return (
     <Menu>
-      <SidebarIconButton
-        render={<MenuTrigger />}
-        icon={UserIcon}
-        label={`Account: ${displayName}`}
-        tooltip={displayName}
-        tooltipSide="right"
-        className={appRailButtonClassName(false)}
-      >
-        <ProfileAvatar
-          initials={accountInitial(displayName)}
-          color={avatarColor}
-          image={avatarImage}
-          className="size-7 shrink-0"
-          textClassName="text-ui-xs"
-        />
-      </SidebarIconButton>
+      <RemoteConnectionsCoachmark signedIn tooltip={displayName}>
+        <SidebarIconButton
+          render={<MenuTrigger />}
+          icon={UserIcon}
+          label={`Account: ${displayName}`}
+          className={appRailButtonClassName(false)}
+        >
+          <ProfileAvatar
+            initials={accountInitial(displayName)}
+            color={avatarColor}
+            image={avatarImage}
+            className="size-7 shrink-0"
+            textClassName="text-ui-xs"
+          />
+        </SidebarIconButton>
+      </RemoteConnectionsCoachmark>
       <ComposerPickerMenuPopup side="right" align="end" className="w-64 min-w-64">
         <MenuGroup>
           <div className="flex flex-col gap-0.5 px-2 py-1.5">
@@ -109,17 +101,16 @@ function SignedInFooter() {
             <SidebarContextMenuIcon icon={UsageGaugeIcon} />
             <span>Usage</span>
           </MenuItem>
-          {/* Three honest states: a public profile links to its live page, a
-              private one routes to the visibility setting (the page would
-              404), and no profile resumes onboarding. */}
+          {/* Saved publication can outlive Alto access. Only offer the online
+              link when the account service confirms the page is available. */}
           {profile ? (
-            profile.public ? (
+            publicUrl ? (
               <MenuItem
                 className={SIDEBAR_CONTEXT_MENU_ITEM_CLASS_NAME}
-                onClick={() => openExternalLink(publicProfileUrl(profile.handle))}
+                onClick={() => openExternalLink(publicUrl)}
               >
                 <SidebarContextMenuIcon icon={ExternalLinkIcon} />
-                <span>View public profile</span>
+                <span>{t("common:account_viewPublicProfile")}</span>
               </MenuItem>
             ) : (
               <MenuItem
@@ -127,7 +118,7 @@ function SignedInFooter() {
                 onClick={() => void navigate({ to: "/settings", search: { section: "profile" } })}
               >
                 <SidebarContextMenuIcon icon={GlobeIcon} />
-                <span>Make profile public…</span>
+                <span>{t("common:account_makeYourProfilePublic")}</span>
               </MenuItem>
             )
           ) : (
@@ -159,7 +150,7 @@ function SignedInFooter() {
         <MenuGroup>
           {/* Sign-out also unlinks this machine's host (ADR 0015): its key
               leaves the directory and other devices' sessions to it end. */}
-          <MenuItem variant="destructive" onClick={() => void handleSignOut()}>
+          <MenuItem variant="destructive" onClick={() => void signOutWithToast(account)}>
             <span>Sign out</span>
           </MenuItem>
         </MenuGroup>
@@ -174,15 +165,15 @@ function SignedOutFooter() {
 
   return (
     <Menu>
-      <SidebarIconButton
-        render={<MenuTrigger />}
-        icon={UserIcon}
-        iconClassName="size-5"
-        label="Sign in"
-        tooltip="Sign in"
-        tooltipSide="right"
-        className={appRailButtonClassName(false)}
-      />
+      <RemoteConnectionsCoachmark signedIn={false} tooltip="Sign in">
+        <SidebarIconButton
+          render={<MenuTrigger />}
+          icon={UserIcon}
+          iconClassName="size-5"
+          label="Sign in"
+          className={appRailButtonClassName(false)}
+        />
+      </RemoteConnectionsCoachmark>
       <ComposerPickerMenuPopup side="right" align="end" className="w-64 min-w-64">
         <MenuGroup>
           <div className="flex flex-col gap-0.5 px-2 py-1.5">

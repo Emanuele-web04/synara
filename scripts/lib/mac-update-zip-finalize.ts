@@ -3,7 +3,7 @@
 // Layer: Release/build helper
 // Exports: finalizeMacUpdateZip for build scripts and smoke checks.
 
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   createReadStream,
@@ -89,9 +89,8 @@ function findFirstMacAppBundle(root: string): string | null {
   return null;
 }
 
-// A fully packaged Electron app lists thousands of zip entries, so raise the
-// stdout cap well past spawnSync's 1 MB default to avoid spurious ENOBUFS
-// failures when reading the archive listing.
+// Keep signature verification output well past spawnSync's 1 MB default to
+// avoid spurious ENOBUFS failures. The archive listing below is streamed.
 const COMMAND_OUTPUT_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
 
 function runTextCommand(
@@ -118,17 +117,49 @@ function runTextCommand(
   return result.stdout;
 }
 
-function listZipEntries(zipPath: string): string[] {
-  return runTextCommand("unzip", ["-Z", "-1", zipPath])
+// Archive commands run asynchronously and stream a listing of thousands of
+// entries: the release build packs this ZIP while it awaits DMG notarization,
+// whose wait must not be blocked by a long ditto.
+function runArchiveCommand(
+  command: string,
+  args: ReadonlyArray<string>,
+  options: { readonly cwd?: string; readonly verbose?: boolean } = {},
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, [...args], {
+      cwd: options.cwd,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const stdout: Buffer[] = [];
+    const stderr: Buffer[] = [];
+    child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
+    child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
+    child.once("error", reject);
+    child.once("close", (status) => {
+      const output = Buffer.concat(stdout).toString("utf8");
+      const errors = Buffer.concat(stderr).toString("utf8");
+      if (options.verbose && output) process.stdout.write(output);
+      if (options.verbose && errors) process.stderr.write(errors);
+      if (status !== 0) {
+        reject(new Error(`${command} ${args.join(" ")} failed: ${(errors || output).trim()}`));
+        return;
+      }
+      resolve(output);
+    });
+  });
+}
+
+async function listZipEntries(zipPath: string): Promise<string[]> {
+  return (await runArchiveCommand("unzip", ["-Z", "-1", zipPath]))
     .split(/\r?\n/)
     .map((entry) => entry.trim())
     .filter((entry) => entry.length > 0);
 }
 
-function assertMacZipFrameworkSymlinks(zipPath: string): string {
-  const appBundleName = resolveSingleTopLevelMacAppBundle(listZipEntries(zipPath));
+async function assertMacZipFrameworkSymlinks(zipPath: string): Promise<string> {
+  const appBundleName = resolveSingleTopLevelMacAppBundle(await listZipEntries(zipPath));
   for (const entry of buildMacUpdateZipSymlinkEntries(appBundleName)) {
-    const zipInfo = runTextCommand("unzip", ["-Z", "-v", zipPath, entry]);
+    const zipInfo = await runArchiveCommand("unzip", ["-Z", "-v", zipPath, entry]);
     if (!isZipInfoSymlink(zipInfo)) {
       throw new Error(`macOS update zip entry must be a symlink: ${entry}`);
     }
@@ -255,16 +286,17 @@ export async function finalizeMacUpdateZip(
 
   verifyMacAppSignature(appBundlePath, options.signed, options.expectedBundleIdentifier);
   rmSync(zipPath, { force: true });
-  runTextCommand("ditto", ["-c", "-k", "--sequesterRsrc", "--keepParent", appBundleName, zipPath], {
-    cwd: appBundleParent,
-    verbose,
-  });
+  await runArchiveCommand(
+    "ditto",
+    ["-c", "-k", "--sequesterRsrc", "--keepParent", appBundleName, zipPath],
+    { cwd: appBundleParent, verbose },
+  );
 
-  const zippedAppBundleName = assertMacZipFrameworkSymlinks(zipPath);
+  const zippedAppBundleName = await assertMacZipFrameworkSymlinks(zipPath);
 
   const extractedZipRoot = mkdtempSync(join(tmpdir(), "synara-mac-update-zip-"));
   try {
-    runTextCommand("ditto", ["-x", "-k", zipPath, extractedZipRoot], { verbose });
+    await runArchiveCommand("ditto", ["-x", "-k", zipPath, extractedZipRoot], { verbose });
     verifyMacAppSignature(
       join(extractedZipRoot, zippedAppBundleName),
       options.signed,

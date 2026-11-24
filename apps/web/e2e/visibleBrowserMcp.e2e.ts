@@ -769,9 +769,17 @@ test("production MCP controls one persistent Electron page across visibility cha
         "return await page.snapshot({interactive:true});",
         'return Array.from(document.querySelectorAll("button"));',
         "await waitForTimeout(400);",
+        "await new Promise((resolve) => setTimeout(resolve, 400));",
       ]) {
         await expect(run(code)).rejects.toThrow("BrowserScriptApiUnavailable");
       }
+      await expect(
+        run("await new Promise((resolve) => setTimeout(resolve, 400));"),
+      ).rejects.toThrow("setTimeout is unavailable in browser_run");
+      const waitTimeout = await run(
+        'await page.getByText("Never rendered",{exact:true}).waitFor({timeout:300}); return true;',
+      ).catch((error: unknown) => error);
+      expect(String(waitTimeout)).toContain("locator.waitFor: Timeout 300ms exceeded.");
       expect(
         (await run('return await page.locator("#mode").innerText();')).structuredContent.value,
       ).toBe("Sign Up selected");
@@ -968,11 +976,16 @@ test("preserves composer keyboard ownership while hovering two background browse
     }
 
     for (const [index, tabId] of tabs.entries()) {
-      const observed = await run(
-        tabId,
-        `return await page.evaluate(() => Number(document.body.dataset.trustedMoves));`,
-      );
-      expect(Number(observed.structuredContent.value)).toBeGreaterThan(0);
+      // Electron queues native input before the background renderer observes it.
+      await expect
+        .poll(async () => {
+          const observed = await run(
+            tabId,
+            `return await page.evaluate(() => Number(document.body.dataset.trustedMoves));`,
+          );
+          return Number(observed.structuredContent.value);
+        })
+        .toBeGreaterThan(0);
       const hovered = await run(
         tabId,
         `await page.getByRole('button', {name:'Reveal hover state',exact:true}).hover();

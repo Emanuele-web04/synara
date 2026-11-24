@@ -14,6 +14,8 @@ import {
   nextStatusAfterDownloadFailure,
   shouldCheckForUpdatesOnForeground,
   shouldBroadcastDownloadProgress,
+  shouldAcceptAvailableUpdate,
+  updateFilesMatchRuntimeArch,
 } from "./updateState";
 
 const baseState: DesktopUpdateState = {
@@ -411,6 +413,100 @@ describe("shouldCheckForUpdatesOnForeground", () => {
         foregroundedAtMs: Date.parse("2026-03-04T00:06:00.000Z"),
         minBackgroundDurationMs: 30_000,
         minIntervalMs: 5 * 60 * 1000,
+      }),
+    ).toBe(true);
+  });
+});
+
+describe("resolved update artifact architecture", () => {
+  const arm64AppImage = "Synara-1.5.2-arm64.AppImage";
+  const intelAppImage = "Synara-1.5.2-x86_64.AppImage";
+  const files = (...urls: string[]) => ({ files: urls.map((url) => ({ url })) });
+
+  it("keeps both Linux architectures on their own payload", () => {
+    expect(updateFilesMatchRuntimeArch(files(arm64AppImage), "linux", "arm64")).toBe(true);
+    expect(updateFilesMatchRuntimeArch(files(intelAppImage), "linux", "arm64")).toBe(false);
+    expect(updateFilesMatchRuntimeArch(files(intelAppImage), "linux", "x64")).toBe(true);
+    expect(updateFilesMatchRuntimeArch(files(arm64AppImage), "linux", "x64")).toBe(false);
+  });
+
+  it("rejects a manifest that mixes architectures", () => {
+    expect(updateFilesMatchRuntimeArch(files(intelAppImage, arm64AppImage), "linux", "arm64")).toBe(
+      false,
+    );
+    expect(updateFilesMatchRuntimeArch(files(intelAppImage, arm64AppImage), "linux", "x64")).toBe(
+      false,
+    );
+  });
+
+  it("inspects the legacy top-level path when files are absent", () => {
+    expect(updateFilesMatchRuntimeArch({ path: arm64AppImage }, "linux", "arm64")).toBe(true);
+    expect(updateFilesMatchRuntimeArch({ path: intelAppImage }, "linux", "arm64")).toBe(false);
+    expect(updateFilesMatchRuntimeArch({ path: intelAppImage }, "linux", "x64")).toBe(true);
+    expect(updateFilesMatchRuntimeArch({ path: arm64AppImage }, "linux", "x64")).toBe(false);
+    expect(updateFilesMatchRuntimeArch({}, "linux", "arm64")).toBe(false);
+  });
+
+  it("reads the payload name from URLs with a directory, query or fragment", () => {
+    const hostedArm64 =
+      "https://github.com/o/r/releases/download/v1.5.2/Synara-1.5.2-arm64.AppImage?token=1";
+    const hostedIntel =
+      "https://github.com/o/r/releases/download/v1.5.2/Synara-1.5.2-x86_64.AppImage#frag";
+    expect(updateFilesMatchRuntimeArch(files(hostedArm64), "linux", "arm64")).toBe(true);
+    expect(updateFilesMatchRuntimeArch(files(hostedIntel), "linux", "x64")).toBe(true);
+    expect(updateFilesMatchRuntimeArch(files(hostedArm64), "linux", "x64")).toBe(false);
+  });
+
+  it("leaves other platforms alone and rejects Linux payloads it cannot name", () => {
+    expect(updateFilesMatchRuntimeArch(files(intelAppImage), "darwin", "arm64")).toBe(true);
+    expect(updateFilesMatchRuntimeArch(files(intelAppImage), "win32", "x64")).toBe(true);
+    expect(
+      updateFilesMatchRuntimeArch(
+        { files: [{ url: undefined }, { url: "Synara-1.5.2.zip" }] },
+        "linux",
+        "arm64",
+      ),
+    ).toBe(false);
+  });
+});
+
+describe("available update admission", () => {
+  const arm64AppImage = "Synara-1.5.2-arm64.AppImage";
+  const intelAppImage = "Synara-1.5.2-x86_64.AppImage";
+  const candidate = (info: { path?: string; files?: ReadonlyArray<{ url?: string }> }) => ({
+    currentVersion: "1.5.1",
+    version: "1.5.2",
+    flavor: "production" as const,
+    info,
+    platform: "linux" as NodeJS.Platform,
+    arch: "arm64",
+  });
+
+  it("composes lane, version and architecture into one decision", () => {
+    expect(shouldAcceptAvailableUpdate(candidate({ files: [{ url: arm64AppImage }] }))).toBe(true);
+    expect(shouldAcceptAvailableUpdate(candidate({ files: [{ url: intelAppImage }] }))).toBe(false);
+    expect(shouldAcceptAvailableUpdate(candidate({ path: intelAppImage }))).toBe(false);
+    expect(shouldAcceptAvailableUpdate(candidate({ path: arm64AppImage }))).toBe(true);
+  });
+
+  it("still rejects an old version and a foreign flavor lane", () => {
+    expect(
+      shouldAcceptAvailableUpdate({
+        ...candidate({ files: [{ url: arm64AppImage }] }),
+        version: "1.5.0",
+      }),
+    ).toBe(false);
+    expect(
+      shouldAcceptAvailableUpdate({
+        ...candidate({ files: [{ url: arm64AppImage }] }),
+        version: "1.5.2-beta.1",
+      }),
+    ).toBe(false);
+    expect(
+      shouldAcceptAvailableUpdate({
+        ...candidate({ files: [{ url: arm64AppImage }] }),
+        version: "1.5.2-beta.1",
+        flavor: "beta",
       }),
     ).toBe(true);
   });

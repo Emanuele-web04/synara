@@ -19,6 +19,7 @@ import {
 } from "~/appSettings";
 import { toastManager } from "~/components/ui/toast";
 import { useRefreshProviderStatusesNow } from "~/hooks/useProviderStatusRefresh";
+import { useNewChatDefault } from "~/hooks/useNewChatDefault";
 import type { ScratchModelDraft } from "~/hooks/useScratchComposerDraft";
 import type { ScratchModelCatalog } from "~/hooks/useScratchModelCatalog";
 import { ensureHomeChatProject } from "~/lib/chatProjects";
@@ -79,6 +80,7 @@ export function useTaskDelegation(options: {
   const { modelOptionsByProvider, runtimeMode, runtimeModelForCapabilities } = catalog;
   const navigate = useNavigate();
   const { settings } = useAppSettings();
+  const newChatDefault = useNewChatDefault(settings);
   const refreshProviderStatuses = useRefreshProviderStatusesNow();
   const [isStarting, setIsStarting] = useState(false);
   // Synchronous re-entry guard: a repeated ⌘↵ can land before React flushes isStarting.
@@ -235,7 +237,7 @@ export function useTaskDelegation(options: {
       threadId: chatId,
       projectId: thread.projectId,
       thread,
-      defaultProvider: settings.defaultProvider,
+      newChatDefault,
       providerInstances,
     });
     composerStore.setPrompt(chatId, prompt);
@@ -243,7 +245,7 @@ export function useTaskDelegation(options: {
       threadId: chatId,
       projectId: thread.projectId,
       thread,
-      defaultProvider: settings.defaultProvider,
+      newChatDefault,
       assistantDeliveryMode: resolveAssistantDeliveryMode(settings),
       providerOptions: getProviderStartOptions(settings, dispatchTarget.instanceId),
       providerInstances,
@@ -315,7 +317,7 @@ export function useTaskDelegation(options: {
         interactionMode: DEFAULT_INTERACTION_MODE,
         envMode: "local",
         workingDirectory: target.kind === "folder" ? target.path : null,
-        defaultProvider: settings.defaultProvider,
+        newChatDefault,
         assistantDeliveryMode: resolveAssistantDeliveryMode(settings),
         providerOptions: getProviderStartOptions(settings, selectedProviderInstanceId),
         providerInstances: getProviderInstanceOptions(settings),

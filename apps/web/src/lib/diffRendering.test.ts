@@ -13,6 +13,7 @@ import {
   resolveDiffCopyText,
   PARTIAL_DIFF_COPY_NOTICE,
   resolveFileDiffStatByChangedPath,
+  resolveFileDiffIndexPaths,
   resolveFileDiffPath,
   resolveFileDiffPrevPath,
   sortFileDiffsByPath,
@@ -176,6 +177,87 @@ describe("resolveFileDiffPrevPath", () => {
       ].join("\n"),
     );
     expect(resolveFileDiffPrevPath(changed)).toBeNull();
+  });
+});
+
+describe("resolveFileDiffIndexPaths", () => {
+  const parseSingleFile = (patch: string) => {
+    const renderable = getRenderablePatch(patch, "index-paths:test");
+    if (renderable?.kind !== "files" || renderable.files.length !== 1) {
+      throw new Error("expected one parsed file");
+    }
+    return renderable.files[0]!;
+  };
+
+  it("returns both sides of a rename so unstaging also restores the old path", () => {
+    const renamed = parseSingleFile(
+      [
+        "diff --git a/old.txt b/new.txt",
+        "similarity index 100%",
+        "rename from old.txt",
+        "rename to new.txt",
+        "",
+      ].join("\n"),
+    );
+    expect(resolveFileDiffIndexPaths(renamed)).toEqual(["new.txt", "old.txt"]);
+  });
+
+  it("returns only the file's own path when it was not renamed", () => {
+    const changed = parseSingleFile(
+      [
+        "diff --git a/src/one.ts b/src/one.ts",
+        "index 1111111..2222222 100644",
+        "--- a/src/one.ts",
+        "+++ b/src/one.ts",
+        "@@ -1,1 +1,1 @@",
+        "-const one = 1;",
+        "+const one = 2;",
+        "",
+      ].join("\n"),
+    );
+    expect(resolveFileDiffIndexPaths(changed)).toEqual(["src/one.ts"]);
+  });
+
+  it("keeps a real a/ folder on the old side of a rename out of it", () => {
+    const renamed = parseSingleFile(
+      [
+        "diff --git a/a/old.txt b/new.txt",
+        "similarity index 100%",
+        "rename from a/old.txt",
+        "rename to new.txt",
+        "",
+      ].join("\n"),
+    );
+    expect(resolveFileDiffIndexPaths(renamed)).toEqual(["new.txt", "a/old.txt"]);
+  });
+
+  it("keeps a real b/ folder on the new side of a rename into it", () => {
+    const renamed = parseSingleFile(
+      [
+        "diff --git a/old.txt b/b/new.txt",
+        "similarity index 100%",
+        "rename from old.txt",
+        "rename to b/new.txt",
+        "",
+      ].join("\n"),
+    );
+    expect(resolveFileDiffIndexPaths(renamed)).toEqual(["b/new.txt", "old.txt"]);
+  });
+
+  it("keeps a real b/ folder on a plain change", () => {
+    const changed = parseSingleFile(
+      [
+        "diff --git a/b/x.txt b/b/x.txt",
+        "index 1111111..2222222 100644",
+        "--- a/b/x.txt",
+        "+++ b/b/x.txt",
+        "@@ -1,1 +1,1 @@",
+        "-a",
+        "+b",
+        "",
+      ].join("\n"),
+    );
+    expect(resolveFileDiffIndexPaths(changed)).toEqual(["b/x.txt"]);
   });
 });
 
@@ -389,6 +471,76 @@ describe("fileDiffStatsByPath", () => {
         ["src/one.ts", { additions: 1, deletions: 1 }],
         ["src/two.ts", { additions: 2, deletions: 0 }],
       ]),
+    );
+  });
+
+  it("counts removed and added lines that look like file headers", () => {
+    const patch = [
+      "diff --git a/db/schema.sql b/db/schema.sql",
+      "index 1111111..2222222 100644",
+      "--- a/db/schema.sql",
+      "+++ b/db/schema.sql",
+      "@@ -1,4 +1,4 @@",
+      " CREATE TABLE users (id INTEGER);",
+      // A removed SQL comment "-- drop legacy index" and an added "++ counter".
+      "--- drop legacy index",
+      "-DROP INDEX users_legacy;",
+      "+++ counter",
+      "+CREATE INDEX users_id ON users (id);",
+      " -- end",
+      "diff --git a/src/two.ts b/src/two.ts",
+      "index 3333333..4444444 100644",
+      "--- a/src/two.ts",
+      "+++ b/src/two.ts",
+      "@@ -1 +1 @@",
+      "-const two = 1;",
+      "+const two = 2;",
+    ].join("\n");
+
+    expect(fileDiffStatsByPath(patch)).toEqual(
+      new Map([
+        ["db/schema.sql", { additions: 2, deletions: 2 }],
+        ["src/two.ts", { additions: 1, deletions: 1 }],
+      ]),
+    );
+  });
+
+  it("separates files that have no diff --git line", () => {
+    const patch = [
+      "--- a/one.txt",
+      "+++ b/one.txt",
+      "@@ -1,2 +1,2 @@",
+      " keep",
+      "-old",
+      "+new",
+      "--- a/two.txt",
+      "+++ /dev/null",
+      "@@ -1,2 +0,0 @@",
+      "-first",
+      "-second",
+    ].join("\n");
+
+    expect(fileDiffStatsByPath(patch)).toEqual(
+      new Map([
+        ["one.txt", { additions: 1, deletions: 1 }],
+        ["two.txt", { additions: 0, deletions: 2 }],
+      ]),
+    );
+  });
+
+  it("still counts a hunk whose header understates its body", () => {
+    const patch = [
+      "--- a/one.txt",
+      "+++ b/one.txt",
+      "@@ -1,1 +1,1 @@",
+      "-old",
+      "+new",
+      "+extra line the header did not announce",
+      "\\ No newline at end of file",
+    ].join("\n");
+
+    expect(fileDiffStatsByPath(patch)).toEqual(
+      new Map([["one.txt", { additions: 2, deletions: 1 }]]),
     );
   });
 });

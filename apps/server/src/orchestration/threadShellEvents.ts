@@ -1,4 +1,5 @@
 import type { OrchestrationEvent } from "@synara/contracts";
+import { isBackgroundTaskActivity } from "@synara/shared/backgroundTasks";
 
 const THREAD_SHELL_SUMMARY_ACTIVITY_KINDS = new Set([
   "approval.requested",
@@ -77,7 +78,12 @@ export function shouldPublishThreadShellForEvent(event: OrchestrationEvent): boo
     return event.payload.role === "user" || event.payload.streaming === false;
   }
   if (event.type === "thread.activity-appended") {
-    return THREAD_SHELL_SUMMARY_ACTIVITY_KINDS.has(event.payload.activity.kind);
+    const { activity } = event.payload;
+    // Task status patches, task ends, and "Moved to background" notices change
+    // the shell's pendingBackgroundTaskCount. Task progress never does.
+    return (
+      THREAD_SHELL_SUMMARY_ACTIVITY_KINDS.has(activity.kind) || isBackgroundTaskActivity(activity)
+    );
   }
   return false;
 }

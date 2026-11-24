@@ -73,51 +73,53 @@ Object.freeze(DEFAULT_RIGHT_DOCK_STATE.panes);
 
 function commit(
   set: (fn: (store: RightDockStore) => Partial<RightDockStore>) => void,
+  get: () => RightDockStore,
   threadId: RightDockHostId,
   transform: (state: RightDockThreadState) => RightDockThreadState,
 ): void {
-  set((store) => {
-    const previous = store.dockStateByThreadId[threadId] ?? DEFAULT_RIGHT_DOCK_STATE;
-    const next = transform(previous);
-    if (next === previous) {
-      return {};
-    }
-    return {
-      dockStateByThreadId: {
-        ...store.dockStateByThreadId,
-        [threadId]: next,
-      },
-    };
-  });
+  const previous = get().dockStateByThreadId[threadId] ?? DEFAULT_RIGHT_DOCK_STATE;
+  const next = transform(previous);
+  if (next === previous) {
+    return;
+  }
+  set((store) => ({
+    dockStateByThreadId: {
+      ...store.dockStateByThreadId,
+      [threadId]: next,
+    },
+  }));
 }
 
 export const useRightDockStore = create<RightDockStore>()(
   persist(
-    (set) => ({
+    (set, get) => ({
       dockStateByThreadId: {},
       openPane: (threadId, input) =>
-        commit(set, threadId, (state) =>
+        commit(set, get, threadId, (state) =>
           openPaneInState(state, { ...input, paneId: input.paneId ?? randomUUID() }),
         ),
       toggleSingletonPane: (threadId, input) =>
-        commit(set, threadId, (state) =>
+        commit(set, get, threadId, (state) =>
           toggleSingletonPaneInState(state, { ...input, paneId: input.paneId ?? randomUUID() }),
         ),
       closePane: (threadId, paneId) =>
-        commit(set, threadId, (state) => closePaneInState(state, paneId)),
+        commit(set, get, threadId, (state) => closePaneInState(state, paneId)),
       movePane: (threadId, paneId, overPaneId) =>
-        commit(set, threadId, (state) => movePaneInState(state, paneId, overPaneId)),
+        commit(set, get, threadId, (state) => movePaneInState(state, paneId, overPaneId)),
       setActivePane: (threadId, paneId) =>
-        commit(set, threadId, (state) => setActivePaneInState(state, paneId)),
+        commit(set, get, threadId, (state) => setActivePaneInState(state, paneId)),
       setDockOpen: (threadId, open) =>
-        commit(set, threadId, (state) => setDockOpenInState(state, open)),
+        commit(set, get, threadId, (state) => setDockOpenInState(state, open)),
       updatePane: (threadId, paneId, patch) =>
-        commit(set, threadId, (state) => updatePaneInState(state, paneId, patch)),
+        commit(set, get, threadId, (state) => updatePaneInState(state, paneId, patch)),
       setSidechatPaneThread: (hostId, threadId) =>
-        commit(set, hostId, (state) =>
+        commit(set, get, hostId, (state) =>
           setSidechatPaneThreadInState(state, { paneId: randomUUID(), threadId }),
         ),
-      clearThreadDockState: (threadId) =>
+      clearThreadDockState: (threadId) => {
+        if (!Object.hasOwn(get().dockStateByThreadId, threadId)) {
+          return;
+        }
         set((store) => {
           if (!Object.hasOwn(store.dockStateByThreadId, threadId)) {
             return {};
@@ -125,7 +127,8 @@ export const useRightDockStore = create<RightDockStore>()(
           const next = { ...store.dockStateByThreadId };
           delete next[threadId];
           return { dockStateByThreadId: next };
-        }),
+        });
+      },
     }),
     {
       name: RIGHT_DOCK_STORAGE_KEY,

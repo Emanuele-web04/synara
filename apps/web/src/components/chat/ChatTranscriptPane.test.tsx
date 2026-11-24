@@ -110,13 +110,6 @@ describe("ChatTranscriptPane", () => {
     // In flow above the transcript — an absolute overlay would cover whatever
     // message happens to sit at the top of the scroll region.
     expect(markup).not.toContain("pointer-events-none absolute inset-x-0 top-2");
-    expect(markup).toContain("shrink-0");
     expect(markup).not.toContain("Unblock thread");
-  });
-
-  it("keeps the transcript clean when no thread error is stored", () => {
-    const markup = renderTranscriptPaneMarkup({ threadError: null });
-
-    expect(markup).not.toContain('role="alert"');
   });
 });

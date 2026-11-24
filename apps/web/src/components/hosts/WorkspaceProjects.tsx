@@ -8,7 +8,6 @@ import {
 import { useLocation } from "@tanstack/react-router";
 import type { useSortable } from "@dnd-kit/sortable";
 import { ThreadId } from "@synara/contracts";
-import type { SidebarThreadSortOrder } from "../../appSettings";
 import { CentralIcon } from "../../lib/central-icons";
 import {
   ArchiveIcon,
@@ -17,13 +16,14 @@ import {
   NewThreadIcon,
   PencilIcon,
   PinIcon,
+  XIcon,
   type LucideIcon,
 } from "../../lib/icons";
 import { createClientPointMenuAnchor } from "../../lib/clientPointMenuAnchor";
 import { pinActionLabel } from "../../lib/pin";
 import { DEFAULT_PROJECT_ICON, projectColorValue } from "../../lib/projectAppearance";
 import {
-  deriveWorkspaceProjectThreadRows,
+  type deriveWorkspaceProjectThreadRows,
   workspaceThreadKey,
   type WorkspaceProjectEntry,
   type WorkspaceThreadEntry,
@@ -85,6 +85,8 @@ import {
 } from "../../sidebarRowStyles";
 import { cn, randomUUID } from "../../lib/utils";
 import { showUndoToast } from "../../lib/threadUndoToast";
+import { readNativeApi } from "../../nativeApi";
+import { useTranslation } from "~/i18n";
 
 type SortableProjectHandleProps = Pick<
   ReturnType<typeof useSortable>,
@@ -97,8 +99,10 @@ function WorkspaceRowMenu({
   menu,
   onClose,
   items,
+  children,
 }: {
   menu: WorkspaceMenuState | null;
+  children?: ReactNode;
   onClose: () => void;
   items: readonly { label: string; icon: LucideIcon; onClick: () => void; separator?: boolean }[];
 }) {
@@ -108,6 +112,7 @@ function WorkspaceRowMenu({
   return (
     <Menu
       open
+      keepOpenOnSubmenuInteraction={Boolean(children)}
       onOpenChange={(open) => {
         if (!open) onClose();
       }}
@@ -135,6 +140,7 @@ function WorkspaceRowMenu({
             </MenuItem>
           </span>
         ))}
+        {children}
       </ComposerPickerMenuPopup>
     </Menu>
   );
@@ -484,34 +490,31 @@ export function WorkspaceProjectItem({
   entry,
   expanded,
   onToggle,
-  threadSortOrder,
+  threadRows,
+  spaceMenu,
   dragHandleProps,
   manualSorting: manualSortingProp,
-  extraPages: extraPagesProp,
-  onExtraPagesChange,
+  onExtraPagesChange: setExtraPages,
   threadJumpLabels,
   renderThreadHoverCard,
 }: {
   entry: WorkspaceProjectEntry;
   expanded: boolean;
   onToggle: () => void;
-  threadSortOrder: SidebarThreadSortOrder;
+  threadRows: ReturnType<typeof deriveWorkspaceProjectThreadRows>;
+  spaceMenu?: ReactNode;
   dragHandleProps?: SortableProjectHandleProps | null;
   manualSorting?: boolean;
-  extraPages?: number;
-  onExtraPagesChange?: (pages: number) => void;
+  onExtraPagesChange: (pages: number) => void;
   threadJumpLabels?: ReadonlyMap<string, string>;
   renderThreadHoverCard?: (
     entry: WorkspaceThreadEntry,
   ) => ((anchorId: string) => ReactNode) | undefined;
 }) {
+  const { t } = useTranslation();
   const manualSorting = manualSortingProp ?? false;
-  const [localExtraPages, setLocalExtraPages] = useState(0);
-  const extraPages = extraPagesProp ?? localExtraPages;
-  const setExtraPages = onExtraPagesChange ?? setLocalExtraPages;
   const [menu, setMenu] = useState<WorkspaceMenuState | null>(null);
   const [renameSession, setRenameSession] = useState<WorkspaceSession | null>(null);
-  const href = useLocation({ select: (location) => location.href });
   const { project, session } = entry;
   if (!session) return null;
   const hostName = session.host.hostName;
@@ -520,15 +523,7 @@ export function WorkspaceProjectItem({
   const status = expanded
     ? null
     : resolveProjectStatusIndicator(entry.threads.map((thread) => thread.status));
-  const activeThreadId = entry.threads.find((thread) =>
-    selectedThreadPath(href, session, thread.id),
-  )?.id;
-  const { visibleEntries, paging, canShowMore } = deriveWorkspaceProjectThreadRows({
-    entry,
-    sortOrder: threadSortOrder,
-    activeThreadId,
-    extraPages,
-  });
+  const { visibleEntries, paging, canShowMore } = threadRows;
   const startChat = () => {
     const navigation = readAvailableWorkspaceNavigation(session);
     if (!online || !navigation) return;
@@ -546,6 +541,30 @@ export function WorkspaceProjectItem({
       );
   };
   const actionSession = menu?.session ?? session;
+  const canRemove =
+    project.kind === "project" &&
+    !project.hasThreads &&
+    entry.threads.length === 0 &&
+    Boolean(readAvailableWorkspaceNavigation(actionSession)?.sidebar?.removeEmptyProject);
+  const removeProject = async () => {
+    const api = readNativeApi();
+    if (
+      !api ||
+      !(await api.dialogs.confirm(
+        [
+          t("workspace:removeProject", { value0: project.name }),
+          t("workspace:remoteProjectRemovalKeepsFiles"),
+        ].join("\n"),
+      ))
+    ) {
+      return;
+    }
+    await runWorkspaceSidebarAction(actionSession, (actions) => {
+      if (!actions.removeEmptyProject)
+        throw new Error("This computer does not support removing projects.");
+      return actions.removeEmptyProject(project.id);
+    });
+  };
   const openMenu = (position: { x: number; y: number }) => setMenu({ position, session });
 
   return (
@@ -653,7 +672,7 @@ export function WorkspaceProjectItem({
                     <SidebarMenuSubButton
                       render={<button type="button" />}
                       size="sm"
-                      className="h-7 flex-1 translate-x-0 justify-start rounded-lg pr-2 pl-8 text-left text-ui text-muted-foreground/79 hover:bg-transparent hover:text-foreground active:bg-transparent active:text-foreground"
+                      className="h-7 flex-1 translate-x-0 justify-start rounded-lg pr-2 pl-8 text-left text-ui text-muted-foreground hover:bg-transparent hover:text-foreground active:bg-transparent active:text-foreground"
                       onMouseDown={(event) => event.preventDefault()}
                       onClick={() => setExtraPages(paging.effectiveExtraPages + 1)}
                     >
@@ -665,7 +684,7 @@ export function WorkspaceProjectItem({
                       render={<button type="button" />}
                       size="sm"
                       className={cn(
-                        "h-7 translate-x-0 justify-start rounded-lg text-left text-ui text-muted-foreground/79 hover:bg-transparent hover:text-foreground active:bg-transparent active:text-foreground",
+                        "h-7 translate-x-0 justify-start rounded-lg text-left text-ui text-muted-foreground hover:bg-transparent hover:text-foreground active:bg-transparent active:text-foreground",
                         canShowMore ? "w-auto flex-none px-2" : "flex-1 pr-2 pl-8",
                       )}
                       onMouseDown={(event) => event.preventDefault()}
@@ -698,8 +717,20 @@ export function WorkspaceProjectItem({
               ).catch(() => undefined);
             },
           },
+          ...(canRemove
+            ? [
+                {
+                  label: t("workspace:removeRemoteProject"),
+                  icon: XIcon,
+                  separator: true,
+                  onClick: () => void removeProject().catch(() => undefined),
+                },
+              ]
+            : []),
         ]}
-      />
+      >
+        {spaceMenu}
+      </WorkspaceRowMenu>
       <RenameDialog
         open={renameSession !== null}
         title="Rename project"

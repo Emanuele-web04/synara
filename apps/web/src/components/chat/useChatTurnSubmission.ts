@@ -1,6 +1,7 @@
 import type { ThreadId } from "@synara/contracts";
 import { flushWorkspaceEditors } from "~/lib/workspaceEditorSession";
 import { resolveComputerInvocationMode } from "@synara/shared/computerInvocation";
+import { resolveComputerControlDefault } from "~/computerControlMode";
 import { projectFoldersSessionIssue } from "@synara/shared/projectFolders";
 import {
   prepareComputerPermissionGuide,
@@ -8,6 +9,8 @@ import {
 } from "~/lib/computerProvisioning";
 import { useCallback, useLayoutEffect, useRef } from "react";
 import { hasActiveComposerSend } from "~/lib/composerSendOwnership";
+import { hasActiveDraftThreadDispatch } from "~/lib/draftThreadDispatch";
+import { COMPOSER_TURN_UNCERTAIN, settlePendingComposerTurn } from "~/lib/composerTurnSettlement";
 import {
   filterPromptProviderMentionReferences,
   filterPromptSkillReferences,
@@ -276,7 +279,6 @@ export function useChatTurnSubmission({
         !api ||
         !lateSendHandlers ||
         !activeThread ||
-        activeThread.claudeCacheReview != null ||
         activeThread.sidechatExpiredAt ||
         isVoiceTranscribing
       ) {
@@ -284,6 +286,7 @@ export function useChatTurnSubmission({
       }
       const sendInFlight =
         hasActiveComposerSend(activeThread.id) ||
+        hasActiveDraftThreadDispatch(activeThread.id) ||
         isSendBusy ||
         sendPreflightInFlightRef.current ||
         sendInFlightRef.current;
@@ -302,6 +305,22 @@ export function useChatTurnSubmission({
           notifyBlockedComposerSend(activeThread.id, blockedReason);
         }
         return false;
+      }
+      sendPreflightInFlightRef.current = true;
+      const previous = await settlePendingComposerTurn(
+        api,
+        activeThread.id,
+        queuedTurn?.id,
+      ).finally(() => {
+        sendPreflightInFlightRef.current = false;
+      });
+      if (previous.status === "unknown") {
+        setThreadError(activeThread.id, COMPOSER_TURN_UNCERTAIN);
+        return false;
+      }
+      if (previous.status === "accepted") {
+        setThreadError(activeThread.id, null);
+        return queuedTurn !== undefined && previous.queuedTurnId === queuedTurn.id;
       }
       const hasPendingCacheReview = () =>
         getThreadFromState(useStore.getState(), activeThread.id)?.claudeCacheReview != null;
@@ -391,7 +410,7 @@ export function useChatTurnSubmission({
         // command already froze its mode and generation and must not be inferred again.
         const mode = resolveComputerInvocationMode({
           messageText: promptForSend,
-          enableComputerControl: settings.computerControlEnabled,
+          enableComputerControl: resolveComputerControlDefault(settings.computerControlEnabled),
         });
         dispatchSettings = {
           ...dispatchSettings,
@@ -662,10 +681,7 @@ export function useChatTurnSubmission({
       // creating a worktree the turn would never use.
       const projectFolderIssue =
         (activeProject.additionalFolders?.length ?? 0) > 0
-          ? projectFoldersSessionIssue({
-              provider: selectedModelSelectionForSend.provider,
-              worktree: envModeForSend === "worktree",
-            })
+          ? projectFoldersSessionIssue({ provider: selectedModelSelectionForSend.provider })
           : null;
       if (projectFolderIssue !== null) {
         toastManager.add({ type: "error", title: projectFolderIssue });

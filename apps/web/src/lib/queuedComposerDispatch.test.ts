@@ -2,21 +2,28 @@ import { MessageId, ThreadId } from "@synara/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useComposerDraftStore, type QueuedComposerTurn } from "../composerDraftStore";
-import { makeImage, resetComposerDraftStore } from "../composerDraftStoreTestFixtures";
+import {
+  makeImage,
+  resetComposerDraftStore,
+  stubComposerDraftBrowserStorage,
+} from "../composerDraftStoreTestFixtures";
 import { useStore } from "../store";
 import { initialState } from "../storeState";
+import { WsTransportRequestInterruptedError } from "../wsTransport";
 import { makeState, makeThread, makeUsageLimitRecovery } from "../storeTestFixtures";
 import { dispatchQueuedComposerTurnHeadless } from "./queuedComposerDispatch";
 import * as composerSend from "./composerSend";
 
 const nativeApiMocks = vi.hoisted(() => ({
-  dispatchCommand: vi.fn(async () => undefined),
+  dispatchCommand: vi.fn(async (_command: { type: string }) => undefined),
+  settleTurnDispatch: vi.fn(),
 }));
 
 vi.mock("../nativeApi", () => ({
   readNativeApi: () => ({
     orchestration: {
       dispatchCommand: nativeApiMocks.dispatchCommand,
+      settleTurnDispatch: nativeApiMocks.settleTurnDispatch,
     },
   }),
 }));
@@ -72,11 +79,15 @@ function makeQueuedPlanFollowUp(): QueuedComposerTurn {
   };
 }
 
+beforeEach(stubComposerDraftBrowserStorage);
+afterEach(() => vi.unstubAllGlobals());
+
 describe("dispatchQueuedComposerTurnHeadless", () => {
   beforeEach(() => {
     resetComposerDraftStore();
     useStore.setState(initialState);
     nativeApiMocks.dispatchCommand.mockClear();
+    nativeApiMocks.settleTurnDispatch.mockReset();
     useStore.setState(makeState(makeThread({ id: THREAD_ID })));
   });
 
@@ -84,6 +95,71 @@ describe("dispatchQueuedComposerTurnHeadless", () => {
     vi.restoreAllMocks();
     resetComposerDraftStore();
     useStore.setState(initialState);
+  });
+
+  it("checks the original queued command after a lost acknowledgement without sending it twice", async () => {
+    const queuedTurn = { ...makeQueuedChatTurn(), id: "queued-uncertain-original" };
+    useComposerDraftStore.getState().enqueueQueuedTurn(THREAD_ID, queuedTurn);
+    nativeApiMocks.dispatchCommand.mockImplementation(async (command) => {
+      if (command.type === "thread.turn.start") {
+        throw new WsTransportRequestInterruptedError({
+          code: "WS_TURN_SETTLEMENT_UNAVAILABLE",
+          message: "Delivery could not be checked.",
+          method: "orchestration.settleTurnDispatch",
+          retryable: false,
+          delivery: "unknown",
+        });
+      }
+    });
+    nativeApiMocks.settleTurnDispatch
+      .mockRejectedValueOnce(new Error("Server unavailable"))
+      .mockResolvedValueOnce({ status: "accepted", sequence: 12 });
+    const dispatch = () =>
+      dispatchQueuedComposerTurnHeadless({
+        threadId: THREAD_ID,
+        queuedTurn,
+        dispatchMode: "queue",
+        assistantDeliveryMode: "streaming",
+      });
+    const turnStarts = () =>
+      nativeApiMocks.dispatchCommand.mock.calls
+        .flat()
+        .filter((command) => command.type === "thread.turn.start");
+    try {
+      await expect(dispatch()).resolves.toBe(false);
+      const originalCommand = turnStarts()[0];
+      expect(originalCommand).toBeDefined();
+      await expect(dispatch()).resolves.toBe(false);
+      expect(turnStarts()).toEqual([originalCommand]);
+      expect(useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.queuedTurns).toEqual([
+        queuedTurn,
+      ]);
+      await expect(dispatch()).resolves.toBe(true);
+      expect(turnStarts()).toEqual([originalCommand]);
+      expect(nativeApiMocks.settleTurnDispatch).toHaveBeenCalledTimes(2);
+      expect(nativeApiMocks.settleTurnDispatch).toHaveBeenNthCalledWith(1, {
+        command: expect.objectContaining({
+          ...originalCommand,
+          modelSelection: expect.objectContaining({ provider: "codex", model: "gpt-5" }),
+        }),
+      });
+      expect(nativeApiMocks.settleTurnDispatch.mock.calls[1]).toEqual(
+        nativeApiMocks.settleTurnDispatch.mock.calls[0],
+      );
+      expect(
+        useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.queuedTurns ?? [],
+      ).toEqual([]);
+      // Another window can still hold its earlier queue snapshot after acceptance.
+      useComposerDraftStore.getState().enqueueQueuedTurn(THREAD_ID, queuedTurn);
+      await expect(dispatch()).resolves.toBe(true);
+      expect(turnStarts()).toEqual([originalCommand]);
+      expect(nativeApiMocks.settleTurnDispatch).toHaveBeenCalledTimes(2);
+      expect(
+        useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.queuedTurns ?? [],
+      ).toEqual([]);
+    } finally {
+      nativeApiMocks.dispatchCommand.mockReset().mockResolvedValue(undefined);
+    }
   });
 
   it.each(["chat"] as const)(

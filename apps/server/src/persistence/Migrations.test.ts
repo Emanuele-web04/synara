@@ -21,7 +21,9 @@ import PullRequestAutoFixMigration from "./Migrations/130_PullRequestAutoFix.ts"
 import ForkSourceMessageMigration from "./Migrations/134_ProjectionThreadsForkSourceMessage.ts";
 import WorkspaceInitializationMigration from "./Migrations/133_ProjectionTurnsWorkspaceInitialization.ts";
 import UsageLimitRecoveryMigration from "./Migrations/141_ProjectionThreadsUsageLimitRecovery.ts";
+import SessionSteeringMigration from "./Migrations/145_ProjectionThreadSessionSteering.ts";
 import SpacesMigration from "./Migrations/079_Spaces.ts";
+import { SqlitePersistenceMemory } from "./Layers/Sqlite.ts";
 
 const layer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
 
@@ -29,6 +31,38 @@ const trackerRows = (sql: SqlClient.SqlClient) =>
   sql<{ readonly migration_id: number; readonly name: string }>`
     SELECT migration_id, name FROM effect_sql_migrations ORDER BY migration_id ASC
   `;
+
+it.effect("gives warmed in-memory clients the migrated schema and independent state", () =>
+  Effect.gen(function* () {
+    const readSchema = Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      return {
+        schema: yield* sql.unsafe("SELECT type, name, sql FROM sqlite_schema ORDER BY type, name"),
+        migrations: yield* trackerRows(sql),
+        foreignKeys: yield* sql.unsafe("PRAGMA foreign_keys"),
+        sequences: yield* sql.unsafe("SELECT name, seq FROM sqlite_sequence ORDER BY name, seq"),
+        commandCursors: yield* sql.unsafe(
+          "SELECT consumer_name, last_acked_sequence FROM orchestration_consumer_state ORDER BY consumer_name",
+        ),
+        runtimeCursors: yield* sql.unsafe(
+          "SELECT consumer_name, last_acked_sequence FROM provider_runtime_event_consumers ORDER BY consumer_name",
+        ),
+      };
+    });
+    const migrated = yield* Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql.unsafe("PRAGMA foreign_keys = ON");
+      yield* runMigrations();
+      return yield* readSchema;
+    }).pipe(Effect.provide(NodeSqliteClient.layerMemory()));
+    yield* Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql.unsafe("CREATE TABLE snapshot_isolation_probe (id INTEGER PRIMARY KEY)");
+    }).pipe(Effect.provide(Layer.fresh(SqlitePersistenceMemory)));
+    const replayed = yield* readSchema.pipe(Effect.provide(Layer.fresh(SqlitePersistenceMemory)));
+    assert.deepStrictEqual(replayed, migrated);
+  }),
+);
 
 const projectionThreadsColumnNames = (sql: SqlClient.SqlClient) =>
   sql<{ readonly name: string }>`
@@ -44,6 +78,28 @@ const tableIndexNames = (sql: SqlClient.SqlClient, tableName: string) =>
   sql<{ readonly name: string }>`
     SELECT name FROM pragma_index_list(${tableName})
   `.pipe(Effect.map((rows) => rows.map((row) => row.name)));
+
+it.effect(
+  "preserves existing provider sessions and negotiated values when the steering migration replays",
+  () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* runMigrations({ toMigrationInclusive: 144 });
+      yield* sql`INSERT INTO projection_thread_sessions (thread_id, status, provider_name, updated_at)
+      VALUES ('original-thread', 'ready', 'antigravity', '2026-11-22')`;
+      yield* runMigrations();
+      const read = () => sql`SELECT thread_id, status, supports_native_turn_steering
+      FROM projection_thread_sessions WHERE thread_id = 'original-thread'`;
+      assert.deepStrictEqual(yield* read(), [
+        { thread_id: "original-thread", status: "ready", supports_native_turn_steering: null },
+      ]);
+      yield* sql`UPDATE projection_thread_sessions SET supports_native_turn_steering = 1 WHERE thread_id = 'original-thread'`;
+      yield* SessionSteeringMigration;
+      assert.deepStrictEqual(yield* read(), [
+        { thread_id: "original-thread", status: "ready", supports_native_turn_steering: 1 },
+      ]);
+    }).pipe(Effect.provide(NodeSqliteClient.layerMemory())),
+);
 
 layer("reconcileMigrationLineage", (it) => {
   // An imported database whose tracker high-water
@@ -158,7 +214,7 @@ layer("reconcileMigrationLineage", (it) => {
       const executed = yield* runMigrations();
       assert.deepStrictEqual(
         executed.map(([id]) => id),
-        [136, 137, 138, 139, 140, 141, 142],
+        [136, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146],
       );
       assert.deepStrictEqual(yield* read(), before);
       assert.deepStrictEqual(
@@ -734,6 +790,10 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
         [140, "RemoteAccessControls"],
         [141, "ProjectionThreadsUsageLimitRecovery"],
         [142, "AuthAccessOrigin"],
+        [143, "UsageAnalyticsDeletedTokens"],
+        [144, "ProjectionThreadsPullRequestLinks"],
+        [145, "ProjectionThreadSessionSteering"],
+        [146, "AgentGatewayOperationWaves"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -828,6 +888,10 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
           { migration_id: 140, name: "RemoteAccessControls" },
           { migration_id: 141, name: "ProjectionThreadsUsageLimitRecovery" },
           { migration_id: 142, name: "AuthAccessOrigin" },
+          { migration_id: 143, name: "UsageAnalyticsDeletedTokens" },
+          { migration_id: 144, name: "ProjectionThreadsPullRequestLinks" },
+          { migration_id: 145, name: "ProjectionThreadSessionSteering" },
+          { migration_id: 146, name: "AgentGatewayOperationWaves" },
         ],
       );
       const groupConfigColumns = yield* sql<{ readonly name: string }>`
@@ -1002,6 +1066,10 @@ agentGatewayRetentionLegacyLayer(
           [140, "RemoteAccessControls"],
           [141, "ProjectionThreadsUsageLimitRecovery"],
           [142, "AuthAccessOrigin"],
+          [143, "UsageAnalyticsDeletedTokens"],
+          [144, "ProjectionThreadsPullRequestLinks"],
+          [145, "ProjectionThreadSessionSteering"],
+          [146, "AgentGatewayOperationWaves"],
         ]);
 
         const columns = yield* sql<{ readonly name: string }>`
@@ -1139,6 +1207,10 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [140, "RemoteAccessControls"],
         [141, "ProjectionThreadsUsageLimitRecovery"],
         [142, "AuthAccessOrigin"],
+        [143, "UsageAnalyticsDeletedTokens"],
+        [144, "ProjectionThreadsPullRequestLinks"],
+        [145, "ProjectionThreadSessionSteering"],
+        [146, "AgentGatewayOperationWaves"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -1217,6 +1289,10 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [140, "RemoteAccessControls"],
           [141, "ProjectionThreadsUsageLimitRecovery"],
           [142, "AuthAccessOrigin"],
+          [143, "UsageAnalyticsDeletedTokens"],
+          [144, "ProjectionThreadsPullRequestLinks"],
+          [145, "ProjectionThreadSessionSteering"],
+          [146, "AgentGatewayOperationWaves"],
         ],
       );
 
@@ -1349,6 +1425,10 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [140, "RemoteAccessControls"],
         [141, "ProjectionThreadsUsageLimitRecovery"],
         [142, "AuthAccessOrigin"],
+        [143, "UsageAnalyticsDeletedTokens"],
+        [144, "ProjectionThreadsPullRequestLinks"],
+        [145, "ProjectionThreadSessionSteering"],
+        [146, "AgentGatewayOperationWaves"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -1423,6 +1503,10 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [140, "RemoteAccessControls"],
           [141, "ProjectionThreadsUsageLimitRecovery"],
           [142, "AuthAccessOrigin"],
+          [143, "UsageAnalyticsDeletedTokens"],
+          [144, "ProjectionThreadsPullRequestLinks"],
+          [145, "ProjectionThreadSessionSteering"],
+          [146, "AgentGatewayOperationWaves"],
         ],
       );
       const preservedSpaces = yield* sql<{ readonly spaceId: string }>`

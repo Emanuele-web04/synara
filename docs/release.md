@@ -19,14 +19,23 @@ version, release notes and lockfile are final.
   omit these full-suite gates.
 - Builds portable JavaScript once, verifies its source/lockfile/settings and
   output checksums on each consumer, and stages native dependencies per platform.
-- Builds four artifacts in parallel:
+- Builds five artifacts in parallel:
   - macOS `arm64` DMG
   - macOS `x64` DMG, cross-built on the same Apple Silicon runner type as
     `arm64` (the Intel runner took 15-20 minutes for the same work). Every
-    Mach-O in the app must carry the `x86_64` slice. A short `qualify_intel`
-    job then downloads it and runs the startup smoke on `macos-15-intel`:
-    under Rosetta 2 the app took 135 seconds to over 180 seconds to start.
+    Mach-O in the app must carry the `x86_64` slice. A `qualify_intel` job
+    downloads it and runs the startup smoke on `macos-15-intel`: under
+    Rosetta 2 the app took 135 seconds to over 180 seconds to start. That job
+    installs only `@synara/scripts` and `@synara/cli`, the workspaces the smoke
+    imports. It starts with the packaging job, installs, and then waits for
+    that job of the same run attempt to succeed before downloading its
+    artifact (see [CI setup](../.github/CI.md#intel-qualification-starts-with-packaging)).
+    Publication downloads only the artifact ID recorded after Intel startup
+    passes. Rerun Intel qualification after replacing a packaged x64 artifact.
   - Linux `x64` AppImage
+  - Linux `arm64` AppImage on `ubuntu-24.04-arm`. It runs on a native arm64 host
+    because `node-pty` and the patched Cua driver compile for the host, and the
+    arm64 leg fails the release if it cannot build.
   - Windows `x64` NSIS installer
 - Each platform calls `release-platform.yml` with one native job that builds,
   signs/notarizes where required, records verified provenance, runs Defender on
@@ -52,9 +61,17 @@ version, release notes and lockfile are final.
   required. Build-only runs may produce unsigned artifacts when signing secrets
   are unavailable.
 
+## Database upgrade safety
+
+Released main builds such as v1.1.0 recorded migrations 1–135 and 141 while
+reserving slots 136–140. This exact history upgrades automatically after a
+recovery backup is saved. Unknown divergent histories require explicit consent.
+Backup validation and interrupted-migration recovery apply to both paths.
+
 ## Desktop auto-update notes
 
 - Runtime updater: `electron-updater` in `apps/desktop/src/main.ts`.
+- Paired iOS clients can check, download, and request a confirmed restart through the desktop updater on packaged macOS builds, including Stable, Beta, and Remote. The app keeps its existing release channel and artifact verification. Running chats and tasks block installation; development builds and unsupported platforms do not expose update control.
 - Update UX:
   - Background checks run on startup delay + interval.
   - New updates are prepared/downloaded in the background after detection; install/restart stays manual.
@@ -67,11 +84,19 @@ version, release notes and lockfile are final.
   - otherwise `GITHUB_REPOSITORY` from GitHub Actions.
 - Required Synara release assets for updater:
   - platform installers (`.exe`, `.dmg`, `.AppImage`, plus macOS `.zip` for Squirrel.Mac update payloads)
-  - `synara-mac.yml`, `synara.yml`, and `synara-linux.yml` metadata
-  - every stable release includes both `synara-mac.yml`, `synara.yml`, `synara-linux.yml` and `latest-mac.yml`, `latest.yml`, `latest-linux.yml`
+  - `synara-mac.yml`, `synara.yml`, and `synara-linux.yml` metadata, plus
+    `synara-linux-arm64.yml` on clean releases: electron-updater appends the
+    architecture to Linux manifest names (x64 keeps `-linux`, arm64 uses
+    `-linux-arm64`), so each Linux architecture owns exactly one feed
+  - every clean-lane stable release includes the `synara*` manifests and the
+    default `latest*` manifests: `latest-mac.yml`, `latest.yml`,
+    `latest-linux.yml`, and `latest-linux-arm64.yml`. The pinned 0.4.x
+    compatibility release stays on the x64 trio because it predates arm64.
+    electron-builder writes the arm64 name itself; the `latest-linux-arm64.yml`
+    fallback is kept beside the channel copy.
   - `*.blockmap` files, except the macOS update ZIP, which uses a full-archive payload
 - Enforced upgrade path:
-  - Stable clean Synara releases are created with `make_latest=true` and carry both six-manifest filenames in the versioned release.
+  - Stable clean Synara releases are created with `make_latest=true` and carry the default `latest*` manifests and the dedicated `synara*` aliases, including the architecture-suffixed arm64 Linux manifest, in the versioned release.
   - The historical 0.4.x compatibility release remains available for predecessor migration and is never overwritten by a clean-lane release.
   - Clean releases do not mirror payloads onto the historical compatibility release, so the 0.4.x line remains immutable.
   - Clean-release publication fails closed if either the default Latest manifests or the dedicated `synara` aliases are missing.
@@ -79,10 +104,12 @@ version, release notes and lockfile are final.
 - macOS metadata note:
   - Installed macOS apps persist alternate icon choices using `NSWorkspace` custom-icon metadata, and reapply the saved choice on launch after an update. Default removes the override so the bundled icon follows system appearance. This requires a writable app bundle; development Electron bundles are not customized.
   - Custom icons leave signed `Contents` unchanged, but add Finder metadata that `codesign --verify --strict` rejects on a customized installation. Validate pristine distribution artifacts with the strict checks below. A local notarized app copy retained normal signature verification and Gatekeeper acceptance after customization; signed release/update testing must still cover this path.
-  - The DMG release path asks electron-builder for the DMG only. After notarization,
-    the finalizer creates the updater ZIP once with `ditto` and writes its
-    `latest-mac.yml` hash/size for each architecture; there is no preliminary ZIP
-    or ZIP blockmap to generate and discard.
+  - The DMG release path asks electron-builder for the DMG only. The app is
+    notarized and stapled before the DMG is built. While Apple notarizes the
+    DMG, the finalizer creates the updater ZIP once from that app with `ditto`
+    and writes its `latest-mac.yml` hash/size for each architecture; there is no
+    preliminary ZIP or ZIP blockmap to generate and discard. Both must succeed
+    before any artifact leaves the stage.
   - The workflow merges the per-arch macOS metadata, then keeps the merged manifest as `latest-mac.yml` and copies it to `synara-mac.yml` for stable releases.
   - Finalization verifies Electron framework symlinks, extracts the ZIP and
     validates the extracted app signature before accepting the updater artifact.
@@ -140,7 +167,7 @@ the smallest platform and stage that can answer the diagnostic question.
 2. Start the workflow in build-only mode:
    - `gh workflow run release.yml --ref BRANCH -f version=X.Y.Z -f publish_release=false`
 3. Wait for `.github/workflows/release.yml` to finish.
-4. Confirm preflight and all four native matrix builds pass.
+4. Confirm preflight and all five native matrix builds pass.
 5. Download the workflow artifacts and sanity-check installation on each OS.
 
 To publish from a manual dispatch instead of a tag push, select the existing
@@ -151,8 +178,10 @@ The public updater repository lookup runs only when publication is enabled;
 build-only validation does not need that GitHub API check.
 
 For one-platform qualification, add `-f platform=mac-arm64`, `mac-x64`,
-`linux-x64`, or `win-x64`. `-f stage=artifact` (the default) still runs quality
-gates, packaging, provenance checks, and isolated startup smoke for that platform.
+`linux-x64`, `linux-arm64`, or `win-x64`. `-f stage=artifact` (the default) still
+runs quality gates, packaging, provenance checks, and isolated startup smoke for
+that platform. `linux-arm64` builds on `ubuntu-24.04-arm`.
+
 For a narrower diagnosis:
 
 ```bash
@@ -185,7 +214,8 @@ The [first paired attempt](release-build-optimization.md#sdk-only-follow-up-atte
 failed before reaching the candidate and does not establish an SDK build speedup.
 
 `native` verifies the pinned Cua artifact/source path only; `icon` compiles the
-macOS catalog only; `js` builds and records portable outputs only. These stages
+macOS catalog only, on macOS 26 and never from the cache; `js` builds and records
+portable outputs only. These stages
 do not qualify an installer or provider runtime. Publication rejects any scope
 other than `platform=all, stage=artifact` and still requires every desktop gate.
 Server tarball preparation starts after exact-source preflight and portable
@@ -199,11 +229,14 @@ baseline, signed Intel CI comparison, local measurements, remaining validation,
 and timing interpretation.
 
 `.github/workflows/cua-release-cache.yml` builds a credential-free Cua cache on
-relevant changes to `main` and daily, with a default-branch guard. Each successful
+relevant changes to `main` and daily, with a default-branch guard, for every
+release Cua leg (macOS arm64 and x64, Linux x64 and arm64). Each successful
 producer also retains the verified unsigned directory as a workflow artifact for
 30 days, outside the Actions cache quota. Daily preparation detects runner image,
-SDK and library drift even when source files are unchanged. To warm new inputs
-before a release, dispatch it on the default branch:
+SDK and library drift even when source files are unchanged. The same workflow
+compiles the macOS icon catalog for each Icon Composer source; see
+[macOS release toolchains](#macos-release-toolchains). To warm new inputs before
+a release, dispatch it on the default branch:
 
 ```bash
 gh workflow run cua-release-cache.yml --ref main
@@ -232,7 +265,9 @@ the whole cache. Never edit provenance to make a hit pass. Packaging re-signs a
 separate staged copy, preserving cached bytes.
 
 Release native preparation starts after exact-source preflight alongside quality
-checks, portable JavaScript and icon compilation. The packaging jobs download
+checks, portable JavaScript and the icon catalog restore. Cua preparation fetches
+only the release commit, except for the paired benchmark, which needs history.
+Packaging also fetches only the release commit. The packaging jobs download
 only their platform's prepared artifact from the same run, recompute the build
 environment key, and repeat executable/provenance verification. Missing artifacts
 or runner drift fail instead of falling back to unrelated binaries. These temporary
@@ -309,13 +344,32 @@ startup checks do not establish runtime behavior on macOS 13.
 Remote .35 pins cloudflared 2026.10.3 with hashes of the downloaded assets (macOS tarballs, not extracted Mach-O files). The vendor macOS executable declares macOS 15, as the previous pin did. The app's macOS 13 declaration does not qualify the Remote connector on macOS 13–14. Inspect the bundled helper separately; after nested signing its bytes differ from the vendor binary, so retain both download provenance and the final signed artifact proof. Never lower deployment metadata or disable certificate verification to bypass an incompatible helper.
 
 Both native macOS release runners use macOS 15. Native helpers and the pinned
-Cua apple-metal bridge build with Xcode 16.4's macOS 15 SDK. A separate macOS 26
-job compiles the architecture-independent Icon Composer catalog with Xcode 26.3
-from the same release checkout and passes it through a required workflow artifact.
-`SYNARA_MAC_ICON_CATALOG` points packaging at that catalog; a missing file fails
-the build. This avoids Apple's AssetRuntime framework crash on macOS 15 without
-changing the native SDK. Local builds without that variable compile icons with
-the selected Xcode on the local host.
+Cua apple-metal bridge build with Xcode 16.4's macOS 15 SDK. The
+architecture-independent Icon Composer catalog compiles on macOS 26 with Xcode
+26.3, which avoids Apple's AssetRuntime framework crash on macOS 15 without
+changing the native SDK. `scripts/mac-icon-catalog.ts` owns the source selection,
+`actool` arguments and Xcode pin for every compile.
+
+The default-branch producer in `cua-release-cache.yml` compiles the catalog for
+the production source (Stable and Remote) and the Beta source on every run. It
+keeps each under an exact key over the source files, `actool` arguments, runner
+label, Xcode version and the key/compile code, in the Actions cache and as a
+30-day artifact. The key cannot see the macOS 26 image patch level, because the
+release computes it on Linux; the producer recompiles each day instead of
+trusting an old hit. In a release, `restore_mac_icon` restores that exact key on
+Ubuntu from the cache or the trusted producer's artifact, checks the key, source,
+recorded Xcode, catalog format and digest, and publishes it as this run's
+`mac-icon-catalog`. A corrupt hit fails the release instead of being replaced:
+delete that cache entry and the retained artifact with the same key, rerun the
+producer, then rerun the failed jobs. Only on a miss does `build_mac_icon`
+compile from the release checkout on `macos-26`. Packaging accepts exactly one
+of the two. To warm a changed icon before a tag, dispatch the producer on
+`main`.
+
+Packaging still downloads only this run's `mac-icon-catalog` artifact.
+`SYNARA_MAC_ICON_CATALOG` points packaging at it; a missing file fails the build.
+Local builds without that variable compile icons with the selected Xcode on the
+local host.
 
 An older `actool` can exit successfully without creating `Assets.car`; that is a
 packaging failure, not permission to silently omit the Liquid Glass icon.
@@ -537,8 +591,9 @@ full subject distinguished name.
    quality gates, server shards, packaging, verification and publication; use the
    recovery procedure below when a stage fails.
 7. Confirm the versioned release is public with all expected installers, manifests
-   and provenance. Stable must be GitHub Latest and carry all three `latest`
-   manifests plus byte-identical `synara` aliases; Beta must remain a prerelease
+   and provenance. Stable must be GitHub Latest and carry all four `latest`
+   manifests, including `latest-linux-arm64.yml`, plus byte-identical `synara`
+   aliases; Beta must remain a prerelease
    with its own feed. Verify the historical compatibility release is unchanged.
 8. Verify public downloads and the authorized website deployment. Report packaged
    startup proof separately from manual installation, installed-app updates and

@@ -1,8 +1,12 @@
 import { ProjectId, type ThreadId } from "@synara/contracts";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useComposerDraftStore } from "../composerDraftStore";
-import { makeFile, resetComposerDraftStore } from "../composerDraftStoreTestFixtures";
+import {
+  makeFile,
+  resetComposerDraftStore,
+  stubComposerDraftBrowserStorage,
+} from "../composerDraftStoreTestFixtures";
 import type { SidebarThreadSummary } from "../types";
 import { dispatchDraftThread } from "./draftThreadDispatch";
 import { createAndDispatchDraftThread, createDraftThread } from "./draftThreadCreate";
@@ -18,6 +22,9 @@ vi.mock("../nativeApi", () => ({
     },
   }),
 }));
+
+beforeEach(stubComposerDraftBrowserStorage);
+afterEach(() => vi.unstubAllGlobals());
 
 describe("draft thread creation", () => {
   beforeEach(() => {
@@ -47,7 +54,7 @@ describe("draft thread creation", () => {
       threadId,
       projectId,
       thread: { id: threadId, projectId } as unknown as SidebarThreadSummary,
-      defaultProvider: "codex",
+      newChatDefault: { defaultProvider: "codex", defaultProviderInstanceId: null },
       assistantDeliveryMode: "buffered",
     });
 
@@ -73,7 +80,7 @@ describe("draft thread creation", () => {
       interactionMode: "default",
       envMode: "local",
       workingDirectory: "/Users/test/Downloads",
-      defaultProvider: "codex",
+      newChatDefault: { defaultProvider: "codex", defaultProviderInstanceId: null },
       assistantDeliveryMode: "buffered",
       beforeDispatch: async (id) => {
         linked.push(id);
@@ -122,7 +129,7 @@ describe("draft thread creation", () => {
       threadId,
       projectId,
       thread: null,
-      defaultProvider: "codex",
+      newChatDefault: { defaultProvider: "codex", defaultProviderInstanceId: null },
       assistantDeliveryMode: "buffered",
     });
 
@@ -152,7 +159,7 @@ describe("draft thread creation", () => {
         runtimeMode: "approval-required",
         interactionMode: "default",
         envMode: "local",
-        defaultProvider: "codex",
+        newChatDefault: { defaultProvider: "codex", defaultProviderInstanceId: null },
         assistantDeliveryMode: "buffered",
         beforeDispatch: async () => {
           throw new Error("offline");
@@ -216,7 +223,7 @@ describe("draft thread creation", () => {
         runtimeMode: "approval-required",
         interactionMode: "default",
         envMode: "local",
-        defaultProvider: "codex",
+        newChatDefault: { defaultProvider: "codex", defaultProviderInstanceId: null },
         assistantDeliveryMode: "buffered",
         beforeDispatch: async (id) => {
           if (stage !== "link") return;

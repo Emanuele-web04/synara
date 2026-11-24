@@ -6,7 +6,6 @@
  */
 import { DatabaseSync, type StatementSync } from "node:sqlite";
 
-import * as Cache from "effect/Cache";
 import * as Config from "effect/Config";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -105,15 +104,44 @@ const makeWithDatabase = (
         return value;
       };
 
-      const prepareCache = yield* Cache.make({
-        capacity: options.prepareCacheSize ?? 200,
-        timeToLive: options.prepareCacheTTL ?? Duration.minutes(10),
-        lookup: (sql: string) =>
-          Effect.try({
-            try: () => db.prepare(sql),
-            catch: (cause) => new SqlError({ cause, message: "Failed to prepare statement" }),
-          }),
-      });
+      const prepareCacheCapacity = options.prepareCacheSize ?? 512;
+      const prepareCache = new Map<string, StatementSync>();
+      const getPreparedStatement = (sql: string): Effect.Effect<StatementSync, SqlError> => {
+        const cached = prepareCache.get(sql);
+        if (cached !== undefined) {
+          // Maintain LRU order when cache is near capacity.
+          if (prepareCache.size >= prepareCacheCapacity) {
+            prepareCache.delete(sql);
+            prepareCache.set(sql, cached);
+          }
+          return Effect.succeed(cached);
+        }
+        try {
+          const statement = db.prepare(sql);
+          if (prepareCache.size >= prepareCacheCapacity) {
+            const oldestKey = prepareCache.keys().next().value;
+            if (oldestKey !== undefined) {
+              prepareCache.delete(oldestKey);
+            }
+          }
+          prepareCache.set(sql, statement);
+          return Effect.succeed(statement);
+        } catch (cause) {
+          return Effect.fail(new SqlError({ cause, message: "Failed to prepare statement" }));
+        }
+      };
+
+      const prepareDirect = (sql: string): Effect.Effect<StatementSync, SqlError> => {
+        const cached = prepareCache.get(sql);
+        if (cached !== undefined) {
+          return Effect.succeed(cached);
+        }
+        try {
+          return Effect.succeed(db.prepare(sql));
+        } catch (cause) {
+          return Effect.fail(new SqlError({ cause, message: "Failed to prepare statement" }));
+        }
+      };
 
       const runStatement = (
         statement: StatementSync,
@@ -134,11 +162,14 @@ const makeWithDatabase = (
         });
 
       const run = (sql: string, params: ReadonlyArray<unknown>, raw = false) =>
-        Effect.flatMap(Cache.get(prepareCache, sql), (s) => runStatement(s, params, raw));
+        Effect.flatMap(getPreparedStatement(sql), (s) => runStatement(s, params, raw));
+
+      const runUnprepared = (sql: string, params: ReadonlyArray<unknown>) =>
+        Effect.flatMap(prepareDirect(sql), (s) => runStatement(s, params, false));
 
       const runValues = (sql: string, params: ReadonlyArray<unknown>) =>
         Effect.acquireUseRelease(
-          Cache.get(prepareCache, sql),
+          getPreparedStatement(sql),
           (statement) =>
             Effect.try({
               try: () => {
@@ -173,7 +204,7 @@ const makeWithDatabase = (
           return runValues(sql, params);
         },
         executeUnprepared(sql, params, rowTransform) {
-          const effect = run(sql, params ?? []);
+          const effect = runUnprepared(sql, params ?? []);
           return rowTransform ? Effect.map(effect, rowTransform) : effect;
         },
         executeStream(_sql, _params) {

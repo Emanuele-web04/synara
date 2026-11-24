@@ -37,6 +37,8 @@ vi.stubGlobal("localStorage", {
   },
   clear: () => physicalItems.clear(),
 });
+// Each test starts from empty storage; persisted drafts must not leak between tests.
+beforeEach(() => physicalItems.clear());
 const setLocalStorageItem = <T, E>(key: string, value: T, schema: Schema.Codec<T, E>) =>
   executionStorage.setItem(key, Schema.encodeSync(Schema.fromJsonString(schema))(value));
 const removeLocalStorageItem = (key: string) => executionStorage.removeItem(key);

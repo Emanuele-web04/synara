@@ -3,7 +3,6 @@ import {
   type ComposerComputerControlMode,
 } from "../computerControlMode";
 import {
-  DEFAULT_MODEL_BY_PROVIDER,
   ProjectId,
   ThreadId,
   type AssistantDeliveryMode,
@@ -21,8 +20,10 @@ import {
   type RuntimeMode,
   type ServerProviderAuthStatus,
   type ThreadId as ThreadIdType,
+  type OrchestrationLatestTurn,
 } from "@synara/contracts";
-import { getDefaultModel, normalizeModelSlug } from "@synara/shared/model";
+import { resolveTurnResumeTarget, type TurnResumeMessage } from "@synara/shared/turnResume";
+import { normalizeModelSlug } from "@synara/shared/model";
 import { approvalSessionGrantWidensSessionPolicy } from "@synara/shared/approvalSessionGrant";
 import { buildSynaraBranchName } from "@synara/shared/git";
 import { isGenericChatThreadTitle } from "@synara/shared/chatThreads";
@@ -67,7 +68,8 @@ import {
   type WorkLogEntry,
 } from "../session-logic";
 import { localSubagentThreadId } from "./ChatView.selectors";
-import { buildModelSelection, type ProviderModelOption } from "../providerModelOptions";
+import type { ComposerCommandKey } from "../composer-logic";
+import { type ProviderModelOption } from "../providerModelOptions";
 import { resolvePromptEffortFromModelSelection } from "../lib/composerSend";
 import { autoRuntimeModeSelectionIssue } from "@synara/shared/runtimeMode";
 
@@ -266,6 +268,41 @@ export async function persistModelSelectionBeforeRuntimeMode(input: {
   }
 }
 
+/**
+ * Whether an empty composer's Send becomes Resume. The newest
+ * request never reached the provider, or the latest turn was interrupted (Stop,
+ * quit, crash, restart). A failed turn keeps its banner's Continue task. Live
+ * work, a pending request, a usage-limit wait, queued follow-ups, a held cache
+ * review or a delivery quarantine decide what runs next instead.
+ */
+export function shouldOfferComposerResume(input: {
+  isServerThread: boolean;
+  messages: ReadonlyArray<TurnResumeMessage>;
+  latestTurn: Pick<OrchestrationLatestTurn, "turnId" | "state"> | null;
+  hasLiveWork: boolean;
+  hasPendingRequests: boolean;
+  hasUsageLimitRecovery: boolean;
+  hasQueuedTurns: boolean;
+  hasCacheReview: boolean;
+  deliveryBlocked: boolean;
+}): boolean {
+  if (
+    !input.isServerThread ||
+    // A thread restored without any message has no task to resume.
+    input.messages.length === 0 ||
+    input.hasLiveWork ||
+    input.hasPendingRequests ||
+    input.hasUsageLimitRecovery ||
+    input.hasQueuedTurns ||
+    input.hasCacheReview ||
+    input.deliveryBlocked
+  ) {
+    return false;
+  }
+  const target = resolveTurnResumeTarget(input);
+  return target !== null && (target.kind === "resend" || target.state === "interrupted");
+}
+
 export function shouldRenderProviderHealthBanner(input: {
   threadEntryPoint: ThreadPrimarySurface;
   terminalWorkspaceTerminalTabActive: boolean;
@@ -434,7 +471,7 @@ export function promptStillMatchesActiveHistoryBrowse(input: {
 }
 
 export function shouldHandlePromptHistoryNavigationKey(input: {
-  key: "ArrowDown" | "ArrowUp" | "Enter" | "Tab" | "Slash";
+  key: ComposerCommandKey;
   metaKey: boolean;
   ctrlKey: boolean;
   altKey: boolean;
@@ -802,29 +839,6 @@ export function resolveThreadDetailHydration(input: {
   return input.detailSyncState === "failed" ? "failed" : "loading";
 }
 
-/**
- * Fallback model selection for a draft thread before the first server turn exists.
- * An explicit project default wins; otherwise the user's default provider is used
- * (pi and omp have no default model, so they are skipped), then codex. The model
- * comes from the project default only when it matches the chosen provider,
- * otherwise the provider's own default.
- */
-export function resolveDraftFallbackModelSelection(input: {
-  projectDefault: ModelSelection | null | undefined;
-  settingsDefaultProvider: ProviderKind;
-}): ModelSelection {
-  const settingsProvider =
-    input.settingsDefaultProvider === "pi" || input.settingsDefaultProvider === "omp"
-      ? null
-      : input.settingsDefaultProvider;
-  const provider = input.projectDefault?.provider ?? settingsProvider ?? "codex";
-  const model =
-    (provider === input.projectDefault?.provider ? input.projectDefault.model : null) ??
-    getDefaultModel(provider) ??
-    DEFAULT_MODEL_BY_PROVIDER.codex;
-  return buildModelSelection(provider, model);
-}
-
 /** Placeholder title for a thread that has not been sent yet (header, open-thread tabs). */
 export function resolveDraftThreadTitle(entryPoint: DraftThreadState["entryPoint"]): string {
   return entryPoint === "terminal" ? "New terminal" : "New thread";
@@ -915,17 +929,20 @@ type ProviderLockingThread = Pick<
 >;
 
 /**
- * A send whose provider differs from the one an already-running thread uses.
- * It must hand the thread off first: Hand off checks background tasks and
- * records the switch, which a plain settings save would skip.
+ * A send whose provider or account differs from the one an already-running
+ * thread uses. It must hand the thread off first: Hand off checks background
+ * tasks and records the switch, which a plain settings save would skip.
  */
 export function turnNeedsProviderHandoff(input: {
   readonly thread: ProviderLockingThread;
   readonly modelSelection: ModelSelection;
 }): boolean {
+  const current = input.thread.modelSelection;
+  const next = input.modelSelection;
   return (
     threadHasProviderLockingActivity(input.thread) &&
-    input.modelSelection.provider !== input.thread.modelSelection.provider
+    (next.provider !== current.provider ||
+      (next.instanceId ?? next.provider) !== (current.instanceId ?? current.provider))
   );
 }
 
@@ -948,10 +965,10 @@ export function createdAtAfterProviderHandoff(input: {
 }
 
 /**
- * The model selection an access-mode change may save with it. A provider
- * picked in the composer over a thread that already runs on another one is a
- * pending Hand off, which only Send performs; saving it here would switch the
- * thread's provider without one.
+ * The model selection an access-mode change may save with it. A provider or
+ * account picked in the composer over a thread that already runs on another
+ * one is a pending Hand off, which only Send performs; saving it here would
+ * switch the thread's provider without one.
  */
 export function accessModeModelSelectionToPersist(input: {
   readonly thread: ProviderLockingThread;
@@ -1537,14 +1554,30 @@ export type WorkingLabel =
   | "Loading"
   | "Thinking"
   | "Checking message delivery…"
-  | `Starting ${string}…`;
+  | `Starting ${string}…`
+  | WaitingOnUserWorkingLabel;
 
+/** Labels for a turn stopped until the user acts; they never shimmer. */
+export type WaitingOnUserWorkingLabel = "Waiting for approval" | "Waiting for your answer";
+
+export function isWaitingOnUserWorkingLabel(
+  label: WorkingLabel | undefined,
+): label is WaitingOnUserWorkingLabel {
+  return label === "Waiting for approval" || label === "Waiting for your answer";
+}
+
+// Delivery checks, the local send and provider startup come first: the turn is
+// not running yet, so nothing can be waiting on the user. Once it runs, a
+// pending approval or question stops it, and the indicator says so instead of
+// "Thinking".
 export function resolveWorkingLabel(input: {
   isSendBusy: boolean;
   turnTakenOver: boolean;
   isConnecting?: boolean;
   isSettlingTurnDispatch?: boolean;
   providerName?: string;
+  awaitingApproval?: boolean;
+  awaitingUserInput?: boolean;
 }): WorkingLabel {
   if (input.isSettlingTurnDispatch) return "Checking message delivery…";
   if (input.isSendBusy && !input.turnTakenOver) {
@@ -1553,6 +1586,8 @@ export function resolveWorkingLabel(input: {
   if (input.isConnecting && input.providerName) {
     return `Starting ${input.providerName}…`;
   }
+  if (input.awaitingApproval) return "Waiting for approval";
+  if (input.awaitingUserInput) return "Waiting for your answer";
   return "Thinking";
 }
 

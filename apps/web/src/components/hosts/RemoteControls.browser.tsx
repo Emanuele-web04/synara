@@ -60,7 +60,6 @@ it.each(["light", "dark"])(
     await expect
       .element(page.getByRole("menuitem", { name: "Back to this computer" }))
       .toBeVisible();
-    await page.screenshot({ path: `./__screenshots__/host-control-${theme}.png` });
     await page.getByRole("menuitem", { name: "Back to this computer" }).click();
     expect(fixture.back).toHaveBeenCalledOnce();
     expect(fixture.request).not.toHaveBeenCalled();

@@ -6,7 +6,7 @@ import {
   formatContextWindowTokens,
   formatCostUsd,
 } from "../../lib/contextWindow";
-import type { RateLimitStatus } from "./RateLimitBanner";
+import { formatRateLimitMessage, type RateLimitStatus } from "~/lib/rateLimitStatus";
 import { Button } from "../ui/button";
 import {
   Dialog,
@@ -19,35 +19,6 @@ import {
 } from "../ui/dialog";
 import { ContextWindowMeter } from "./ContextWindowMeter";
 import { useTranslation, t } from "~/i18n";
-
-function formatRateLimitMessage(
-  rateLimitStatus: RateLimitStatus,
-  translate: typeof t,
-  formatLocale: string,
-): string {
-  const resetAt = rateLimitStatus.resetsAt
-    ? new Date(rateLimitStatus.resetsAt).toLocaleTimeString(formatLocale)
-    : null;
-  if (rateLimitStatus.status === "rejected") {
-    return resetAt
-      ? translate("chat:rateLimitReachedReset", { resetAt })
-      : translate("chat:rateLimitReachedNoReset");
-  }
-  const usage =
-    typeof rateLimitStatus.utilization === "number"
-      ? new Intl.NumberFormat(formatLocale, { style: "percent", maximumFractionDigits: 0 }).format(
-          rateLimitStatus.utilization,
-        )
-      : null;
-  if (usage !== null) {
-    return resetAt
-      ? translate("chat:rateLimitApproachingUsageReset", { usage, resetAt })
-      : translate("chat:rateLimitApproachingUsage", { usage });
-  }
-  return resetAt
-    ? translate("chat:rateLimitApproachingReset", { resetAt })
-    : translate("chat:rateLimitApproaching");
-}
 
 function formatEnvironmentLabel(
   envMode: DraftThreadEnvMode,

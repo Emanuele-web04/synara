@@ -3,57 +3,16 @@
 // Layer: Component rendering tests
 // Depends on: SettingsSidebarNav, the settings search index, and React server rendering.
 
-import { beforeEach, describe, expect, it } from "vitest";
-import { renderToStaticMarkup } from "react-dom/server";
-import { afterEach } from "vitest";
-import { setLanguagePreference, t } from "../i18n";
-import { SettingsRow } from "./settings/SettingsPanelPrimitives";
+import { describe, expect, it } from "vitest";
 
 import {
   SETTINGS_SEARCH_ENTRIES,
   rankSettingsSearchEntries,
   settingsSearchEntryTarget,
+  settingsSearchEntryTitle,
 } from "../settingsSearchIndex";
 
-afterEach(() => setLanguagePreference("system"));
-
-describe("localized settings", () => {
-  it("renders Chinese labels while retaining explicit navigation targets", () => {
-    setLanguagePreference("zh-CN");
-    const html = renderToStaticMarkup(
-      <SettingsRow
-        id="setting-default-provider"
-        title="settings:changed_defaultProvider"
-        description="settings:chooseTheProviderUsedForNewChatsAgentCodex"
-      />,
-    );
-    expect(html).toContain('id="setting-default-provider"');
-    expect(html).toContain("默认提供商");
-    expect(html).toContain("选择新聊天使用的提供商");
-  });
-
-  it("finds English settings in every interface locale and Chinese settings in Chinese with stable links", () => {
-    for (const language of ["en", "zh-CN", "es"] as const) {
-      setLanguagePreference(language);
-      const queries =
-        language === "zh-CN" ? ["default provider", "默认提供商"] : ["default provider"];
-      for (const query of queries) {
-        const [result] = rankSettingsSearchEntries(query, 12);
-        expect(result?.id).toBe("general:default-provider");
-        expect(settingsSearchEntryTarget(result!)).toBe("setting-default-provider");
-      }
-      const languageQueries = language === "zh-CN" ? ["language", "语言"] : ["language"];
-      for (const query of languageQueries) {
-        const [result] = rankSettingsSearchEntries(query, 12);
-        expect(result?.id).toBe("general:language");
-        expect(settingsSearchEntryTarget(result!)).toBe("setting-language");
-      }
-    }
-  });
-});
-
 describe("rankSettingsSearchEntries", () => {
-  beforeEach(() => setLanguagePreference("en"));
   it("returns nothing for an empty query", () => {
     expect(rankSettingsSearchEntries("", 12)).toHaveLength(0);
     expect(rankSettingsSearchEntries("   ", 12)).toHaveLength(0);
@@ -69,14 +28,26 @@ describe("rankSettingsSearchEntries", () => {
     expect(results.some((entry) => entry.id === "behavior:diff-line-wrapping")).toBe(true);
   });
 
-  it("indexes the stacked and split diff layout preference", () => {
-    const results = rankSettingsSearchEntries("stacked", 12);
-    expect(results.some((entry) => entry.id === "behavior:diff-layout")).toBe(true);
-  });
-
   it("surfaces every row in a section when searching the section label", () => {
     const results = rankSettingsSearchEntries("appearance", SETTINGS_SEARCH_ENTRIES.length);
     expect(results.some((entry) => entry.section === "appearance")).toBe(true);
+  });
+
+  it("omits desktop-only Appearance controls in a browser", () => {
+    const results = rankSettingsSearchEntries("appearance", SETTINGS_SEARCH_ENTRIES.length);
+    const targets = results.map(settingsSearchEntryTarget);
+    expect(targets).toContain("setting-base-font-size");
+    expect(targets).not.toContain("setting-app-icon");
+    expect(targets).not.toContain("setting-use-custom-title-bar");
+  });
+
+  it("finds the agent keep-awake row only when the server supports it", () => {
+    const targets = (keepAwakeAvailable: boolean) =>
+      rankSettingsSearchEntries("keep computer awake", SETTINGS_SEARCH_ENTRIES.length, {
+        keepAwakeAvailable,
+      }).map(settingsSearchEntryTarget);
+    expect(targets(false)).not.toContain("setting-keep-computer-awake");
+    expect(targets(true)).toContain("setting-keep-computer-awake");
   });
 
   it("respects the result limit", () => {
@@ -97,30 +68,34 @@ describe("rankSettingsSearchEntries", () => {
       }
     }
   });
+});
 
-  it("finds the Behavior and Providers rows by their titles", () => {
-    const titles = (query: string) =>
-      rankSettingsSearchEntries(query, 12).map((entry) => t(entry.title));
-    expect(titles("dictating")).toContain("Enter while dictating");
-    expect(titles("diff colors")).toContain("Pull request diff colors");
-    expect(titles("enabled providers")).toContain("Enabled providers");
+describe("account search", () => {
+  const context = {
+    accounts: [
+      {
+        instanceId: "codex_work",
+        label: "Work",
+        providerLabel: "Codex",
+        identity: "alex@acme.dev · Acme Labs",
+      },
+      { instanceId: "claudeAgent", label: "Personal", providerLabel: "Claude", identity: null },
+    ],
+  };
+
+  it("leads with the Accounts page for account, sign-in, and login queries", () => {
+    for (const query of ["account", "sign in", "login", "second account"]) {
+      const results = rankSettingsSearchEntries(query, 12, context);
+      expect(results.some((entry) => entry.id === "accounts:accounts")).toBe(true);
+    }
   });
 
-  it("finds the Fold finished turns and Wait for subagents rows", () => {
-    const sections = (query: string) =>
-      rankSettingsSearchEntries(query, 12).map((entry) => `${entry.section}:${t(entry.title)}`);
-    expect(sections("fold")).toContain("behavior:Fold finished turns");
-    expect(sections("worked for")).toContain("behavior:Fold finished turns");
-    expect(sections("subagents")).toContain("notifications:Wait for subagents");
-    const targets = (query: string) =>
-      rankSettingsSearchEntries(query, 12).map((entry) => settingsSearchEntryTarget(entry));
-    expect(targets("fold")).toContain("setting-fold-finished-turns");
-    expect(targets("subagents")).toContain("setting-wait-for-subagents");
-  });
-
-  it("deep-links the provider picker result to the Available CLIs row", () => {
-    const [top] = rankSettingsSearchEntries("picker order", 12);
-    expect(top && t(top.title)).toBe("Available CLIs");
-    expect(settingsSearchEntryTarget(top!)).toBe("setting-available-clis");
+  it("finds each account by name, email, or agent and opens its row", () => {
+    const [byEmail] = rankSettingsSearchEntries("acme.dev", 12, context);
+    expect(byEmail?.id).toBe("accounts:account:codex_work");
+    expect(settingsSearchEntryTitle(byEmail!)).toBe("Codex · Work");
+    expect(settingsSearchEntryTarget(byEmail!)).toBe("setting-account-codex-work");
+    const byAgent = rankSettingsSearchEntries("claude personal", 12, context);
+    expect(byAgent.some((entry) => entry.id === "accounts:account:claudeAgent")).toBe(true);
   });
 });

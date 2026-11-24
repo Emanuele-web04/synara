@@ -8,10 +8,102 @@ const ORCHESTRATION_RESUME_REPLAY_LIMIT = 128;
 const ORCHESTRATION_RESUME_REPLAY_MAX_BYTES = 1024 * 1024;
 // Subscribers share immutable journal objects; cache wire size, never payload copies.
 const eventSizes = new WeakMap<OrchestrationEvent, number>();
+
+// Computes exact UTF-8 JSON byte length of a string (including quotes and
+// JSON escapes) without allocating a JSON-serialized copy.
+function jsonStringUtf8Bytes(value: string): number {
+  let bytes = 2; // surrounding quotes
+  const length = value.length;
+  for (let i = 0; i < length; i += 1) {
+    const code = value.charCodeAt(i);
+    if (code < 0x80) {
+      if (code === 0x22 || code === 0x5c) {
+        bytes += 2; // \" or \\
+      } else if (code < 0x20) {
+        // \b \f \n \r \t take 2 bytes; other control chars take \u00XX (6 bytes)
+        bytes +=
+          code === 0x08 || code === 0x09 || code === 0x0a || code === 0x0c || code === 0x0d ? 2 : 6;
+      } else {
+        bytes += 1;
+      }
+    } else if (code < 0x800) {
+      bytes += 2;
+    } else if (code >= 0xd800 && code <= 0xdbff) {
+      const next = i + 1 < length ? value.charCodeAt(i + 1) : 0;
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        bytes += 4;
+        i += 1;
+      } else {
+        bytes += 6; // lone high surrogate -> \uXXXX
+      }
+    } else if (code >= 0xdc00 && code <= 0xdfff) {
+      bytes += 6; // lone low surrogate -> \uXXXX
+    } else {
+      bytes += 3;
+    }
+  }
+  return bytes;
+}
+
+// Computes exact UTF-8 JSON byte length for JSON-serializable values without
+// allocating giant intermediate strings on every live event.
+function exactJsonUtf8Bytes(value: unknown, depth = 0): number {
+  if (value === null) return 4;
+  switch (typeof value) {
+    case "string":
+      return jsonStringUtf8Bytes(value);
+    case "number":
+      return Number.isFinite(value) ? String(value).length : 4;
+    case "boolean":
+      return value ? 4 : 5;
+    case "undefined":
+    case "function":
+    case "symbol":
+      return 0;
+    case "bigint":
+      return value.toString().length;
+    case "object": {
+      if (depth > 32) return Buffer.byteLength(JSON.stringify(value));
+      if (typeof (value as { toJSON?: unknown }).toJSON === "function") {
+        return exactJsonUtf8Bytes((value as { toJSON: () => unknown }).toJSON(), depth + 1);
+      }
+      if (Array.isArray(value)) {
+        let total = 2;
+        for (let index = 0; index < value.length; index += 1) {
+          if (index > 0) total += 1;
+          const entry = value[index];
+          total +=
+            entry === undefined || typeof entry === "function" || typeof entry === "symbol"
+              ? 4
+              : exactJsonUtf8Bytes(entry, depth + 1);
+        }
+        return total;
+      }
+      const record = value as Record<string, unknown>;
+      let total = 2;
+      let first = true;
+      for (const key in record) {
+        if (!Object.prototype.hasOwnProperty.call(record, key)) continue;
+        const entry = record[key];
+        if (entry === undefined || typeof entry === "function" || typeof entry === "symbol") {
+          continue;
+        }
+        if (!first) total += 1;
+        first = false;
+        total += jsonStringUtf8Bytes(key) + 1 + exactJsonUtf8Bytes(entry, depth + 1);
+      }
+      return total;
+    }
+    default:
+      return 0;
+  }
+}
+
 const eventBytes = (event: OrchestrationEvent) => {
   const cached = eventSizes.get(event);
   if (cached !== undefined) return cached;
-  const bytes = Buffer.byteLength(JSON.stringify({ kind: "event", event }));
+  // Envelope `{"kind":"event","event":...}` adds 25 bytes around the event JSON.
+  const bytes = 25 + exactJsonUtf8Bytes(event);
   eventSizes.set(event, bytes);
   return bytes;
 };
@@ -85,11 +177,10 @@ export function makeResnapshotEscalationTracker(): {
  * Attach live delivery first, capture a snapshot and durable high-water fence,
  * replay the exact gap, then continue with strictly newer live events.
  *
- * When `resumeFromSequence` is provided and the gap to the durable head is
- * non-negative and fits 128 events and one MiB, the snapshot is skipped entirely
- * and only the gap is replayed. A negative gap (client cursor ahead of the
- * server head — restored backup or reset database) or an overflowing gap is
- * never trusted: both fall back to the full snapshot path. With `batchReplay`
+ * When `resumeFromSequence` is provided and the replay fits 128 events and one
+ * MiB, the snapshot is skipped. A scoped stream can check its own event count
+ * when the global gap exceeds the event limit. A cursor ahead of the server
+ * head or an overflowing replay falls back to the full snapshot. With `batchReplay`
  * the resume gap arrives as a single `replay` item (omitted when empty) so the
  * client can apply the whole catch-up at once; the snapshot path is unchanged.
  */
@@ -108,6 +199,12 @@ export function makeCursorSafeSnapshotLiveStream<Snapshot, E>(input: {
   ) => Stream.Stream<OrchestrationEvent, E>;
   readonly resumeFromSequence?: number | undefined;
   readonly batchReplay?: boolean | undefined;
+  /** Check a scoped replay's event budget when the global distance exceeds it. */
+  readonly resumeReplayFits?: (
+    fromSequenceExclusive: number,
+    throughSequenceInclusive: number,
+    maxEvents: number,
+  ) => Effect.Effect<boolean, E>;
   /**
    * Guards the resume shortcut against a subject that no longer exists. A hard
    * purge removes a thread's rows while unrelated events keep the journal head
@@ -187,11 +284,20 @@ export function makeCursorSafeSnapshotLiveStream<Snapshot, E>(input: {
         // full snapshot instead. Sequences themselves are never reused
         // (`sequence INTEGER PRIMARY KEY AUTOINCREMENT`), so a non-negative
         // gap cannot silently alias deleted history onto new events.
-        const subjectExists =
-          input.resumeSubjectExists === undefined
-            ? true
-            : yield* duringLive(input.resumeSubjectExists);
-        if (subjectExists && resumeGap >= 0 && resumeGap <= ORCHESTRATION_RESUME_REPLAY_LIMIT) {
+        const canAttemptResume =
+          resumeGap >= 0 &&
+          (input.resumeSubjectExists === undefined ||
+            (yield* duringLive(input.resumeSubjectExists))) &&
+          (resumeGap <= ORCHESTRATION_RESUME_REPLAY_LIMIT ||
+            (input.resumeReplayFits !== undefined &&
+              (yield* duringLive(
+                input.resumeReplayFits(
+                  resumeFromSequence,
+                  highWaterSequence,
+                  ORCHESTRATION_RESUME_REPLAY_LIMIT,
+                ),
+              ))));
+        if (canAttemptResume) {
           yield* bufferedLive.retainAfter((event) => event.sequence > highWaterSequence, false);
           const resumeRows: Array<OrchestrationEvent> = [];
           const releaseResumeRows = () => {

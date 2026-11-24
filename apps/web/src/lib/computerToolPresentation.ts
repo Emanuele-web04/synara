@@ -13,26 +13,12 @@
 // the pane already receives rather than left as an opaque id.
 
 import type { ComputerPermission, ComputerWindow } from "@synara/contracts";
-import { getFormatLocale, t } from "~/i18n";
-import { listComputerPermissions, sortComputerPermissions } from "@synara/shared/computerGrants";
+import { t } from "~/i18n";
+import { listComputerPermissions } from "@synara/shared/computerGrants";
 
-/** Localized OS permission names in the canonical order, with duplicate grants removed. */
-export function localizedComputerPermissions(
-  permissions: readonly ComputerPermission[],
-  translate: typeof t = t,
-  locale = getFormatLocale(),
-): string {
-  // Keep the established English wording; other locales own their list punctuation.
-  if (locale === "en") return listComputerPermissions(permissions);
-  const keys: Record<ComputerPermission, string> = {
-    accessibility: "settings:accessibility",
-    screenRecording: "settings:screenRecording",
-    inputMonitoring: "settings:inputMonitoring",
-  };
-  const labels = sortComputerPermissions(permissions).map((permission) =>
-    translate(keys[permission]),
-  );
-  return new Intl.ListFormat(locale, { style: "long", type: "conjunction" }).format(labels);
+/** OS permission names in the canonical order, with duplicate grants removed. */
+export function localizedComputerPermissions(permissions: readonly ComputerPermission[]): string {
+  return listComputerPermissions(permissions);
 }
 
 /** The gateway's Computer tools, and the verb each one performs. */

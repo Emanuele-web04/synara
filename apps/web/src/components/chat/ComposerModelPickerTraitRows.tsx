@@ -19,6 +19,7 @@ import { type ProviderOptions } from "../../providerModelOptions";
 import { MenuRadioGroup, MenuRadioItem, MenuSub, MenuSubTrigger } from "../ui/menu";
 import { ComposerEffortSliderCard } from "./ComposerEffortSliderCard";
 import { ComposerPickerMenuSubPopup } from "./ComposerPickerMenuPopup";
+import { ComposerUltrafastMenu } from "./ComposerUltrafastMenu";
 import { COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME } from "./composerPickerStyles";
 import {
   getComposerTraitSelection,
@@ -86,8 +87,7 @@ export function ComposerModelPickerTraitRows(props: {
   modelOptions: ProviderOptions | undefined;
   prompt: string;
   onPromptChange: (prompt: string) => void;
-  // "slider" swaps the Effort and Speed rows for the stepped slider card, which owns
-  // both. Models without an effort ladder always keep the rows.
+  // "slider" uses the stepped effort card and its binary Fast toggle.
   effortControl: ComposerEffortControl;
   fastModeNotice?: FastModeNotice | null | undefined;
 }) {
@@ -186,7 +186,16 @@ export function ComposerModelPickerTraitRows(props: {
       />,
     );
   }
-  if (supportsComposerFastModeControl(selection) && !usesEffortSlider) {
+  if (selection.supportsUltrafastMode && !usesEffortSlider) {
+    rows.push(
+      <ComposerUltrafastMenu
+        key="speed"
+        selection={selection}
+        runtimeModel={props.runtimeModel}
+        onChange={commitTrait}
+      />,
+    );
+  } else if (supportsComposerFastModeControl(selection) && !usesEffortSlider) {
     rows.push(
       <TraitRow
         key="speed"

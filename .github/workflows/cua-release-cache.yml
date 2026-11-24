@@ -12,6 +12,11 @@ on:
       - scripts/lib/build-timing.ts
       - .github/actions/provision-cua/action.yml
       - .github/workflows/cua-release-cache.yml
+      - assets/prod/Synara.icon/**
+      - assets/beta/Synara.icon/**
+      - scripts/lib/brand-assets.ts
+      - scripts/lib/mac-icon-catalog.ts
+      - scripts/mac-icon-catalog.ts
   workflow_dispatch:
   schedule:
     # Refresh before retention expires and detect hosted SDK/library drift.
@@ -33,6 +38,7 @@ jobs:
           - { runner: macos-15, arch: arm64 }
           - { runner: macos-15, arch: x64 }
           - { runner: ubuntu-24.04, arch: x64 }
+          - { runner: ubuntu-24.04-arm, arch: arm64 }
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     steps:
@@ -50,5 +56,57 @@ jobs:
         with:
           name: ${{ steps.cua.outputs.cache-key }}
           path: ${{ runner.temp }}/cua-artifact
+          retention-days: 30
+          if-no-files-found: error
+
+  # Release tags restore this catalog on Linux by exact key and compile on
+  # macOS 26 only on a miss. The key binds the Icon Composer source bytes, the
+  # actool arguments and the pinned Xcode; it cannot observe the macOS 26 image
+  # patch level, so this producer recompiles every run to surface image drift.
+  mac_icon:
+    name: Prepare macOS icon catalog (${{ matrix.flavor }})
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    strategy:
+      fail-fast: false
+      matrix:
+        # Every release icon source: Stable and Remote share production.
+        flavor: [production, beta]
+    runs-on: macos-26
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: package.json
+      - id: key
+        name: Fingerprint icon catalog inputs
+        run: node scripts/mac-icon-catalog.ts key --flavor "${{ matrix.flavor }}"
+      # Workspace-relative, unlike Cua: the Linux release consumer must derive
+      # the same cache version, which hashes the literal path.
+      - id: cache
+        name: Look up the exact icon catalog cache
+        uses: actions/cache/restore@v4
+        with:
+          path: mac-icon-catalog
+          key: ${{ steps.key.outputs.key }}
+          lookup-only: true
+      - name: Compile the icon catalog with the pinned Xcode
+        env:
+          DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+        run: |
+          set -euo pipefail
+          rm -rf mac-icon-catalog
+          node scripts/mac-icon-catalog.ts compile --flavor "${{ matrix.flavor }}" --output mac-icon-catalog
+      - name: Save trusted default-branch icon catalog
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: mac-icon-catalog
+          key: ${{ steps.key.outputs.key }}
+      - name: Retain verified icon catalog outside the cache quota
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.key.outputs.key }}
+          path: mac-icon-catalog
           retention-days: 30
           if-no-files-found: error

@@ -36,6 +36,21 @@ export interface ProviderAccountStatusSummary {
   readonly detail: string | null;
 }
 
+/**
+ * An enabled account whose installed CLI reports no sign-in. The Accounts badge counts
+ * these, and their rows offer Sign in.
+ */
+export function providerAccountNeedsSignIn(input: {
+  readonly status: Pick<ServerProviderStatus, "available" | "authStatus"> | undefined;
+  readonly enabled: boolean;
+}): boolean {
+  return (
+    input.enabled &&
+    input.status?.available !== false &&
+    input.status?.authStatus === "unauthenticated"
+  );
+}
+
 // One title per account row. The local switch wins over a stale status: an account that
 // was just turned off reads translate("chat:disabled") before the server reports it.
 export function providerAccountStatusSummary(

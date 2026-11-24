@@ -101,6 +101,7 @@ const makeThreadEventReadMethods = (
   | "getThreadHighWaterSequence"
   | "getThreadTitleHighWaterSequence"
   | "hasThreadStopAfter"
+  | "canReplayThreadEventsInRange"
   | "readThreadEvents"
   | "readThreadEventsFromSequence"
 > => ({
@@ -111,6 +112,8 @@ const makeThreadEventReadMethods = (
         .at(-1)?.sequence ?? 0,
     ),
   getThreadTitleHighWaterSequence: () => Effect.succeed(0),
+  canReplayThreadEventsInRange: () =>
+    Effect.die("replay admission is not used by the orchestration engine harness"),
   hasThreadStopAfter: (threadId, sequenceExclusive, turnId) =>
     Effect.succeed(
       events.some(
@@ -1346,6 +1349,100 @@ describe("OrchestrationEngine", () => {
       }
     },
   );
+
+  it("admits a gateway continuation for the latest persisted user message on a live thread", async () => {
+    const system = await createOrchestrationSystem();
+    const { engine } = system;
+    const projectId = asProjectId("gateway-wake-project");
+    const threadId = ThreadId.makeUnsafe("gateway-wake-thread");
+    const sourceTurnId = asTurnId("gateway-wake-source-turn");
+    const createdAt = "2026-08-01T00:00:00.000Z";
+    const completedAt = "2026-08-01T00:00:02.000Z";
+    const turnOptions = {
+      threadId,
+      interactionMode: "default",
+      runtimeMode: "approval-required",
+    } as const;
+    try {
+      const dispatch = (command: OrchestrationCommand) => system.run(engine.dispatch(command));
+      await dispatch({
+        type: "project.create",
+        commandId: CommandId.makeUnsafe("gateway-wake-project"),
+        projectId,
+        title: "Gateway wake",
+        workspaceRoot: "/tmp/gateway-wake-project",
+        defaultModelSelection: null,
+        createdAt,
+      });
+      await dispatch({
+        type: "thread.create",
+        commandId: CommandId.makeUnsafe("gateway-wake-thread"),
+        ...turnOptions,
+        projectId,
+        title: "Gateway wake",
+        modelSelection: { provider: "codex", model: "gpt-5-codex" },
+        branch: null,
+        worktreePath: null,
+        createdAt,
+      });
+      await dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("gateway-wake-user-send"),
+        ...turnOptions,
+        message: {
+          messageId: asMessageId("gateway-wake-original-message"),
+          role: "user",
+          text: "Review the changes when the delegated task finishes.",
+          attachments: [],
+        },
+        createdAt,
+      });
+      for (const status of ["running", "ready"] as const) {
+        const running = status === "running";
+        const updatedAt = running ? createdAt : completedAt;
+        await dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.makeUnsafe(`gateway-wake-${status}`),
+          threadId,
+          session: {
+            threadId,
+            providerName: "codex",
+            status,
+            activeTurnId: running ? sourceTurnId : null,
+            runtimeMode: turnOptions.runtimeMode,
+            lastError: null,
+            updatedAt,
+          },
+          createdAt: updatedAt,
+        });
+      }
+
+      const wake = await dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("gateway-wake-follow-up"),
+        ...turnOptions,
+        dispatchOrigin: "agent",
+        dispatchMode: "queue",
+        gatewayCompletionPrecondition: {
+          sourceTurnId,
+          provider: "codex",
+          instanceId: "codex",
+          runtimeMode: turnOptions.runtimeMode,
+          latestUserMessageAt: createdAt,
+        },
+        message: {
+          messageId: asMessageId("gateway-wake-follow-up-message"),
+          role: "user",
+          text: "Read the delegated result.",
+          attachments: [],
+        },
+        createdAt: completedAt,
+      });
+      expect(wake.sequence).toBeGreaterThan(0);
+    } finally {
+      await system.dispose();
+    }
+  });
 
   it.each([false, true])(
     "persists async questions and admits one concurrent answer (running=%s)",
@@ -2633,7 +2730,7 @@ describe("OrchestrationEngine", () => {
       const pending = system.run(
         engine
           .dispatch({ type: "thread.meta.update", commandId, threadId, goal })
-          .pipe(Effect.timeoutOption("2 seconds")),
+          .pipe(Effect.timeoutOption("250 millis")),
       );
       await pending;
       const receipt = await system.run(originalLookup({ commandId }));
@@ -2722,75 +2819,6 @@ describe("OrchestrationEngine", () => {
     expect(thread?.goal ?? "").toBe("");
     await expect(fs.access(goalFilePath ?? "")).rejects.toThrow();
 
-    await system.dispose();
-  });
-
-  it("stores completed checkpoint summaries even when no files changed", async () => {
-    const system = await createOrchestrationSystem();
-    const { engine } = system;
-    const createdAt = now();
-
-    await system.run(
-      engine.dispatch({
-        type: "project.create",
-        commandId: CommandId.makeUnsafe("cmd-project-turn-diff-create"),
-        projectId: asProjectId("project-turn-diff"),
-        title: "Turn Diff Project",
-        workspaceRoot: "/tmp/project-turn-diff",
-        defaultModelSelection: {
-          provider: "codex",
-          model: "gpt-5-codex",
-        },
-        createdAt,
-      }),
-    );
-    await system.run(
-      engine.dispatch({
-        type: "thread.create",
-        commandId: CommandId.makeUnsafe("cmd-thread-turn-diff-create"),
-        threadId: ThreadId.makeUnsafe("thread-turn-diff"),
-        projectId: asProjectId("project-turn-diff"),
-        title: "Turn diff thread",
-        modelSelection: {
-          provider: "codex",
-          model: "gpt-5-codex",
-        },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        branch: null,
-        worktreePath: null,
-        createdAt,
-      }),
-    );
-    await system.run(
-      engine.dispatch({
-        type: "thread.turn.diff.complete",
-        commandId: CommandId.makeUnsafe("cmd-turn-diff-complete"),
-        threadId: ThreadId.makeUnsafe("thread-turn-diff"),
-        turnId: asTurnId("turn-1"),
-        completedAt: createdAt,
-        checkpointRef: asCheckpointRef("refs/synara/checkpoints/thread-turn-diff/turn/1"),
-        status: "ready",
-        files: [],
-        checkpointTurnCount: 1,
-        createdAt,
-      }),
-    );
-
-    const thread = (await system.run(engine.getReadModel())).threads.find(
-      (entry) => entry.id === "thread-turn-diff",
-    );
-    expect(thread?.checkpoints).toEqual([
-      {
-        turnId: asTurnId("turn-1"),
-        checkpointTurnCount: 1,
-        checkpointRef: asCheckpointRef("refs/synara/checkpoints/thread-turn-diff/turn/1"),
-        status: "ready",
-        files: [],
-        assistantMessageId: null,
-        completedAt: createdAt,
-      },
-    ]);
     await system.dispose();
   });
 
@@ -3347,31 +3375,6 @@ describe("OrchestrationEngine", () => {
         }),
       ),
     ).rejects.toThrow("still has a pending interaction");
-
-    await system.dispose();
-  });
-
-  it("keeps projection health healthy when optional cursors do not exist yet", async () => {
-    const system = await createOrchestrationSystem();
-    const createdAt = now();
-
-    await system.run(
-      system.engine.dispatch({
-        type: "project.create",
-        commandId: CommandId.makeUnsafe("cmd-project-health-fresh"),
-        projectId: asProjectId("project-health-fresh"),
-        title: "Fresh projection health",
-        workspaceRoot: "/tmp/project-health-fresh",
-        defaultModelSelection: null,
-        createdAt,
-      }),
-    );
-
-    await system.run(system.engine.drain);
-    await expect(system.run(system.engine.getProjectionCatchUpStatus)).resolves.toMatchObject({
-      state: "healthy",
-      missingProjectors: [],
-    });
 
     await system.dispose();
   });

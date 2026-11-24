@@ -279,6 +279,48 @@ describe("browser automation errors", () => {
     });
   });
 
+  it("accepts only a bounded, typed script cause on script failure codes", () => {
+    const scriptFailure = {
+      ...makeCanonicalError("BrowserEvaluationFailed"),
+      phase: "evaluate",
+      effectMayHaveCommitted: true,
+    };
+    const cause = {
+      name: "TimeoutError",
+      api: "page.waitForFunction",
+      message: "page.waitForFunction: Timeout 5000ms exceeded.",
+    };
+    expect(Schema.is(BrowserAutomationError)({ ...scriptFailure, cause })).toBe(true);
+    expect(
+      Schema.is(BrowserAutomationError)({
+        ...makeCanonicalError("BrowserScriptApiUnavailable"),
+        cause: { name: "ReferenceError", message: "setTimeout is unavailable in browser_run." },
+      }),
+    ).toBe(true);
+    for (const invalid of [
+      { ...cause, name: "PageError" },
+      { ...cause, api: "page.evaluate(secret)" },
+      { ...cause, message: "" },
+      { ...cause, message: "x".repeat(321) },
+    ]) {
+      expect(Schema.is(BrowserAutomationError)({ ...scriptFailure, cause: invalid })).toBe(false);
+    }
+    for (const code of ["BrowserTimeout", "BrowserTargetNotFound"] as const) {
+      expect(Schema.is(BrowserAutomationError)({ ...makeCanonicalError(code), cause })).toBe(false);
+    }
+    const largest = Schema.decodeUnknownSync(BrowserMcpToolErrorEnvelope)({
+      type: "synara_browser_error",
+      version: 1,
+      error: {
+        ...scriptFailure,
+        operationId: "018f4f7a-4b2a-7c10-8d6e-4c1ac7b92f31",
+        tabId: "018f4f7a-4b2a-7c10-8d6e-4c1ac7b92f32",
+        cause: { name: "TimeoutError", api: `a${"b".repeat(63)}`, message: "é".repeat(160) },
+      },
+    });
+    expect(utf8ByteLength(JSON.stringify(largest))).toBeLessThanOrEqual(8 * 1024);
+  });
+
   it("exports only readonly canonical data and rejects every forged message", () => {
     expect("makeBrowserAutomationError" in BrowserContracts).toBe(false);
     expect("makeBrowserMcpToolErrorEnvelope" in BrowserContracts).toBe(false);

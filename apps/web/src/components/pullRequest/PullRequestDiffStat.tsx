@@ -6,7 +6,6 @@
 // Layer: Pull request presentation
 // Exports: PullRequestDiffStat
 
-import { useTranslation } from "~/i18n";
 import { cn } from "~/lib/utils";
 import { PR_QUIET_INK_CLASS_NAME } from "./pullRequestText";
 
@@ -21,7 +20,6 @@ export function PullRequestDiffStat({
   tone?: "muted" | "diff";
   className?: string;
 }) {
-  const { formatLocale } = useTranslation();
   const tone = toneProp ?? "muted";
   return (
     <span
@@ -32,10 +30,10 @@ export function PullRequestDiffStat({
       )}
     >
       <span className={tone === "diff" ? "text-[var(--color-decoration-added)]" : undefined}>
-        +{additions.toLocaleString(formatLocale)}
+        +{additions.toLocaleString("en-US")}
       </span>
       <span className={tone === "diff" ? "text-[var(--color-decoration-deleted)]" : undefined}>
-        -{deletions.toLocaleString(formatLocale)}
+        -{deletions.toLocaleString("en-US")}
       </span>
     </span>
   );

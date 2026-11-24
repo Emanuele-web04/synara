@@ -1,5 +1,8 @@
 import type { ProjectId } from "@synara/contracts";
-import type { AgentGatewayOperationRepositoryShape } from "./Services/AgentGatewayOperationRepository";
+import {
+  isTerminalAgentGatewayOperationStatus,
+  type AgentGatewayOperationRepositoryShape,
+} from "./Services/AgentGatewayOperationRepository";
 import type { ProjectionThreadMessageRepositoryShape } from "../persistence/Services/ProjectionThreadMessages";
 import type { ProjectionTurnRepositoryShape } from "../persistence/Services/ProjectionTurns";
 import {
@@ -110,9 +113,7 @@ export function makeHubWorkGateway(dependencies: {
         callerTurnId: `hub-work:${record.id}`,
         operationKind: "create_threads",
       });
-      return (
-        operation !== null && operation.status !== "failed" && operation.status !== "completed"
-      );
+      return operation !== null && !isTerminalAgentGatewayOperationStatus(operation.status);
     });
 
   const start = (record: HubWorkRecord) =>
@@ -215,6 +216,11 @@ export function makeHubWorkGateway(dependencies: {
       if (!isServerGroupsEnabled()) return null;
       const principal = yield* principalFor(context);
       if (principal.kind !== "coordinator") return null;
+      if (input.resumeCreatorOnComplete) {
+        return yield* Effect.fail(
+          new ToolInputError("Hub coordinators receive results through Hub work reports."),
+        );
+      }
       yield* context.assertCallerTurnActive();
       const sourcesByTask = yield* Effect.forEach(input.threads, (spec) =>
         resolveHubWorkSource({

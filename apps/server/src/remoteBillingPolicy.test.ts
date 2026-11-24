@@ -5,6 +5,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 
+import { Effect } from "effect";
 import { afterEach, expect, it, vi } from "vitest";
 
 import {
@@ -13,8 +14,13 @@ import {
   runAuthLogout,
   writeAccountCredentials,
 } from "./accountAuth";
+import { decideWithBillingPolicy, requireRemoteSessionAdmission } from "./auth/remoteAccess";
 import { startRemoteAuthorization } from "./cloudflare/authorization";
-import { recordRemoteBillingPolicyHint, startRemoteBillingPolicy } from "./remoteBillingPolicy";
+import {
+  recordRemoteBillingPolicyHint,
+  startRemoteBillingPolicy,
+  type RemoteBillingPolicyOptions,
+} from "./remoteBillingPolicy";
 import { RemoteSessionRegistry } from "./remoteSessions/sessionRegistry";
 
 const directories: string[] = [];
@@ -79,6 +85,7 @@ async function fixture(enforced?: boolean) {
     registry = new RemoteSessionRegistry(),
     now?: () => number,
     url = accountUrl,
+    polling: Pick<RemoteBillingPolicyOptions, "pollIntervalMs" | "pollWhileIdle"> = {},
   ) {
     const policy = await startRemoteBillingPolicy({
       stateDir,
@@ -86,6 +93,7 @@ async function fixture(enforced?: boolean) {
       required,
       remoteSessions: registry,
       pollIntervalMs: 60_000,
+      ...polling,
       ...(now === undefined ? {} : { now }),
     });
     policies.push(policy);
@@ -319,3 +327,137 @@ it.each([false, true])(
     expect(restored.registry.remoteBillingEnforced).toBe(true);
   },
 );
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+it("polls only while remote connections are open and refreshes an idle policy before it decides", async () => {
+  const f = await fixture(false);
+  const { policy, registry } = await f.start(false, undefined, undefined, undefined, {
+    pollIntervalMs: 100,
+  });
+  await policy.refresh();
+  await sleep(350);
+  // No remote session or legacy socket: only the startup read.
+  expect(f.requests).toHaveLength(1);
+
+  const release = registry.registerLegacyConnection(() => {});
+  await vi.waitFor(() => expect(f.requests.length).toBeGreaterThanOrEqual(4), { timeout: 3_000 });
+  release?.();
+  await sleep(150);
+  const afterSocket = f.requests.length;
+  await sleep(350);
+  expect(f.requests).toHaveLength(afterSocket);
+
+  // An authenticated snapshot carries the same flag; while snapshots flow no public read is needed.
+  let snapshots = 0;
+  registry.registerAdmissionGuard({
+    available: () => false,
+    prepare: async () => {
+      snapshots++;
+      await recordRemoteBillingPolicyHint(
+        f.stateDir,
+        f.accountUrl,
+        false,
+        undefined,
+        performance.now(),
+      );
+    },
+  });
+  await registry.prepareRemoteAdmission();
+  expect(snapshots).toBe(1);
+  expect(f.requests).toHaveLength(afterSocket);
+  registry.registerAdmissionGuard({ available: () => false });
+  const afterLease = afterSocket;
+  await sleep(150);
+
+  // Enforcement turned on while the host was idle: admission reads it before deciding.
+  f.reply.enforced = true;
+  const refused = await Effect.runPromise(
+    Effect.flip(requireRemoteSessionAdmission(registry, { accessOrigin: "remote" })),
+  );
+  expect(refused.status).toBe(503);
+  expect(f.requests).toHaveLength(afterLease + 1);
+  expect(registry.canAdmitRemoteSession()).toBe(false);
+
+  await sleep(150);
+  // Answers the policy cannot change, and local sessions, never wait on the account service.
+  expect(await Effect.runPromise(decideWithBillingPolicy(registry, () => "local"))).toBe("local");
+  await Effect.runPromise(requireRemoteSessionAdmission(registry, { accessOrigin: "local" }));
+  expect(f.requests).toHaveLength(afterLease + 1);
+  expect(await Effect.runPromise(decideWithBillingPolicy(registry, (enforced) => enforced))).toBe(
+    true,
+  );
+  expect(f.requests).toHaveLength(afterLease + 2);
+});
+
+it("keeps polling while idle when local access itself depends on the policy", async () => {
+  const f = await fixture(false);
+  await f.start(false, undefined, undefined, undefined, {
+    pollIntervalMs: 100,
+    pollWhileIdle: true,
+  });
+  await vi.waitFor(() => expect(f.requests.length).toBeGreaterThanOrEqual(3), { timeout: 3_000 });
+});
+
+it("restores the newer true policy after a stale authenticated false reply and restart", async () => {
+  const f = await fixture(true);
+  const olderRequestStartedAt = performance.now();
+  const { policy } = await f.start(true);
+  await policy.refresh();
+  await recordRemoteBillingPolicyHint(
+    f.stateDir,
+    f.accountUrl,
+    false,
+    undefined,
+    olderRequestStartedAt,
+  );
+  await policy.stop();
+
+  f.reply.status = 503;
+  const restored = await f.start(true);
+  await restored.policy.refresh();
+  expect(restored.registry.canAdmitRemoteSession()).toBe(false);
+});
+
+it("never lets an authenticated false requested before a newer true clear enforcement", async () => {
+  const f = await fixture(true);
+  const requestedBeforePublicTrue = performance.now();
+  const { policy, registry } = await f.start(false);
+  await policy.refresh();
+  expect(registry.remoteBillingEnforced).toBe(true);
+  // A slow snapshot request that began before the public read answers false afterwards.
+  await recordRemoteBillingPolicyHint(
+    f.stateDir,
+    f.accountUrl,
+    false,
+    undefined,
+    requestedBeforePublicTrue,
+  );
+  expect(registry.remoteBillingEnforced).toBe(true);
+  // A snapshot requested after it is newer proof and is adopted.
+  await recordRemoteBillingPolicyHint(
+    f.stateDir,
+    f.accountUrl,
+    false,
+    undefined,
+    performance.now(),
+  );
+  expect(registry.remoteBillingEnforced).toBe(false);
+  // An authenticated true is adopted at once and closes unpaid sockets.
+  let closed = 0;
+  registry.registerLegacyConnection(() => {
+    closed++;
+  });
+  await recordRemoteBillingPolicyHint(f.stateDir, f.accountUrl, true, undefined, performance.now());
+  expect(registry.remoteBillingEnforced).toBe(true);
+  expect(closed).toBe(1);
+  // A public false requested before that true cannot clear it either.
+  f.reply.enforced = false;
+  f.reply.hold = true;
+  const publicRead = policy.refresh();
+  if (f.requests.length === 1) await once(f.server, "request");
+  await recordRemoteBillingPolicyHint(f.stateDir, f.accountUrl, true, undefined, performance.now());
+  f.release();
+  await publicRead;
+  expect(registry.remoteBillingEnforced).toBe(true);
+});

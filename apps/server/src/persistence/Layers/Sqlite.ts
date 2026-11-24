@@ -69,6 +69,73 @@ interface SqliteSetupOptions {
   readonly onSetupComplete?: ((legacyRebuildNeeded: boolean) => void) | undefined;
 }
 
+interface MigratedSchemaSnapshot {
+  readonly tables: ReadonlyArray<string>;
+  readonly rows: ReadonlyArray<{
+    readonly table: string;
+    readonly rows: ReadonlyArray<Record<string, unknown>>;
+  }>;
+  readonly dependents: ReadonlyArray<string>;
+}
+
+/**
+ * In-memory databases are created once per test, and replaying every migration
+ * dominates test time. The fully migrated schema (and any rows migrations seed)
+ * is captured the first time and replayed as plain DDL afterwards. Only the
+ * in-memory layer uses this; file databases always run the real migrator.
+ */
+let migratedMemorySnapshot: MigratedSchemaSnapshot | undefined;
+
+const captureMigratedSchema = (sql: SqlClient.SqlClient) =>
+  Effect.gen(function* () {
+    const schema = yield* sql<{
+      readonly type: string;
+      readonly name: string;
+      readonly sql: string;
+    }>`
+      SELECT type, name, sql FROM sqlite_schema
+      WHERE sql IS NOT NULL AND name NOT GLOB 'sqlite_*'
+      ORDER BY rowid ASC
+    `;
+    const tableNames = schema.filter((row) => row.type === "table").map((row) => row.name);
+    const rows = [];
+    for (const table of [...tableNames, "sqlite_sequence"]) {
+      const exists = yield* sql`SELECT 1 FROM sqlite_schema WHERE name = ${table} LIMIT 1`;
+      if (exists.length === 0) continue;
+      const tableRows = yield* sql.unsafe<Record<string, unknown>>(`SELECT * FROM "${table}"`);
+      if (tableRows.length > 0 || table === "sqlite_sequence")
+        rows.push({ table, rows: tableRows });
+    }
+    return {
+      tables: schema.filter((row) => row.type === "table").map((row) => row.sql),
+      rows,
+      dependents: schema.filter((row) => row.type !== "table").map((row) => row.sql),
+    } satisfies MigratedSchemaSnapshot;
+  });
+
+const restoreMigratedSchema = (sql: SqlClient.SqlClient, snapshot: MigratedSchemaSnapshot) =>
+  Effect.gen(function* () {
+    yield* sql`PRAGMA foreign_keys = OFF;`;
+    yield* sql.withTransaction(
+      Effect.gen(function* () {
+        for (const statement of snapshot.tables) yield* sql.unsafe(statement);
+        for (const { table, rows } of snapshot.rows) {
+          // Inserting seed data can advance counters. Copy the original counters exactly.
+          if (table === "sqlite_sequence") yield* sql.unsafe("DELETE FROM sqlite_sequence");
+          for (const row of rows) {
+            const columns = Object.keys(row);
+            yield* sql.unsafe(
+              `INSERT INTO "${table}" (${columns.map((c) => `"${c}"`).join(", ")}) VALUES (${columns.map(() => "?").join(", ")})`,
+              columns.map((column) => row[column] as never),
+            );
+          }
+        }
+        for (const statement of snapshot.dependents) yield* sql.unsafe(statement);
+      }),
+    );
+    yield* sql`PRAGMA foreign_keys = ON;`;
+  });
+
 const makeSetup = ({
   dbPath,
   pendingRecovery = null,
@@ -155,9 +222,19 @@ const makeSetup = ({
       // so the fallback stays the last known-good database.
       const migrations = dbPath
         ? pendingRecovery
-          ? resumeMarkedMigration(dbPath, pendingRecovery, runMigrations())
+          ? resumeMarkedMigration(dbPath, pendingRecovery, runMigrations(), { divergenceConsent })
           : runWithPreMigrationBackup(dbPath, runMigrations(), { divergenceConsent })
-        : runMigrations();
+        : undefined;
+      if (migrations === undefined) {
+        if (migratedMemorySnapshot === undefined) {
+          yield* runMigrations();
+          const captured = yield* captureMigratedSchema(sql);
+          migratedMemorySnapshot ??= captured;
+        } else {
+          yield* restoreMigratedSchema(sql, migratedMemorySnapshot);
+        }
+        return;
+      }
       yield* migrations.pipe(
         Effect.catch((cause) =>
           cause instanceof MigrationSchemaTooNewError && dbPath

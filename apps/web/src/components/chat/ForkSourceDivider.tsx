@@ -7,6 +7,7 @@ import { memo, type MouseEvent } from "react";
 
 import { GitForkIcon } from "~/lib/icons";
 import { useTranslation } from "~/i18n";
+import { TranscriptDividerRule } from "./TranscriptDividerRule";
 
 export interface ForkSourceReference {
   readonly sourceThreadId: ThreadId;
@@ -33,7 +34,7 @@ export const ForkSourceDivider = memo(function ForkSourceDivider({
       data-fork-source-divider="true"
       className="flex w-full items-center gap-4 py-4 font-system-ui"
     >
-      <span aria-hidden className="h-px min-w-0 flex-1 bg-[color:var(--color-border-light)]" />
+      <TranscriptDividerRule />
       <a
         href={sourceHref}
         aria-label={t("chat:openSourceChat", { value0: source.sourceTitle })}
@@ -50,7 +51,7 @@ export const ForkSourceDivider = memo(function ForkSourceDivider({
         <GitForkIcon className="size-4 shrink-0 text-muted-foreground/70" aria-hidden />
         <span className="truncate">{t("chat:continuedFromChat")}</span>
       </a>
-      <span aria-hidden className="h-px min-w-0 flex-1 bg-[color:var(--color-border-light)]" />
+      <TranscriptDividerRule />
     </div>
   );
 });
