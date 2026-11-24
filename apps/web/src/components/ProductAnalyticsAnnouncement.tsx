@@ -8,8 +8,9 @@
 // sharing off is acknowledged silently: that user already chose in Settings, and turning
 // sharing back on there must not pop this sheet over the page. Remote and Beta are skipped: Remote also sends technical diagnostics under the
 // same switch, and Beta welcomes users with its own diagnostics disclosure. The sheet
-// waits for the first-run tour like every startup announcement, then takes the shared
-// slot ahead of the "last" launch sheets.
+// waits for the first-run tour like every startup announcement, and for the team sharing
+// consent, which opens outside the announcement slot; then it takes the shared slot ahead
+// of the "last" launch sheets.
 
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
@@ -26,6 +27,7 @@ import {
 } from "~/lib/productAnalytics";
 import { cn } from "~/lib/utils";
 import { AnnouncementSheet } from "./AnnouncementSheet";
+import { useClearOfOutsideDialogs } from "./hosts/RemoteConnectionsAnnouncement";
 import {
   AnnouncementBackdrop,
   DEVICE_SHADOW_CLASS_NAME,
@@ -61,7 +63,9 @@ export function ProductAnalyticsAnnouncement() {
     ...productAnalyticsConsentQueryOptions(bridge),
     enabled: unseen,
   });
+  const sharing = unseen && consent.data?.enabled === true;
   const optedOut = unseen && consent.data?.enabled === false;
+  const clear = useClearOfOutsideDialogs(sharing);
 
   useEffect(() => {
     if (optedOut) setStorage({ acknowledged: true });
@@ -69,7 +73,7 @@ export function ProductAnalyticsAnnouncement() {
 
   return (
     <AnnouncementSheet
-      open={unseen && consent.data?.enabled === true}
+      open={sharing && clear}
       presentation="feature"
       hero={<ProductAnalyticsAnnouncementHero />}
       title={t("settings:productAnalyticsNoticeTitle")}

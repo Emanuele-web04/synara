@@ -11,7 +11,6 @@ import {
   type ReliabilityCode,
 } from "@synara/contracts";
 import { isBuiltInComposerSlashCommandName } from "@synara/shared/composerSlashCommands";
-import { queryOptions } from "@tanstack/react-query";
 import { readWorkspaceFrame } from "./hosts/workspaceFrame";
 
 /** Only trusted app workspace frames may use the controlling window's consent. */
@@ -26,14 +25,17 @@ export function productAnalyticsBridge(): DesktopBridge["productAnalytics"] {
   }
 }
 
-/** This installation's sharing choice; Settings and the startup notice share one cache entry. */
+/**
+ * This installation's sharing choice; Settings and the startup notice share one cache entry.
+ * A plain options object: the transport imports this module and must not pull in React Query.
+ */
 export function productAnalyticsConsentQueryOptions(bridge: DesktopBridge["productAnalytics"]) {
-  return queryOptions({
+  return {
     queryKey: ["desktop", "product-analytics-consent"] as const,
-    queryFn: () => bridge!.getState(),
+    queryFn: (): Promise<{ enabled: boolean }> => bridge!.getState(),
     enabled: !!bridge,
     retry: false,
-  });
+  };
 }
 
 export function trackProductAnalytics(input: ProductAnalyticsInput): void {

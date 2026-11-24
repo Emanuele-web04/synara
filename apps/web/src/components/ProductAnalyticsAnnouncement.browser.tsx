@@ -1,5 +1,6 @@
 import "../index.css";
 
+import type { AccountStatus } from "@synara/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { page } from "vitest/browser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -16,8 +17,19 @@ const fixture = vi.hoisted(() => ({
   navigate: vi.fn(),
   bridge: null as { getState: () => Promise<{ enabled: boolean }> } | null,
   enabled: true,
+  status: { state: "signed-out" } as AccountStatus,
+  accountPending: false,
 }));
-vi.mock("@tanstack/react-router", () => ({ useNavigate: () => fixture.navigate }));
+vi.mock("@tanstack/react-router", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@tanstack/react-router")>()),
+  useNavigate: () => fixture.navigate,
+}));
+vi.mock("~/hooks/useAccount", () => ({
+  useAccount: () => ({
+    status: fixture.status,
+    statusQuery: { isPending: fixture.accountPending },
+  }),
+}));
 vi.mock("~/lib/productAnalytics", async (importOriginal) => ({
   ...(await importOriginal<typeof import("~/lib/productAnalytics")>()),
   productAnalyticsBridge: () => fixture.bridge,
@@ -43,6 +55,8 @@ describe("ProductAnalyticsAnnouncement", () => {
     localStorage.removeItem(PRODUCT_ANALYTICS_ANNOUNCEMENT_STORAGE_KEY);
     fixture.navigate.mockReset();
     fixture.enabled = true;
+    fixture.status = { state: "signed-out" };
+    fixture.accountPending = false;
     fixture.bridge = { getState: async () => ({ enabled: fixture.enabled }) };
     useOnboardingDialogStore.setState({
       isOpen: false,
@@ -96,6 +110,13 @@ describe("ProductAnalyticsAnnouncement", () => {
     await renderAnnouncement();
     await expect.poll(acknowledged).toEqual({ acknowledged: true });
     await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("waits until the account has loaded, so team sharing consent can't open underneath", async () => {
+    fixture.accountPending = true;
+    await renderAnnouncement();
+    await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
+    expect(acknowledged()).toBeNull();
   });
 
   it("stays hidden without the desktop analytics bridge", async () => {
