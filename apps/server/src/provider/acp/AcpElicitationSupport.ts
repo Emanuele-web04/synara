@@ -125,6 +125,7 @@ export function elicitationQuestionsFromRequest(
     .map(([id, property], index) => {
       const title = trimmedString(property.title);
       const choices = propertyOptions(property);
+      const customAnswerId = isAntigravity ? companions.get(id) : undefined;
       return {
         id,
         header: title ?? `Question ${index + 1}`,
@@ -140,6 +141,7 @@ export function elicitationQuestionsFromRequest(
             }))
           : choices.filter((option) => !companions.has(id) || option.label !== "other"),
         multiSelect: property.type === "array",
+        ...(customAnswerId !== undefined ? { customAnswerId } : {}),
       };
     });
 }

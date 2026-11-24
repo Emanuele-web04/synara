@@ -138,6 +138,7 @@ describe("ACP elicitation mapping", () => {
     expect(elicitationQuestionsFromRequest(antigravityRequest, mapping)).toEqual([
       {
         id: "q1",
+        customAnswerId: "q1_other",
         header: "Which fruit should I use?",
         question: "Which fruit should I use?",
         options: [
@@ -154,6 +155,10 @@ describe("ACP elicitation mapping", () => {
     expect(elicitationResponseFromAnswers(antigravityRequest, { q1: "Peach" }, mapping)).toEqual({
       action: "accept",
       content: { q1_other: "Peach" },
+    });
+    expect(elicitationResponseFromAnswers(antigravityRequest, { q1_other: "2" }, mapping)).toEqual({
+      action: "accept",
+      content: { q1_other: "2" },
     });
   });
 

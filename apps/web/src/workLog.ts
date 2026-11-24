@@ -1913,6 +1913,7 @@ export function parseUserInputQuestions(
           return {
             label: optionRecord.label,
             description: optionRecord.description,
+            ...(typeof optionRecord.value === "string" ? { value: optionRecord.value } : {}),
           };
         })
         .filter((option): option is UserInputQuestion["options"][number] => option !== null);
@@ -1921,6 +1922,9 @@ export function parseUserInputQuestions(
         header: question.header,
         question: question.question,
         options,
+        ...(typeof question.customAnswerId === "string" && question.customAnswerId.length > 0
+          ? { customAnswerId: question.customAnswerId }
+          : {}),
         ...(question.multiSelect === true ? { multiSelect: true } : {}),
       };
     })
@@ -1935,6 +1939,10 @@ function formatUserInputAnswer(
   question: UserInputQuestion,
 ): string | null {
   const value = answers?.[question.id] ?? answers?.[question.question];
+  if (value == null && question.customAnswerId) {
+    const custom = answers?.[question.customAnswerId];
+    if (typeof custom === "string") return custom.trim() || null;
+  }
   const parts =
     typeof value === "string"
       ? [value]
@@ -1945,7 +1953,7 @@ function formatUserInputAnswer(
           : [];
   const text = parts
     .filter((part): part is string => typeof part === "string")
-    .map((part) => part.trim())
+    .map((part) => (question.options.find((option) => option.value === part)?.label ?? part).trim())
     .filter((part) => part.length > 0)
     .join(", ");
   return text.length > 0 ? text : null;
