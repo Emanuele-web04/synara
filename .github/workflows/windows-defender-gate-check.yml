@@ -44,7 +44,7 @@ jobs:
              limits = @('First observed runner definitions, not reconstructed historical user definitions.',
                'Automatic definition changes are observed, never blocked or downgraded.',
                'Sequential downloads and cloud verdicts can affect caching.',
-               'Hosted runners do not reproduce the reporter’s exact device and policy.') } |
+               'Hosted runners have their own device configuration and policy.') } |
             ConvertTo-Json -Depth 5 | Set-Content "$root/diagnostic-context.json"
           if ('${{ matrix.os }}' -eq 'windows-11-arm') {
             if ($os.ProductType -ne 1 -or [int]$os.BuildNumber -lt 22000 -or [Runtime.InteropServices.RuntimeInformation]::OSArchitecture -ne 'Arm64') { throw 'Expected Windows 11 ARM64 client.' }
