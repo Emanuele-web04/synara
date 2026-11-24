@@ -99,4 +99,37 @@ describe("remote dialer through native TLS and the host gateway", () => {
     expect(input.authorize).toHaveBeenCalledOnce();
     expect(input.sessions.size).toBe(0);
   });
+
+  it("reuses a valid cached session credential on reconnect without fetching a grant", async () => {
+    const input = await fixture();
+    const first = await dialHost(input);
+    expect(input.requestGrant).toHaveBeenCalledTimes(1);
+    first.socket.terminate();
+
+    const second = await dialHost({
+      ...input,
+      cachedCredential: {
+        credential: first.credential,
+        expiresAtSeconds: first.credentialExpiresAtSeconds,
+      },
+    });
+    expect(input.requestGrant).toHaveBeenCalledTimes(1);
+    expect(second.credential).toBe(first.credential);
+    expect(second.environmentId).toBe(environmentId);
+    second.socket.terminate();
+  });
+
+  it("falls back to a fresh grant and mint when a cached credential is rejected by the host", async () => {
+    const input = await fixture();
+    const session = await dialHost({
+      ...input,
+      cachedCredential: {
+        credential: "invalid.cached.credential",
+        expiresAtSeconds: Math.floor(Date.now() / 1000) + 600,
+      },
+    });
+    expect(input.requestGrant).toHaveBeenCalledTimes(1);
+    expect(session.environmentId).toBe(environmentId);
+    session.socket.terminate();
+  });
 });
