@@ -50,6 +50,7 @@
     "brand:check": "node scripts/check-brand-identity.ts",
     "windows-runtime:check": "node scripts/check-windows-runtime-boundary.ts",
     "migrations:check": "node scripts/check-migration-lineage.ts",
+    "perf:budget": "node scripts/check-server-perf-budgets.ts",
     "test:desktop-smoke": "turbo run smoke-test --filter=@synara/desktop",
     "test:device": "bun scripts/device-helper-smoke.ts",
     "test:device:probe": "bun scripts/device-helper-smoke.ts --probe-only",
