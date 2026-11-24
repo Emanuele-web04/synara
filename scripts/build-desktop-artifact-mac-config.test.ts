@@ -66,6 +66,10 @@ describe("createDesktopPlatformBuildConfig", () => {
       assert.ok(folders?.includes("Resources/en.lproj"));
       assert.ok(folders?.includes("Resources/es.lproj"));
       assert.equal(folders?.includes("Resources/zh-Hans.lproj"), flavor !== "production");
+      assert.ok(config.electronLanguages?.includes("en-US"));
+      assert.ok(config.electronLanguages?.includes("es"));
+      assert.equal(config.electronLanguages?.includes("zh-CN"), flavor !== "production");
+      assert.equal(config.electronLanguages?.includes("zh-Hans"), flavor !== "production");
     }
   });
 

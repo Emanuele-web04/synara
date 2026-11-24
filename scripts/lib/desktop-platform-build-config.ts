@@ -59,6 +59,7 @@ export interface DesktopPlatformBuildConfig {
   readonly onNodeModuleFile?: string;
   readonly asarUnpack?: ReadonlyArray<string>;
   readonly dmg?: Record<string, unknown>;
+  readonly electronLanguages?: ReadonlyArray<string>;
   readonly extraFiles?: ReadonlyArray<Record<string, string>>;
   readonly extraResources?: ReadonlyArray<Record<string, string>>;
   readonly files?: ReadonlyArray<string>;
@@ -66,6 +67,18 @@ export interface DesktopPlatformBuildConfig {
   readonly mac?: Record<string, unknown>;
   readonly nsis?: Record<string, unknown>;
   readonly win?: Record<string, unknown>;
+}
+
+const ELECTRON_LOCALE_CODES: Readonly<Record<string, ReadonlyArray<string>>> = {
+  en: ["en-US", "en-GB", "en_GB"],
+  es: ["es", "es-419", "es_419"],
+  "zh-CN": ["zh-CN", "zh_CN", "zh-Hans"],
+};
+
+export function electronLanguagesForFlavor(
+  flavor: SynaraPackagedDesktopFlavor = "production",
+): string[] {
+  return availableUiLocales(flavor).flatMap((locale) => ELECTRON_LOCALE_CODES[locale] ?? [locale]);
 }
 
 export interface CreateDesktopPlatformBuildConfigInput {
@@ -120,6 +133,7 @@ export function createDesktopPlatformBuildConfig(
   const connectorResources = { from: "apps/desktop/resources/cloudflared", to: "cloudflared" };
   const nativePackaging = {
     asarUnpack: [...NODE_PTY_ASAR_UNPACK_GLOBS],
+    electronLanguages: electronLanguagesForFlavor(input.flavor ?? "production"),
     files,
     extraResources: [connectorResources],
     // TypeScript reads these declarations at runtime in the intelligence worker.
