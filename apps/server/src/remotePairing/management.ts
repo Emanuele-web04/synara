@@ -1,9 +1,8 @@
 import { accountStateDirectory } from "../accountAuth";
 import { createServerAccountClient } from "../accountHttp";
 import { mintHostProof, readHostIdentity } from "../hostIdentity";
-import { randomUUID } from "node:crypto";
-import { SignJWT } from "jose";
-import { X509Certificate } from "node:crypto";
+import { randomUUID, X509Certificate } from "node:crypto";
+import { loadJose } from "../lazyJose";
 import {
   EnvironmentId,
   WsRpcError,
@@ -142,7 +141,10 @@ export function makeRemoteAccessManagement(
         .toUpperCase()
         .replace(/[^A-Z2-9]/g, "")
         .replace(/^(.{4})(.{4})$/, "$1-$2");
-      const device = await options.account.dialIdentity({ expectedAccount });
+      const [{ SignJWT }, device] = await Promise.all([
+        loadJose(),
+        options.account.dialIdentity({ expectedAccount }),
+      ]);
       const proof = await new SignJWT({ code })
         .setProtectedHeader({ alg: "ES256", typ: "synara-pairing-code+jwt" })
         .setIssuer("synara-device")

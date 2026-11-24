@@ -15,7 +15,7 @@ import {
 } from "@synara/contracts";
 import { Effect, Option, Schema } from "effect";
 import type * as SqlClient from "effect/unstable/sql/SqlClient";
-import { calculateJwkThumbprint, importJWK, jwtVerify } from "jose";
+import { loadJose } from "./lazyJose";
 import { loadFromMarkdown } from "./lazyMarkdown";
 import { assertBoundedLifetime } from "./hostAuth/grantVerifier";
 import { PROVIDER_RUNTIME_INGESTION_CONSUMER } from "./persistence/Services/ProviderRuntimeEvents";
@@ -155,6 +155,7 @@ async function verifyRecipient(
 ): Promise<boolean> {
   if (deviceKey.kty !== "EC") return false;
   try {
+    const { calculateJwkThumbprint, importJWK, jwtVerify } = await loadJose();
     const { preview, ...binding } = watch;
     if ((await calculateJwkThumbprint(deviceKey)) !== watch.deviceJkt) return false;
     const { payload } = await jwtVerify(preview.proof, await importJWK(deviceKey, "ES256"), {

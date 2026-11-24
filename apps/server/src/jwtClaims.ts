@@ -3,13 +3,13 @@
 //   here checks the signature, so the claims must never decide authorization.
 // Layer: Server utility (no IO)
 
-import { decodeJwt } from "jose";
+import { decodeJwtPayloadUnsafe } from "./lazyJose";
 
 /** The payload claims of a JWT, or undefined when the token cannot be read as one. */
 export function decodeJwtClaims(jwt: string | undefined): Record<string, unknown> | undefined {
   if (jwt === undefined) return undefined;
   try {
-    return decodeJwt(jwt);
+    return decodeJwtPayloadUnsafe(jwt);
   } catch {
     return undefined;
   }

@@ -19,7 +19,7 @@ import {
   type TransportKind,
   type TransportRaceResult,
 } from "@synara/shared/transportRace";
-import { decodeJwt } from "jose";
+import { decodeJwtPayloadUnsafe } from "../lazyJose";
 import WebSocket from "ws";
 import type { RemoteTlsAnchor } from "../remoteTransport/certificates";
 import {
@@ -334,7 +334,7 @@ export async function dialHost(input: DialInput): Promise<DialedSession> {
     const compatibility = Schema.decodeUnknownSync(WsBootstrapNegotiateResult)(ready.compatibility);
     if (ready.environmentId !== input.anchor.environmentId)
       throw new Error("Host protocol identity does not match its paired root");
-    const exp = decodeJwt(credential).exp;
+    const exp = decodeJwtPayloadUnsafe(credential).exp;
     if (typeof exp !== "number" || exp <= Date.now() / 1000)
       throw new Error("Host returned an expired credential");
     return {

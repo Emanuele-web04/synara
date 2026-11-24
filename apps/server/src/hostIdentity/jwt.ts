@@ -7,11 +7,11 @@ import {
   HOST_PROOF_MAX_AGE_SECONDS,
   type AccountHostPlatform,
 } from "@synara/contracts";
-import { importPKCS8, SignJWT } from "jose";
-
+import { loadJose } from "../lazyJose";
 import type { HostIdentity } from "./store";
 
 async function signingKey(identity: HostIdentity): Promise<CryptoKey> {
+  const { importPKCS8 } = await loadJose();
   return importPKCS8(identity.privateKeyPem, "EdDSA");
 }
 
@@ -30,6 +30,7 @@ export async function mintHostLinkProof(input: {
   readonly appVersion?: string;
   readonly nowSeconds?: number;
 }): Promise<string> {
+  const { SignJWT } = await loadJose();
   const now = input.nowSeconds ?? Math.floor(Date.now() / 1_000);
   return new SignJWT({
     challengeId: input.challengeId,
@@ -58,7 +59,7 @@ export async function mintHostProof(input: {
   readonly nowSeconds?: number;
 }): Promise<string> {
   // The clock is read after the key import, which can queue behind a busy thread pool.
-  const key = await signingKey(input.identity);
+  const [{ SignJWT }, key] = await Promise.all([loadJose(), signingKey(input.identity)]);
   const now = input.nowSeconds ?? Math.floor(Date.now() / 1_000);
   return new SignJWT({ keyGeneration: input.keyGeneration })
     .setProtectedHeader({ alg: "EdDSA", typ: HOST_PROOF_JWT_TYP })

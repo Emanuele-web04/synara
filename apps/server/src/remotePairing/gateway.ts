@@ -5,8 +5,8 @@ import {
   type RemoteTrustScope,
 } from "@synara/contracts";
 import { Effect, Schema } from "effect";
-import { calculateJwkThumbprint, importJWK, jwtVerify } from "jose";
 import type WebSocket from "ws";
+import { loadJose } from "../lazyJose";
 import type { AuthControlPlaneShape } from "../auth/Services/AuthControlPlane";
 import { HostMintError, type HostGrantVerifier } from "../hostAuth/grantVerifier";
 import type { RemoteDeviceTrustRepositoryShape } from "../persistence/Services/RemoteDeviceTrust";
@@ -113,6 +113,7 @@ export function acceptRemotePairing(
           const invitation = await Effect.runPromise(
             pairing.verifyInvitation(scope, frame.inviteId, frame.secret),
           );
+          const { calculateJwkThumbprint } = await loadJose();
           const deviceJkt = await calculateJwkThumbprint(publicKey);
           if (invitation.pendingDevice && invitation.pendingDevice.deviceJkt !== deviceJkt)
             throw new Error("Invitation already claimed by another key");
@@ -133,6 +134,7 @@ export function acceptRemotePairing(
           frame.type === "pairing_proof" &&
           typeof frame.proof === "string"
         ) {
+          const { importJWK, jwtVerify } = await loadJose();
           const algorithm = context.device.publicKey.kty === "EC" ? "ES256" : "EdDSA";
           const { payload } = await jwtVerify(
             frame.proof,
