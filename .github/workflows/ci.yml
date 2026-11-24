@@ -240,6 +240,9 @@ jobs:
       - name: Build desktop pipeline
         run: bun run build:desktop
 
+      - name: Check portable bundle size budgets
+        run: bun run bundle-size:check
+
       - name: Build analytics dashboard and bundle Worker
         run: |
           bun run --cwd apps/analytics build
