@@ -10,7 +10,9 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { Effect } from "effect";
+import { createOpencodeClient } from "@opencode-ai/sdk/v2";
 import { parseCheckpointFilesFromUnifiedDiff } from "./checkpointing/Diffs.ts";
+import { withOpenCodeV2Client } from "./provider/openCodeV2Client.ts";
 import { runProcess } from "./processRunner.ts";
 import { verifyRemoteTlsRuntime } from "./remoteTransport/runtimeSmoke";
 import { verifyEditorLanguageRuntime } from "./editor/runtimeSmoke";
@@ -218,6 +220,44 @@ const checkpointFiles = await Effect.runPromise(
   ),
 );
 assert.equal(checkpointFiles[0]?.path, "smoke.txt");
+
+// Exercise the bundled OpenCode V2 client offline inside app.asar without
+// relying on @opencode/{protocol,schema} or a nested Effect copy in node_modules.
+{
+  const syntheticFetch: typeof fetch = Object.assign(
+    async (resource: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+      const url = new URL(
+        typeof resource === "string"
+          ? resource
+          : resource instanceof URL
+            ? resource.href
+            : resource.url,
+      );
+      if (url.pathname === "/api/info") {
+        return Response.json({
+          version: "2.0.0-smoke",
+          pid: 1,
+          urls: [],
+          paths: { tmp: "/tmp" },
+        });
+      }
+      return Response.json({ error: `Unexpected smoke path ${url.pathname}` }, { status: 404 });
+    },
+    { preconnect: denyNetwork },
+  );
+  const legacy = createOpencodeClient({
+    baseUrl: "http://127.0.0.1:1",
+    fetch: syntheticFetch,
+  });
+  const v2 = withOpenCodeV2Client(legacy, {
+    baseUrl: "http://127.0.0.1:1",
+    directory: "/tmp/synara-opencode-smoke",
+    fetch: syntheticFetch,
+  });
+  const health = await v2.global.health();
+  assert.equal(health.data?.version, "2.0.0-smoke");
+}
+
 await verifyEditorLanguageRuntime();
 await verifyOfflineCompactorRuntime();
 console.log("Packaged runtime dependency smoke passed.");

@@ -39,7 +39,11 @@ export default defineConfig({
     __SYNARA_MIGRATION_RUNTIME_SOURCE_DIGEST__: JSON.stringify(migrationRuntimeSourceDigest),
   },
   clean: true,
-  noExternal: (id) => id.startsWith("@synara/") || id === "@pierre/diffs",
+  // Inline @pierre/diffs (only parsePatchFiles is used; Shiki is tree-shaken away)
+  // and @opencode/client (its Promise client does not load @opencode/{protocol,schema}
+  // or their duplicate nested effect@4.0.0-rc.* trees).
+  noExternal: (id) =>
+    id.startsWith("@synara/") || id === "@pierre/diffs" || id === "@opencode/client",
   inlineOnly: false,
   banner: {
     js: "#!/usr/bin/env node\n",
