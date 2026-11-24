@@ -2669,12 +2669,18 @@ export function makeDevinAdapter(
               Effect.gen(function* () {
                 yield* logNative(input.threadId, "session/request_permission", params);
 
-                const permissionRequest = parsePermissionRequest(params);
+                const parsedRequest = parsePermissionRequest(params);
                 // Devin's request_permission toolCall arrives sparse (usually
                 // only {toolCallId, kind}); merge the tracked session/update
                 // state so policy matching and the approval card can see the
                 // tool name and its arguments.
                 const trackedToolCall = ctx?.devinToolCallStateById.get(params.toolCall.toolCallId);
+                // A sparse request must keep the tracked shell classification
+                // so the coordinator's MCP auto-approval cannot cover execution.
+                const permissionRequest: AcpPermissionRequest =
+                  trackedToolCall?.kind === "execute"
+                    ? { ...parsedRequest, kind: "execute" }
+                    : parsedRequest;
                 const toolCall =
                   permissionRequest.toolCall === undefined
                     ? trackedToolCall

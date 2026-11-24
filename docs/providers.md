@@ -310,6 +310,10 @@ retries from four minutes to 40 seconds. See the [Devin CLI changelog](https://d
 
 Synara passes its thread-scoped orchestration tools and granted connectors through ACP when
 creating or reopening a Devin session. Devin keeps using its own login, skills, and MCP settings.
+Call `synara_capabilities` from a Devin thread to inspect the available Orchestrator v2 targets
+and runtime modes. A coordinator can pre-approve recognized Synara MCP tools for one call.
+**Approval required** keeps command approval for tracked shell calls when Devin omits the
+type from its ACP permission request.
 On Windows, Synara prepares process tracking before launching Devin so Stop can verify that the
 CLI and its child processes have exited before Synara starts a replacement runtime.
 
