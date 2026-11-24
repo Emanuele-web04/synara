@@ -25,6 +25,19 @@ export function productAnalyticsBridge(): DesktopBridge["productAnalytics"] {
   }
 }
 
+/**
+ * This installation's sharing choice; Settings and the startup notice share one cache entry.
+ * A plain options object: the transport imports this module and must not pull in React Query.
+ */
+export function productAnalyticsConsentQueryOptions(bridge: DesktopBridge["productAnalytics"]) {
+  return {
+    queryKey: ["desktop", "product-analytics-consent"] as const,
+    queryFn: (): Promise<{ enabled: boolean }> => bridge!.getState(),
+    enabled: !!bridge,
+    retry: false,
+  };
+}
+
 export function trackProductAnalytics(input: ProductAnalyticsInput): void {
   try {
     productAnalyticsBridge()?.track(input);

@@ -48,6 +48,7 @@ import { BetaWelcomeDialog } from "../components/BetaWelcomeDialog";
 import { useOnboarding } from "../onboarding/useOnboarding";
 import { ProjectImportAnnouncementDialog } from "../projectImport/ProjectImportAnnouncementDialog";
 import { ConnectionLaunchAnnouncements } from "../components/hosts/IosBetaAnnouncement";
+import { ProductAnalyticsAnnouncement } from "../components/ProductAnalyticsAnnouncement";
 import { useProjectImportDialogStore } from "../projectImport/projectImportDialogStore";
 import { FeatureTourDialog } from "../components/FeatureTourDialog";
 import { SafariAccessOnboarding } from "../components/SafariAccessOnboarding";
@@ -415,6 +416,7 @@ function RootRouteView() {
               </SafariAccessOnboarding>
               <GlobalOnboardingDialog />
               <ProjectImportAnnouncementDialog />
+              <ProductAnalyticsAnnouncement />
               <ConnectionLaunchAnnouncements />
             </>
           )}
