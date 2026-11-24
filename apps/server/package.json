@@ -38,7 +38,6 @@
     "@opencode-ai/sdk": "1.18.31",
     "@opencode/client": "2.0.25",
     "@peculiar/x509": "2.1.0",
-    "@pierre/diffs": "^1.2.12",
     "@xterm/headless": "^6.0.0",
     "effect": "catalog:",
     "jose": "^6.1.0",
@@ -55,6 +54,7 @@
   "devDependencies": {
     "@effect/language-service": "catalog:",
     "@effect/vitest": "catalog:",
+    "@pierre/diffs": "^1.2.12",
     "@synara/contracts": "workspace:*",
     "@synara/shared": "workspace:*",
     "@synara/web": "workspace:*",

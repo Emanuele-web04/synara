@@ -9,6 +9,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
+import { Effect } from "effect";
+import { parseCheckpointFilesFromUnifiedDiff } from "./checkpointing/Diffs.ts";
 import { runProcess } from "./processRunner.ts";
 import { verifyRemoteTlsRuntime } from "./remoteTransport/runtimeSmoke";
 import { verifyEditorLanguageRuntime } from "./editor/runtimeSmoke";
@@ -210,11 +212,12 @@ await import("@xterm/headless");
 // Connectors load the MCP SDK's OAuth client on first use.
 await import("@modelcontextprotocol/sdk/client/auth.js");
 
-const { parsePatchFiles } = await import("@pierre/diffs");
-const patches = parsePatchFiles(
-  "diff --git a/smoke.txt b/smoke.txt\n--- a/smoke.txt\n+++ b/smoke.txt\n@@ -1 +1 @@\n-before\n+after\n",
+const checkpointFiles = await Effect.runPromise(
+  parseCheckpointFilesFromUnifiedDiff(
+    "diff --git a/smoke.txt b/smoke.txt\n--- a/smoke.txt\n+++ b/smoke.txt\n@@ -1 +1 @@\n-before\n+after\n",
+  ),
 );
-assert.equal(patches[0]?.files[0]?.name, "smoke.txt");
+assert.equal(checkpointFiles[0]?.path, "smoke.txt");
 await verifyEditorLanguageRuntime();
 await verifyOfflineCompactorRuntime();
 console.log("Packaged runtime dependency smoke passed.");

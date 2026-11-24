@@ -39,7 +39,7 @@ export default defineConfig({
     __SYNARA_MIGRATION_RUNTIME_SOURCE_DIGEST__: JSON.stringify(migrationRuntimeSourceDigest),
   },
   clean: true,
-  noExternal: (id) => id.startsWith("@synara/"),
+  noExternal: (id) => id.startsWith("@synara/") || id === "@pierre/diffs",
   inlineOnly: false,
   banner: {
     js: "#!/usr/bin/env node\n",
