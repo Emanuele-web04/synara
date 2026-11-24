@@ -1,5 +1,5 @@
 import fs from "node:fs/promises";
-import type { Dirent } from "node:fs";
+import { constants as fsConstants, type Dirent } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { runProcess } from "./processRunner";
@@ -36,7 +36,7 @@ import {
   isWorkspaceRelativePathSafe,
 } from "@synara/shared/path";
 import { normalizeWorkspaceEntrySearchQuery } from "@synara/shared/searchQuery";
-import { resolveRealPathWithinRoot } from "./workspace/realPathContainment";
+import { isContainedPath, resolveRealPathWithinRoot } from "./workspace/realPathContainment";
 
 const WORKSPACE_CACHE_TTL_MS = 15_000;
 const WORKSPACE_CACHE_MAX_KEYS = 4;
@@ -165,7 +165,11 @@ function scoreSubsequenceMatch(value: string, query: string): number | null {
   return null;
 }
 
-function scoreEntry(entry: SearchableWorkspaceEntry, query: string): number | null {
+function scoreEntry(
+  entry: SearchableWorkspaceEntry,
+  query: string,
+  slashQuery = query ? `/${query}` : "",
+): number | null {
   if (!query) {
     return entry.kind === "directory" ? 0 : 1;
   }
@@ -187,7 +191,7 @@ function scoreEntry(entry: SearchableWorkspaceEntry, query: string): number | nu
   }
 
   if (normalizedPath.startsWith(query)) return 1000;
-  if (normalizedPath.includes(`/${query}`)) return 1001;
+  if (normalizedPath.includes(slashQuery)) return 1001;
   if (normalizedPath.includes(query)) return 1002;
 
   const pathFuzzyScore = scoreSubsequenceMatch(normalizedPath, query);
@@ -242,6 +246,22 @@ function insertRankedEntry(
 ): void {
   if (limit <= 0) {
     return;
+  }
+
+  // O(1) fast-reject when the top-K buffer is already full and the candidate
+  // cannot beat the current worst kept entry (avoids binary search + localeCompare).
+  if (rankedEntries.length >= limit) {
+    const worst = rankedEntries[limit - 1]!;
+    if (candidate.score > worst.score) return;
+    if (candidate.score === worst.score) {
+      if (candidate.entry.depth > worst.entry.depth) return;
+      if (
+        candidate.entry.depth === worst.entry.depth &&
+        candidate.entry.path.localeCompare(worst.entry.path) >= 0
+      ) {
+        return;
+      }
+    }
   }
 
   const insertionIndex = findInsertionIndex(rankedEntries, candidate);
@@ -574,42 +594,39 @@ async function buildWorkspaceIndexFromGit(cwd: string): Promise<WorkspaceIndex |
     return null;
   }
 
-  const listedFiles = await runProcess(
-    "git",
-    [
-      ...WORKSPACE_GIT_HARDENED_CONFIG_ARGS,
-      "ls-files",
-      "--cached",
-      "--others",
-      "--exclude-standard",
-      "-z",
-    ],
-    {
+  // `--cached` keeps listing tracked files that were deleted from disk but not
+  // staged (e.g. an agent's `rm`), so they would show up in search and open to
+  // ENOENT. Run both `git ls-files` queries concurrently to halve subprocess latency.
+  const [listedFiles, deletedFiles] = await Promise.all([
+    runProcess(
+      "git",
+      [
+        ...WORKSPACE_GIT_HARDENED_CONFIG_ARGS,
+        "ls-files",
+        "--cached",
+        "--others",
+        "--exclude-standard",
+        "-z",
+      ],
+      {
+        cwd,
+        allowNonZeroExit: true,
+        timeoutMs: 20_000,
+        maxBufferBytes: 16 * 1024 * 1024,
+        outputMode: "truncate",
+      },
+    ).catch(() => null),
+    runProcess("git", [...WORKSPACE_GIT_HARDENED_CONFIG_ARGS, "ls-files", "--deleted", "-z"], {
       cwd,
       allowNonZeroExit: true,
       timeoutMs: 20_000,
       maxBufferBytes: 16 * 1024 * 1024,
       outputMode: "truncate",
-    },
-  ).catch(() => null);
+    }).catch(() => null),
+  ]);
   if (!listedFiles || listedFiles.code !== 0) {
     return null;
   }
-
-  // `--cached` keeps listing tracked files that were deleted from disk but not
-  // staged (e.g. an agent's `rm`), so they would show up in search and open to
-  // ENOENT. Drop them, and fall back to the filesystem walk if this listing fails.
-  const deletedFiles = await runProcess(
-    "git",
-    [...WORKSPACE_GIT_HARDENED_CONFIG_ARGS, "ls-files", "--deleted", "-z"],
-    {
-      cwd,
-      allowNonZeroExit: true,
-      timeoutMs: 20_000,
-      maxBufferBytes: 16 * 1024 * 1024,
-      outputMode: "truncate",
-    },
-  ).catch(() => null);
   if (!deletedFiles || deletedFiles.code !== 0 || deletedFiles.stdoutTruncated) {
     return null;
   }
@@ -886,6 +903,7 @@ export async function searchWorkspaceEntries(
 ): Promise<ProjectSearchEntriesResult> {
   const index = await getWorkspaceIndex(input.cwd);
   const normalizedQuery = normalizeWorkspaceEntrySearchQuery(input.query);
+  const slashQuery = normalizedQuery ? `/${normalizedQuery}` : "";
   const limit = Math.max(0, Math.floor(input.limit));
   const rankedEntries: RankedWorkspaceEntry[] = [];
   let matchedEntryCount = 0;
@@ -895,7 +913,7 @@ export async function searchWorkspaceEntries(
       continue;
     }
 
-    const score = scoreEntry(entry, normalizedQuery);
+    const score = scoreEntry(entry, normalizedQuery, slashQuery);
     if (score === null) {
       continue;
     }
@@ -918,7 +936,7 @@ const CONTENT_SEARCH_MIN_QUERY_LENGTH = PROJECT_SEARCH_CONTENT_MIN_QUERY_LENGTH;
 const CONTENT_SEARCH_MAX_FILE_BYTES = 512 * 1024;
 const CONTENT_SEARCH_MAX_MATCHES_PER_FILE = 5;
 const CONTENT_SEARCH_TIME_BUDGET_MS = 4_000;
-const CONTENT_SEARCH_LINE_READ_CONCURRENCY = 8;
+const CONTENT_SEARCH_LINE_READ_CONCURRENCY = 24;
 const CONTENT_SEARCH_MAX_LINE_LENGTH = PROJECT_SEARCH_CONTENT_MAX_LINE_LENGTH;
 
 // A file is treated as binary when its first 8 KiB contains a null byte.
@@ -938,21 +956,50 @@ function buildContentLineText(line: string): string {
   return `${trimmed.slice(0, CONTENT_SEARCH_MAX_LINE_LENGTH - 1)}…`;
 }
 
-async function searchFileContent(
-  cwd: string,
+const OPEN_NOFOLLOW_FLAGS =
+  typeof fsConstants.O_NOFOLLOW === "number" ? fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW : null;
+
+async function openContainedFile(
+  realRoot: string,
   relativePath: string,
-  normalizedQuery: string,
-): Promise<ContentSearchMatch[] | null> {
-  const absolutePath = await resolveRealPathWithinRoot(cwd, path.join(cwd, relativePath)).catch(
-    () => null,
-  );
-  if (!absolutePath) {
+  resolveDir: (relativeDir: string) => Promise<string | null>,
+): Promise<Awaited<ReturnType<typeof fs.open>> | null> {
+  const lastSlash = relativePath.lastIndexOf("/");
+  const relativeDir = lastSlash === -1 ? "" : relativePath.slice(0, lastSlash);
+  const fileName = lastSlash === -1 ? relativePath : relativePath.slice(lastSlash + 1);
+  const realDir = await resolveDir(relativeDir);
+  if (!realDir) {
     return null;
   }
-  let fileHandle: Awaited<ReturnType<typeof fs.open>>;
-  try {
-    fileHandle = await fs.open(absolutePath, "r");
-  } catch {
+  const candidatePath = path.join(realDir, fileName);
+
+  if (OPEN_NOFOLLOW_FLAGS !== null) {
+    try {
+      return await fs.open(candidatePath, OPEN_NOFOLLOW_FLAGS);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException | null)?.code;
+      if (code !== "ELOOP" && code !== "EMLINK") {
+        return null;
+      }
+      // Leaf is a symlink: resolve it and verify containment before opening.
+    }
+  }
+
+  const realTarget = await fs.realpath(candidatePath).catch(() => null);
+  if (!realTarget || !isContainedPath(realRoot, realTarget)) {
+    return null;
+  }
+  return await fs.open(realTarget, "r").catch(() => null);
+}
+
+async function searchFileContent(
+  realRoot: string,
+  relativePath: string,
+  normalizedQuery: string,
+  resolveDir: (relativeDir: string) => Promise<string | null>,
+): Promise<ContentSearchMatch[] | null> {
+  const fileHandle = await openContainedFile(realRoot, relativePath, resolveDir);
+  if (!fileHandle) {
     return null;
   }
 
@@ -962,37 +1009,54 @@ async function searchFileContent(
       return null;
     }
 
-    const sniffLength = Math.min(stats.size, CONTENT_SEARCH_BINARY_SNIFF_BYTES);
-    const sniffBuffer = Buffer.alloc(sniffLength);
-    await fileHandle.read(sniffBuffer, 0, sniffLength, 0);
-    if (sniffBuffer.includes(0)) {
+    // Read the bounded file in one pre-sized buffer using the size we already
+    // stat'd, avoiding fileHandle.readFile()'s redundant internal fstat + chunk
+    // concatenation, and sniff its prefix in memory.
+    const buffer = Buffer.allocUnsafe(stats.size);
+    let bytesRead = 0;
+    while (bytesRead < stats.size) {
+      const result = await fileHandle.read(buffer, bytesRead, stats.size - bytesRead, bytesRead);
+      if (result.bytesRead === 0) break;
+      bytesRead += result.bytesRead;
+    }
+    const contentBuffer = bytesRead === stats.size ? buffer : buffer.subarray(0, bytesRead);
+    const sniffEnd = Math.min(contentBuffer.length, CONTENT_SEARCH_BINARY_SNIFF_BYTES);
+    if (contentBuffer.subarray(0, sniffEnd).includes(0)) {
       return null;
     }
 
-    const contents = await fileHandle.readFile("utf8");
-    // Whole-file miss check before the line split: most files don't contain
-    // the query at all, and skipping the split + per-line scan cuts 50-68% off
-    // scan cost for typical queries (measured on this repo). The pathological
-    // case — a query matching a third of all files — pays ~36% extra on the
-    // files it hits, but the overall collect limit stops the scan after a
-    // handful of such files anyway.
-    if (!contents.toLowerCase().includes(normalizedQuery)) {
+    const contents = contentBuffer.toString("utf8");
+    const lowered = contents.toLowerCase();
+    let matchIndex = lowered.indexOf(normalizedQuery);
+    if (matchIndex === -1) {
       return [];
     }
-    const lines = contents.split("\n");
+
+    // Scan matches directly via indexOf without splitting the entire file into
+    // a lines array or re-lowercasing every line.
     const matches: ContentSearchMatch[] = [];
-    for (let index = 0; index < lines.length; index += 1) {
-      const line = lines[index];
-      if (!line) continue;
-      if (!line.toLowerCase().includes(normalizedQuery)) continue;
-      matches.push({
-        path: relativePath,
-        lineNumber: index + 1,
-        lineText: buildContentLineText(line),
-      });
-      if (matches.length >= CONTENT_SEARCH_MAX_MATCHES_PER_FILE) {
-        break;
+    let lineNumber = 1;
+    let countedUpTo = 0;
+
+    while (matchIndex !== -1 && matches.length < CONTENT_SEARCH_MAX_MATCHES_PER_FILE) {
+      let lineStart = contents.lastIndexOf("\n", matchIndex - 1);
+      lineStart = lineStart === -1 ? 0 : lineStart + 1;
+      for (let pos = countedUpTo; pos < lineStart; pos += 1) {
+        if (contents.charCodeAt(pos) === 10 /* '\n' */) lineNumber += 1;
       }
+      countedUpTo = lineStart;
+      let lineEnd = contents.indexOf("\n", matchIndex);
+      if (lineEnd === -1) lineEnd = contents.length;
+      const line = contents.slice(lineStart, lineEnd);
+      if (line.length > 0) {
+        matches.push({
+          path: relativePath,
+          lineNumber,
+          lineText: buildContentLineText(line),
+        });
+      }
+      if (lineEnd >= contents.length) break;
+      matchIndex = lowered.indexOf(normalizedQuery, lineEnd + 1);
     }
     return matches;
   } catch {
@@ -1019,7 +1083,13 @@ export async function searchWorkspaceContent(
     Math.min(input.limit ?? CONTENT_SEARCH_DEFAULT_LIMIT, CONTENT_SEARCH_MAX_LIMIT),
   );
 
-  const index = await getWorkspaceIndex(input.cwd);
+  const [index, realRoot] = await Promise.all([
+    getWorkspaceIndex(input.cwd),
+    fs.realpath(input.cwd).catch(() => null),
+  ]);
+  if (!realRoot) {
+    return { matches: [], truncated: false };
+  }
   // Scan every indexed file: the time budget is the only scan bound. A fixed
   // file-count cap over the localeCompare-sorted index would permanently
   // exclude directories late in the alphabet, silently, on every query.
@@ -1031,6 +1101,21 @@ export async function searchWorkspaceContent(
   const collected: ContentSearchMatch[] = [];
   let scannedFiles = 0;
   let truncated = index.truncated;
+
+  const dirRealPathCache = new Map<string, Promise<string | null>>();
+  dirRealPathCache.set("", Promise.resolve(realRoot));
+  const resolveDir = (relativeDir: string): Promise<string | null> => {
+    const cached = dirRealPathCache.get(relativeDir);
+    if (cached) {
+      return cached;
+    }
+    const promise = fs
+      .realpath(path.join(realRoot, relativeDir))
+      .then((resolved) => (isContainedPath(realRoot, resolved) ? resolved : null))
+      .catch(() => null);
+    dirRealPathCache.set(relativeDir, promise);
+    return promise;
+  };
 
   let nextIndex = 0;
   const workers = Array.from(
@@ -1044,9 +1129,10 @@ export async function searchWorkspaceContent(
         const currentIndex = nextIndex;
         nextIndex += 1;
         const fileMatches = await searchFileContent(
-          input.cwd,
+          realRoot,
           filePaths[currentIndex] as string,
           normalizedQuery,
+          resolveDir,
         );
         scannedFiles += 1;
         if (fileMatches && fileMatches.length > 0) {
