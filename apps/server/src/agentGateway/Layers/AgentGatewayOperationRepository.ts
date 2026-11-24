@@ -1,4 +1,5 @@
 import { makeCompletionRepository } from "../completionRepository.ts";
+import { SYNARA_GATEWAY_MAX_THREADS_PER_TURN } from "@synara/contracts";
 import { Effect, Layer } from "effect";
 import { withCommitNotifications } from "../../persistence/commitNotifications.ts";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -38,6 +39,7 @@ export const makeAgentGatewayOperationRepository = Effect.gen(function* () {
     readonly callerThreadId: string;
     readonly callerTurnId: string;
     readonly operationKind: "create_threads";
+    readonly requestId?: string;
   }) =>
     sql<OperationRow>`
       SELECT
@@ -58,6 +60,8 @@ export const makeAgentGatewayOperationRepository = Effect.gen(function* () {
       WHERE caller_thread_id = ${input.callerThreadId}
         AND caller_turn_id = ${input.callerTurnId}
         AND operation_kind = ${input.operationKind}
+        ${input.requestId === undefined ? sql`` : sql`AND request_id = ${input.requestId}`}
+      ORDER BY created_at ASC, operation_id ASC
       LIMIT 1
     `;
 
@@ -65,7 +69,43 @@ export const makeAgentGatewayOperationRepository = Effect.gen(function* () {
     sql
       .withTransaction(
         Effect.gen(function* () {
-          const inserted = yield* sql<{ readonly operationId: string }>`
+          const [existing] = yield* readByScope(
+            input.allowAdditionalPlans
+              ? input
+              : {
+                  callerThreadId: input.callerThreadId,
+                  callerTurnId: input.callerTurnId,
+                  operationKind: input.operationKind,
+                },
+          );
+          if (existing) {
+            const kind =
+              existing.requestId !== input.requestId
+                ? "creation_plan_locked"
+                : existing.fingerprint !== input.fingerprint
+                  ? "idempotency_conflict"
+                  : "replay";
+            return { kind, operation: existing } satisfies ReserveAgentGatewayOperationResult;
+          }
+          if (input.allowAdditionalPlans) {
+            // Check the aggregate budget inside the same transaction as reservation.
+            const [total] = yield* sql<{ readonly usedCount: number }>`
+              SELECT COALESCE(SUM(requested_count), 0) AS "usedCount"
+              FROM agent_gateway_operations
+              WHERE caller_thread_id = ${input.callerThreadId}
+                AND caller_turn_id = ${input.callerTurnId}
+                AND operation_kind = ${input.operationKind}
+            `;
+            const usedCount = total?.usedCount ?? 0;
+            if (usedCount + input.requestedCount > SYNARA_GATEWAY_MAX_THREADS_PER_TURN) {
+              return {
+                kind: "turn_creation_limit",
+                usedCount,
+                limit: SYNARA_GATEWAY_MAX_THREADS_PER_TURN,
+              } satisfies ReserveAgentGatewayOperationResult;
+            }
+          }
+          yield* sql`
             INSERT INTO agent_gateway_operations (
               operation_id,
               caller_thread_id,
@@ -78,6 +118,7 @@ export const makeAgentGatewayOperationRepository = Effect.gen(function* () {
               status,
               result_json,
               error_json,
+              resume_context_json,
               created_at,
               updated_at
             ) VALUES (
@@ -92,11 +133,10 @@ export const makeAgentGatewayOperationRepository = Effect.gen(function* () {
               'reserved',
               NULL,
               NULL,
+              ${input.resumeContextJson ?? null},
               ${input.now},
               ${input.now}
             )
-            ON CONFLICT (caller_thread_id, caller_turn_id, operation_kind) DO NOTHING
-            RETURNING operation_id AS "operationId"
           `;
           const [operation] = yield* readByScope(input);
           if (!operation) {
@@ -104,15 +144,7 @@ export const makeAgentGatewayOperationRepository = Effect.gen(function* () {
               new Error("Reserved gateway operation could not be read back."),
             );
           }
-          let kind: ReserveAgentGatewayOperationResult["kind"];
-          if (inserted.length > 0) {
-            kind = "reserved";
-          } else if (operation.requestId === input.requestId) {
-            kind = operation.fingerprint === input.fingerprint ? "replay" : "idempotency_conflict";
-          } else {
-            kind = "creation_plan_locked";
-          }
-          return { kind, operation } satisfies ReserveAgentGatewayOperationResult;
+          return { kind: "reserved", operation } satisfies ReserveAgentGatewayOperationResult;
         }),
       )
       .pipe(Effect.mapError(mapSqlError("reserve")));
@@ -192,7 +224,8 @@ export const makeAgentGatewayOperationRepository = Effect.gen(function* () {
               json_extract(entry.value, '$.ids.messageId'), op.created_at
             FROM agent_gateway_operations AS op, json_each(op.plan_json) AS entry
             WHERE op.operation_id = ${input.operationId}
-              AND json_extract(entry.value, '$.notifyCreatorOnComplete') = 1
+              AND (op.resume_context_json IS NOT NULL
+                OR json_extract(entry.value, '$.notifyCreatorOnComplete') = 1)
           `;
           yield* sql`
             DELETE FROM agent_gateway_operations

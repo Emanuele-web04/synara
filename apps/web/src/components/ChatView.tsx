@@ -6807,9 +6807,11 @@ export default function ChatView({
                       : isComposerApprovalState
                         ? t("chat:placeholder_resolveApproval")
                         : activePendingProgress
-                          ? activePendingProgress.activeQuestion?.options.length === 0
-                            ? t("chat:placeholder_typeAnswer")
-                            : t("chat:orTypeYourOwnAnswer")
+                          ? activePendingProgress.activeQuestion?.allowCustomAnswer === false
+                            ? ""
+                            : activePendingProgress.activeQuestion?.options.length === 0
+                              ? t("chat:placeholder_typeAnswer")
+                              : t("chat:orTypeYourOwnAnswer")
                           : showPlanFollowUpPrompt && activeProposedPlan
                             ? t("chat:placeholder_refinePlan")
                             : activeThread?.parentThreadId
@@ -6821,7 +6823,10 @@ export default function ChatView({
                                   : t("chat:doAnythingInSynara")
                   }
                   prediction={composerPrediction.ghost}
-                  disabled={isComposerEditorDisabled}
+                  disabled={
+                    isComposerEditorDisabled ||
+                    activePendingProgress?.activeQuestion?.allowCustomAnswer === false
+                  }
                   singleLine={composerSingleRow}
                 />
               </div>

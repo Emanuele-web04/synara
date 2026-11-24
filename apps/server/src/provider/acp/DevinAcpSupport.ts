@@ -18,6 +18,12 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 
 import { buildProviderChildEnvironment } from "../../providerChildEnvironment.ts";
 import { isLoopbackHost } from "../../startupAccess.ts";
+import { normalizeProviderProcessEnvironment } from "../providerProcessEnv.ts";
+import {
+  collectSessionConfigOptionValues,
+  extractModelConfigId,
+  findSessionConfigOption,
+} from "./AcpRuntimeModel.ts";
 import {
   AcpSessionRuntime,
   type AcpSessionRuntimeOptions,
@@ -43,7 +49,6 @@ export interface DevinAcpRuntimeInput extends Omit<
   readonly childProcessSpawner: ChildProcessSpawner.ChildProcessSpawner["Service"];
   readonly devinSettings: DevinAcpRuntimeSettings | null | undefined;
   readonly runtimeMode: RuntimeMode;
-  readonly sessionConfig?: { readonly childEnvironment: NodeJS.ProcessEnv };
 }
 
 const DEVIN_API_KEY_AUTH_METHOD_IDS = new Set([
@@ -64,6 +69,10 @@ const DEVIN_INTERACTIVE_AUTH_METHOD_IDS = new Set([
 // that some secret/credential injectors provide.
 const DEVIN_API_KEY_ENV_KEYS = ["WINDSURF_API_KEY", "DEVIN_API_KEY", "windsurf_api_key"] as const;
 const DEVIN_API_SERVER_URL_ENV_KEYS = ["WINDSURF_API_SERVER_URL", "DEVIN_API_SERVER_URL"] as const;
+const DEVIN_AUTH_ENV_KEYS: ReadonlySet<string> = new Set([
+  ...DEVIN_API_KEY_ENV_KEYS,
+  ...DEVIN_API_SERVER_URL_ENV_KEYS,
+]);
 const DEVIN_COMPACT_COMMAND_NAME = "compact";
 const DEVIN_COMPACT_PROMPT = "/compact";
 
@@ -102,6 +111,7 @@ export interface DevinAcpCredentials {
 
 export interface DevinAcpAuthInput {
   readonly apiKey?: string;
+  readonly env?: NodeJS.ProcessEnv;
 }
 
 /** Host auth metadata sent in the ACP authenticate request for Devin. */
@@ -157,6 +167,22 @@ export function getDevinApiServerUrlEnv(env: NodeJS.ProcessEnv = process.env): s
     }
   }
   return undefined;
+}
+
+/** Keep the selected key and endpoint together when a profile supplies either. */
+function resolveDevinAcpEnvironment(
+  configured: DevinAcpRuntimeSettings["environment"],
+): NodeJS.ProcessEnv {
+  if (configured === undefined) return process.env;
+  const selected = normalizeProviderProcessEnvironment(configured);
+  const env = { ...process.env };
+  if (Object.keys(selected).some((name) => DEVIN_AUTH_ENV_KEYS.has(name))) {
+    // The ACP spawner overlays this environment on the base again, so use empty overrides.
+    for (const name of Object.keys(env)) {
+      if (DEVIN_AUTH_ENV_KEYS.has(name.toUpperCase())) env[name] = "";
+    }
+  }
+  return Object.assign(env, selected);
 }
 
 function parseDevinTomlString(rawValue: string): string | undefined {
@@ -345,11 +371,14 @@ export function buildDevinAcpSpawnInput(
     args.push("--model", model);
   }
 
-  // The Devin ACP server expects `WINDSURF_API_KEY`. If only the lowercase
-  // variant is present, normalize it to the canonical key for the child.
-  const baseEnv = childEnvironment ?? process.env;
+  // Use the CLI's canonical environment names when the profile supplies aliases.
+  const baseEnv = childEnvironment ?? resolveDevinAcpEnvironment(devinSettings?.environment);
   const apiKey = getDevinApiKeyEnv(baseEnv);
-  const overrides: NodeJS.ProcessEnv = apiKey ? { WINDSURF_API_KEY: apiKey } : {};
+  const apiServerUrl = getDevinApiServerUrlEnv(baseEnv);
+  const overrides: NodeJS.ProcessEnv = {
+    ...(apiKey ? { WINDSURF_API_KEY: apiKey } : {}),
+    ...(apiServerUrl ? { WINDSURF_API_SERVER_URL: apiServerUrl } : {}),
+  };
 
   return {
     command: resolveDevinBinaryPath(devinSettings?.binaryPath, { env: baseEnv }),
@@ -377,7 +406,7 @@ export const resolveDevinAcpAuthMethodId = (
 ): Effect.Effect<string, AcpErrors.AcpError> =>
   Effect.gen(function* () {
     const authMethodIds = availableAuthMethodIds(initializeResult);
-    const hasApiKey = (input.apiKey?.trim() || getDevinApiKeyEnv()) !== undefined;
+    const hasApiKey = (input.apiKey?.trim() || getDevinApiKeyEnv(input.env)) !== undefined;
     if (hasApiKey) {
       const apiKeyMethod = [...authMethodIds].find((methodId) =>
         DEVIN_API_KEY_AUTH_METHOD_IDS.has(methodId),
@@ -422,16 +451,14 @@ export const makeDevinAcpRuntime = (
   input: DevinAcpRuntimeInput,
 ): Effect.Effect<AcpSessionRuntimeShape, AcpErrors.AcpError, Scope.Scope> =>
   Effect.gen(function* () {
-    const providerEnvironment = {
-      ...process.env,
-      ...(input.devinSettings?.environment ?? {}),
-    };
+    const providerEnvironment = resolveDevinAcpEnvironment(input.devinSettings?.environment);
     const storedCredentials = yield* Effect.tryPromise(() =>
       readDevinStoredCredentials(providerEnvironment),
     ).pipe(Effect.orElseSucceed(() => undefined));
-    const authenticateMeta = yield* buildDevinAcpAuthenticateMeta(
-      storedCredentials ? { credentials: storedCredentials } : {},
-    );
+    const authenticateMeta = yield* buildDevinAcpAuthenticateMeta({
+      env: providerEnvironment,
+      ...(storedCredentials ? { credentials: storedCredentials } : {}),
+    });
     const apiKey = authenticateMeta.api_key;
     const acpContext = yield* Layer.build(
       AcpSessionRuntime.layer({
@@ -440,15 +467,24 @@ export const makeDevinAcpRuntime = (
           input.devinSettings,
           input.cwd,
           input.runtimeMode,
-          input.sessionConfig?.childEnvironment ?? providerEnvironment,
+          providerEnvironment,
         ),
+        // Devin may advertise only browser login even when its native login is active.
+        // An unauthed setup can succeed with an empty model selector and fail on prompt.
         authPolicy: "on-demand",
         resolveAuthMethodId: (initializeResult) =>
-          resolveDevinAcpAuthMethodId(initializeResult, { ...(apiKey ? { apiKey } : {}) }),
-        validateInitializeResult: (initializeResult) =>
-          resolveDevinAcpAuthMethodId(initializeResult, { ...(apiKey ? { apiKey } : {}) }).pipe(
-            Effect.asVoid,
-          ),
+          resolveDevinAcpAuthMethodId(initializeResult, {
+            env: providerEnvironment,
+            ...(apiKey ? { apiKey } : {}),
+          }),
+        authSetupHeuristic: (initializeResult, session) => {
+          if (!apiKey || !initializeResult.authMethods?.length) return false;
+          const model = findSessionConfigOption(
+            session.configOptions,
+            extractModelConfigId(session) ?? "",
+          );
+          return model?.type === "select" && collectSessionConfigOptionValues(model).length === 0;
+        },
         authenticateMeta,
         normalizeIncomingMessage: normalizeDevinGetOutputToolCall,
       }).pipe(

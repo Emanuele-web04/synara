@@ -129,7 +129,7 @@ async function resolveCredentialKey(
   const fetcher = PROVIDER_USAGE_FETCHERS[provider];
   try {
     const credentialKey = fetcher?.cacheKey ? await fetcher.cacheKey(ctx) : provider;
-    if (credentialKey === null || !ctx.instanceId) {
+    if (credentialKey === null || (!ctx.instanceId && fetcher?.retainSnapshot !== false)) {
       return credentialKey;
     }
     // A renamed/reconfigured route can retain its credential identity while its
@@ -141,6 +141,7 @@ async function resolveCredentialKey(
         homeDir: ctx.homeDir,
         codexBinaryPath: ctx.codexBinaryPath,
         claudeBinaryPath: ctx.claudeBinaryPath,
+        antigravityBinaryPath: ctx.antigravityBinaryPath,
         isolateCredentials: ctx.isolateCredentials,
         disableResetCredits: ctx.disableResetCredits,
         skipLocalUsage: ctx.skipLocalUsage,
@@ -185,13 +186,14 @@ async function getProviderUsageSnapshot(
   const cacheGeneration = snapshotCacheGenerations.get(scope) ?? Symbol();
   snapshotCacheGenerations.set(scope, cacheGeneration);
   const providerContext = buildProviderContext(provider, ctx);
+  const retainSnapshot = PROVIDER_USAGE_FETCHERS[provider]?.retainSnapshot !== false;
   const credentialKey = await resolveCredentialKey(provider, providerContext);
   const pending = inFlightFetches.get(scope);
   if (credentialKey !== null && pending?.credentialKey === credentialKey) {
     return pending.promise;
   }
 
-  if (!forceRefresh && credentialKey !== null) {
+  if (retainSnapshot && !forceRefresh && credentialKey !== null) {
     const cached = snapshotCache.get(scope);
     if (
       cached &&
@@ -216,10 +218,9 @@ async function getProviderUsageSnapshot(
           ctx,
         )
       : null;
+    if (!enriched || !retainSnapshot || credentialKey === null) return enriched;
     const refreshedCredentialKey = await resolveCredentialKey(provider, providerContext);
     if (
-      enriched &&
-      credentialKey !== null &&
       refreshedCredentialKey === credentialKey &&
       snapshotCacheGenerations.get(scope) === cacheGeneration
     ) {
@@ -429,6 +430,9 @@ function instanceUsageContext(
     ...(localUsageHomePath ? { localUsageHomePath } : {}),
     ...(start?.codex?.binaryPath ? { codexBinaryPath: start.codex.binaryPath } : {}),
     ...(start?.claudeAgent?.binaryPath ? { claudeBinaryPath: start.claudeAgent.binaryPath } : {}),
+    ...(start?.antigravity?.binaryPath
+      ? { antigravityBinaryPath: start.antigravity.binaryPath }
+      : {}),
   };
 }
 
@@ -447,9 +451,10 @@ export const listProviderUsage = Effect.fn(function* (input: ServerListProviderU
       (scope) => scope.includes(":") && !activeScopes.has(scope),
     ),
   );
-  const selected = input.provider
-    ? instances.filter((instance) => instance.driver === input.provider)
-    : instances;
+  const selected = instances.filter(
+    ({ driver }) =>
+      (!input.provider || driver === input.provider) && driver !== input.excludeProvider,
+  );
 
   return yield* Effect.tryPromise({
     try: async () => {

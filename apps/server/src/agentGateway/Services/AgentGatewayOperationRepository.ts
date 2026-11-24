@@ -71,7 +71,8 @@ export type ReserveAgentGatewayOperationResult =
   | { readonly kind: "reserved"; readonly operation: AgentGatewayOperationRecord }
   | { readonly kind: "replay"; readonly operation: AgentGatewayOperationRecord }
   | { readonly kind: "idempotency_conflict"; readonly operation: AgentGatewayOperationRecord }
-  | { readonly kind: "creation_plan_locked"; readonly operation: AgentGatewayOperationRecord };
+  | { readonly kind: "creation_plan_locked"; readonly operation: AgentGatewayOperationRecord }
+  | { readonly kind: "turn_creation_limit"; readonly usedCount: number; readonly limit: number };
 
 export interface ReserveAgentGatewayOperationInput {
   readonly operationId: string;
@@ -81,6 +82,8 @@ export interface ReserveAgentGatewayOperationInput {
   readonly requestId: string;
   readonly fingerprint: string;
   readonly requestedCount: number;
+  readonly allowAdditionalPlans?: boolean;
+  readonly resumeContextJson?: string;
   readonly planJson: string;
   readonly now: string;
 }
@@ -132,6 +135,7 @@ export interface AgentGatewayOperationRepositoryShape {
     readonly callerThreadId: string;
     readonly callerTurnId: string;
     readonly operationKind: "create_threads";
+    readonly requestId?: string;
   }) => Effect.Effect<AgentGatewayOperationRecord | null, Error>;
   readonly listNonTerminal: () => Effect.Effect<ReadonlyArray<AgentGatewayOperationRecord>, Error>;
 }

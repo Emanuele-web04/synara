@@ -45,6 +45,9 @@ To remove stored credentials from an interactive Antigravity session, use:
 
 Synara does not copy or replace the credential profile stored by Antigravity.
 
+Open **Settings → Usage** to see the account’s remaining quotas and reset times. Synara runs
+Antigravity’s official quota report in the background using the selected account’s existing sign-in.
+
 ## Verify
 
 From a clean test directory:
@@ -100,13 +103,19 @@ Synara runs Antigravity through `agy acp`, the Agent Client Protocol server buil
 - Context-window usage reported by the runtime
 - Attachments, including images, projected into the provider prompt
 - Conversation continuity: Synara resumes the same Antigravity conversation after a restart
+- [Multi-folder projects](/docs/features/multi-folder-projects): the primary folder stays the working directory, and each additional folder is passed through `agy acp --add-dir`
 - Synara’s terminal, browser, diff, checkpoint, and Git delivery surfaces
 
-Antigravity runs with full access in Synara. Computer Use actions use Synara’s own approval cards.
+Choose **Approval required** to review Antigravity's native permission requests in Synara.
+**Full access** can grant a request once. Computer Use actions use Synara’s own approval cards.
+
+On Windows, an Antigravity session launched from a WSL folder requires every additional project folder to be in that same WSL distribution. Native Windows and other-distribution folders are refused for that session.
 
 When Antigravity sends a command to the background, the turn stays open until the command finishes and Antigravity reports on it. Dev servers and other long-running daemons do not hold the turn open. Stopping the turn also stops its background commands.
 
-Synara does not currently classify Antigravity as supporting native live-turn steering. Use interruption and follow-up controls according to the state shown in the active task.
+When the session reports Antigravity 1.5.0 or newer, use **Steer** to send a follow-up while the agent and its subagents continue working. Older or unidentified runtimes use the existing interrupt and queue controls. If Antigravity asks a question, choose an answer in the composer, including in Full access mode.
+
+Subagent activity shows the role and prompt for each launch. Synara shows child details when the active Antigravity profile identifies which launch owns the child.
 
 Antigravity keeps its own settings and conversation data. Changes to its permission mode, sandbox, model, hooks, or workspace trust can alter behavior even when the same task is opened through Synara.
 
@@ -149,6 +158,7 @@ Follow Antigravity’s updater troubleshooting guidance. A stale updater lock, r
 
 - [Antigravity installation and authentication](https://antigravity.google/docs/cli/install)
 - [Antigravity CLI usage](https://antigravity.google/docs/cli-using)
+- [Antigravity ACP and workspace directory flags](https://antigravity.google/docs/ide/extensions/acp/)
 - [Antigravity troubleshooting](https://antigravity.google/docs/cli-troubleshooting)
 
 Continue with [Your first task](/docs/getting-started/first-task) or [Provider handoffs](/docs/workflows/handoffs).

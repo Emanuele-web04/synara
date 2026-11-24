@@ -25,6 +25,8 @@ export interface ProviderUsageContext {
   readonly claudeBinaryPath?: string;
   /** Codex CLI binary (settings.providers.codex.binaryPath); defaults to "codex". */
   readonly codexBinaryPath?: string;
+  /** Antigravity CLI binary for the selected account; defaults to "agy". */
+  readonly antigravityBinaryPath?: string;
   /** Stable account route; omitted by legacy provider-only callers. */
   readonly instanceId?: ProviderInstanceId;
   /** Recovery-only: owning task cwd used to exclude project authentication overrides. */
@@ -42,6 +44,8 @@ export interface ProviderUsageContext {
 
 export interface ProviderUsageFetcher {
   readonly provider: ProviderKind;
+  /** Share concurrent reads, but do not keep the snapshot when account changes are opaque. */
+  readonly retainSnapshot?: false;
   /**
    * Resolve a non-secret identity for the currently selected credentials. A changed identity
    * invalidates the orchestration cache before its TTL expires. Null disables caching for the

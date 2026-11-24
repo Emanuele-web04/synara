@@ -714,7 +714,10 @@ export function useChatTurnExecution({
           activeThread?.session?.provider ?? selectedModelSelectionForSend.provider;
         if (
           dispatchMode === "steer" &&
-          !providerSupportsNativeTurnSteering(liveProviderForSteerGate)
+          !providerSupportsNativeTurnSteering(
+            liveProviderForSteerGate,
+            activeThread?.session?.supportsNativeTurnSteering,
+          )
         ) {
           const nextSteerGate = {
             sawInterruptGap: false,

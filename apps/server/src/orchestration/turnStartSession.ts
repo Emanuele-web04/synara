@@ -47,8 +47,9 @@ export function deriveTurnStartSession(input: {
   readonly threadId: ThreadId;
   readonly currentSession:
     | OrchestrationSession
-    | (Omit<OrchestrationSession, "providerInstanceId"> & {
+    | (Omit<OrchestrationSession, "providerInstanceId" | "supportsNativeTurnSteering"> & {
         readonly providerInstanceId: ProviderInstanceId | null;
+        readonly supportsNativeTurnSteering?: boolean | null | undefined;
       })
     | null;
   readonly providerName: OrchestrationSession["providerName"];
