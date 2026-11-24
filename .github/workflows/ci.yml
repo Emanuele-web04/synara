@@ -465,6 +465,10 @@ jobs:
       - name: Wait for the desktop build
         wait: desktop-build
 
+      - name: Check portable bundle size budgets
+        if: steps.changes.outputs.code == 'true'
+        run: bun run bundle-size:check
+
       - name: Build analytics dashboard and bundle Worker
         if: steps.changes.outputs.code == 'true'
         run: |

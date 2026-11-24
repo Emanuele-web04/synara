@@ -226,6 +226,7 @@ jobs:
             --output-dir release
             --skip-build
             --keep-stage
+            --check-size-budget
             --verbose
           )
 

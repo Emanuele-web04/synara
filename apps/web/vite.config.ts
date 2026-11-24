@@ -35,6 +35,62 @@ const buildSourcemap =
       ? "hidden"
       : false;
 
+const USED_SHIKI_THEMES = new Set(["github-light", "github-dark"]);
+const PRUNED_SHIKI_THEME_ID = "\0synara-pruned-shiki-theme";
+
+// Synara renders all code/diff highlighting via DIFF_THEME_NAMES (github-light,
+// github-dark) and @pierre/theme defaults (pierre-light/pierre-dark). Stub out
+// the other 60+ Shiki theme chunks that @pierre/theming and shiki reference
+// behind dynamic imports so they are not emitted into dist/assets.
+function pruneUnusedShikiThemesPlugin(): Plugin {
+  return {
+    name: "synara-prune-unused-shiki-themes",
+    apply: "build",
+    enforce: "pre",
+    resolveId: {
+      filter: { id: /^(?:@shikijs\/themes|shiki\/themes)\// },
+      handler(source) {
+        const match = /^(?:@shikijs\/themes|shiki\/themes)\/([^/]+)$/.exec(source);
+        if (match?.[1] && !USED_SHIKI_THEMES.has(match[1])) {
+          return PRUNED_SHIKI_THEME_ID;
+        }
+        return null;
+      },
+    },
+    load: {
+      filter: { id: /^\0synara-pruned-shiki-theme$/ },
+      handler() {
+        return "export default undefined;";
+      },
+    },
+  };
+}
+
+// Electron Chromium and all supported browsers load woff2 natively; strip
+// legacy woff and truetype fallbacks from KaTeX CSS so Vite does not emit
+// 40 unused .woff/.ttf font files (~0.8 MB).
+function katexWoff2OnlyPlugin(): Plugin {
+  return {
+    name: "synara-katex-woff2-only",
+    apply: "build",
+    enforce: "pre",
+    transform: {
+      filter: { id: /katex(?:\.min)?\.css/ },
+      handler(code, id) {
+        const normalized = id.replaceAll("\\", "/").split("?")[0] ?? "";
+        if (!/\/katex\/dist\/katex(?:\.min)?\.css$/.test(normalized)) {
+          return null;
+        }
+        const next = code.replace(
+          /,url\(fonts\/KaTeX_[^)]+\.woff\)\s*format\("woff"\),url\(fonts\/KaTeX_[^)]+\.ttf\)\s*format\("truetype"\)/g,
+          "",
+        );
+        return next === code ? null : { code: next, map: null };
+      },
+    },
+  };
+}
+
 // Prune before compression. closeBundle hooks are parallel by default;
 // enforce: "post" alone does not make the asynchronous compression hook wait.
 function centralIconPrunePlugin(): Plugin {
@@ -234,9 +290,14 @@ export default defineConfig({
       };
     }),
     tailwindcss(),
+    katexWoff2OnlyPlugin(),
+    pruneUnusedShikiThemesPlugin(),
     centralIconPrunePlugin(),
     precompressPlugin(),
   ],
+  worker: {
+    plugins: () => [pruneUnusedShikiThemesPlugin()],
+  },
   optimizeDeps: {
     include: ["@pierre/diffs", "@pierre/diffs/react", "@pierre/diffs/worker/worker.js"],
   },
