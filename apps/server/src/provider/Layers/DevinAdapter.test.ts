@@ -3303,14 +3303,15 @@ describe("Devin permission requests", () => {
         yield* adapter.sendTurn({ threadId, input: "coordinate", attachments: [] });
 
         // A Synara gateway tool call resolves without ever surfacing a prompt.
-        const gateway = yield* handles.requestPermission(
-          makePermissionParams("call-gw", {
+        yield* handles.emitToolCall("call-gw", "pending", {
+          kind: "other",
+          data: {
             kind: "other",
-            rawInput: {
-              _toolName: "synara_list_threads",
-              arguments: { limit: 3 },
-            },
-          }),
+            rawInput: { _toolName: "synara_list_threads", arguments: { limit: 3 } },
+          },
+        });
+        const gateway = yield* handles.requestPermission(
+          makePermissionParams("call-gw", { kind: null }),
         );
         expect(gateway).toEqual({
           outcome: { outcome: "selected", optionId: "allow-once" },
@@ -3385,6 +3386,16 @@ describe("Devin permission requests", () => {
 
         const openedCount = () =>
           runtimeEvents.filter((event) => event.type === "request.opened").length;
+        // Devin can report execute in session/update and omit the kind from
+        // the subsequent permission request. Keep the shell classification.
+        yield* handles.emitToolCall("sparse-execute", "pending", {
+          kind: "execute",
+          command: "pwd",
+          data: {
+            kind: "execute",
+            rawInput: { _toolName: "synara_list_threads", command: "pwd" },
+          },
+        });
         const promptCases: Array<{
           toolCallId: string;
           toolCall: Partial<Acp.RequestPermissionRequest["toolCall"]>;
@@ -3403,6 +3414,10 @@ describe("Devin permission requests", () => {
               kind: "execute",
               rawInput: { _toolName: "synara_list_threads", command: "rm -rf y" },
             },
+          },
+          {
+            toolCallId: "sparse-execute",
+            toolCall: { kind: null },
           },
           // The mcp__synara__ prefix alone names nothing: the part after it
           // must be a real catalog tool.
@@ -3428,6 +3443,9 @@ describe("Devin permission requests", () => {
           yield* flushTimers();
           expect(openedCount(), promptCase.toolCallId).toBe(before + 1);
           const opened = runtimeEvents.findLast((event) => event.type === "request.opened");
+          if (promptCase.toolCallId === "sparse-execute") {
+            expect(opened?.payload?.requestType).toBe("exec_command_approval");
+          }
           yield* adapter.respondToRequest(threadId, opened!.requestId as never, "cancel");
           expect(yield* Fiber.join(pending)).toEqual({ outcome: { outcome: "cancelled" } });
         }
