@@ -176,8 +176,18 @@ describe("desktop bundle file selection", () => {
       "node_modules/web-streams-polyfill/dist/ponyfill.es2018.js",
       "node_modules/zod/v4/classic/schemas.js",
       "node_modules/tldts/dist/cjs/index.js",
+      "apps/server/dist/client/index.html",
+      "apps/server/dist/client/assets/index-abc123.js",
     ]) {
       expect(excluded(path, patterns), path).toBe(false);
+    }
+    for (const path of [
+      "apps/server/dist/client/index.html.gz",
+      "apps/server/dist/client/index.html.br",
+      "apps/server/dist/client/assets/index-abc123.js.gz",
+      "apps/server/dist/client/assets/index-abc123.js.br",
+    ]) {
+      expect(excluded(path, patterns), path).toBe(true);
     }
   });
 });

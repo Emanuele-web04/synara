@@ -74,6 +74,12 @@ export function createDesktopBundleFilePatterns(
     "**/*",
     "!apps/desktop/resources/cloudflared/**",
     "!apps/desktop/prod-resources/cloudflared/**",
+    // Desktop Electron loads static assets over 127.0.0.1 loopback (and Synara Remote
+    // compresses at the Cloudflare Tunnel edge). Shipping precompressed .gz/.br sidecars
+    // inside app.asar adds ~14.7 MB of incompressible bytes directly to every DMG/ZIP
+    // and copies 1,700+ extra files into the static snapshot; apps/server/src/http.ts
+    // serves the uncompressed assets directly when sidecars are absent.
+    "!apps/server/dist/client/**/*.{gz,br}",
     ...UNUSED_DEPENDENCY_RUNTIME_FILES,
   ];
   if (!options.diagnostics) files.push(...DIAGNOSTIC_FILES);
