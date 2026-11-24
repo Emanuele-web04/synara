@@ -22,6 +22,30 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "1.6.7",
+    date: "Nov 25",
+    features: [
+      {
+        id: "antigravity-question-answers",
+        title: "More reliable Antigravity questions",
+        description:
+          "Question cards show the choices Antigravity sends. Selected choices and custom answers are returned using the IDs Antigravity expects.",
+      },
+      {
+        id: "macos-backend-shutdown",
+        title: "Clean backend shutdown on macOS",
+        description:
+          "The updater connection releases the backend so it can exit after completing shutdown.",
+      },
+      {
+        id: "provider-usage-refresh",
+        title: "More reliable Codex and Grok usage refresh",
+        description:
+          "Overlapping usage requests on the same account share a refresh lock, reducing conflicts when a provider rotates a refresh token.",
+      },
+    ],
+  },
+  {
     version: "1.6.6",
     date: "Nov 24",
     features: [
