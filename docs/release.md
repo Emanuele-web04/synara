@@ -509,6 +509,11 @@ does not replace Windows 11 browser-download qualification, prove that the cloud
 classified a particular installer, or establish that an antivirus download block
 has been fixed.
 
+Windows builds omit the optional native cookie reader for external browser
+profiles. Packaged startup inspects both the extracted resources and the ASAR
+file inventory for the reader before launching the application. Windows users
+can sign in directly in the integrated browser and access Saved logins.
+
 Signing, provenance, and startup smoke alone do not establish Microsoft Defender
 acceptance. For a reported antivirus block, collect the exact artifact hash,
 engine/definition versions, and detected component before changing packaging;

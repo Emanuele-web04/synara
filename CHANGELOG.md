@@ -6,6 +6,7 @@
 
 ### Changed
 
+- Windows builds remove the native cookie reader and disable importing cookies from external browser profiles. Sign in directly in the Synara browser. Saved logins and existing browser sessions remain available.
 - Linux and Windows release builds can start independently of macOS icon preparation. The release workflow overlaps native packaging with quality checks and preserves warm build caches. ([#2291](https://github.com/Emanuele-web04/synara/pull/2291), [#2292](https://github.com/Emanuele-web04/synara/pull/2292))
 - Project-agent lookups load rows in bulk, reducing database round trips. ([#2294](https://github.com/Emanuele-web04/synara/pull/2294))
 

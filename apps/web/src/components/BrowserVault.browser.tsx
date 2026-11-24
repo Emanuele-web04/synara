@@ -198,6 +198,29 @@ describe("browser saved logins", () => {
     await expect.element(page.getByRole("status")).toHaveTextContent(message);
     await expect.element(page.getByRole("status")).not.toHaveTextContent("Windows");
   });
+  it("keeps Saved logins available when browser cookie import is disabled", async () => {
+    state = { ...state, cookieImportAvailable: false };
+    await render(
+      <>
+        <BrowserVaultButton
+          destination={{
+            threadId: ThreadId.makeUnsafe("thread"),
+            tabId: "tab",
+            origin: "https://example.test",
+          }}
+        />
+        <BrowserVaultDialog />
+      </>,
+    );
+    await page.getByRole("button", { name: "Saved logins", exact: true }).click();
+    await expect
+      .element(page.getByRole("switch", { name: "Offer to save passwords" }))
+      .toBeVisible();
+    await expect
+      .element(page.getByRole("button", { name: "Import browser cookies" }))
+      .not.toBeInTheDocument();
+  });
+
   it("requires the master password for reveal and hides the secret on blur", async () => {
     state = {
       ...state,

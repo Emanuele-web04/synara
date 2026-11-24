@@ -20,6 +20,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { listPackage } from "@electron/asar";
 import { CLOUDFLARED_VERSION } from "@synara/shared/cloudflared";
 import { spawnProcess, spawnProcessSync } from "@synara/shared/processRuntime";
 import { teardownChildProcessTree } from "../apps/server/src/platform/supervisedProcessTeardown.ts";
@@ -201,6 +202,18 @@ function prepareLinuxLaunch(
   };
 }
 
+function isCookieReader(path: string): boolean {
+  return /(^|[/\\])rookie[-_]cookies(?:[./\\-]|$)/i.test(path);
+}
+
+export function verifyWindowsCookieReaderAbsent(resourcesDirectory: string): void {
+  const bundled = listPackage(join(resourcesDirectory, "app.asar"), { isPack: false });
+  const reader = bundled.find(isCookieReader) ?? findFiles(resourcesDirectory, isCookieReader)[0];
+  if (reader)
+    throw new Error(`Windows installer contains a disabled browser cookie reader: ${reader}.`);
+  console.log("Verified the Windows installer does not bundle the browser cookie reader.");
+}
+
 function prepareWindowsLaunch(assetsDirectory: string, extractionRoot: string): LaunchCommand {
   const installer = requireSingleAsset(assetsDirectory, ".exe");
   const installerRoot = join(extractionRoot, "installer");
@@ -225,14 +238,14 @@ function prepareWindowsLaunch(assetsDirectory: string, extractionRoot: string): 
       `Expected one extracted Synara application executable, found ${executables.length}.`,
     );
   }
+  const executable = executables[0]!;
+  const resourcesDirectory = join(dirname(executable), "resources");
+  verifyWindowsCookieReaderAbsent(resourcesDirectory);
   return {
-    command: executables[0]!,
+    command: executable,
     args: [],
-    cwd: dirname(executables[0]!),
-    runtime: {
-      executable: executables[0]!,
-      resourcesDirectory: join(dirname(executables[0]!), "resources"),
-    },
+    cwd: dirname(executable),
+    runtime: { executable, resourcesDirectory },
   };
 }
 

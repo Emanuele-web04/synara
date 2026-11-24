@@ -22,6 +22,7 @@ export function registerBrowserVaultIpc(
   cookies?: BrowserCookieImport,
 ): () => void {
   const channels = BROWSER_IPC_CHANNELS.vault;
+  const cookieImporter = process.platform === "win32" ? undefined : cookies;
   const handle = (channel: string, action: (input: unknown) => unknown) => {
     ipcMain.removeHandler(channel);
     ipcMain.handle(channel, async (event: IpcMainInvokeEvent, input: unknown) => {
@@ -38,7 +39,10 @@ export function registerBrowserVaultIpc(
       }
     });
   };
-  handle(channels.snapshot, () => vault.snapshot());
+  handle(channels.snapshot, async () => ({
+    ...(await vault.snapshot()),
+    cookieImportAvailable: cookieImporter !== undefined,
+  }));
   handle(channels.configure, (input) =>
     vault.configure(Schema.decodeUnknownSync(BrowserVaultSettings)(input)),
   );
@@ -51,8 +55,8 @@ export function registerBrowserVaultIpc(
   handle(channels.lock, () => vault.lock());
   handle(channels.reveal, (input) => vault.reveal(Schema.decodeUnknownSync(Reveal)(input)));
   const requireCookies = () => {
-    if (!cookies) throw new Error("Cookie import is unavailable.");
-    return cookies;
+    if (!cookieImporter) throw new Error("Cookie import is unavailable.");
+    return cookieImporter;
   };
   handle(channels.cookieSources, () => requireCookies().sources());
   handle(channels.cookieProfiles, (input) =>

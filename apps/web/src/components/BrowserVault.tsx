@@ -393,7 +393,7 @@ export function BrowserVaultDialog() {
                   />
                 </label>
               </section>
-              {open && destination ? (
+              {open && destination && snapshot.cookieImportAvailable !== false ? (
                 <BrowserCookieImport
                   key={`${destination.threadId}:${destination.tabId}:${destination.origin}`}
                   api={api}
