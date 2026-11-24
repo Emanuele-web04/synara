@@ -602,25 +602,19 @@ async function verifyReleaseWorkflowSafety(): Promise<void> {
     needs: Record<string, unknown>,
     cancelled: () => boolean,
   ) => boolean;
-  const prerequisites = [
-    "preflight",
-    "restore_mac_icon",
-    "build_mac_icon",
-    "build_portable",
-    "prepare_cua",
-  ];
+  const prerequisites = ["preflight", "restore_mac_icon", "build_mac_icon", "build_portable"];
   const dependencies = buildJob.match(/    needs: \[(.+)\]/)?.[1]?.split(/,\s*/) ?? [];
   for (const name of prerequisites)
     if (!dependencies.includes(name)) throw new Error(`Packaging does not await ${name}.`);
-  for (const testGate of ["quality", "server_tests"])
-    if (dependencies.includes(testGate))
-      throw new Error(`Packaging unnecessarily waits for ${testGate}.`);
+  for (const independentJob of ["quality", "server_tests", "prepare_cua"])
+    if (dependencies.includes(independentJob))
+      throw new Error(`Packaging unnecessarily waits for ${independentJob}.`);
   // Baseline: an exact icon catalog miss compiled on macOS 26.
   const successful: Record<string, { result: string; outputs?: Record<string, string> }> =
     Object.fromEntries(prerequisites.map((name) => [name, { result: "success" }]));
   successful.preflight = {
     result: "success",
-    outputs: { package_artifacts: "true", prepare_cua: "true", build_icon: "true" },
+    outputs: { package_artifacts: "true", build_icon: "true" },
   };
   successful.restore_mac_icon = { result: "success", outputs: { hit: "" } };
   if (!admits(successful, () => false)) throw new Error("Valid packaging is blocked.");
@@ -648,25 +642,32 @@ async function verifyReleaseWorkflowSafety(): Promise<void> {
       admits({ ...restored, restore_mac_icon: { result, outputs: { hit: "true" } } }, () => false)
     )
       throw new Error(`Packaging admitted an icon hit from restore_mac_icon=${result}.`);
-  for (const platform of ["linux", "win"]) {
-    const noMac = {
-      ...successful,
-      preflight: {
-        result: "success",
-        outputs: {
-          package_artifacts: "true",
-          build_icon: "false",
-          prepare_cua: platform === "win" ? "false" : "true",
-        },
-      },
-      restore_mac_icon: { result: "skipped", outputs: {} },
-      build_mac_icon: { result: "skipped" },
-      prepare_cua: { result: platform === "win" ? "skipped" : "success" },
-    };
-    if (!admits(noMac, () => false))
-      throw new Error(`${platform} packaging is blocked by an intentional skip.`);
-    if (admits({ ...noMac, preflight: successful.preflight }, () => false))
-      throw new Error("Packaging admitted a macOS release without its icon catalog.");
+  const noMac = {
+    ...successful,
+    preflight: { result: "success", outputs: { package_artifacts: "true", build_icon: "false" } },
+    restore_mac_icon: { result: "skipped", outputs: {} },
+    build_mac_icon: { result: "skipped" },
+  };
+  if (!admits(noMac, () => false))
+    throw new Error("Non-macOS packaging is blocked by an intentional icon skip.");
+  if (admits({ ...noMac, preflight: successful.preflight }, () => false))
+    throw new Error("Packaging admitted a macOS release without its icon catalog.");
+
+  const cua = nativeSteps.find((step) => step.uses === "./.github/actions/provision-cua");
+  const artifact = nativeSteps.find((step) => step.id === "build_artifact");
+  if (!cua || !artifact || nativeSteps.indexOf(cua) >= nativeSteps.indexOf(artifact))
+    throw new Error("Every Cua platform must verify its own helper before packaging.");
+  for (const platform of ["mac", "linux", "win"]) {
+    for (const restored of ["success", "skipped"]) {
+      const needsCua = platform !== "win" && restored !== "success";
+      if (
+        evaluates(cua, {
+          inputs: { platform },
+          steps: { restore_checkpoint: { outcome: restored } },
+        }) !== needsCua
+      )
+        throw new Error(`Incorrect Cua provisioning admission for ${platform} / ${restored}.`);
+    }
   }
   for (const gate of [
     "  quality:\n    name: Quality gates\n    needs: preflight\n    runs-on: ubuntu-24.04\n    timeout-minutes: 15\n    permissions:\n      contents: read",
@@ -727,8 +728,25 @@ async function verifyReleaseWorkflowSafety(): Promise<void> {
     "Expected only CLI publication to combine repository reads with npm OIDC.",
   );
   const workflowDefinition = parseYaml(workflow) as {
+    concurrency: { group: string; "cancel-in-progress": boolean };
     jobs: Record<string, { needs: string[]; if: string; permissions?: Record<string, string> }>;
   };
+  const releaseQueue = workflowDefinition.concurrency;
+  const resolveQueue = new Function(
+    "github",
+    "inputs",
+    `return ${releaseQueue.group.replace(/^\$\{\{\s*|\s*\}\}$/g, "")};`,
+  );
+  const tagQueue = resolveQueue({ event_name: "push" }, {});
+  const manualQueue = resolveQueue({ event_name: "workflow_dispatch" }, { publish_release: true });
+  const buildQueue = resolveQueue({ event_name: "workflow_dispatch" }, { publish_release: false });
+  if (
+    !tagQueue ||
+    tagQueue !== manualQueue ||
+    tagQueue === buildQueue ||
+    releaseQueue["cancel-in-progress"]
+  )
+    throw new Error("Publication must serialize independently of build-only diagnostics.");
   for (const name of ["release", "publish_cli"]) {
     const publisher = workflowDefinition.jobs[name]!;
     for (const gate of ["preflight", "quality", "server_tests", "build"])

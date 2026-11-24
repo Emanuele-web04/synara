@@ -137,9 +137,9 @@ describe("release validation scope", () => {
       "Publication requires",
     );
   });
-  it("prepares native artifacts only for the selected Cua platforms", () => {
+  it("keeps build-only native preparation off the packaging critical path", () => {
     const all = resolveReleaseBuildScope("all", "artifact");
-    expect(all.prepare_cua).toBe(true);
+    expect(all.prepare_cua).toBe(false);
     expect(all.cua_matrix.include.map((entry) => entry.id)).toEqual([
       "mac-arm64",
       "mac-x64",
@@ -147,9 +147,12 @@ describe("release validation scope", () => {
       "linux-arm64",
     ]);
     for (const platform of ["mac-arm64", "mac-x64", "linux-x64", "linux-arm64"]) {
-      const scope = resolveReleaseBuildScope(platform, "artifact");
-      expect(scope.prepare_cua).toBe(true);
-      expect(scope.cua_matrix.include.map((entry) => entry.id)).toEqual([platform]);
+      const artifact = resolveReleaseBuildScope(platform, "artifact");
+      expect(artifact.prepare_cua).toBe(false);
+      expect(artifact.matrix.include.map((entry) => entry.id)).toEqual([platform]);
+      const native = resolveReleaseBuildScope(platform, "native");
+      expect(native.prepare_cua).toBe(true);
+      expect(native.cua_matrix.include.map((entry) => entry.id)).toEqual([platform]);
     }
     const windows = resolveReleaseBuildScope("win-x64", "artifact");
     expect(windows.prepare_cua).toBe(false);
