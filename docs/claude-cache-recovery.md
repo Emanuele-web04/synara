@@ -37,6 +37,20 @@ The displayed input, cache-read, and cache-write counts describe requests. They 
 of an Anthropic subscription allowance. A warm estimate does not guarantee a hit if the provider
 changes the prefix or configuration.
 
+## Automatic compaction settings
+
+Claude Code owns the `autoCompactEnabled` setting. Change it from `/config` or in the selected
+Claude profile's settings files. Claude Code defaults to automatic compaction near the context
+limit, and the manual `/compact` command remains available when automatic compaction is off.
+[Claude Code automatic compaction settings](https://code.claude.com/docs/en/settings-reference#autocompactenabled)
+
+Idle compaction is available on Claude Code's interactive surfaces. It can prepare a summary for
+the next message when the prompt cache expires. Synara uses the Agent SDK and does not schedule
+manual `/compact` requests while a thread is idle. A manual compact immediately replaces context
+with a summary and can invalidate a warm prefix.
+[Claude Code idle compaction settings](https://code.claude.com/docs/en/settings-reference#idlecompaction),
+[Claude Code prompt caching](https://code.claude.com/docs/en/prompt-caching#compacting-the-conversation)
+
 ## Durable choices
 
 The original message and attachments use the existing conversation journal. A nullable projection
