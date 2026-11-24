@@ -260,6 +260,12 @@ try {
     binary = join(temporary, "cua-driver");
     if (binaries.length > 1) run("lipo", ["-create", ...binaries, "-output", binary]);
     else await copyFile(binaries[0], binary);
+    if (platform === "darwin") {
+      // Cargo runs with CARGO_PROFILE_RELEASE_STRIP=none so proc-macro dylibs stay
+      // intact on macOS 27 (rust-lang/rust#157750). Strip only the final linked
+      // executable here before signing and hashing into provenance.json.
+      run("strip", [binary]);
+    }
     if (platform === "linux") {
       const target = sourceTargets.linux[architectures[0]];
       linuxSidecars = Object.fromEntries(
