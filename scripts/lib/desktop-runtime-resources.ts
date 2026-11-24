@@ -7,14 +7,17 @@ import { Effect, FileSystem, Path } from "effect";
 
 import { BETA_ASSET_PATHS, BRAND_ASSET_PATHS } from "./brand-assets.ts";
 
-// Resources read by the installer or macOS bundle: DMG artwork, the compiled
-// icon, and localized permission descriptions. Keep these outside app.asar;
-// the application never resolves them through its runtime resource directory.
+// Resources read by the installer, macOS bundle, or spawned as external native
+// executables (via extraFiles/extraResources): DMG artwork, the compiled icon,
+// localized permission descriptions, and helper binaries. Keep these outside
+// app.asar; the application never resolves them through prod-resources.
 const BUNDLE_ONLY_RESOURCE_ENTRIES = new Set([
   "dmgly",
   "Assets.car",
   "Synara.icns",
   "localizations",
+  "cua-driver",
+  "cloudflared",
 ]);
 
 export const stageDesktopRuntimeResources = Effect.fn("stageDesktopRuntimeResources")(function* (

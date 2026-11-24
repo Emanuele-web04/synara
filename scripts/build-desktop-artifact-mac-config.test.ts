@@ -150,6 +150,7 @@ describe("createDesktopPlatformBuildConfig", () => {
     assert.ok(config.files?.includes(MAC_APPSNAP_HELPER_ASAR_EXCLUSION));
     assert.ok(config.files?.includes(MAC_WINDOW_MATERIAL_ADDON_ASAR_EXCLUSION));
     assert.ok(config.files?.includes("!apps/desktop/resources/cua-driver/**"));
+    assert.ok(config.files?.includes("!apps/desktop/prod-resources/cua-driver/**"));
     assert.deepStrictEqual(config.extraFiles, [
       {
         from: "apps/desktop/resources/cua-driver",

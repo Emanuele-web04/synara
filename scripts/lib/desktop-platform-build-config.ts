@@ -201,6 +201,7 @@ export function createDesktopPlatformBuildConfig(
         MAC_APPSNAP_HELPER_ASAR_EXCLUSION,
         MAC_WINDOW_MATERIAL_ADDON_ASAR_EXCLUSION,
         "!apps/desktop/resources/cua-driver/**",
+        "!apps/desktop/prod-resources/cua-driver/**",
       ],
       extraFiles: [
         { from: "apps/desktop/resources/cua-driver", to: "Resources/cua-driver" },

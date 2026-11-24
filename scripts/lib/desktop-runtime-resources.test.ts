@@ -28,6 +28,8 @@ it.layer(NodeServices.layer)("stageDesktopRuntimeResources", (it) => {
         "dmgly/assets/dmg-background.png",
         "dmgly/assets/app-icon.png",
         "localizations/zh-Hans.lproj/InfoPlist.strings",
+        "cua-driver/cua-driver",
+        "cloudflared/cloudflared",
       ];
 
       for (const file of [...runtimeFiles, ...bundleOnlyFiles]) {
@@ -50,6 +52,8 @@ it.layer(NodeServices.layer)("stageDesktopRuntimeResources", (it) => {
       }
       assert.equal(yield* fs.exists(path.join(runtimeResources, "dmgly")), false);
       assert.equal(yield* fs.exists(path.join(runtimeResources, "localizations")), false);
+      assert.equal(yield* fs.exists(path.join(runtimeResources, "cua-driver")), false);
+      assert.equal(yield* fs.exists(path.join(runtimeResources, "cloudflared")), false);
       for (const file of bundleOnlyFiles) {
         assert.equal(
           yield* fs.readFileString(path.join(buildResources, file)),
