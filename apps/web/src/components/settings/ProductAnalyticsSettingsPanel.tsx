@@ -1,29 +1,26 @@
 // Purpose: Shows this installation's product analytics choice through the desktop bridge.
 // Remote also uses this choice for its separate diagnostics sender.
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { productAnalyticsBridge } from "~/lib/productAnalytics";
+import {
+  productAnalyticsBridge,
+  productAnalyticsConsentQueryOptions,
+} from "~/lib/productAnalytics";
 import { SettingsRow, SettingsSection } from "./SettingsPanelPrimitives";
 import { Switch } from "~/components/ui/switch";
 import { Button } from "~/components/ui/button";
 import { IS_REMOTE_DESKTOP } from "~/branding";
 import { useTranslation } from "~/i18n";
 
-const queryKey = ["desktop", "product-analytics-consent"] as const;
-
 // Keep the persisted choice visible while reads or writes fail.
 export function ProductAnalyticsSettingsPanel() {
   const { t } = useTranslation();
   const bridge = productAnalyticsBridge();
   const client = useQueryClient();
-  const state = useQuery({
-    queryKey,
-    queryFn: () => bridge!.getState(),
-    enabled: !!bridge,
-    retry: false,
-  });
+  const consent = productAnalyticsConsentQueryOptions(bridge);
+  const state = useQuery(consent);
   const change = useMutation({
     mutationFn: (enabled: boolean) => bridge!.setEnabled(enabled),
-    onSuccess: (value) => client.setQueryData(queryKey, value),
+    onSuccess: (value) => client.setQueryData(consent.queryKey, value),
   });
   if (!bridge) return null;
   const title = IS_REMOTE_DESKTOP
