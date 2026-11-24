@@ -108,11 +108,18 @@ export function serverConfigQueryOptions() {
     queryKey: serverQueryKeys.config(),
     queryFn: async ({ client, queryKey }) => {
       // An invalidation or refetch means the caller believes the config changed.
-      const isInitialLoad = client.getQueryData(queryKey) === undefined;
+      if (client.getQueryData(queryKey) !== undefined) {
+        return withWorkspaceKeybindings(await ensureNativeApi().server.getConfig());
+      }
+      const config = await fetchInitialServerConfigShared();
+      const latest = latestProviderStatusSnapshotByQueryClient.get(client);
       return withWorkspaceKeybindings(
-        isInitialLoad
-          ? await fetchInitialServerConfigShared()
-          : await ensureNativeApi().server.getConfig(),
+        latest?.reconciled
+          ? {
+              ...config,
+              providers: mergeProviderStatusSnapshots(config.providers, latest.providers),
+            }
+          : config,
       );
     },
     staleTime: Infinity,

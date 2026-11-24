@@ -134,6 +134,10 @@ export function useComposerSingleRow(input: {
         ? null
         : new ResizeObserver(() => {
             cachedLineHeightByElement.delete(editor);
+            const ghost = predictionRef.current
+              ? surface.querySelector<HTMLElement>(PREDICTION_LINE_SELECTOR)
+              : null;
+            if (ghost) cachedLineHeightByElement.delete(ghost);
             sync();
           });
     observer?.observe(editor);

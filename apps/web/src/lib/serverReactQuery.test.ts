@@ -583,6 +583,36 @@ describe("server config and settings boot snapshots", () => {
     expect(refreshed.providers).toEqual([READY_CODEX_STATUS]);
   });
 
+  it("keeps a provider update that arrives while the first config query is waiting", async () => {
+    nativeApiMocks.getConfig.mockReset();
+    let resolveSnapshot!: (config: ServerConfig) => void;
+    streamSnapshotMocks.waitForInitialServerConfigSnapshot.mockReturnValue(
+      new Promise((resolve) => {
+        resolveSnapshot = resolve;
+      }),
+    );
+    const queryClient = new QueryClient();
+    const config = queryClient.fetchQuery(serverConfigQueryOptions());
+    const reconciled = reconcileServerProviderStatuses(queryClient, [READY_CODEX_STATUS]);
+
+    resolveSnapshot(
+      makeServerConfig([
+        {
+          ...READY_CODEX_STATUS,
+          status: "warning",
+          checkedAt: "2026-07-26T16:41:37.000Z",
+        },
+      ]),
+    );
+
+    expect((await config).providers).toEqual([READY_CODEX_STATUS]);
+    await reconciled;
+    expect(queryClient.getQueryData(serverQueryKeys.config())).toMatchObject({
+      providers: [READY_CODEX_STATUS],
+    });
+    expect(nativeApiMocks.getConfig).not.toHaveBeenCalled();
+  });
+
   it("does not resolve the native API again after waiting for the boot snapshot", async () => {
     // Resolving it again would open a new connection for a query whose
     // transport was disposed while it waited.

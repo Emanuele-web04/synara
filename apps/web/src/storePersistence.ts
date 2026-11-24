@@ -225,10 +225,11 @@ export function persistState(state: AppState): void {
       projectNamesByCwd,
       projectAppearanceByCwd,
     });
+    if (payload !== lastPersistedProjectsPayload) {
+      executionStorage.setItem(PERSISTED_STATE_KEY, payload);
+      lastPersistedProjectsPayload = payload;
+    }
     lastPersistedProjectsRef = state.projects;
-    if (payload === lastPersistedProjectsPayload) return;
-    executionStorage.setItem(PERSISTED_STATE_KEY, payload);
-    lastPersistedProjectsPayload = payload;
   } catch (error) {
     // Quota/private-mode storage failures are not actionable in the UI; log at
     // debug level so they are observable in devtools without breaking chat UX.

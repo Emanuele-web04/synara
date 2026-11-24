@@ -1,5 +1,5 @@
 import "../../index.css";
-import { useRef, useState } from "react";
+import { type CSSProperties, useRef, useState } from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { page } from "vitest/browser";
 import { cleanup, render } from "vitest-browser-react";
@@ -110,11 +110,19 @@ it("keeps the plan accessible in the compact row even without a task capsule", a
   expect(openPlan).toHaveBeenCalledOnce();
 });
 
-function PredictionRow({ prediction }: { prediction: string | null }) {
+function PredictionRow({
+  prediction,
+  width = 600,
+  fontSize,
+}: {
+  prediction: string | null;
+  width?: number;
+  fontSize?: string;
+}) {
   const formRef = useRef<HTMLFormElement>(null);
   const row = useComposerSingleRow({ formRef, eligible: true, prompt: "", prediction });
   return (
-    <div style={{ width: 600 }}>
+    <div style={{ width, "--app-font-size-chat": fontSize } as CSSProperties}>
       <form ref={formRef} data-testid="prediction-form" data-layout={row ? "row" : "block"}>
         <div
           data-chat-composer-surface=""
@@ -157,6 +165,18 @@ it("keeps the row for a suggestion that fits it and gives a wrapping one the blo
 
   await screen.rerender(<PredictionRow prediction={null} />);
   await expect.element(page.getByTestId("prediction-form")).toHaveAttribute("data-layout", "row");
+});
+
+it("updates the prediction layout when the pane and chat font shrink", async () => {
+  const prediction = "Rerun the tests and review the changes.";
+  const screen = await render(
+    <PredictionRow prediction={prediction} width={900} fontSize="28px" />,
+  );
+  const form = page.getByTestId("prediction-form");
+  await expect.element(form, { timeout: 2_000 }).toHaveAttribute("data-layout", "row");
+
+  await screen.rerender(<PredictionRow prediction={prediction} width={210} fontSize="11px" />);
+  await expect.element(form, { timeout: 2_000 }).toHaveAttribute("data-layout", "block");
 });
 
 const LONG_DRAFT =
