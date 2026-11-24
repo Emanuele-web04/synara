@@ -66,6 +66,7 @@ export default defineConfig({
   // user's `pi` CLI install at runtime (piSdkImports.ts).
   external: [/^bun:/u, /^@earendil-works\//u],
   sourcemap: buildSourcemap,
+  minify: true,
   define: {
     __SYNARA_MIGRATION_RUNTIME_SOURCE_DIGEST__: JSON.stringify(migrationRuntimeSourceDigest),
   },
