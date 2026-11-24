@@ -250,8 +250,7 @@ async function openRemoteTransport<Socket>(
   // When a host advertises only one endpoint (and no custom probe was injected),
   // there is no transport preference decision to make: skip the extra /health
   // RTT and let the real WS upgrade + TLS handshake determine reachability.
-  const singleDirectCandidate =
-    candidates.length === 1 && !input.probe ? candidates[0] : undefined;
+  const singleDirectCandidate = candidates.length === 1 && !input.probe ? candidates[0] : undefined;
   let race: TransportRaceResult;
   let ordered: readonly TransportCandidate[];
   if (singleDirectCandidate) {
@@ -273,15 +272,15 @@ async function openRemoteTransport<Socket>(
         }
       }
     }
-    ordered =
-      race.outcome === "reachable"
-        ? [
-            race.candidate,
-            ...sortByTransportPreference(candidates).filter(
-              (candidate) => candidate !== race.candidate,
-            ),
-          ]
-        : sortByTransportPreference(candidates);
+    if (race.outcome === "reachable") {
+      const winner = race.candidate;
+      ordered = [
+        winner,
+        ...sortByTransportPreference(candidates).filter((candidate) => candidate !== winner),
+      ];
+    } else {
+      ordered = sortByTransportPreference(candidates);
+    }
   }
 
   let failure: unknown;

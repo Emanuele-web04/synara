@@ -15,7 +15,7 @@ function loadSmolToml(): typeof import("smol-toml") {
   return cachedSmolToml;
 }
 const parseToml = (source: string) => loadSmolToml().parse(source);
-const stringifyToml = (value: Parameters<typeof import("smol-toml")["stringify"]>[0]) =>
+const stringifyToml = (value: Parameters<(typeof import("smol-toml"))["stringify"]>[0]) =>
   loadSmolToml().stringify(value);
 
 import {

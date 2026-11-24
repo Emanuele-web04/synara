@@ -42,9 +42,7 @@ export async function importMcpServerCandidates(workspace: string | null) {
         continue;
       }
       const text = await readFile(source.path, "utf8");
-      parsed = record(
-        source.toml ? (await loadSmolToml()).parse(text) : JSON.parse(text),
-      );
+      parsed = record(source.toml ? (await loadSmolToml()).parse(text) : JSON.parse(text));
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT")
         warnings.push(`${source.label}: could not read the config.`);

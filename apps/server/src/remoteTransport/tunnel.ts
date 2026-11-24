@@ -95,7 +95,6 @@ export class RemoteTlsServer {
     maxPayload: MAX_MESSAGE_BYTES,
     perMessageDeflate: false,
   });
-  #identity: RemoteTlsIdentity;
   #secureContext: tls.SecureContext;
   readonly #contexts = new WeakMap<Duplex, RemoteIngressContext>();
   readonly #connections = new Map<WebSocket, Duplex>();
@@ -113,7 +112,6 @@ export class RemoteTlsServer {
 
   constructor(options: RemoteTlsServerOptions) {
     this.#options = options;
-    this.#identity = options.identity;
     this.#secureContext = RemoteTlsServer.createContext(options.identity);
     this.#http.headersTimeout = options.handshakeTimeoutMs ?? REMOTE_HANDSHAKE_TIMEOUT_MS;
     this.#http.requestTimeout = 30_000;
@@ -223,7 +221,6 @@ export class RemoteTlsServer {
     ) {
       throw new Error("Root replacement requires local re-pair");
     }
-    this.#identity = identity;
     this.#secureContext = RemoteTlsServer.createContext(identity);
   }
 

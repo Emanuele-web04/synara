@@ -2505,7 +2505,10 @@ export class WsTransport {
       const wakeController = new AbortController();
       this.reconnectWakeController = wakeController;
       try {
-        await delayWithAbort(delayMs, AbortSignal.any([this.lifetime.signal, wakeController.signal]));
+        await delayWithAbort(
+          delayMs,
+          AbortSignal.any([this.lifetime.signal, wakeController.signal]),
+        );
       } catch (error) {
         if (this.lifetime.signal.aborted) throw error;
         // Woken early by an online/foreground event; proceed immediately.
