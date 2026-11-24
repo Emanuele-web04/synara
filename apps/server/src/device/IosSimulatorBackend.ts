@@ -18,7 +18,7 @@
  */
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { constants as fsConstants, existsSync } from "node:fs";
-import { access, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { access, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import * as path from "node:path";
 
@@ -32,7 +32,6 @@ import type {
   DeviceInstallAppResult,
   DeviceKeyModifier,
   DeviceLaunchAppResult,
-  DeviceScreenshotResult,
   DeviceSetupStep,
   DeviceStartRecordingResult,
   DeviceStopRecordingResult,
@@ -103,14 +102,6 @@ const MAX_SCREENSHOT_BYTES = 32 * 1024 * 1024;
  * and the retry typed it a second time.
  */
 const TEXT_CHUNK_LENGTH = 120;
-/** The default CoreSimulator device set, whose `<udid>/data` is each guest's root. */
-const SIMULATOR_DEVICES_ROOT = path.join(
-  homedir(),
-  "Library",
-  "Developer",
-  "CoreSimulator",
-  "Devices",
-);
 
 export const DEVICE_HELPER_CACHE_ROOT = path.join(homedir(), ...DEVICE_HELPER_CACHE_SEGMENTS);
 

@@ -13,7 +13,6 @@ import {
   type DroidModelOptions,
   type ProviderListModelsResult,
   type ProviderInteractionMode,
-  type ProviderModelDescriptor,
 } from "@synara/contracts";
 import { Effect, Layer, Scope, ServiceMap } from "effect";
 import * as AcpErrors from "./AcpErrors.ts";

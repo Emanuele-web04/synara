@@ -13,7 +13,6 @@ import type {
   AccountHost,
   AccountHostEndpoint,
   AccountSsoProvider,
-  DevicePublicKeyJwk,
   HostPublicKeyJwk,
   HostSecretEnvelope,
   InstanceInfo,

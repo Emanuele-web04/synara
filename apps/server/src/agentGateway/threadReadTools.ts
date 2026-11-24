@@ -347,7 +347,7 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
       },
       annotations: { title: "Read a Synara thread", ...READ_ONLY_TOOL_ANNOTATIONS },
     },
-    handler: (args, context) =>
+    handler: (args, _context) =>
       Effect.gen(function* () {
         const threadId = readStringArg(args, "threadId", { required: true })!;
         const cursor = readStringArg(args, "cursor");

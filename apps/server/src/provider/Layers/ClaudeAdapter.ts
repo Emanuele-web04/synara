@@ -6465,10 +6465,6 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               },
             });
             return;
-          case "commands_changed":
-            // A refreshed slash-command list. supportedCommands() already returns the
-            // latest push, and commands are read on demand, so there is nothing to show.
-            return;
           case "background_tasks_changed": {
             // REPLACE semantics: the payload is the full live background set.
             // Announce only newly backgrounded work with a one-line notice;

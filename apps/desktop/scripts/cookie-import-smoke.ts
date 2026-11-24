@@ -3,7 +3,7 @@ import { strict as assert } from "node:assert";
 import { execFileSync } from "node:child_process";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { BetterWright, NetworkPolicy } from "betterwright";
 import { configureElectronNetwork } from "betterwright/electron";
 import { synaraHostTarget } from "../src/browserAutomation/betterwrightHostTarget";

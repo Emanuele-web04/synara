@@ -33,6 +33,7 @@ import {
   toUsedPercent,
 } from "../parse";
 import type { ProviderUsageContext, ProviderUsageFetcher } from "../types";
+import { createRefreshLock } from "./refreshLock";
 
 const SOURCE = "grok-xai";
 const API_KEY_URL = "https://api.x.ai/v1/api-key";
@@ -60,19 +61,7 @@ export interface GrokSession {
   root?: Record<string, unknown>;
 }
 
-const refreshLocks = new Map<string, Promise<unknown>>();
-function withRefreshLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
-  const prev = refreshLocks.get(key) ?? Promise.resolve();
-  const run = prev.then(fn, fn);
-  refreshLocks.set(
-    key,
-    run.then(
-      () => undefined,
-      () => undefined,
-    ),
-  );
-  return run;
-}
+const withRefreshLock = createRefreshLock();
 
 function grokAuthPath(ctx: Pick<ProviderUsageContext, "env" | "homeDir">): string {
   const grokHome = ctx.env.GROK_HOME?.trim() || nodePath.join(ctx.homeDir, ".grok");

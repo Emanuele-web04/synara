@@ -54,7 +54,7 @@
  */
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomBytes } from "node:crypto";
@@ -68,7 +68,6 @@ import { computerApprovalGate } from "../../apps/server/src/computer/ComputerApp
 import {
   analyzeFocusSamples,
   parseFocusProbeLine,
-  type FocusProbeExpect,
   type FocusProbeLine,
   type FocusProbeSample,
 } from "../../apps/desktop/src/cuaFixtures/focusProbe";
@@ -210,23 +209,6 @@ async function stopProbe(): Promise<ReturnType<typeof analyzeFocusSamples> | und
 
 let endpoint = "";
 let capability = "";
-
-async function call<T = unknown>(
-  name: string,
-  args?: Record<string, unknown>,
-  timeoutMs = 30_000,
-): Promise<T> {
-  return cuaRequest<T>(
-    endpoint,
-    {
-      method: "call",
-      name,
-      ...(args ? { args } : {}),
-      capability,
-    },
-    { timeoutMs, mutation: true },
-  );
-}
 
 /** Per-tool wall-clock samples — aggregated into the report's speed
  * table (count/p50/p95/max per driver tool). */
@@ -507,7 +489,6 @@ if (existsSync(APPSNAP)) {
 }
 
 let failures = 0;
-let skips = 0;
 const t0 = Date.now();
 
 try {
@@ -2123,7 +2104,6 @@ end repeat`,
   const failed = rows.filter((r) => r.verdict === "fail");
   const skipped = rows.filter((r) => r.verdict === "skipped");
   failures += failed.length;
-  skips += skipped.length;
 
   const summary = {
     run: SENTINEL,
@@ -2136,9 +2116,9 @@ end repeat`,
     summary: {
       total: rows.length,
       pass: rows.filter((r) => r.verdict === "pass").length,
-      fail: failed.length,
+      fail: failures,
       skipped: skipped.length,
-      verdict: failed.length === 0 ? "pass" : "fail",
+      verdict: failures === 0 ? "pass" : "fail",
     },
   };
   await mkdir(dirname(reportPath), { recursive: true });
@@ -2172,5 +2152,5 @@ end repeat`,
   log(
     `${summary.summary.pass} pass / ${summary.summary.fail} fail / ${summary.summary.skipped} skipped in ${Math.round(summary.elapsedMs / 1000)}s`,
   );
-  process.exit(failed.length > 0 ? 2 : 0);
+  process.exit(failures > 0 ? 2 : 0);
 }
