@@ -34,6 +34,7 @@ export default defineConfig({
   // Bun builtins only resolve at runtime under Bun; MigrationBackup.ts guards
   // the import behind a `process.versions.bun` check.
   external: [/^bun:/u],
+  minify: true,
   sourcemap: buildSourcemap,
   define: {
     __SYNARA_MIGRATION_RUNTIME_SOURCE_DIGEST__: JSON.stringify(migrationRuntimeSourceDigest),
