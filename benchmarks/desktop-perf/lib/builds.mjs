@@ -234,6 +234,8 @@ function writeWindowState(home) {
 async function launchOnce(build, home, profile, drive) {
   writeWindowState(home);
   const app = launchDesktop({ buildDir: build.dir, home, profile, debugPort: await freePort() });
+  let outcome;
+  let launchFailure;
   try {
     const { session } = await attachMainPage(app);
     await sleep(6000);
@@ -244,11 +246,18 @@ async function launchOnce(build, home, profile, drive) {
       `[...document.querySelectorAll('[role="dialog"]')].map((element) => element.innerText.replace(/\\s+/g, " ").slice(0, 60))`,
     );
     session.close();
-    return { dismissed, result, openDialogs };
-  } finally {
+    outcome = { dismissed, result, openDialogs };
+  } catch (error) {
+    launchFailure = { error };
+  }
+  try {
     const quit = await quitDesktop(app);
     if (quit.forced) throw new Error("Template launch did not quit cleanly");
+  } catch (error) {
+    if (!launchFailure) throw error;
   }
+  if (launchFailure) throw launchFailure.error;
+  return outcome;
 }
 
 /**

@@ -1068,12 +1068,13 @@ export function makeAntigravityAdapter(dependencies: AntigravityAdapterDependenc
               if (!isFormElicitationRequest(params)) {
                 return { action: "decline" as const };
               }
-              const questions = elicitationQuestionsFromRequest(params);
+              const mapping = { otherAnswerConvention: "antigravity" } as const;
+              const questions = elicitationQuestionsFromRequest(params, mapping);
               if (questions.length === 0) {
                 return { action: "decline" as const };
               }
               const resolved = yield* requestUserInput(questions, "session/elicitation", params);
-              return elicitationResponseFromAnswers(params, resolved);
+              return elicitationResponseFromAnswers(params, resolved, mapping);
             }),
           );
 

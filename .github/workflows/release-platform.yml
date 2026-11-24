@@ -169,12 +169,11 @@ jobs:
         if: steps.restore_checkpoint.outcome != 'success'
         run: node scripts/report-build-runner.ts
 
-      - name: Import this candidate's verified Cua
+      - name: Provision verified Cua for this platform
         if: (inputs.platform == 'mac' || inputs.platform == 'linux') && steps.restore_checkpoint.outcome != 'success'
         uses: ./.github/actions/provision-cua
         with:
           arch: ${{ inputs.arch }}
-          prepared-artifact: prepared-cua-${{ inputs.platform }}-${{ inputs.arch }}
 
       - name: Restore portable outputs
         if: steps.restore_checkpoint.outcome != 'success'
@@ -226,6 +225,7 @@ jobs:
             --output-dir release
             --skip-build
             --keep-stage
+            --check-size-budget
             --verbose
           )
 

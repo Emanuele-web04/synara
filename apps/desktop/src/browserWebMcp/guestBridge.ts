@@ -381,7 +381,7 @@ export function installWebMcpBridgeInMainWorld(hostAllowsCompatibility = false):
       const title =
         tool?.title === undefined ? undefined : normalizedText(tool.title, MAX_TITLE_BYTES);
       const inputSchema = normalizedSchema(tool?.inputSchema);
-      if (!name || !description || tool?.execute instanceof Function === false || !inputSchema) {
+      if (!name || !description || typeof tool?.execute !== "function" || !inputSchema) {
         throw new TypeError("Invalid WebMCP tool definition");
       }
       if (options.signal?.aborted) throw options.signal.reason;

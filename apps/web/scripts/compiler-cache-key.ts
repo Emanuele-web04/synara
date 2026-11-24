@@ -13,7 +13,7 @@ const repository = fileURLToPath(new URL("../../../", import.meta.url));
 const inputFiles = [
   "package.json",
   "scripts/bun-lockfile.ts",
-  "apps/web/vite.config.ts",
+  "apps/web/scripts/react-compiler-vite.ts",
   "apps/web/scripts/compiler-cache-key.ts",
   "apps/web/scripts/react-compiler-plugin.mjs",
   "apps/web/scripts/transform-cache.ts",

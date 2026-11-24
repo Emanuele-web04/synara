@@ -44,6 +44,11 @@ const BUNDLED_RUNTIME_PACKAGES = [
   "pure-rand",
   "toml",
   "uuid",
+  // Inline @pierre/diffs (only parsePatchFiles is used; Shiki is tree-shaken away)
+  // and @opencode/client (its Promise client does not load @opencode/{protocol,schema}
+  // or their duplicate nested effect@4.0.0-rc.* trees).
+  "@pierre/diffs",
+  "@opencode/client",
 ];
 
 function isBundledRuntimePackage(id: string): boolean {
@@ -65,8 +70,8 @@ export default defineConfig({
   // The Pi SDK stays out of the bundle: the provider resolves it from the
   // user's `pi` CLI install at runtime (piSdkImports.ts).
   external: [/^bun:/u, /^@earendil-works\//u],
-  sourcemap: buildSourcemap,
   minify: true,
+  sourcemap: buildSourcemap,
   // `effect` imports `yaml` in ConfigProvider; its bindings are tree-shaken out,
   // but because `yaml` stays external, Rolldown would otherwise preserve a dead
   // `import "yaml"` side-effect on the cold boot path (~13ms). `yaml` is pure.

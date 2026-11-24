@@ -497,6 +497,7 @@ export async function verifyPackagedDesktopStartup(
   let child: ChildProcess | null = null;
   let logDirectory: string | null = null;
   let outputTail = "";
+  let startupFailure: { error: unknown } | undefined;
   try {
     const launch = prepareLaunch(options, extractionRoot);
     const env = createPackagedDesktopSmokeEnvironment(join(temporaryRoot, "state"), options);
@@ -535,12 +536,14 @@ export async function verifyPackagedDesktopStartup(
     child.stderr?.on("data", retainOutputTail);
 
     const deadline = Date.now() + options.timeoutMs;
+    let passed = false;
     while (Date.now() < deadline) {
       if (hasStartupProof(logPath)) {
         console.log(
           `Packaged ${options.platform}/${options.arch} startup smoke passed from isolated state.`,
         );
-        return;
+        passed = true;
+        break;
       }
       if (childOutcome.launchError) {
         throw new Error(`Packaged app could not start: ${childOutcome.launchError.message}`);
@@ -552,35 +555,53 @@ export async function verifyPackagedDesktopStartup(
       }
       await new Promise((resolveDelay) => setTimeout(resolveDelay, 200));
     }
-    throw new Error(`Packaged startup proof timed out after ${options.timeoutMs}ms.`);
+    if (!passed) {
+      throw new Error(`Packaged startup proof timed out after ${options.timeoutMs}ms.`);
+    }
   } catch (error) {
+    startupFailure = { error };
     if (logDirectory) {
       console.error(readPackagedStartupLogTails(logDirectory));
       console.error(`Packaged process output tail:\n${outputTail || "No output captured."}`);
     }
-    throw error;
-  } finally {
-    if (child) {
-      await terminateProcessTree(child);
-    }
+  }
+  let cleanupFailure: { error: unknown } | undefined;
+  if (child) {
     try {
-      rmSync(temporaryRoot, {
-        recursive: true,
-        force: true,
-        maxRetries: process.platform === "win32" ? 20 : 0,
-        retryDelay: process.platform === "win32" ? 250 : 100,
-      });
+      await terminateProcessTree(child);
     } catch (error) {
-      if (
-        process.platform !== "win32" ||
-        !(error instanceof Error && "code" in error && error.code === "EPERM")
-      ) {
-        throw error;
+      cleanupFailure = { error };
+      if (startupFailure) console.error("Packaged smoke process cleanup failed:", error);
+    }
+  }
+  try {
+    rmSync(temporaryRoot, {
+      recursive: true,
+      force: true,
+      maxRetries: process.platform === "win32" ? 20 : 0,
+      retryDelay: process.platform === "win32" ? 250 : 100,
+    });
+  } catch (error) {
+    if (
+      process.platform !== "win32" ||
+      !(error instanceof Error && "code" in error && error.code === "EPERM")
+    ) {
+      if (startupFailure || cleanupFailure) {
+        console.error("Packaged smoke directory cleanup failed:", error);
+      } else {
+        cleanupFailure = { error };
       }
+    } else {
       console.warn(
         `Could not remove Windows smoke temp directory; leaving it for runner cleanup: ${temporaryRoot}`,
       );
     }
+  }
+  if (startupFailure) {
+    throw startupFailure.error;
+  }
+  if (cleanupFailure) {
+    throw cleanupFailure.error;
   }
 }
 

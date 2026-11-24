@@ -52,9 +52,7 @@ function hasTrustedMainFrameOrigin(
   const reportedOrigins = [requestingOrigin, record.requestingUrl, record.securityOrigin]
     .filter((value): value is string => typeof value === "string" && value.length > 0)
     .map(comparableOrigin);
-  return (
-    reportedOrigins.length === 0 || reportedOrigins.every((origin) => origin === rendererOrigin)
-  );
+  return reportedOrigins.every((origin) => origin === rendererOrigin);
 }
 
 export function isTrustedMediaPermissionRequest(

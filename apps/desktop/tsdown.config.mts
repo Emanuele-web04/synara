@@ -39,6 +39,7 @@ const migrationRuntimeSourceDigest = createHash("sha256")
 const shared = {
   format: "cjs" as const,
   outDir: "dist-electron",
+  minify: true,
   sourcemap: buildSourcemap,
   outExtensions: () => ({ js: ".js" }),
 };

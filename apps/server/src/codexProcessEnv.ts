@@ -1473,9 +1473,7 @@ async function withSharedContinuationLock<T>(
     await sleep(SYNARA_SHARED_CONTINUATION_LOCK_POLL_MS);
   }
 
-  try {
-    return await operation();
-  } finally {
+  const release = async () => {
     const observed = await readSharedContinuationLock(lockPath);
     if (!observed || !sameSharedContinuationLock(ownership, observed)) {
       throw new Error(
@@ -1487,7 +1485,25 @@ async function withSharedContinuationLock<T>(
         `Lost ownership of Codex continuation lock ${lockPath} during release; no successor was removed.`,
       );
     }
+  };
+
+  let result: T;
+  try {
+    result = await operation();
+  } catch (operationError) {
+    try {
+      await release();
+    } catch (releaseError) {
+      throw new AggregateError(
+        [operationError, releaseError],
+        `${String(operationError)}\nCould not release the Codex continuation lock: ${String(releaseError)}`,
+        { cause: operationError },
+      );
+    }
+    throw operationError;
   }
+  await release();
+  return result;
 }
 
 function isSharedContinuationEntry(entryName: string): boolean {

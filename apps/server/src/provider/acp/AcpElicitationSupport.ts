@@ -13,7 +13,7 @@ type FormElicitationRequest = Acp.ElicitationFormMode & {
 };
 type ElicitationProperty = Acp.ElicitationPropertySchema;
 type ElicitationMappingOptions = {
-  readonly otherAnswerConvention?: "droid";
+  readonly otherAnswerConvention?: "droid" | "antigravity";
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -83,17 +83,27 @@ function propertyOptions(property: ElicitationProperty): ReadonlyArray<{
 }
 
 function otherAnswerCompanions(
-  properties: Readonly<Record<string, ElicitationProperty>>,
+  schema: FormElicitationRequest["requestedSchema"],
+  convention: ElicitationMappingOptions["otherAnswerConvention"],
 ): ReadonlyMap<string, string> {
   const companions = new Map<string, string>();
+  if (!convention) return companions;
+  const properties = schema.properties ?? {};
   for (const [id, property] of Object.entries(properties)) {
     const companionId = `${id}_other`;
     const companion = properties[companionId];
-    if (
-      companion?.type === "string" &&
-      propertyOptions(companion).length === 0 &&
-      propertyOptions(property).some((option) => option.label === "other")
-    ) {
+    if (companion?.type !== "string" || propertyOptions(companion).length > 0) continue;
+
+    const choices = propertyOptions(property);
+    // Agy's ask_question uses an optional companion without a sentinel choice.
+    const matches =
+      convention === "antigravity"
+        ? /^q[1-9]\d*$/u.test(id) &&
+          choices.length > 0 &&
+          companion.title === "Other" &&
+          !schema.required?.includes(companionId)
+        : choices.some((option) => option.label === "other");
+    if (matches) {
       companions.set(id, companionId);
     }
   }
@@ -106,23 +116,34 @@ export function elicitationQuestionsFromRequest(
   options: ElicitationMappingOptions = {},
 ): ReadonlyArray<UserInputQuestion> {
   const properties = request.requestedSchema.properties ?? {};
-  // The companion naming convention is Droid-specific, not part of ACP schemas.
-  const companions =
-    options.otherAnswerConvention === "droid"
-      ? otherAnswerCompanions(properties)
-      : new Map<string, string>();
+  const convention = options.otherAnswerConvention;
+  const companions = otherAnswerCompanions(request.requestedSchema, convention);
+  const isAntigravity = convention === "antigravity";
   const companionIds = new Set(companions.values());
   return Object.entries(properties)
     .filter(([id]) => !companionIds.has(id))
-    .map(([id, property], index) => ({
-      id,
-      header: trimmedString(property.title) ?? `Question ${index + 1}`,
-      question: trimmedString(property.description) ?? request.message,
-      options: propertyOptions(property).filter(
-        (option) => !companions.has(id) || option.label !== "other",
-      ),
-      multiSelect: property.type === "array",
-    }));
+    .map(([id, property], index) => {
+      const title = trimmedString(property.title);
+      const choices = propertyOptions(property);
+      const customAnswerId = isAntigravity ? companions.get(id) : undefined;
+      return {
+        id,
+        header: title ?? `Question ${index + 1}`,
+        question:
+          trimmedString(property.description) ??
+          (isAntigravity ? title : undefined) ??
+          request.message,
+        options: isAntigravity
+          ? choices.map(({ label, description }) => ({
+              value: label,
+              label: description,
+              description,
+            }))
+          : choices.filter((option) => !companions.has(id) || option.label !== "other"),
+        multiSelect: property.type === "array",
+        ...(customAnswerId !== undefined ? { customAnswerId } : {}),
+      };
+    });
 }
 
 function firstAnswerValue(value: ProviderUserInputAnswers[string] | undefined): string | undefined {
@@ -167,11 +188,8 @@ export function elicitationResponseFromAnswers(
 ): Acp.CreateElicitationResponse {
   const content: Record<string, Acp.ElicitationContentValue> = {};
   const properties = request.requestedSchema.properties ?? {};
-  // The companion naming convention is Droid-specific, not part of ACP schemas.
-  const companions =
-    options.otherAnswerConvention === "droid"
-      ? otherAnswerCompanions(properties)
-      : new Map<string, string>();
+  const convention = options.otherAnswerConvention;
+  const companions = otherAnswerCompanions(request.requestedSchema, convention);
   const companionIds = new Set(companions.values());
   for (const [id, property] of Object.entries(properties)) {
     if (companionIds.has(id)) continue;
@@ -180,7 +198,10 @@ export function elicitationResponseFromAnswers(
       const answer = coerceElicitationAnswer(property, answers[id]);
       const values = typeof answer === "string" ? [answer] : Array.isArray(answer) ? answer : [];
       const knownValues = new Set(propertyOptions(property).map((option) => option.label));
-      const selected = values.filter((value) => value !== "other" && knownValues.has(value));
+      const usesOtherSentinel = convention === "droid";
+      const selected = values.filter(
+        (value) => (!usesOtherSentinel || value !== "other") && knownValues.has(value),
+      );
       const customValues = values.filter(
         (value) => !knownValues.has(value) && value.trim().length > 0,
       );
@@ -188,15 +209,16 @@ export function elicitationResponseFromAnswers(
       // applies only when Other was selected, not to a stale hidden answer.
       const customText =
         customValues.join("\n") ||
-        (values.includes("other") || values.length === 0
+        ((usesOtherSentinel && values.includes("other")) || values.length === 0
           ? firstAnswerValue(answers[companionId])
           : undefined);
       if (customText?.trim()) {
-        selected.push("other");
+        if (usesOtherSentinel) selected.push("other");
         content[companionId] = customText;
       }
       if (property.type === "array") {
-        if (answer !== undefined || selected.length > 0) content[id] = selected;
+        if (selected.length > 0 || (usesOtherSentinel && answer !== undefined))
+          content[id] = selected;
       } else if (selected[0] !== undefined) {
         content[id] = selected[0];
       }

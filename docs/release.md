@@ -12,11 +12,12 @@ version, release notes and lockfile are final.
   - Manual publication requires the explicit `publish_release=true` input.
 - Runs lint, typecheck and every test in parallel with native preparation and
   packaging. Packaging starts after exact-source preflight and its portable
-  JavaScript, Cua and icon inputs are ready; it does not wait for `quality` or
-  `server_tests`. Both GitHub and npm publication depend directly on successful
-  `quality`, all `server_tests` shards and native artifact jobs. No tests are
-  removed. Narrow `native`, `icon`, and `js` validation stages cannot publish and
-  omit these full-suite gates.
+  JavaScript is ready. Each native packaging job prepares its Cua input, and
+  only macOS packaging waits for the icon catalog. Native packaging runs
+  independently of `quality` and `server_tests`. Both GitHub and npm publication
+  depend directly on successful `quality`, all `server_tests` shards and native
+  artifact jobs. Narrow `native`, `icon`, and `js` validation stages cannot publish
+  and omit these full-suite gates.
 - Builds portable JavaScript once, verifies its source/lockfile/settings and
   output checksums on each consumer, and stages native dependencies per platform.
 - Builds five artifacts in parallel:
@@ -264,19 +265,19 @@ rerun the producer, or intentionally bump the `cua-v1` key schema when invalidat
 the whole cache. Never edit provenance to make a hit pass. Packaging re-signs a
 separate staged copy, preserving cached bytes.
 
-Release native preparation starts after exact-source preflight alongside quality
-checks, portable JavaScript and the icon catalog restore. Cua preparation fetches
-only the release commit, except for the paired benchmark, which needs history.
-Packaging also fetches only the release commit. The packaging jobs download
-only their platform's prepared artifact from the same run, recompute the build
-environment key, and repeat executable/provenance verification. Missing artifacts
-or runner drift fail instead of falling back to unrelated binaries. These temporary
-handoff artifacts expire after 30 days; signing credentials are passed only to the
-packaging step. Once preflight and the required prepared inputs pass, packaging
-can run while quality and server tests are still in progress. This can spend
-native compute on a candidate whose tests later fail. Both GitHub and npm
-publication wait directly for the full quality/server-test gates and successful
-native qualification; no tests or release acceptance gates are skipped.
+Portable JavaScript, the icon catalog and quality checks start after exact-source
+preflight. When the portable output and any required icon catalog are ready,
+each macOS and Linux packaging runner restores or builds its exact Cua helper
+and verifies it on that runner. A helper cache miss affects only its platform.
+macOS-only symbol stripping code is included in the macOS Cua key. Packaging
+fetches only the release commit, and signing credentials are passed only to the
+packaging step. The build-only native and paired benchmark stages retain their
+dedicated Cua jobs. The paired benchmark needs full history for its baseline.
+
+Packaging can run while quality and server tests are still in progress. This
+can spend native compute on a candidate whose tests later fail. Both GitHub and
+npm publication wait directly for the full quality and server test gates and
+successful native qualification.
 
 When deploying changes to the cache/provenance logic, run the producer on `main`
 after merge and before the next release: the exact fingerprint changes with that

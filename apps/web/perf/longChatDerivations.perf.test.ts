@@ -154,7 +154,6 @@ describe.skipIf(!ENABLED)("long chat derivations perf", () => {
         approvals.ms +
         userInputs.ms;
       const messageChain = timeline.ms + rows.ms + stable.ms + trail.ms;
-      // eslint-disable-next-line no-console
       console.log(
         JSON.stringify({
           name,

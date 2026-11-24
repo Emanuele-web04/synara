@@ -128,7 +128,15 @@ export function buildPendingUserInputAnswers(
   const answers: Record<string, string | string[]> = {};
 
   for (const question of questions) {
-    const answer = resolvePendingUserInputAnswer(question, draftAnswers[question.id]);
+    const draft = draftAnswers[question.id];
+    if (question.customAnswerId && question.allowCustomAnswer !== false) {
+      const customAnswer = normalizeDraftAnswer(draft?.customAnswer);
+      if (customAnswer) {
+        answers[question.customAnswerId] = customAnswer;
+        continue;
+      }
+    }
+    const answer = resolvePendingUserInputAnswer(question, draft);
     if (!answer) {
       return null;
     }

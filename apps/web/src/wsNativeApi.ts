@@ -30,8 +30,6 @@ import {
   type AuthSessionState,
   type AuthWebSocketTokenResult,
   type ExternalMcpCreateIntegrationInput,
-  type ExternalMcpCreateIntegrationResult,
-  type ExternalMcpIntegration,
   type ExternalMcpRefreshPairingInput,
   type ExternalMcpRevokeIntegrationInput,
   type McpConnectorConnectInput,
@@ -70,7 +68,6 @@ import {
   COMPUTER_WS_METHODS,
   type ComputerEvent,
 } from "@synara/contracts";
-import { VOICE_TRANSCRIPTION_UPLOAD_ROUTE_PATH } from "@synara/shared/binaryTransfer";
 import { Schema } from "effect";
 
 import { showConfirmDialogFallback } from "./confirmDialogFallback";

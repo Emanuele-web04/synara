@@ -12,6 +12,52 @@ const DIAGNOSTIC_FILES = [
   "!node_modules/@effect/{platform-node,platform-node-shared,sql-sqlite-bun}/src/**/*.ts",
   "!node_modules/openai/src/**/*.ts",
   "!node_modules/@anthropic-ai/sdk/src/**/*.ts",
+  "!node_modules/**/node_modules/@anthropic-ai/sdk/src/**/*.ts",
+  "!node_modules/zod/src/**/*.ts",
+  "!node_modules/**/node_modules/zod/src/**/*.ts",
+  "!node_modules/{tldts,tldts-core,tldts-experimental,smol-toml,mime,eventsource,eventsource-parser}/src/**/*.ts",
+  "!node_modules/tough-cookie/node_modules/tldts/src/**/*.ts",
+  "!node_modules/tough-cookie/node_modules/tldts/node_modules/tldts-core/src/**/*.ts",
+  "!node_modules/@noble/{hashes,curves,ciphers}/src/**/*.ts",
+  "!node_modules/**/node_modules/@noble/hashes/src/**/*.ts",
+] as const;
+
+const UNUSED_DEPENDENCY_RUNTIME_FILES = [
+  // BetterWright optional/debug payloads unused by Synara:
+  // - patchright-core is only loaded for stealthRuntimeFix (unsupported on hostTarget).
+  // - playwright-core/lib/vite contains HTML report / trace viewer / recorder web UIs.
+  // - @ghostery/* is lazy-imported by betterwright/dist/src/ad-blocker.js only when adBlock: true;
+  //   Synara explicitly passes adBlock: false on every BetterWright instance.
+  "!node_modules/patchright-core/**",
+  "!node_modules/playwright-core/lib/vite/**",
+  "!node_modules/@ghostery/**",
+  "!node_modules/betterwright/docs/**",
+  // @earendil-works/pi-coding-agent ships a standalone CLI bundle (dist/bundle) and
+  // markdown docs + screenshots (docs/) that are not referenced by its library entrypoint.
+  "!node_modules/@earendil-works/pi-coding-agent/dist/bundle/**",
+  "!node_modules/@earendil-works/pi-coding-agent/docs/**",
+  // EditorLanguageService only imports typescript/lib/typescript.js and lib.*.d.ts
+  // (English diagnostics are embedded; CLI compiler and localized catalogs are unused).
+  "!node_modules/typescript/bin/**",
+  "!node_modules/typescript/lib/tsc.js",
+  "!node_modules/typescript/lib/_tsc.js",
+  "!node_modules/typescript/lib/{cs,de,es,fr,it,ja,ko,pl,pt-br,ru,tr,zh-cn,zh-tw}/**",
+  // Effect bundles full Scalar and Swagger HTML/JS UIs that Synara never serves.
+  "!node_modules/effect/dist/unstable/httpapi/internal/httpApiScalar.js",
+  "!node_modules/effect/dist/unstable/httpapi/internal/httpApiSwagger.js",
+  // Browser-only SDK bundle; Node runtime loads sdk.mjs.
+  "!node_modules/@anthropic-ai/claude-agent-sdk/browser-sdk.js",
+  // @google/genai resolves exports["."].node -> dist/node/index.{mjs,cjs} under Node;
+  // browser, non-node fallback, and vertex_internal bundles are never loaded.
+  "!node_modules/@google/genai/dist/web/**",
+  "!node_modules/@google/genai/dist/index.{cjs,mjs}",
+  "!node_modules/@google/genai/dist/vertex_internal/**",
+  // fetch-blob/streams.cjs only references dist/ponyfill.es2018.js as a fallback;
+  // drop redundant ES5/ES6/polyfill/minified variants.
+  "!node_modules/web-streams-polyfill/dist/{polyfill,polyfill.es6,polyfill.es2018,polyfill.min,polyfill.es6.min,polyfill.es2018.min,ponyfill,ponyfill.es6}.{js,mjs}",
+  // Undici markdown documentation trees.
+  "!node_modules/undici/docs/**",
+  "!node_modules/**/node_modules/undici/docs/**",
 ] as const;
 
 export function preserveDependencyDiagnostics(env: NodeJS.ProcessEnv): boolean {
@@ -28,6 +74,13 @@ export function createDesktopBundleFilePatterns(
     "**/*",
     "!apps/desktop/resources/cloudflared/**",
     "!apps/desktop/prod-resources/cloudflared/**",
+    // Desktop Electron loads static assets over 127.0.0.1 loopback (and Synara Remote
+    // compresses at the Cloudflare Tunnel edge). Shipping precompressed .gz/.br sidecars
+    // inside app.asar adds ~14.7 MB of incompressible bytes directly to every DMG/ZIP
+    // and copies 1,700+ extra files into the static snapshot; apps/server/src/http.ts
+    // serves the uncompressed assets directly when sidecars are absent.
+    "!apps/server/dist/client/**/*.{gz,br}",
+    ...UNUSED_DEPENDENCY_RUNTIME_FILES,
   ];
   if (!options.diagnostics) files.push(...DIAGNOSTIC_FILES);
 

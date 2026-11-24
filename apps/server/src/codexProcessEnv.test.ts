@@ -13,6 +13,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
+import * as fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { parse as parseToml } from "smol-toml";
@@ -36,6 +37,10 @@ import {
 import { isProviderCredentialKey } from "./providerChildEnvironment.ts";
 import { buildCodexMcpConfigToml } from "./agentGateway/mcpInjection.ts";
 import { resolveActiveCodexHomeWritePath } from "./codexHomePaths.ts";
+
+vi.mock("node:fs/promises", async (importOriginal) => ({
+  ...(await importOriginal<typeof fs>()),
+}));
 
 describe("hydrateCodexProviderCredentialEnvironment", () => {
   it("hydrates only missing provider credentials without trusting shell PATH", () => {
@@ -1088,36 +1093,61 @@ describe("buildCodexProcessEnv account overlays", () => {
     }
   });
 
-  it("preserves legacy-only continuation state and requires an explicit migration", async () => {
-    const fixture = makeAccountFixture();
-    writeFileSync(path.join(fixture.shadowHomePath, "auth.json"), '{"account":"work"}', "utf8");
-    const overlayHomePath = resolveActiveCodexHomeWritePath({
-      env: fixture.env,
-      homePath: fixture.homePath,
-      shadowHomePath: fixture.shadowHomePath,
-      accountId: "work",
-    });
-    mkdirSync(path.join(overlayHomePath, "sessions"), { recursive: true });
-    writeFileSync(path.join(overlayHomePath, "sessions", "legacy.jsonl"), "legacy", "utf8");
+  it.each([false, true])(
+    "preserves legacy-only state and reports the migration error (release fails: %s)",
+    async (releaseFails) => {
+      const fixture = makeAccountFixture();
+      writeFileSync(path.join(fixture.shadowHomePath, "auth.json"), '{"account":"work"}', "utf8");
+      const overlayHomePath = resolveActiveCodexHomeWritePath({
+        env: fixture.env,
+        homePath: fixture.homePath,
+        shadowHomePath: fixture.shadowHomePath,
+        accountId: "work",
+      });
+      mkdirSync(path.join(overlayHomePath, "sessions"), { recursive: true });
+      writeFileSync(path.join(overlayHomePath, "sessions", "legacy.jsonl"), "legacy", "utf8");
 
-    try {
-      await expect(
-        buildCodexProcessEnv({
+      const rename = fs.rename;
+      const release = releaseFails
+        ? vi.spyOn(fs, "rename").mockImplementation((from, to) => {
+            if (
+              String(from) === path.join(fixture.homePath, ".synara-shared-continuation-v1.lock")
+            ) {
+              return Promise.reject(new Error("Fixture lock release denied"));
+            }
+            return rename(from, to);
+          })
+        : undefined;
+      try {
+        const preparation = buildCodexProcessEnv({
           env: fixture.env,
           homePath: fixture.homePath,
           shadowHomePath: fixture.shadowHomePath,
           accountId: "work",
           platform: "win32",
-        }),
-      ).rejects.toThrow(/refusing to migrate legacy state automatically/);
-      expect(readFileSync(path.join(overlayHomePath, "sessions", "legacy.jsonl"), "utf8")).toBe(
-        "legacy",
-      );
-      expect(() => lstatSync(path.join(fixture.homePath, "sessions"))).toThrow();
-    } finally {
-      rmSync(fixture.root, { recursive: true, force: true });
-    }
-  });
+        });
+        if (releaseFails) {
+          await expect(preparation).rejects.toMatchObject({
+            message: expect.stringContaining("Fixture lock release denied"),
+            cause: {
+              message: expect.stringContaining("refusing to migrate legacy state automatically"),
+            },
+          });
+        } else {
+          await expect(preparation).rejects.toThrow(
+            /refusing to migrate legacy state automatically/,
+          );
+        }
+        expect(readFileSync(path.join(overlayHomePath, "sessions", "legacy.jsonl"), "utf8")).toBe(
+          "legacy",
+        );
+        expect(() => lstatSync(path.join(fixture.homePath, "sessions"))).toThrow();
+      } finally {
+        release?.mockRestore();
+        rmSync(fixture.root, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("links account-private auth from the shadow home instead of the shared home", async () => {
     const fixture = makeAccountFixture();

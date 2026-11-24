@@ -7,9 +7,6 @@ inputs:
   save-cache:
     description: Only the trusted default-branch producer may save
     default: "false"
-  prepared-artifact:
-    description: Verified native preparation from this workflow run; never falls back to another source
-    default: ""
   arch:
     description: Target architecture (arm64 or x64); defaults to the runner. macOS may cross-compile.
     default: ""
@@ -62,7 +59,7 @@ runs:
 
     - name: Restore exact Cua artifact
       id: cache
-      if: inputs.benchmark-baseline == '' && inputs.prepared-artifact == ''
+      if: inputs.benchmark-baseline == ''
       uses: actions/cache/restore@v4
       with:
         path: ${{ runner.temp }}/cua-artifact
@@ -75,7 +72,7 @@ runs:
 
     - name: Find trusted persistent Cua artifact
       id: persistent
-      if: inputs.benchmark-baseline == '' && inputs.prepared-artifact == '' && steps.cache.outputs.cache-hit != 'true'
+      if: inputs.benchmark-baseline == '' && steps.cache.outputs.cache-hit != 'true'
       uses: actions/github-script@v8
       env:
         CACHE_KEY: ${{ steps.key.outputs.key }}
@@ -97,15 +94,8 @@ runs:
         github-token: ${{ github.token }}
         path: ${{ runner.temp }}/cua-artifact
 
-    - name: Download this run's prepared Cua
-      if: inputs.benchmark-baseline == '' && inputs.prepared-artifact != ''
-      uses: actions/download-artifact@v8
-      with:
-        name: ${{ inputs.prepared-artifact }}
-        path: ${{ runner.temp }}/cua-artifact
-
     - name: Build on a valid cache miss
-      if: inputs.benchmark-baseline == '' && inputs.prepared-artifact == '' && steps.cache.outputs.cache-hit != 'true' && steps.persistent.outputs.artifact-id == ''
+      if: inputs.benchmark-baseline == '' && steps.cache.outputs.cache-hit != 'true' && steps.persistent.outputs.artifact-id == ''
       shell: bash
       env:
         CACHE_KEY: ${{ steps.key.outputs.key }}
@@ -122,17 +112,16 @@ runs:
         CACHE_KEY: ${{ steps.key.outputs.key }}
         CACHE_HIT: ${{ steps.cache.outputs.cache-hit }}
         PERSISTENT_RUN: ${{ steps.persistent.outputs.run-id }}
-        PREPARED_ARTIFACT: ${{ inputs.prepared-artifact }}
       run: |
         set -euo pipefail
         test "$(cat "$RUNNER_TEMP/cua-artifact/build-key.txt")" = "$CACHE_KEY"
         unset SYNARA_CUA_SIGN_IDENTITY
         node apps/desktop/scripts/provision-cua-driver.mjs --arch "$SYNARA_CUA_TARGET_ARCH" --artifact-dir "$RUNNER_TEMP/cua-artifact" --destination "$RUNNER_TEMP/cua-verified"
         echo "SYNARA_CUA_ARTIFACT_DIR=$RUNNER_TEMP/cua-verified" >> "$GITHUB_ENV"
-        echo "Cua exact cache hit: $CACHE_HIT; persistent run: $PERSISTENT_RUN; prepared artifact: $PREPARED_ARTIFACT; key: $CACHE_KEY" >> "$GITHUB_STEP_SUMMARY"
+        echo "Cua exact cache hit: $CACHE_HIT; persistent run: $PERSISTENT_RUN; key: $CACHE_KEY" >> "$GITHUB_STEP_SUMMARY"
 
     - name: Save trusted default-branch Cua artifact
-      if: inputs.benchmark-baseline == '' && inputs.save-cache == 'true' && inputs.prepared-artifact == '' && steps.cache.outputs.cache-hit != 'true' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && (github.event_name == 'push' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule')
+      if: inputs.benchmark-baseline == '' && inputs.save-cache == 'true' && steps.cache.outputs.cache-hit != 'true' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && (github.event_name == 'push' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule')
       uses: actions/cache/save@v4
       with:
         path: ${{ runner.temp }}/cua-artifact

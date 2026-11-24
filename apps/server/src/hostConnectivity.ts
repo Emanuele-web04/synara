@@ -22,7 +22,7 @@ import { acceptRemotePairing } from "./remotePairing/gateway";
 
 import { AccountApiError } from "@synara/shared/account";
 import { createServerAccountClient } from "./accountHttp";
-import WebSocket, { WebSocketServer } from "ws";
+import { WebSocketServer } from "ws";
 import {
   loadRemoteTlsIdentity,
   remoteTlsIdentityPath,

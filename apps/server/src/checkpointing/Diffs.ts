@@ -265,7 +265,9 @@ export function parseCheckpointFilesFromUnifiedDiffSync(
 }
 
 /**
- * Effectful wrapper matching the existing checkpoint diff query contract.
+ * Effectful wrapper matching the checkpoint diff query contract.
+ * Uses the single-pass parser so `@pierre/diffs` and Shiki grammars/themes
+ * are neither loaded at runtime nor shipped in server/desktop dependencies.
  */
 export function parseCheckpointFilesFromUnifiedDiff(
   diff: string,

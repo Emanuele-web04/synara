@@ -1,5 +1,50 @@
 # Changelog
 
+## 1.6.7 — 2026-11-25
+
+**More reliable Antigravity answers, macOS shutdown, and provider usage refresh.**
+
+### Changed
+
+- Linux and Windows release builds can start independently of macOS icon preparation. The release workflow overlaps native packaging with quality checks and preserves warm build caches. ([#2291](https://github.com/Emanuele-web04/synara/pull/2291), [#2292](https://github.com/Emanuele-web04/synara/pull/2292))
+- Project-agent lookups load rows in bulk, reducing database round trips. ([#2294](https://github.com/Emanuele-web04/synara/pull/2294))
+
+### Fixed
+
+- Antigravity question cards display native choice text and send the expected identifiers for selected and custom answers. ([#2295](https://github.com/Emanuele-web04/synara/pull/2295))
+- The macOS backend exits after shutdown even if the updater IPC channel is still open. ([#2296](https://github.com/Emanuele-web04/synara/pull/2296))
+- Codex and Grok usage refreshes serialize concurrent refresh requests per account within the server process. ([#2294](https://github.com/Emanuele-web04/synara/pull/2294))
+
+### Verification
+
+Publication requires workspace checks, server tests, native packaging, artifact provenance, and packaged startup. macOS requires signing and notarization. Windows x64 uses the version-scoped unsigned exception and requires a live Microsoft Defender scan. Manual installs, upgrades, and live provider sessions require separate verification.
+
+## 1.6.6 — 2026-11-24
+
+**Smaller desktop downloads, faster startup, and more control in Antigravity.**
+
+### Added
+
+- Antigravity supports projects with additional folders and shows account quota pools and reset times in **Settings → Usage** using the official CLI. The primary project or worktree remains the working directory. WSL projects require roots that the selected distribution can access. ([#2261](https://github.com/Emanuele-web04/synara/pull/2261), [#2270](https://github.com/Emanuele-web04/synara/pull/2270))
+- Antigravity surfaces native questions and recognized subagents in chat and supports steering when the active session advertises it. Interactive **Approval required** mode routes native tool requests through Synara’s approval cards. **Full access** can grant permission for an individual request, and persistent grants require an explicit response. ([#2263](https://github.com/Emanuele-web04/synara/pull/2263), [#2271](https://github.com/Emanuele-web04/synara/pull/2271))
+
+### Changed
+
+- Desktop packaging removes duplicate dependencies and unused assets and adds release size budgets. In a local unsigned macOS Apple Silicon packaging comparison, the DMG was **22% smaller**, the updater ZIP **21% smaller**, and the installed app used **27% fewer bytes**. These measurements compare two local builds and vary by platform. ([#2288](https://github.com/Emanuele-web04/synara/pull/2288))
+- The web client loads fewer assets at startup, and the server does less work during streaming. In a headless Chromium benchmark on an Apple M5 Pro with 83 seeded chats, startup used **61 HTTP requests instead of 315** and transferred **22.5% less HTTP data**. On an emulated slow link, median splash dismissal fell from **1.58 s to 0.71 s**. In a separate SQLite benchmark with two streaming chats, median persistence time fell from **1.80 s to 1.66 s**. ([#2266](https://github.com/Emanuele-web04/synara/pull/2266))
+- The agent gateway checks delegated targets against the chosen provider profile, available models, and compatible execution modes. It supports multiple batches within the turn’s existing budget and can resume the parent after the children settle when explicitly requested and the original turn context still matches. ([#2269](https://github.com/Emanuele-web04/synara/pull/2269))
+- Stable desktop now shares product analytics by default and shows a one-time notice about the data it sends. Change the preference in **Settings → Privacy**. Events exclude prompts, chats, files, project names, and identity. Stable still excludes Beta and Remote technical diagnostics. ([#2290](https://github.com/Emanuele-web04/synara/pull/2290))
+
+### Fixed
+
+- Devin preserves its native CLI sign-in, passes granted connectors to new and reopened chats, and tracks the process tree on Windows so Stop can retire the session before a restart. Its ACP integration validates permission modes and retains per-command approval when later updates omit the tool kind. ([#2268](https://github.com/Emanuele-web04/synara/pull/2268), [#2287](https://github.com/Emanuele-web04/synara/pull/2287), [#2289](https://github.com/Emanuele-web04/synara/pull/2289))
+- Claude Code honors the selected profile’s native Auto-compact setting and still receives an explicit context window when one is selected. ([#2272](https://github.com/Emanuele-web04/synara/pull/2272))
+- Usage Analytics labels the local device **This Device** on Windows and Linux. ([#2260](https://github.com/Emanuele-web04/synara/pull/2260))
+
+### Verification
+
+Publication requires workspace and server checks, native packaging, artifact provenance, and packaged startup. The Windows x64 installer uses a version-scoped unsigned exception and requires Microsoft Defender scanning. macOS requires signing and notarization. Manual installation, installed-app upgrades, and live provider sessions fall outside these automated checks.
+
 ## 1.6.5 — 2026-11-22
 
 **Better multilingual transcripts, retained OpenCode reasoning, and more predictable Antigravity resume.**

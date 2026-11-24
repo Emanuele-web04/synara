@@ -287,7 +287,7 @@ import {
 } from "./remoteSessions/sessionRegistry";
 import { HostConnectionRegistryService } from "./hostConnections/registry";
 import { makeHostConnectionsPort } from "./hostConnections/port";
-import { isOwnerRole, projectProviderStatusesForWsSession, requireOwnerRole } from "./wsOwnerOnly";
+import { isOwnerRole, projectProviderStatusesForWsSession } from "./wsOwnerOnly";
 import {
   negotiateWsCompatibility,
   parseWsNegotiateSearchParams,

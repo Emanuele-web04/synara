@@ -3,10 +3,8 @@
 // Layer: Web build config
 // Depends on: Vite, Tailwind, React compiler, TanStack Router.
 
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import zlib from "node:zlib";
 import { promisify } from "node:util";
 import tailwindcss from "@tailwindcss/vite";
@@ -15,15 +13,8 @@ import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import { defineConfig, type Plugin } from "vite";
 import pkg from "./package.json" with { type: "json" };
 import { bootChunkGroups } from "./scripts/boot-chunk-groups";
-import { compilerCacheFingerprint } from "./scripts/compiler-cache-key";
-import {
-  threadWorkerFactory,
-  transformWorkerCount,
-  withParallelTransform,
-} from "./scripts/parallel-transform";
 import { listFiles, pruneProductionIcons } from "./scripts/production-assets";
-import { createReactCompilerPlugin } from "./scripts/react-compiler-plugin.mjs";
-import { withTransformCache } from "./scripts/transform-cache";
+import { createViteReactCompilerPlugin } from "./scripts/react-compiler-vite";
 
 const port = Number(process.env.PORT ?? 5733);
 const sourcemapEnv = process.env.SYNARA_WEB_SOURCEMAP?.trim().toLowerCase();
@@ -34,6 +25,62 @@ const buildSourcemap =
     : sourcemapEnv === "hidden"
       ? "hidden"
       : false;
+
+const USED_SHIKI_THEMES = new Set(["github-light", "github-dark"]);
+const PRUNED_SHIKI_THEME_ID = "\0synara-pruned-shiki-theme";
+
+// Synara renders all code/diff highlighting via DIFF_THEME_NAMES (github-light,
+// github-dark) and @pierre/theme defaults (pierre-light/pierre-dark). Stub out
+// the other 60+ Shiki theme chunks that @pierre/theming and shiki reference
+// behind dynamic imports so they are not emitted into dist/assets.
+function pruneUnusedShikiThemesPlugin(): Plugin {
+  return {
+    name: "synara-prune-unused-shiki-themes",
+    apply: "build",
+    enforce: "pre",
+    resolveId: {
+      filter: { id: /^(?:@shikijs\/themes|shiki\/themes)\// },
+      handler(source) {
+        const match = /^(?:@shikijs\/themes|shiki\/themes)\/([^/]+)$/.exec(source);
+        if (match?.[1] && !USED_SHIKI_THEMES.has(match[1])) {
+          return PRUNED_SHIKI_THEME_ID;
+        }
+        return null;
+      },
+    },
+    load: {
+      filter: { id: /^\0synara-pruned-shiki-theme$/ },
+      handler() {
+        return "export default undefined;";
+      },
+    },
+  };
+}
+
+// Electron Chromium and all supported browsers load woff2 natively; strip
+// legacy woff and truetype fallbacks from KaTeX CSS so Vite does not emit
+// 40 unused .woff/.ttf font files (~0.8 MB).
+function katexWoff2OnlyPlugin(): Plugin {
+  return {
+    name: "synara-katex-woff2-only",
+    apply: "build",
+    enforce: "pre",
+    transform: {
+      filter: { id: /katex(?:\.min)?\.css/ },
+      handler(code, id) {
+        const normalized = id.replaceAll("\\", "/").split("?")[0] ?? "";
+        if (!/\/katex\/dist\/katex(?:\.min)?\.css$/.test(normalized)) {
+          return null;
+        }
+        const next = code.replace(
+          /,url\(fonts\/KaTeX_[^)]+\.woff\)\s*format\("woff"\),url\(fonts\/KaTeX_[^)]+\.ttf\)\s*format\("truetype"\)/g,
+          "",
+        );
+        return next === code ? null : { code: next, map: null };
+      },
+    },
+  };
+}
 
 // Prune before compression. closeBundle hooks are parallel by default;
 // enforce: "post" alone does not make the asynchronous compression hook wait.
@@ -65,28 +112,6 @@ function centralIconPrunePlugin(): Plugin {
       },
     },
   };
-}
-
-// Browser tests and the Desktop CI build opt into separate cache namespaces.
-const testTransformCacheDirectory =
-  process.env.VITEST === "true" ? process.env.SYNARA_WEB_TRANSFORM_CACHE_DIR?.trim() : undefined;
-
-function transformCacheSalt(productionBuild: boolean): string {
-  const hash = createHash("sha256")
-    .update(compilerCacheFingerprint(path.resolve(import.meta.dirname, "../..")))
-    .update("\0");
-  hash.update(`${process.env.BABEL_ENV ?? ""}\0${process.env.NODE_ENV ?? ""}\0`);
-  if (productionBuild) {
-    hash.update(
-      JSON.stringify([
-        "desktop-production",
-        buildSourcemap,
-        process.env.BROWSERSLIST,
-        process.env.BROWSERSLIST_ENV,
-      ]),
-    );
-  }
-  return hash.digest("hex");
 }
 
 const gzip = promisify(zlib.gzip);
@@ -186,57 +211,16 @@ export default defineConfig({
       autoCodeSplitting: true,
     }),
     react(),
-    // React Compiler is a single-threaded Babel pass and nearly all of a
-    // production build's time (.github/CI.md). Worker threads run the same
-    // plugin's own hook. Opt-in CI caches only reuse identical inputs.
-    createReactCompilerPlugin().then((plugin) => {
-      const workers = transformWorkerCount();
-      const compiler =
-        workers > 0
-          ? withParallelTransform(plugin, {
-              workers,
-              createWorker: threadWorkerFactory(
-                pathToFileURL(
-                  path.resolve(import.meta.dirname, "scripts/parallel-transform.worker.mjs"),
-                ),
-              ),
-            })
-          : plugin;
-      let cacheWrapped = false;
-      return {
-        ...compiler,
-        // Large chat modules make the compiler expensive on cold loads and every
-        // edit. Oxc still provides JSX/TypeScript transforms and Fast Refresh.
-        // Keep production builds and browser tests compiled, with an opt-in for
-        // debugging compiler-specific behavior in the development app.
-        apply: ((_config, { command, mode }) => {
-          const productionBuild = command === "build" && mode === "production";
-          const cacheDirectory = productionBuild
-            ? process.env.SYNARA_WEB_BUILD_TRANSFORM_CACHE_DIR?.trim()
-            : mode === "test"
-              ? testTransformCacheDirectory
-              : undefined;
-          if (cacheDirectory && !cacheWrapped) {
-            withTransformCache(compiler, {
-              directory: path.resolve(import.meta.dirname, cacheDirectory),
-              salt: transformCacheSalt(productionBuild),
-              coordinateWrites:
-                !productionBuild && process.env.SYNARA_WEB_TRANSFORM_CACHE_SHARED === "true",
-            });
-            cacheWrapped = true;
-          }
-          return (
-            command === "build" ||
-            mode === "test" ||
-            /^(1|true)$/i.test(process.env.SYNARA_DEV_REACT_COMPILER?.trim() ?? "")
-          );
-        }) satisfies Plugin["apply"],
-      };
-    }),
+    createViteReactCompilerPlugin(buildSourcemap),
     tailwindcss(),
+    katexWoff2OnlyPlugin(),
+    pruneUnusedShikiThemesPlugin(),
     centralIconPrunePlugin(),
     precompressPlugin(),
   ],
+  worker: {
+    plugins: () => [pruneUnusedShikiThemesPlugin()],
+  },
   optimizeDeps: {
     include: ["@pierre/diffs", "@pierre/diffs/react", "@pierre/diffs/worker/worker.js"],
   },

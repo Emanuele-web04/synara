@@ -509,6 +509,8 @@ export const UserInputQuestion = Schema.Struct({
   question: TrimmedNonEmptyStringSchema,
   options: Schema.Array(UserInputQuestionOption),
   allowCustomAnswer: Schema.optional(Schema.Boolean),
+  // Some providers receive free-form text in a separate response field.
+  customAnswerId: Schema.optional(TrimmedNonEmptyStringSchema),
   multiSelect: Schema.optional(Schema.Boolean).pipe(
     Schema.withConstructorDefault(() => Option.some(false)),
   ),
