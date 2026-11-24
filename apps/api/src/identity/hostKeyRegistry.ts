@@ -7,7 +7,6 @@ import {
   HostLinkClaims,
   HostProofClaims,
   LinkedAccountHost,
-  type LinkStartRequest,
 } from "@synara/contracts";
 import { and, eq, exists, gt, inArray, isNotNull, isNull, lt, ne, or, sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";

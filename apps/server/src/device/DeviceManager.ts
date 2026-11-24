@@ -71,7 +71,6 @@ import {
 import { DeviceFrameTransport, type DeviceFrameSink } from "./deviceFrameTransport.ts";
 import {
   DeviceUiTargetError,
-  deviceKeyboardTop,
   SCROLL_SWIPE_DURATION_MS,
   describeTarget,
   findTarget,
