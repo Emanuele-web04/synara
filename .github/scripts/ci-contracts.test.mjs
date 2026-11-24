@@ -404,7 +404,7 @@ test("caches restore in every consumer and save from one owner per key", () => {
     "Cache Electron runtime",
   ]);
 });
-test("compiler cache survives workspace release bumps and invalidates dependency and patch changes", () => {
+test("compiler cache tracks compiler inputs and survives workspace bumps and bundler-only edits", () => {
   const scratch = mkdtempSync(join(tmpdir(), "synara-compiler-key-"));
   try {
     mkdirSync(join(scratch, "apps/web"), { recursive: true });
@@ -435,6 +435,20 @@ test("compiler cache survives workspace release bumps and invalidates dependency
     };
     const baseline = fingerprint(lockfile);
     assert.equal(fingerprint(lockfile.replace("1.5.4", "1.6.2")), baseline);
+    const bundler = join(scratch, "apps/web/vite.config.ts");
+    const bundlerSource = readFileSync(bundler, "utf8");
+    writeFileSync(
+      bundler,
+      bundlerSource.replace("autoCodeSplitting: true", "autoCodeSplitting: false"),
+    );
+    assert.notEqual(readFileSync(bundler, "utf8"), bundlerSource);
+    assert.equal(fingerprint(lockfile), baseline);
+    const compiler = join(scratch, "apps/web/scripts/react-compiler-vite.ts");
+    const compilerSource = readFileSync(compiler, "utf8");
+    writeFileSync(compiler, compilerSource.replace("!productionBuild &&", "productionBuild &&"));
+    assert.notEqual(readFileSync(compiler, "utf8"), compilerSource);
+    assert.notEqual(fingerprint(lockfile), baseline);
+    writeFileSync(compiler, compilerSource);
     assert.notEqual(fingerprint(lockfile.replace("^2.0.0", "^2.1.0")), baseline);
     assert.notEqual(fingerprint(lockfile.replace("version@2.0.0", "version@2.1.0")), baseline);
     assert.notEqual(fingerprint(lockfile.replace("fixture,]", "fixture]")), baseline);
@@ -542,18 +556,20 @@ test("browser tests and Desktop CI use separate compiler cache namespaces", () =
   assert.ok(!restore.includes(fallback));
   // The Vite salt and the archive key begin with the same input fingerprint.
   const viteConfig = read("../../apps/web/vite.config.ts");
-  assert.ok(viteConfig.includes(".update(compilerCacheFingerprint("));
+  assert.ok(viteConfig.includes("createViteReactCompilerPlugin(buildSourcemap)"));
+  const compilerAdapter = read("../../apps/web/scripts/react-compiler-vite.ts");
+  assert.ok(compilerAdapter.includes(".update(compilerCacheFingerprint("));
   // Workers must compile with the plugin definition the main thread uses.
   const worker = read("../../apps/web/scripts/parallel-transform.worker.mjs");
   assert.ok(worker.includes('from "./react-compiler-plugin.mjs"'));
-  assert.ok(viteConfig.includes('from "./scripts/react-compiler-plugin.mjs"'));
+  assert.ok(compilerAdapter.includes('from "./react-compiler-plugin.mjs"'));
   assert.ok(!viteConfig.includes("reactCompilerPreset"), "one definition of the compiler plugin");
   const pool = read("../../apps/web/scripts/parallel-transform.ts");
   for (const relaxed of ["retry", "setTimeout"])
     assert.ok(!pool.includes(relaxed), `the transform pool must not ${relaxed}`);
-  assert.ok(viteConfig.includes('command === "build" && mode === "production"'));
-  assert.ok(viteConfig.includes('process.env.VITEST === "true"'));
-  assert.ok(viteConfig.includes("transformCacheSalt(productionBuild)"));
+  assert.ok(compilerAdapter.includes('command === "build" && mode === "production"'));
+  assert.ok(compilerAdapter.includes('process.env.VITEST === "true"'));
+  assert.ok(compilerAdapter.includes("transformCacheSalt(productionBuild, buildSourcemap)"));
   // Browser lanes, Desktop Build, and the Core unit lane's matrix entry and setup.
   assert.equal(workflow.match(/web-transform-cache:/g)?.length, 4);
   assert.equal(workflow.match(/web-transform-fallback:/g)?.length, 1);

@@ -3,10 +3,8 @@
 // Layer: Web build config
 // Depends on: Vite, Tailwind, React compiler, TanStack Router.
 
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import zlib from "node:zlib";
 import { promisify } from "node:util";
 import tailwindcss from "@tailwindcss/vite";
@@ -15,15 +13,8 @@ import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import { defineConfig, type Plugin } from "vite";
 import pkg from "./package.json" with { type: "json" };
 import { bootChunkGroups } from "./scripts/boot-chunk-groups";
-import { compilerCacheFingerprint } from "./scripts/compiler-cache-key";
-import {
-  threadWorkerFactory,
-  transformWorkerCount,
-  withParallelTransform,
-} from "./scripts/parallel-transform";
 import { listFiles, pruneProductionIcons } from "./scripts/production-assets";
-import { createReactCompilerPlugin } from "./scripts/react-compiler-plugin.mjs";
-import { withTransformCache } from "./scripts/transform-cache";
+import { createViteReactCompilerPlugin } from "./scripts/react-compiler-vite";
 
 const port = Number(process.env.PORT ?? 5733);
 const sourcemapEnv = process.env.SYNARA_WEB_SOURCEMAP?.trim().toLowerCase();
@@ -123,28 +114,6 @@ function centralIconPrunePlugin(): Plugin {
   };
 }
 
-// Browser tests and the Desktop CI build opt into separate cache namespaces.
-const testTransformCacheDirectory =
-  process.env.VITEST === "true" ? process.env.SYNARA_WEB_TRANSFORM_CACHE_DIR?.trim() : undefined;
-
-function transformCacheSalt(productionBuild: boolean): string {
-  const hash = createHash("sha256")
-    .update(compilerCacheFingerprint(path.resolve(import.meta.dirname, "../..")))
-    .update("\0");
-  hash.update(`${process.env.BABEL_ENV ?? ""}\0${process.env.NODE_ENV ?? ""}\0`);
-  if (productionBuild) {
-    hash.update(
-      JSON.stringify([
-        "desktop-production",
-        buildSourcemap,
-        process.env.BROWSERSLIST,
-        process.env.BROWSERSLIST_ENV,
-      ]),
-    );
-  }
-  return hash.digest("hex");
-}
-
 const gzip = promisify(zlib.gzip);
 const brotliCompress = promisify(zlib.brotliCompress);
 
@@ -242,53 +211,7 @@ export default defineConfig({
       autoCodeSplitting: true,
     }),
     react(),
-    // React Compiler is a single-threaded Babel pass and nearly all of a
-    // production build's time (.github/CI.md). Worker threads run the same
-    // plugin's own hook. Opt-in CI caches only reuse identical inputs.
-    createReactCompilerPlugin().then((plugin) => {
-      const workers = transformWorkerCount();
-      const compiler =
-        workers > 0
-          ? withParallelTransform(plugin, {
-              workers,
-              createWorker: threadWorkerFactory(
-                pathToFileURL(
-                  path.resolve(import.meta.dirname, "scripts/parallel-transform.worker.mjs"),
-                ),
-              ),
-            })
-          : plugin;
-      let cacheWrapped = false;
-      return {
-        ...compiler,
-        // Large chat modules make the compiler expensive on cold loads and every
-        // edit. Oxc still provides JSX/TypeScript transforms and Fast Refresh.
-        // Keep production builds and browser tests compiled, with an opt-in for
-        // debugging compiler-specific behavior in the development app.
-        apply: ((_config, { command, mode }) => {
-          const productionBuild = command === "build" && mode === "production";
-          const cacheDirectory = productionBuild
-            ? process.env.SYNARA_WEB_BUILD_TRANSFORM_CACHE_DIR?.trim()
-            : mode === "test"
-              ? testTransformCacheDirectory
-              : undefined;
-          if (cacheDirectory && !cacheWrapped) {
-            withTransformCache(compiler, {
-              directory: path.resolve(import.meta.dirname, cacheDirectory),
-              salt: transformCacheSalt(productionBuild),
-              coordinateWrites:
-                !productionBuild && process.env.SYNARA_WEB_TRANSFORM_CACHE_SHARED === "true",
-            });
-            cacheWrapped = true;
-          }
-          return (
-            command === "build" ||
-            mode === "test" ||
-            /^(1|true)$/i.test(process.env.SYNARA_DEV_REACT_COMPILER?.trim() ?? "")
-          );
-        }) satisfies Plugin["apply"],
-      };
-    }),
+    createViteReactCompilerPlugin(buildSourcemap),
     tailwindcss(),
     katexWoff2OnlyPlugin(),
     pruneUnusedShikiThemesPlugin(),
