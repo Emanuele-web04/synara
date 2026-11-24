@@ -1489,7 +1489,7 @@ describe("ClaudeAdapterLive", () => {
       label: "Sonnet 5 ultracode becomes xhigh plus the Claude Code setting",
       model: "claude-sonnet-5",
       options: { effort: "ultracode" },
-      settings: { autoCompactEnabled: true, effortLevel: "xhigh", ultracode: true },
+      settings: { effortLevel: "xhigh", ultracode: true },
     },
     {
       label: "adaptive effort is ignored for Haiku 4.5",
@@ -1500,25 +1500,25 @@ describe("ClaudeAdapterLive", () => {
       label: "thinking toggle reaches SDK settings for Haiku 4.5",
       model: "claude-haiku-4-5",
       options: { thinking: false },
-      settings: { autoCompactEnabled: true, alwaysThinkingEnabled: false },
+      settings: { alwaysThinkingEnabled: false },
     },
     {
       label: "thinking toggle is ignored for non-Haiku models",
       model: "claude-sonnet-4-6",
       options: { thinking: false },
-      settings: { autoCompactEnabled: true },
+      settings: {},
     },
     {
       label: "fast mode reaches SDK settings for Opus",
       model: "claude-opus-4-6",
       options: { fastMode: true },
-      settings: { autoCompactEnabled: true, fastMode: true },
+      settings: { fastMode: true },
     },
     {
       label: "fast mode is ignored for non-Opus models",
       model: "claude-sonnet-4-6",
       options: { fastMode: true },
-      settings: { autoCompactEnabled: true },
+      settings: {},
     },
   ] as const)("model options: $label", ({ model, options, ...expected }) => {
     const harness = makeHarness();
@@ -10106,7 +10106,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
     });
   }
 
-  it.effect("enables auto-compaction without pinning the model-native window", () => {
+  it.effect("lets the Claude profile control automatic and idle compaction", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
@@ -10121,10 +10121,9 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         runtimeMode: "full-access",
       });
 
-      const settings = harness.getLastCreateQueryInput()?.options.settings;
-      assert.ok(settings && typeof settings === "object");
-      assert.equal((settings as { autoCompactEnabled?: boolean }).autoCompactEnabled, true);
-      assert.isUndefined((settings as { autoCompactWindow?: number }).autoCompactWindow);
+      const options = harness.getLastCreateQueryInput()?.options;
+      assert.sameMembers(options?.settingSources ?? [], ["user", "project", "local"]);
+      assert.deepEqual(options?.settings, {});
 
       const configuredEvent = yield* Fiber.join(configuredEventFiber);
       assert.equal(configuredEvent._tag, "Some");
