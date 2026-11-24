@@ -14,6 +14,11 @@ import rootPackageJson from "../package.json" with { type: "json" };
 import desktopPackageJson from "../apps/desktop/package.json" with { type: "json" };
 import serverPackageJson from "../apps/server/package.json" with { type: "json" };
 
+import {
+  evaluatePackagedBundleSize,
+  formatBundleBudgetReport,
+  readBundleSizeBudget,
+} from "./check-bundle-size.ts";
 import { startBuildStage } from "./lib/build-timing.ts";
 import { retargetStagedEntry } from "./lib/desktop-artifact-naming.ts";
 import { verifyPortableBuild } from "./lib/portable-build.ts";
@@ -125,6 +130,7 @@ interface BuildCliInput {
   readonly outputDir: Option.Option<string>;
   readonly skipBuild: Option.Option<boolean>;
   readonly keepStage: Option.Option<boolean>;
+  readonly checkSizeBudget: boolean;
   readonly signed: Option.Option<boolean>;
   readonly verbose: Option.Option<boolean>;
   readonly mockUpdates: Option.Option<boolean>;
@@ -225,6 +231,7 @@ interface ResolvedBuildOptions {
   readonly outputDir: string;
   readonly skipBuild: boolean;
   readonly keepStage: boolean;
+  readonly checkSizeBudget: boolean;
   readonly signed: boolean;
   readonly verbose: boolean;
   readonly mockUpdates: boolean;
@@ -376,6 +383,7 @@ export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
     outputDir,
     skipBuild,
     keepStage,
+    checkSizeBudget: input.checkSizeBudget,
     signed,
     verbose,
     mockUpdates,
@@ -1525,6 +1533,41 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   }
 
   const stageEntries = yield* fs.readDirectory(stageDistDir);
+  if (options.checkSizeBudget) {
+    const productName = artifactIdentity.identity.displayName;
+    const appDirs = stageEntries
+      .map((entry) =>
+        options.platform === "mac"
+          ? path.join(stageDistDir, entry, `${productName}.app`)
+          : path.join(stageDistDir, entry),
+      )
+      .filter((dir) =>
+        existsSync(
+          path.join(
+            dir,
+            options.platform === "mac" ? "Contents/Resources" : "resources",
+            "app.asar",
+          ),
+        ),
+      );
+    const appDir = appDirs[0];
+    if (appDirs.length !== 1 || !appDir) {
+      return yield* new BuildScriptError({
+        message: `Expected one unpacked desktop app in ${stageDistDir}, found ${appDirs.length}.`,
+      });
+    }
+    const report = evaluatePackagedBundleSize({
+      platform: options.platform,
+      arch: options.arch,
+      assetsDir: stageDistDir,
+      appDir,
+      budgets: readBundleSizeBudget(path.join(repoRoot, "scripts/bundle-size-budget.json"))
+        .packaged,
+    });
+    const summary = formatBundleBudgetReport(report);
+    if (!report.passed) return yield* new BuildScriptError({ message: summary });
+    yield* Effect.log(summary);
+  }
   yield* fs.makeDirectory(options.outputDir, { recursive: true });
 
   const copiedArtifacts: string[] = [];
@@ -1598,6 +1641,11 @@ const buildDesktopArtifactCli = Command.make("build-desktop-artifact", {
   keepStage: Flag.boolean("keep-stage").pipe(
     Flag.withDescription("Keep temporary staging files (env: SYNARA_DESKTOP_KEEP_STAGE)."),
     Flag.optional,
+  ),
+  checkSizeBudget: Flag.boolean("check-size-budget").pipe(
+    Flag.withDescription(
+      "Verify the staged installer and unpacked app against release size budgets.",
+    ),
   ),
   signed: Flag.boolean("signed").pipe(
     Flag.withDescription(

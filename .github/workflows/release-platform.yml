@@ -226,6 +226,7 @@ jobs:
             --output-dir release
             --skip-build
             --keep-stage
+            --check-size-budget
             --verbose
           )
 
@@ -309,16 +310,6 @@ jobs:
               mv release-publish/latest-mac.yml "release-publish/latest-mac-${{ inputs.arch }}.yml"
             fi
           fi
-
-      - name: Check packaged bundle size budgets
-        if: steps.restore_checkpoint.outcome != 'success'
-        shell: bash
-        run: |
-          node scripts/check-bundle-size.ts \
-            --mode packaged \
-            --platform "${{ inputs.platform }}" \
-            --arch "${{ inputs.arch }}" \
-            --assets-dir release-publish
 
       - name: Verify and record artifact provenance
         id: provenance
