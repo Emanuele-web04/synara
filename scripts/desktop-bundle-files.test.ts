@@ -143,4 +143,41 @@ describe("desktop bundle file selection", () => {
     expect(excluded("node_modules/node-pty/prebuilds/win32-x64/conpty.node", win)).toBe(false);
     expect(excluded("node_modules/node-pty/prebuilds/darwin-arm64/pty.node", win)).toBe(true);
   });
+
+  it("prunes verified unused dependency payloads while retaining runtime entrypoints", () => {
+    const patterns = createDesktopBundleFilePatterns("mac");
+    for (const path of [
+      "node_modules/patchright-core/lib/index.js",
+      "node_modules/playwright-core/lib/vite/traceViewer/index.html",
+      "node_modules/@ghostery/adblocker/dist/esm/index.js",
+      "node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js",
+      "node_modules/@earendil-works/pi-coding-agent/docs/images/demo.png",
+      "node_modules/typescript/lib/_tsc.js",
+      "node_modules/typescript/lib/ja/diagnosticMessages.generated.json",
+      "node_modules/effect/dist/unstable/httpapi/internal/httpApiScalar.js",
+      "node_modules/@anthropic-ai/claude-agent-sdk/browser-sdk.js",
+      "node_modules/@google/genai/dist/web/index.mjs",
+      "node_modules/@google/genai/dist/index.cjs",
+      "node_modules/web-streams-polyfill/dist/polyfill.es6.js",
+      "node_modules/zod/src/v4/classic/schemas.ts",
+      "node_modules/undici/docs/docs/api/Client.md",
+    ]) {
+      expect(excluded(path, patterns), path).toBe(true);
+    }
+    for (const path of [
+      "node_modules/betterwright/dist/src/index.js",
+      "node_modules/playwright-core/index.js",
+      "node_modules/@earendil-works/pi-coding-agent/dist/index.js",
+      "node_modules/typescript/lib/typescript.js",
+      "node_modules/typescript/lib/lib.dom.d.ts",
+      "node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs",
+      "node_modules/@anthropic-ai/claude-agent-sdk/bridge.mjs",
+      "node_modules/@google/genai/dist/node/index.mjs",
+      "node_modules/web-streams-polyfill/dist/ponyfill.es2018.js",
+      "node_modules/zod/v4/classic/schemas.js",
+      "node_modules/tldts/dist/cjs/index.js",
+    ]) {
+      expect(excluded(path, patterns), path).toBe(false);
+    }
+  });
 });
