@@ -1,9 +1,11 @@
 import { readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import * as Path from "node:path";
-import { parse as parseToml } from "smol-toml";
 import type { McpConnectorConnectInput } from "@synara/contracts";
+import { lazyModule } from "../lazyModule.ts";
 import { normalizeConnectorInput } from "./config.ts";
+
+const loadSmolToml = lazyModule(() => import("smol-toml"));
 
 const record = (value: unknown): Record<string, unknown> =>
   value && typeof value === "object" && !Array.isArray(value)
@@ -40,7 +42,9 @@ export async function importMcpServerCandidates(workspace: string | null) {
         continue;
       }
       const text = await readFile(source.path, "utf8");
-      parsed = record(source.toml ? parseToml(text) : JSON.parse(text));
+      parsed = record(
+        source.toml ? (await loadSmolToml()).parse(text) : JSON.parse(text),
+      );
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT")
         warnings.push(`${source.label}: could not read the config.`);

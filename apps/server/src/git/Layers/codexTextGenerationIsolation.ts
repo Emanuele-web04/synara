@@ -6,8 +6,17 @@ import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { createRequire } from "node:module";
 import { Effect, FileSystem } from "effect";
-import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
+
+let cachedSmolToml: typeof import("smol-toml") | undefined;
+function loadSmolToml(): typeof import("smol-toml") {
+  cachedSmolToml ??= createRequire(import.meta.url)("smol-toml") as typeof import("smol-toml");
+  return cachedSmolToml;
+}
+const parseToml = (source: string) => loadSmolToml().parse(source);
+const stringifyToml = (value: Parameters<typeof import("smol-toml")["stringify"]>[0]) =>
+  loadSmolToml().stringify(value);
 
 import {
   CodexPreparedHomeFileSnapshotError,
