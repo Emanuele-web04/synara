@@ -488,7 +488,6 @@ if (existsSync(APPSNAP)) {
   escMonitor.start();
 }
 
-let failures = 0;
 const t0 = Date.now();
 
 try {
@@ -2037,7 +2036,7 @@ end repeat`,
   }
 } catch (e) {
   console.error("HARNESS ERROR", e);
-  failures++;
+  row("harness", "fail", "Harness aborted. See HARNESS ERROR in the run output.");
 } finally {
   // ── focus-invariant ──
   const report = await stopProbe();
@@ -2103,7 +2102,6 @@ end repeat`,
 
   const failed = rows.filter((r) => r.verdict === "fail");
   const skipped = rows.filter((r) => r.verdict === "skipped");
-  failures += failed.length;
 
   const summary = {
     run: SENTINEL,
@@ -2116,9 +2114,9 @@ end repeat`,
     summary: {
       total: rows.length,
       pass: rows.filter((r) => r.verdict === "pass").length,
-      fail: failures,
+      fail: failed.length,
       skipped: skipped.length,
-      verdict: failures === 0 ? "pass" : "fail",
+      verdict: failed.length === 0 ? "pass" : "fail",
     },
   };
   await mkdir(dirname(reportPath), { recursive: true });
@@ -2152,5 +2150,5 @@ end repeat`,
   log(
     `${summary.summary.pass} pass / ${summary.summary.fail} fail / ${summary.summary.skipped} skipped in ${Math.round(summary.elapsedMs / 1000)}s`,
   );
-  process.exit(failures > 0 ? 2 : 0);
+  process.exit(failed.length > 0 ? 2 : 0);
 }

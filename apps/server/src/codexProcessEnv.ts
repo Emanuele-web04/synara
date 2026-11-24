@@ -1467,33 +1467,37 @@ async function withSharedContinuationLock<T>(
     await sleep(SYNARA_SHARED_CONTINUATION_LOCK_POLL_MS);
   }
 
+  const release = async () => {
+    const observed = await readSharedContinuationLock(lockPath);
+    if (!observed || !sameSharedContinuationLock(ownership, observed)) {
+      throw new Error(
+        `Lost ownership of Codex continuation lock ${lockPath}; refusing to remove another owner.`,
+      );
+    }
+    if (!(await quarantineObservedSharedContinuationLock({ observed }))) {
+      throw new Error(
+        `Lost ownership of Codex continuation lock ${lockPath} during release; no successor was removed.`,
+      );
+    }
+  };
+
   let result: T;
-  let operationError: unknown;
-  let hasOperationError = false;
   try {
     result = await operation();
-  } catch (error) {
-    operationError = error;
-    hasOperationError = true;
-  }
-  let releaseError: Error | undefined;
-  const observed = await readSharedContinuationLock(lockPath);
-  if (!observed || !sameSharedContinuationLock(ownership, observed)) {
-    releaseError = new Error(
-      `Lost ownership of Codex continuation lock ${lockPath}; refusing to remove another owner.`,
-    );
-  } else if (!(await quarantineObservedSharedContinuationLock({ observed }))) {
-    releaseError = new Error(
-      `Lost ownership of Codex continuation lock ${lockPath} during release; no successor was removed.`,
-    );
-  }
-  if (hasOperationError) {
+  } catch (operationError) {
+    try {
+      await release();
+    } catch (releaseError) {
+      throw new AggregateError(
+        [operationError, releaseError],
+        `${String(operationError)}\nCould not release the Codex continuation lock: ${String(releaseError)}`,
+        { cause: operationError },
+      );
+    }
     throw operationError;
   }
-  if (releaseError) {
-    throw releaseError;
-  }
-  return result!;
+  await release();
+  return result;
 }
 
 function isSharedContinuationEntry(entryName: string): boolean {

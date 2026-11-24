@@ -235,8 +235,7 @@ async function launchOnce(build, home, profile, drive) {
   writeWindowState(home);
   const app = launchDesktop({ buildDir: build.dir, home, profile, debugPort: await freePort() });
   let outcome;
-  let primaryError;
-  let hasPrimaryError = false;
+  let launchFailure;
   try {
     const { session } = await attachMainPage(app);
     await sleep(6000);
@@ -249,12 +248,15 @@ async function launchOnce(build, home, profile, drive) {
     session.close();
     outcome = { dismissed, result, openDialogs };
   } catch (error) {
-    primaryError = error;
-    hasPrimaryError = true;
+    launchFailure = { error };
   }
-  const quit = await quitDesktop(app);
-  if (hasPrimaryError) throw primaryError;
-  if (quit.forced) throw new Error("Template launch did not quit cleanly");
+  try {
+    const quit = await quitDesktop(app);
+    if (quit.forced) throw new Error("Template launch did not quit cleanly");
+  } catch (error) {
+    if (!launchFailure) throw error;
+  }
+  if (launchFailure) throw launchFailure.error;
   return outcome;
 }
 

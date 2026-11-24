@@ -497,8 +497,7 @@ export async function verifyPackagedDesktopStartup(
   let child: ChildProcess | null = null;
   let logDirectory: string | null = null;
   let outputTail = "";
-  let primaryError: unknown;
-  let hasPrimaryError = false;
+  let startupFailure: { error: unknown } | undefined;
   try {
     const launch = prepareLaunch(options, extractionRoot);
     const env = createPackagedDesktopSmokeEnvironment(join(temporaryRoot, "state"), options);
@@ -560,18 +559,21 @@ export async function verifyPackagedDesktopStartup(
       throw new Error(`Packaged startup proof timed out after ${options.timeoutMs}ms.`);
     }
   } catch (error) {
-    primaryError = error;
-    hasPrimaryError = true;
+    startupFailure = { error };
     if (logDirectory) {
       console.error(readPackagedStartupLogTails(logDirectory));
       console.error(`Packaged process output tail:\n${outputTail || "No output captured."}`);
     }
   }
+  let cleanupFailure: { error: unknown } | undefined;
   if (child) {
-    await terminateProcessTree(child);
+    try {
+      await terminateProcessTree(child);
+    } catch (error) {
+      cleanupFailure = { error };
+      if (startupFailure) console.error("Packaged smoke process cleanup failed:", error);
+    }
   }
-  let cleanupError: unknown;
-  let hasCleanupError = false;
   try {
     rmSync(temporaryRoot, {
       recursive: true,
@@ -584,19 +586,22 @@ export async function verifyPackagedDesktopStartup(
       process.platform !== "win32" ||
       !(error instanceof Error && "code" in error && error.code === "EPERM")
     ) {
-      cleanupError = error;
-      hasCleanupError = true;
+      if (startupFailure || cleanupFailure) {
+        console.error("Packaged smoke directory cleanup failed:", error);
+      } else {
+        cleanupFailure = { error };
+      }
     } else {
       console.warn(
         `Could not remove Windows smoke temp directory; leaving it for runner cleanup: ${temporaryRoot}`,
       );
     }
   }
-  if (hasPrimaryError) {
-    throw primaryError;
+  if (startupFailure) {
+    throw startupFailure.error;
   }
-  if (hasCleanupError) {
-    throw cleanupError;
+  if (cleanupFailure) {
+    throw cleanupFailure.error;
   }
 }
 
