@@ -22,6 +22,46 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "1.6.6",
+    date: "Nov 24",
+    features: [
+      {
+        id: "smaller-desktop-download",
+        title: "A smaller desktop app",
+        description:
+          "Synara ships fewer duplicate dependencies and unused packaged assets, reducing download size and disk use.",
+        details:
+          "In a like-for-like local packaging comparison on Apple Silicon, the unsigned macOS installer was 22% smaller, the updater ZIP was 21% smaller, and the installed app used 27% fewer bytes.",
+      },
+      {
+        id: "faster-boot-and-streaming",
+        title: "Faster startup and lighter streaming",
+        description:
+          "Synara loads fewer assets up front and does less database work while responses stream.",
+        details:
+          "In headless Chromium with 83 seeded chats, cold startup went from 315 HTTP requests to 61 and transferred 22.5% less HTTP data. On an emulated slow link, the median time to dismiss the splash fell from 1.58 s to 0.71 s. In a separate two-chat SQLite benchmark, streaming persistence took 8% less time.",
+      },
+      {
+        id: "antigravity-workflows",
+        title: "More control in Antigravity",
+        description:
+          "Use projects with multiple folders, answer native questions and approve tool requests in chat, steer supported live turns, and see account quotas and reset times in Settings → Usage.",
+      },
+      {
+        id: "provider-session-reliability",
+        title: "More reliable Devin and Claude sessions",
+        description:
+          "Devin reuses its saved CLI sign-in and reconnects granted tools when reopening a chat. Windows process tracking improves Stop and restart. Claude Code honors the selected profile’s native Auto-compact setting.",
+      },
+      {
+        id: "stable-product-analytics",
+        title: "Product analytics on Stable",
+        description:
+          "Stable desktop shares product analytics by default and explains the data in a one-time notice. You can opt out in Settings → Privacy. Prompts, chats, files, project names, and identity are excluded.",
+      },
+    ],
+  },
+  {
     version: "1.6.5",
     date: "Nov 22",
     features: [
