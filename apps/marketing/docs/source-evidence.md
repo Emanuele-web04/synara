@@ -86,12 +86,17 @@ install scripts `https://x.ai/cli/install.sh` and `https://x.ai/cli/install.ps1`
 **Claims:** Devin CLI installation on macOS, Linux, WSL, and Windows; the `devin`
 executable; `devin auth login`, `devin auth status`, `devin models list --format json`,
 `devin update`, and the `devin acp` stdio server; ACP authentication through
-`WINDSURF_API_KEY` or credentials stored by `devin auth login`.
+`WINDSURF_API_KEY` or credentials stored by `devin auth login`. Devin's Smart
+permission mode auto-approves routine actions and asks on risky or uncertain ones,
+with Accept Edits as the approval fallback and `bypass` as the unrestricted mode.
 
 **Primary source:** [Devin CLI quickstart](https://docs.devin.ai/cli),
-[commands and flags](https://docs.devin.ai/cli/reference/commands), and
+[commands and flags](https://docs.devin.ai/cli/reference/commands),
+[permissions](https://docs.devin.ai/cli/reference/permissions),
+[stable changelog](https://docs.devin.ai/cli/changelog/stable), and
 [configuration file reference](https://docs.devin.ai/cli/reference/configuration/config-file),
-checked 2026-09-01 (HTTP 200 with current CLI content).
+checked 2026-09-01 (HTTP 200 with current CLI content); permissions and changelog
+pages re-checked 2026-11-23 (HTTP 200).
 
 ## OpenCode
 

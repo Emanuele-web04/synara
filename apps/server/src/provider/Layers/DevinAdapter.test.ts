@@ -1954,6 +1954,117 @@ describe("applyDevinSessionConfiguration", () => {
       expect(calls).toEqual([]);
     },
   );
+
+  it("switches approval-required sessions to Smart once", async () => {
+    const { runtime, calls } = makeFakeAcpRuntime({
+      currentModeId: "accept-edits",
+      availableModes: [
+        { id: "accept-edits", name: "Code" },
+        { id: "smart", name: "Smart" },
+      ],
+    });
+
+    await Effect.runPromise(
+      applyDevinSessionConfiguration({
+        runtime,
+        runtimeMode: "approval-required",
+        interactionMode: undefined,
+      }),
+    );
+
+    expect(calls).toEqual([{ method: "setMode", args: ["smart"] }]);
+  });
+
+  it("leaves an already-Smart session untouched", async () => {
+    const { runtime, calls } = makeFakeAcpRuntime({
+      currentModeId: "smart",
+      availableModes: [
+        { id: "accept-edits", name: "Code" },
+        { id: "smart", name: "Smart" },
+      ],
+    });
+
+    await Effect.runPromise(
+      applyDevinSessionConfiguration({
+        runtime,
+        runtimeMode: "approval-required",
+        interactionMode: undefined,
+      }),
+    );
+
+    expect(calls).toEqual([]);
+  });
+
+  it("fails when the agent does not confirm the requested mode", async () => {
+    const { runtime } = makeFakeAcpRuntime({
+      currentModeId: "accept-edits",
+      availableModes: [
+        { id: "accept-edits", name: "Code" },
+        { id: "smart", name: "Smart" },
+      ],
+    });
+    const stubborn = {
+      getModeState: runtime.getModeState,
+      // Acknowledge the request but never actually switch modes.
+      setMode: () => Effect.succeed({} as Acp.SetSessionModeResponse),
+    };
+
+    await expect(
+      Effect.runPromise(
+        applyDevinSessionConfiguration({
+          runtime: stubborn,
+          runtimeMode: "approval-required",
+          interactionMode: undefined,
+        }),
+      ),
+    ).rejects.toMatchObject({ _tag: "ProviderAdapterValidationError" });
+  });
+
+  it("fails before dispatch when setMode rejects", async () => {
+    const { runtime } = makeFakeAcpRuntime({
+      currentModeId: "accept-edits",
+      availableModes: [
+        { id: "accept-edits", name: "Code" },
+        { id: "smart", name: "Smart" },
+      ],
+    });
+    const failing = {
+      getModeState: runtime.getModeState,
+      setMode: () =>
+        Effect.fail(new AcpRequestError({ code: -32603, errorMessage: "agent refused" })),
+    };
+
+    await expect(
+      Effect.runPromise(
+        applyDevinSessionConfiguration({
+          runtime: failing,
+          runtimeMode: "approval-required",
+          interactionMode: undefined,
+        }),
+      ),
+    ).rejects.toMatchObject({ _tag: "ProviderAdapterValidationError" });
+  });
+
+  it("normalizes a resumed session left in Bypass back to Smart", async () => {
+    const { runtime, calls } = makeFakeAcpRuntime({
+      currentModeId: "bypass",
+      availableModes: [
+        { id: "accept-edits", name: "Code" },
+        { id: "smart", name: "Smart" },
+        { id: "bypass", name: "Full Access" },
+      ],
+    });
+
+    await Effect.runPromise(
+      applyDevinSessionConfiguration({
+        runtime,
+        runtimeMode: "approval-required",
+        interactionMode: undefined,
+      }),
+    );
+
+    expect(calls).toEqual([{ method: "setMode", args: ["smart"] }]);
+  });
 });
 
 describe("resolveRequestedModeId", () => {
@@ -1993,16 +2104,7 @@ describe("resolveRequestedModeId", () => {
     ).rejects.toMatchObject({ _tag: "ProviderAdapterValidationError" });
   });
 
-  it("maps approval-required to Code in the real Devin 3000.6.7 catalog", async () => {
-    await expect(
-      Effect.runPromise(
-        resolveRequestedModeId({
-          modeState: { currentModeId: "smart", availableModes: devin300067Modes },
-          runtimeMode: "approval-required",
-          interactionMode: undefined,
-        }),
-      ),
-    ).resolves.toBe("accept-edits");
+  it("maps approval-required to Smart in the real Devin 3000.6.7 catalog", async () => {
     await expect(
       Effect.runPromise(
         resolveRequestedModeId({
@@ -2011,10 +2113,56 @@ describe("resolveRequestedModeId", () => {
           interactionMode: undefined,
         }),
       ),
+    ).resolves.toBe("smart");
+    await expect(
+      Effect.runPromise(
+        resolveRequestedModeId({
+          modeState: { currentModeId: "smart", availableModes: devin300067Modes },
+          runtimeMode: "approval-required",
+          interactionMode: undefined,
+        }),
+      ),
     ).resolves.toBeUndefined();
   });
 
-  it("keeps Plan precedence and never maps approval-required to Smart or Ask", async () => {
+  it("falls back to Code only when Smart is absent, and fails closed otherwise", async () => {
+    const withoutSmart = devin300067Modes.filter((mode) => mode.id !== "smart");
+    await expect(
+      Effect.runPromise(
+        resolveRequestedModeId({
+          modeState: { currentModeId: "ask", availableModes: withoutSmart },
+          runtimeMode: "approval-required",
+          interactionMode: undefined,
+        }),
+      ),
+    ).resolves.toBe("accept-edits");
+    await expect(
+      Effect.runPromise(
+        resolveRequestedModeId({
+          modeState: { currentModeId: "accept-edits", availableModes: withoutSmart },
+          runtimeMode: "approval-required",
+          interactionMode: undefined,
+        }),
+      ),
+    ).resolves.toBeUndefined();
+
+    for (const unavailableModes of [
+      withoutSmart.filter((mode) => mode.id !== "accept-edits"),
+      [{ id: "bypass", name: "Full Access" }],
+    ]) {
+      await expect(
+        Effect.runPromise(
+          resolveRequestedModeId({
+            modeState: { currentModeId: "ask", availableModes: unavailableModes },
+            runtimeMode: "approval-required",
+            interactionMode: undefined,
+          }),
+        ),
+      ).rejects.toMatchObject({ _tag: "ProviderAdapterValidationError" });
+    }
+  });
+
+  it("keeps Plan precedence over Smart for approval-required threads", async () => {
     await expect(
       Effect.runPromise(
         resolveRequestedModeId({
@@ -2024,24 +2172,15 @@ describe("resolveRequestedModeId", () => {
         }),
       ),
     ).resolves.toBe("plan");
-
-    for (const unavailableModes of [
-      devin300067Modes.filter((mode) => mode.id !== "accept-edits"),
-      [
-        { id: "smart", name: "Smart" },
-        { id: "ask", name: "Ask" },
-      ],
-    ]) {
-      await expect(
-        Effect.runPromise(
-          resolveRequestedModeId({
-            modeState: { currentModeId: "smart", availableModes: unavailableModes },
-            runtimeMode: "approval-required",
-            interactionMode: undefined,
-          }),
-        ),
-      ).rejects.toMatchObject({ _tag: "ProviderAdapterValidationError" });
-    }
+    await expect(
+      Effect.runPromise(
+        resolveRequestedModeId({
+          modeState: { currentModeId: "smart", availableModes: devin300067Modes },
+          runtimeMode: "approval-required",
+          interactionMode: "plan",
+        }),
+      ),
+    ).resolves.toBe("plan");
   });
 
   it("maps full-access to Full Access without weakening approval-required", async () => {
@@ -2773,7 +2912,14 @@ describe("Devin resume model pinning", () => {
   });
 });
 
-function makePermissionRuntime(prompt: AcpSessionRuntimeShape["prompt"] = () => Effect.never) {
+function makePermissionRuntime(
+  prompt: AcpSessionRuntimeShape["prompt"] = () => Effect.never,
+  availableModes: Array<{ id: string; name: string }> = [
+    { id: "code", name: "Accept Edits" },
+    { id: "bypass", name: "Full Access" },
+  ],
+  initialModeId = "code",
+) {
   let permissionHandler:
     | ((
         request: Acp.RequestPermissionRequest,
@@ -2783,17 +2929,14 @@ function makePermissionRuntime(prompt: AcpSessionRuntimeShape["prompt"] = () => 
   // immediately-completing prompt clears the interaction mode and the policy
   // layer would cancel the request before it ever reaches the approval card.
   const handles = makeEventAcpRuntime(prompt);
-  let modeId = "code";
+  let modeId = initialModeId;
   const runtime = {
     ...handles.runtime,
     // Approval-required sessions resolve their ACP mode id from the reported
     // modes, so the harness must advertise one besides "bypass".
     getModeState: Effect.sync(() => ({
       currentModeId: modeId,
-      availableModes: [
-        { id: "code", name: "Accept Edits" },
-        { id: "bypass", name: "Full Access" },
-      ],
+      availableModes,
     })),
     setMode: (next: string) =>
       Effect.sync(() => {
@@ -2985,6 +3128,62 @@ describe("Devin permission requests", () => {
         yield* adapter.respondToRequest(threadId, opened!.requestId as never, "accept");
         const response = yield* Fiber.join(pending);
         expect(response).toEqual({
+          outcome: { outcome: "selected", optionId: "allow-once" },
+        });
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(
+          makeDevinAdapterTestLayer(handles.runtime, handles.completeProcessedEvent, {
+            turnIdleMs: 3_600_000,
+            toolIdleMs: 3_600_000,
+          }),
+        ),
+      ),
+    );
+  });
+
+  it("still waits for the user when a Smart-mode session emits a permission request", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const handles = makePermissionRuntime(undefined, [
+      { id: "accept-edits", name: "Code" },
+      { id: "smart", name: "Smart" },
+      { id: "bypass", name: "Full Access" },
+    ]);
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* DevinAdapter;
+        const threadId = ThreadId.makeUnsafe("thread-devin-smart-permission");
+        const runtimeEvents: Array<{ type: string; requestId?: unknown }> = [];
+        yield* adapter.streamEvents.pipe(
+          Stream.runForEach((event) =>
+            Effect.sync(() => {
+              runtimeEvents.push({ type: event.type, requestId: event.requestId });
+            }),
+          ),
+          Effect.forkScoped,
+        );
+        yield* adapter.startSession({
+          provider: "devin",
+          threadId,
+          runtimeMode: "approval-required",
+          cwd: process.cwd(),
+        });
+        yield* adapter.sendTurn({ threadId, input: "work", attachments: [] });
+
+        const pending = yield* handles
+          .requestPermission(makePermissionParams("call-1"))
+          .pipe(Effect.forkChild);
+        yield* flushTimers();
+
+        // Smart judged this risky or uncertain: it must reach the user and
+        // never be auto-resolved into an allow.
+        const opened = runtimeEvents.find((event) => event.type === "request.opened");
+        expect(opened).toBeDefined();
+        expect(pending.pollUnsafe()).toBeUndefined();
+
+        yield* adapter.respondToRequest(threadId, opened!.requestId as never, "accept");
+        expect(yield* Fiber.join(pending)).toEqual({
           outcome: { outcome: "selected", optionId: "allow-once" },
         });
       }).pipe(
