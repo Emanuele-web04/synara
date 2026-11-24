@@ -18,6 +18,8 @@ async function fixture(connected = true) {
     platform: "darwin",
     env: environment,
     connected,
+    // The bridge must not unref Vitest's real fork channel.
+    channel: undefined,
     send: connected
       ? (message: Record<string, unknown>, callback: (error: Error | null) => void) => {
           messages.push(message);
