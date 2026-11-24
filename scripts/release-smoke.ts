@@ -156,6 +156,10 @@ async function verifyReleaseWorkflowSafety(): Promise<void> {
     "  preflight:\n    name: Preflight\n    runs-on: ubuntu-24.04\n    timeout-minutes: 15\n    permissions:\n      contents: read",
     "Expected preflight to receive read-only repository access.",
   );
+  const macBuildJob = workflow.slice(
+    workflow.indexOf("  build_mac:\n"),
+    workflow.indexOf("  build:\n"),
+  );
   const buildJob = workflow.slice(
     workflow.indexOf("  build:\n"),
     workflow.indexOf("  publish_cli:\n"),
@@ -213,11 +217,12 @@ async function verifyReleaseWorkflowSafety(): Promise<void> {
       throw new Error(`Incorrect Defender evidence upload after ${outcome} scan.`);
     }
   }
-  assertContains(
-    buildJob,
-    "uses: ./.github/workflows/release-platform.yml",
-    "Missing native workflow.",
-  );
+  for (const job of [macBuildJob, buildJob])
+    assertContains(
+      job,
+      "uses: ./.github/workflows/release-platform.yml",
+      "Missing native workflow.",
+    );
   type Step = {
     name?: string;
     id?: string;
@@ -265,8 +270,8 @@ async function verifyReleaseWorkflowSafety(): Promise<void> {
   if (
     qualifyIntel.qualify_intel?.needs !== undefined ||
     qualifyIntel.build?.name !== "Package and qualify" ||
-    !buildJob.includes("    name: Build ${{ matrix.label }}\n") ||
-    !buildJob.includes("      label: ${{ matrix.label }}\n") ||
+    !macBuildJob.includes("    name: Build ${{ matrix.label }}\n") ||
+    !macBuildJob.includes("      label: ${{ matrix.label }}\n") ||
     waitStep?.env?.PACKAGING_JOB !== "Build ${{ inputs.label }} / Package and qualify" ||
     waitStep?.env?.GH_TOKEN !== "${{ github.token }}" ||
     waitStep?.run !==
@@ -596,14 +601,14 @@ async function verifyReleaseWorkflowSafety(): Promise<void> {
   );
   // Execute the actual job predicate against failed/skipped prerequisites. A
   // matching source string would not detect a permissive OR elsewhere in it.
-  const predicate = buildJob.match(/    if: \$\{\{ (.+) \}\}/)?.[1];
+  const predicate = macBuildJob.match(/    if: \$\{\{ (.+) \}\}/)?.[1];
   if (!predicate) throw new Error("Missing packaging admission predicate.");
   const admits = new Function("needs", "cancelled", `return ${predicate};`) as (
     needs: Record<string, unknown>,
     cancelled: () => boolean,
   ) => boolean;
   const prerequisites = ["preflight", "restore_mac_icon", "build_mac_icon", "build_portable"];
-  const dependencies = buildJob.match(/    needs: \[(.+)\]/)?.[1]?.split(/,\s*/) ?? [];
+  const dependencies = macBuildJob.match(/    needs: \[(.+)\]/)?.[1]?.split(/,\s*/) ?? [];
   for (const name of prerequisites)
     if (!dependencies.includes(name)) throw new Error(`Packaging does not await ${name}.`);
   for (const independentJob of ["quality", "server_tests", "prepare_cua"])
@@ -642,16 +647,47 @@ async function verifyReleaseWorkflowSafety(): Promise<void> {
       admits({ ...restored, restore_mac_icon: { result, outputs: { hit: "true" } } }, () => false)
     )
       throw new Error(`Packaging admitted an icon hit from restore_mac_icon=${result}.`);
-  const noMac = {
-    ...successful,
-    preflight: { result: "success", outputs: { package_artifacts: "true", build_icon: "false" } },
-    restore_mac_icon: { result: "skipped", outputs: {} },
-    build_mac_icon: { result: "skipped" },
+  if (
+    admits(
+      {
+        ...successful,
+        preflight: {
+          result: "success",
+          outputs: { package_artifacts: "true", build_icon: "false" },
+        },
+      },
+      () => false,
+    )
+  )
+    throw new Error("macOS packaging can start for a scope without macOS.");
+  const nonMacDependencies = buildJob.match(/    needs: \[(.+)\]/)?.[1]?.split(/,\s*/) ?? [];
+  if (
+    nonMacDependencies.length !== 2 ||
+    !["preflight", "build_portable"].every((job) => nonMacDependencies.includes(job))
+  )
+    throw new Error("Non-macOS packaging must depend only on preflight and the portable build.");
+  const nonMacPredicate = buildJob.match(/    if: \$\{\{ (.+) \}\}/)?.[1];
+  if (!nonMacPredicate) throw new Error("Missing non-macOS packaging admission predicate.");
+  const admitsNonMac = new Function("needs", "cancelled", `return ${nonMacPredicate};`);
+  const nonMacNeeds = {
+    preflight: { result: "success", outputs: { package_non_mac: "true" } },
+    build_portable: { result: "success" },
   };
-  if (!admits(noMac, () => false))
-    throw new Error("Non-macOS packaging is blocked by an intentional icon skip.");
-  if (admits({ ...noMac, preflight: successful.preflight }, () => false))
-    throw new Error("Packaging admitted a macOS release without its icon catalog.");
+  if (!admitsNonMac(nonMacNeeds, () => false))
+    throw new Error("Non-macOS packaging waits for an unrelated job.");
+  if (
+    admitsNonMac(nonMacNeeds, () => true) ||
+    admitsNonMac(
+      { ...nonMacNeeds, preflight: { result: "success", outputs: { package_non_mac: "false" } } },
+      () => false,
+    )
+  )
+    throw new Error("Non-macOS packaging admitted an unselected or cancelled scope.");
+  for (const job of nonMacDependencies) {
+    for (const result of ["failure", "cancelled", "skipped", ""])
+      if (admitsNonMac({ ...nonMacNeeds, [job]: { ...successful[job], result } }, () => false))
+        throw new Error(`Non-macOS packaging admitted ${job}=${result}.`);
+  }
 
   const cua = nativeSteps.find((step) => step.uses === "./.github/actions/provision-cua");
   const artifact = nativeSteps.find((step) => step.id === "build_artifact");
@@ -677,11 +713,12 @@ async function verifyReleaseWorkflowSafety(): Promise<void> {
   ]) {
     assertContains(workflow, gate, "Expected read-only, sharded quality gates before publication.");
   }
-  assertContains(
-    buildJob,
-    "permissions:\n      contents: read",
-    "Artifact builds must remain read-only.",
-  );
+  for (const job of [macBuildJob, buildJob])
+    assertContains(
+      job,
+      "permissions:\n      contents: read",
+      "Artifact builds must remain read-only.",
+    );
   assertContains(
     readFileSync(resolve(repoRoot, "scripts/lib/release-build-scope.ts"), "utf8"),
     'runner: "macos-15",',
@@ -749,7 +786,7 @@ async function verifyReleaseWorkflowSafety(): Promise<void> {
     throw new Error("Publication must serialize independently of build-only diagnostics.");
   for (const name of ["release", "publish_cli"]) {
     const publisher = workflowDefinition.jobs[name]!;
-    for (const gate of ["preflight", "quality", "server_tests", "build"])
+    for (const gate of ["preflight", "quality", "server_tests", "build_mac", "build"])
       if (!publisher.needs.includes(gate))
         throw new Error(`${name} does not directly await ${gate}.`);
     const expression = publisher.if.replace(/^\$\{\{\s*|\s*\}\}$/g, "");

@@ -12,11 +12,12 @@ version, release notes and lockfile are final.
   - Manual publication requires the explicit `publish_release=true` input.
 - Runs lint, typecheck and every test in parallel with native preparation and
   packaging. Packaging starts after exact-source preflight and its portable
-  JavaScript, Cua and icon inputs are ready; it does not wait for `quality` or
-  `server_tests`. Both GitHub and npm publication depend directly on successful
-  `quality`, all `server_tests` shards and native artifact jobs. No tests are
-  removed. Narrow `native`, `icon`, and `js` validation stages cannot publish and
-  omit these full-suite gates.
+  JavaScript is ready. Each native packaging job prepares its Cua input, and
+  only macOS packaging waits for the icon catalog. Native packaging runs
+  independently of `quality` and `server_tests`. Both GitHub and npm publication
+  depend directly on successful `quality`, all `server_tests` shards and native
+  artifact jobs. Narrow `native`, `icon`, and `js` validation stages cannot publish
+  and omit these full-suite gates.
 - Builds portable JavaScript once, verifies its source/lockfile/settings and
   output checksums on each consumer, and stages native dependencies per platform.
 - Builds five artifacts in parallel:
