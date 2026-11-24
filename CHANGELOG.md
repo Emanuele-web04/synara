@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.6.7 — 2026-11-25
+
+**More reliable Antigravity answers, macOS shutdown, and provider usage refresh.**
+
+### Changed
+
+- Linux and Windows release builds can start independently of macOS icon preparation. The release workflow overlaps native packaging with quality checks and preserves warm build caches. ([#2291](https://github.com/Emanuele-web04/synara/pull/2291), [#2292](https://github.com/Emanuele-web04/synara/pull/2292))
+- Project-agent lookups load rows in bulk, reducing database round trips. ([#2294](https://github.com/Emanuele-web04/synara/pull/2294))
+
+### Fixed
+
+- Antigravity question cards display native choice text and send the expected identifiers for selected and custom answers. ([#2295](https://github.com/Emanuele-web04/synara/pull/2295))
+- The macOS backend exits after shutdown even if the updater IPC channel is still open. ([#2296](https://github.com/Emanuele-web04/synara/pull/2296))
+- Codex and Grok usage refreshes serialize concurrent refresh requests per account within the server process. ([#2294](https://github.com/Emanuele-web04/synara/pull/2294))
+
+### Verification
+
+Publication requires workspace checks, server tests, native packaging, artifact provenance, and packaged startup. macOS requires signing and notarization. Windows x64 uses the version-scoped unsigned exception and requires a live Microsoft Defender scan. Manual installs, upgrades, and live provider sessions require separate verification.
+
 ## 1.6.6 — 2026-11-24
 
 **Smaller desktop downloads, faster startup, and more control in Antigravity.**
