@@ -14,6 +14,7 @@ import react from "@vitejs/plugin-react";
 import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import { defineConfig, type Plugin } from "vite";
 import pkg from "./package.json" with { type: "json" };
+import { bootChunkGroups } from "./scripts/boot-chunk-groups";
 import { compilerCacheFingerprint } from "./scripts/compiler-cache-key";
 import {
   threadWorkerFactory,
@@ -168,6 +169,16 @@ function precompressPlugin(): Plugin {
   };
 }
 
+// Cold-boot steps after the entry, in load order: bootstrap.ts imports main.tsx once
+// connected, every route renders inside the _chat layout, and usePreloadRouteChunks
+// warms the thread route. The build fails if a root leaves the module graph, so a
+// rename cannot silently drop a step.
+const BOOT_STEPS = [
+  { name: "boot-main", root: "src/main.tsx" },
+  { name: "boot-chat", root: "src/routes/_chat.tsx?tsr-split=component" },
+  { name: "boot-thread", root: "src/routes/_chat.$threadId.tsx?tsr-split=component" },
+] as const;
+
 export default defineConfig({
   plugins: [
     tanstackRouter({
@@ -227,12 +238,7 @@ export default defineConfig({
     precompressPlugin(),
   ],
   optimizeDeps: {
-    include: [
-      "@pierre/diffs",
-      "@pierre/diffs/react",
-      "@pierre/diffs/worker/worker.js",
-      "react-icons/gr",
-    ],
+    include: ["@pierre/diffs", "@pierre/diffs/react", "@pierre/diffs/worker/worker.js"],
   },
   define: {
     // In dev mode, tell the web app where the WebSocket server lives
@@ -257,13 +263,54 @@ export default defineConfig({
     outDir: "dist",
     emptyOutDir: true,
     sourcemap: buildSourcemap,
-    // The largest chunks are intentionally lazy-loaded editor grammars,
-    // terminal runtime code, and the chat route—not initial-load bundles.
+    // Above the limit: the lazy Monaco editor and CSS worker.
     chunkSizeWarningLimit: 850,
     rolldownOptions: {
       checks: {
         // React Compiler is expected to dominate transform time in this app.
         pluginTimings: false,
+      },
+      output: {
+        // Automatic chunking spreads a cold boot over ~300 small shared chunks, one
+        // per mix of lazy routes and components that also use a module; over HTTP/1.1
+        // they queue on six connections. These groups load it in about 30 files
+        // without growing what the entry evaluates before DOMContentLoaded:
+        // - The entry's static closure (rolldown's `$initial` tag) goes first, in three
+        //   chunks that download and compile in parallel. A broader group that took
+        //   one of these modules would make the entry import, and evaluate, the rest
+        //   of that group. Dependencies first: the last group holds the entry module,
+        //   and a group takes its modules' dependencies with it.
+        // - Each boot step is cut into acyclic bands of about 1 MB of source
+        //   (bootChunkGroups). One file per step would be fewer requests, but on a
+        //   slow CPU a 2 MB script adds a long main-thread task when it arrives.
+        // Everything else (other routes, dialogs, xterm, KaTeX, @pierre/diffs,
+        // locales) keeps automatic chunking and loads only when used.
+        // Measurements: benchmarks/web-boot/RESULTS.md.
+        codeSplitting: {
+          groups: [
+            {
+              name: "boot-vendor",
+              tags: ["$initial"],
+              test: /[\\/]node_modules[\\/]/,
+              priority: 1003,
+            },
+            {
+              name: "boot-shared",
+              tags: ["$initial"],
+              test: /[\\/]packages[\\/]/,
+              priority: 1002,
+            },
+            { name: "boot", tags: ["$initial"], priority: 1001 },
+            ...bootChunkGroups({
+              root: import.meta.dirname,
+              entry: "src/bootstrap.ts",
+              steps: BOOT_STEPS,
+              bandBytes: 1_000_000,
+              maxBandsPerStep: 40,
+              priority: 1000,
+            }),
+          ],
+        },
       },
     },
   },

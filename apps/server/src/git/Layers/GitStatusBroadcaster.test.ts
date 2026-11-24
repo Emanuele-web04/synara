@@ -1,5 +1,5 @@
 import type { GitStatusResult, GitStatusStreamEvent } from "@synara/contracts";
-import { Deferred, Effect, Layer, Scope, Stream } from "effect";
+import { Deferred, Effect, Fiber, Layer, Scope, Stream } from "effect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { GitManagerServiceError } from "../Errors";
@@ -39,6 +39,8 @@ function makeTestLayer(state: {
   currentStatus: GitStatusResult;
   detailsCalls: number;
   statusCalls: number;
+  /** Holds every status read open after it captured the current status. */
+  statusGate?: Effect.Effect<void>;
 }) {
   const gitCore = {
     statusDetails: () =>
@@ -49,9 +51,11 @@ function makeTestLayer(state: {
   } as unknown as GitCoreShape;
   const gitManager: GitManagerShape = {
     status: () =>
-      Effect.sync(() => {
+      Effect.suspend(() => {
         state.statusCalls += 1;
-        return state.currentStatus;
+        // Captured before the gate, like git subprocesses that already ran.
+        const status = state.currentStatus;
+        return state.statusGate ? Effect.as(state.statusGate, status) : Effect.succeed(status);
       }),
     pullRequestForBranch: () =>
       Effect.die("pullRequestForBranch should not be called in this test"),
@@ -82,6 +86,7 @@ const runBroadcasterTest = (
     currentStatus: GitStatusResult;
     detailsCalls: number;
     statusCalls: number;
+    statusGate?: Effect.Effect<void>;
   },
   effect: Effect.Effect<void, GitManagerServiceError, GitStatusBroadcaster | Scope.Scope>,
 ) => effect.pipe(Effect.provide(makeTestLayer(state)), Effect.scoped, Effect.runPromise);
@@ -409,6 +414,90 @@ describe("GitStatusBroadcasterLive", () => {
             workingTree: baseStatus.workingTree,
           },
         });
+      }),
+    );
+  });
+
+  it("shares one git read between concurrent status loads", async () => {
+    const gate = Effect.runSync(Deferred.make<void>());
+    const state = {
+      currentDetails: baseDetails,
+      currentStatus: baseStatus,
+      detailsCalls: 0,
+      statusCalls: 0,
+      statusGate: Deferred.await(gate),
+    };
+
+    await runBroadcasterTest(
+      state,
+      Effect.gen(function* () {
+        const broadcaster = yield* GitStatusBroadcaster;
+        const first = yield* broadcaster.getStatus({ cwd: "/repo" }).pipe(Effect.forkScoped);
+        const second = yield* broadcaster.getStatus({ cwd: "/repo" }).pipe(Effect.forkScoped);
+        yield* Effect.sleep("10 millis");
+        yield* Deferred.succeed(gate, undefined);
+
+        expect(yield* Fiber.join(first)).toEqual(baseStatus);
+        expect(yield* Fiber.join(second)).toEqual(baseStatus);
+        expect(state.statusCalls).toBe(1);
+      }),
+    );
+  });
+
+  it("releases waiting status loads when the leading load is interrupted", async () => {
+    const gate = Effect.runSync(Deferred.make<void>());
+    const state = {
+      currentDetails: baseDetails,
+      currentStatus: baseStatus,
+      detailsCalls: 0,
+      statusCalls: 0,
+      statusGate: Deferred.await(gate),
+    };
+
+    await runBroadcasterTest(
+      state,
+      Effect.gen(function* () {
+        const broadcaster = yield* GitStatusBroadcaster;
+        const leader = yield* broadcaster.getStatus({ cwd: "/repo" }).pipe(Effect.forkScoped);
+        yield* Effect.sleep("10 millis");
+        const waiter = yield* broadcaster.getStatus({ cwd: "/repo" }).pipe(Effect.forkScoped);
+        yield* Effect.sleep("10 millis");
+        expect(state.statusCalls).toBe(1);
+
+        yield* Fiber.interrupt(leader);
+        yield* Deferred.succeed(gate, undefined);
+
+        // The waiter takes over with its own read instead of hanging forever.
+        expect(yield* Fiber.join(waiter)).toEqual(baseStatus);
+        expect(state.statusCalls).toBe(2);
+      }),
+    );
+  });
+
+  it("runs a new git read for a refresh requested during an in-flight refresh", async () => {
+    const gate = Effect.runSync(Deferred.make<void>());
+    const state = {
+      currentDetails: baseDetails,
+      currentStatus: baseStatus,
+      detailsCalls: 0,
+      statusCalls: 0,
+      statusGate: Deferred.await(gate),
+    };
+
+    await runBroadcasterTest(
+      state,
+      Effect.gen(function* () {
+        const broadcaster = yield* GitStatusBroadcaster;
+        const beforeCommit = yield* broadcaster.refreshStatus("/repo").pipe(Effect.forkScoped);
+        yield* Effect.sleep("10 millis");
+        state.currentStatus = { ...baseStatus, aheadCount: 1 };
+        const afterCommit = yield* broadcaster.refreshStatus("/repo").pipe(Effect.forkScoped);
+        yield* Effect.sleep("10 millis");
+        yield* Deferred.succeed(gate, undefined);
+
+        expect(yield* Fiber.join(beforeCommit)).toEqual(baseStatus);
+        expect(yield* Fiber.join(afterCommit)).toEqual({ ...baseStatus, aheadCount: 1 });
+        expect(state.statusCalls).toBe(2);
       }),
     );
   });

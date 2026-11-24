@@ -2107,6 +2107,45 @@ describe("WsTransport", () => {
     }
   });
 
+  it("offers the config boot snapshot only while it is recent", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-26T10:00:00.000Z"));
+    const { transport, internals } = makeBareTransport();
+    const config = { issues: [], providers: [] };
+    Object.assign(internals, {
+      latestServerConfigSnapshot: config,
+      latestServerConfigSnapshotAtMs: Date.now(),
+    });
+
+    expect(transport.getLatestServerConfigSnapshot()).toBe(config);
+    vi.setSystemTime(new Date("2026-07-26T10:00:11.000Z"));
+    // Past boot the snapshot is the server's state at subscribe time, not now.
+    expect(transport.getLatestServerConfigSnapshot()).toBeNull();
+  });
+
+  it("waits for the config snapshot only until the config stream has spoken", async () => {
+    vi.useFakeTimers();
+    bindWindowTimersToCurrentGlobals();
+    const { transport, internals } = makeBareTransport();
+    Object.assign(internals, {
+      listeners: new Map([[WS_CHANNELS.serverConfigUpdated, new Set([() => undefined])]]),
+      initialServerConfigWaiters: new Set(),
+      latestServerConfigSnapshot: null,
+      serverConfigStreamSettled: false,
+    });
+
+    // Boot: the opening snapshot is still on its way.
+    const pending = transport.waitForInitialServerConfigSnapshot(1_500);
+    expect(pending).not.toBeNull();
+    await vi.advanceTimersByTimeAsync(1_500);
+    await expect(pending).resolves.toBeNull();
+
+    // After a configUpdated event no snapshot is coming: callers must not
+    // sit out the timeout before asking the server.
+    Object.assign(internals, { serverConfigStreamSettled: true });
+    expect(transport.waitForInitialServerConfigSnapshot(1_500)).toBeNull();
+  });
+
   it("preserves terminal closed state when an already scheduled stream requests reconnect", async () => {
     const { transport, internals } = makeBareTransport();
     const session = { id: 2, failed: false };

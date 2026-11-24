@@ -9,6 +9,7 @@ import {
   createAllThreadsMessagelessSelector,
   createComposerThreadMentionSourcesSelector,
   createLastActivityTimestampSelector,
+  createNotificationThreadsSelector,
   createProjectLastActivityAtSelector,
   createSidebarDisplayThreadsSelector,
   createSidechatSummariesForGitHubItemSelector,
@@ -107,6 +108,33 @@ describe("createThreadShellsSelector", () => {
     expect(after).not.toBe(before);
     expect(after[0]?.title).toBe("renamed");
   });
+});
+
+it("keeps notification threads stable during streaming and observes settled background work", () => {
+  const selectThreads = createNotificationThreadsSelector();
+  const initialShell = { ...shellA, pendingBackgroundTaskCount: 1 };
+  const initial = makeState({
+    threadIds: [threadIdA],
+    threadShellById: { [threadIdA]: initialShell },
+  });
+  const before = selectThreads(initial);
+  const streamedShell = {
+    ...initialShell,
+    updatedAt: "2026-01-01T00:00:05.000Z",
+  };
+  expect(
+    selectThreads({
+      ...initial,
+      threadShellById: { [threadIdA]: streamedShell },
+    }),
+  ).toBe(before);
+
+  expect(
+    selectThreads({
+      ...initial,
+      threadShellById: { [threadIdA]: { ...streamedShell, pendingBackgroundTaskCount: 0 } },
+    })[0]?.pendingBackgroundTaskCount,
+  ).toBe(0);
 });
 
 describe("createThreadShellSettingsSelector", () => {

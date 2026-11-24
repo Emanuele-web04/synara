@@ -79,17 +79,22 @@ export function markThreadVisited(
 ): AppState {
   const at = visitedAt ?? new Date().toISOString();
   const visitedAtMs = Date.parse(at);
-  return applyThreadUpdate(state, threadId, (thread) => {
-    const previousVisitedAtMs = thread.lastVisitedAt ? Date.parse(thread.lastVisitedAt) : NaN;
-    if (
-      Number.isFinite(previousVisitedAtMs) &&
-      Number.isFinite(visitedAtMs) &&
-      previousVisitedAtMs >= visitedAtMs
-    ) {
-      return thread;
-    }
-    return { ...thread, lastVisitedAt: at };
-  });
+  return applyThreadUpdate(
+    state,
+    threadId,
+    (thread) => {
+      const previousVisitedAtMs = thread.lastVisitedAt ? Date.parse(thread.lastVisitedAt) : NaN;
+      if (
+        Number.isFinite(previousVisitedAtMs) &&
+        Number.isFinite(visitedAtMs) &&
+        previousVisitedAtMs >= visitedAtMs
+      ) {
+        return thread;
+      }
+      return { ...thread, lastVisitedAt: at };
+    },
+    { recomputeSummarySignals: false },
+  );
 }
 
 export function markThreadUnread(state: AppState, threadId: ThreadId): AppState {

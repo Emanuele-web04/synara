@@ -405,6 +405,22 @@ export function onServerWelcome(listener: (payload: WsWelcomePayload) => void): 
  * Subscribe to server config update events. Replays the latest update for
  * late subscribers to avoid missing config validation feedback.
  */
+export function readLatestServerConfigSnapshot() {
+  return instance?.transport.getLatestServerConfigSnapshot() ?? null;
+}
+
+export function waitForInitialServerConfigSnapshot(timeoutMs?: number) {
+  return instance?.transport.waitForInitialServerConfigSnapshot(timeoutMs) ?? null;
+}
+
+export function readLatestServerSettingsSnapshot() {
+  return instance?.transport.getLatestServerSettingsSnapshot() ?? null;
+}
+
+export function waitForInitialServerSettingsSnapshot(timeoutMs?: number) {
+  return instance?.transport.waitForInitialServerSettingsSnapshot(timeoutMs) ?? null;
+}
+
 export function onServerConfigUpdated(
   listener: (payload: ServerConfigUpdatedPayload) => void,
 ): () => void {

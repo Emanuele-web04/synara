@@ -10,24 +10,35 @@ export interface OrchestrationCommandFingerprint {
   readonly value: string;
 }
 
+const decodeOrchestrationCommand = Schema.decodeUnknownSync(OrchestrationCommand);
+
 function canonicalizeJson(value: unknown): unknown {
   if (Array.isArray(value)) {
-    return value.map(canonicalizeJson);
+    const length = value.length;
+    const out = new Array<unknown>(length);
+    for (let index = 0; index < length; index += 1) {
+      out[index] = canonicalizeJson(value[index]);
+    }
+    return out;
   }
   if (value !== null && typeof value === "object") {
     const record = value as Record<string, unknown>;
-    return Object.fromEntries(
-      Object.keys(record)
-        .sort()
-        .filter((key) => record[key] !== undefined)
-        .map((key) => [key, canonicalizeJson(record[key])]),
-    );
+    const keys = Object.keys(record).sort();
+    const out: Record<string, unknown> = {};
+    for (let index = 0; index < keys.length; index += 1) {
+      const key = keys[index]!;
+      const entry = record[key];
+      if (entry !== undefined) {
+        out[key] = canonicalizeJson(entry);
+      }
+    }
+    return out;
   }
   return value;
 }
 
 function commandIntent(command: Command): Record<string, unknown> {
-  const decoded = Schema.decodeUnknownSync(OrchestrationCommand)(command);
+  const decoded = decodeOrchestrationCommand(command);
   const { commandId: _commandId, ...intent } = decoded;
   if (intent.type !== "thread.turn.start") {
     return intent;
@@ -56,13 +67,51 @@ function commandIntent(command: Command): Record<string, unknown> {
   };
 }
 
+function tryBuildFastAssistantDeltaCanonicalJson(command: Command): string | null {
+  if (command.type !== "thread.message.assistant.delta" || command.attachments !== undefined) {
+    return null;
+  }
+  const { createdAt, delta, messageId, segmentSequence, segmentStartedAt, threadId, turnId } =
+    command;
+  if (
+    typeof createdAt !== "string" ||
+    typeof delta !== "string" ||
+    typeof messageId !== "string" ||
+    typeof threadId !== "string" ||
+    (segmentSequence !== undefined &&
+      (typeof segmentSequence !== "number" ||
+        !Number.isInteger(segmentSequence) ||
+        segmentSequence < 0)) ||
+    (segmentStartedAt !== undefined && typeof segmentStartedAt !== "string") ||
+    (turnId !== undefined && typeof turnId !== "string")
+  ) {
+    return null;
+  }
+  // Exact same sorted-key JSON as `canonicalizeJson({ version, command: intent })`.
+  let json = `{"command":{"createdAt":${JSON.stringify(createdAt)},"delta":${JSON.stringify(delta)},"messageId":${JSON.stringify(messageId)}`;
+  if (segmentSequence !== undefined) {
+    json += `,"segmentSequence":${segmentSequence}`;
+  }
+  if (segmentStartedAt !== undefined) {
+    json += `,"segmentStartedAt":${JSON.stringify(segmentStartedAt)}`;
+  }
+  json += `,"threadId":${JSON.stringify(threadId)}`;
+  if (turnId !== undefined) {
+    json += `,"turnId":${JSON.stringify(turnId)}`;
+  }
+  json += `,"type":"thread.message.assistant.delta"},"version":${ORCHESTRATION_COMMAND_FINGERPRINT_VERSION}}`;
+  return json;
+}
+
 export function fingerprintOrchestrationCommand(command: Command): OrchestrationCommandFingerprint {
-  const canonical = JSON.stringify(
-    canonicalizeJson({
-      version: ORCHESTRATION_COMMAND_FINGERPRINT_VERSION,
-      command: commandIntent(command),
-    }),
-  );
+  const canonical =
+    tryBuildFastAssistantDeltaCanonicalJson(command) ??
+    JSON.stringify(
+      canonicalizeJson({
+        version: ORCHESTRATION_COMMAND_FINGERPRINT_VERSION,
+        command: commandIntent(command),
+      }),
+    );
   return {
     version: ORCHESTRATION_COMMAND_FINGERPRINT_VERSION,
     value: Crypto.createHash("sha256").update(canonical).digest("hex"),
