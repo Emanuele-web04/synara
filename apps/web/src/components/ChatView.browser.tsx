@@ -2680,18 +2680,19 @@ describe("ChatView transcript geometry (full app)", () => {
           },
         ],
       };
+      // This case exercises the editor's quota UI, so mount that surface and
+      // let the existing chat fixture wait for its lazy route and composer.
+      if (editor) await import("./EditorWorkspaceView");
       const mounted = await mountChatView({
         viewport: { ...DEFAULT_VIEWPORT, width: 1_400 },
         snapshot,
+        ...(editor ? { initialEntry: `/${THREAD_ID}?view=editor` } : {}),
       });
       try {
         await waitForComposerEditor();
         if (editor) {
-          await mounted.router.navigate({
-            to: "/$threadId",
-            params: { threadId: THREAD_ID },
-            search: { view: "editor" },
-          });
+          await expect.element(page.getByTitle("Switch to chat view")).toBeVisible();
+          await expect.element(page.getByTestId("composer-editor")).toBeVisible();
           await expect
             .element(page.getByRole("button", { name: /Toggle environment panel/ }))
             .not.toBeInTheDocument();

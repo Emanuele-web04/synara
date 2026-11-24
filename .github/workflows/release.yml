@@ -37,7 +37,8 @@ env:
   AZURE_TRUSTED_SIGNING_SUBJECT_DN: ${{ secrets.AZURE_TRUSTED_SIGNING_SUBJECT_DN }}
 
 concurrency:
-  group: synara-desktop-release
+  # Build-only diagnostics cannot hold the publishing queue.
+  group: ${{ (github.event_name == 'push' || inputs.publish_release) && 'synara-desktop-release' || 'synara-desktop-build-only' }}
   cancel-in-progress: false
 
 jobs:
@@ -458,14 +459,6 @@ jobs:
         with:
           arch: ${{ matrix.arch }}
           benchmark-baseline: ${{ inputs.cua_benchmark_baseline || '' }}
-      - name: Upload prepared Cua for this candidate
-        if: needs.preflight.outputs.package_artifacts == 'true'
-        uses: actions/upload-artifact@v7
-        with:
-          name: prepared-cua-${{ matrix.platform }}-${{ matrix.arch }}
-          path: ${{ runner.temp }}/cua-artifact
-          retention-days: 30
-          if-no-files-found: error
       - name: Upload Cua benchmark evidence
         if: ${{ always() && needs.preflight.outputs.benchmark_native == 'true' }}
         uses: actions/upload-artifact@v7
@@ -476,11 +469,12 @@ jobs:
 
   build:
     name: Build ${{ matrix.label }}
+    # Each native job verifies its own Cua helper on the packaging runner.
     # Tests consume the same source independently; both publishers gate on them.
     # The icon catalog comes from exactly one source: a verified exact restore
     # (compile skipped) or the macOS 26 compile after a successful miss.
-    needs: [preflight, restore_mac_icon, build_mac_icon, build_portable, prepare_cua]
-    if: ${{ !cancelled() && needs.preflight.result == 'success' && needs.preflight.outputs.package_artifacts == 'true' && (needs.prepare_cua.result == 'success' || (needs.preflight.outputs.prepare_cua == 'false' && needs.prepare_cua.result == 'skipped')) && ((needs.restore_mac_icon.result == 'success' && ((needs.restore_mac_icon.outputs.hit == 'true' && needs.build_mac_icon.result == 'skipped') || (needs.restore_mac_icon.outputs.hit != 'true' && needs.build_mac_icon.result == 'success'))) || (needs.preflight.outputs.build_icon == 'false' && needs.restore_mac_icon.result == 'skipped' && needs.build_mac_icon.result == 'skipped')) && needs.build_portable.result == 'success' }}
+    needs: [preflight, restore_mac_icon, build_mac_icon, build_portable]
+    if: ${{ !cancelled() && needs.preflight.result == 'success' && needs.preflight.outputs.package_artifacts == 'true' && ((needs.restore_mac_icon.result == 'success' && ((needs.restore_mac_icon.outputs.hit == 'true' && needs.build_mac_icon.result == 'skipped') || (needs.restore_mac_icon.outputs.hit != 'true' && needs.build_mac_icon.result == 'success'))) || (needs.preflight.outputs.build_icon == 'false' && needs.restore_mac_icon.result == 'skipped' && needs.build_mac_icon.result == 'skipped')) && needs.build_portable.result == 'success' }}
     permissions:
       contents: read
       actions: read

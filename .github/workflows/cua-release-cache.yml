@@ -6,6 +6,7 @@ on:
       - packages/shared/src/cuaDriverRelease.json
       - apps/desktop/patches/cua-driver/**
       - apps/desktop/scripts/provision-cua-driver.mjs
+      - apps/desktop/scripts/strip-mac-cua-symbols.mjs
       - apps/desktop/scripts/cua-artifact-provenance.mjs
       - apps/desktop/scripts/cua-cache-key.mjs
       - apps/desktop/scripts/find-cua-artifact.mjs

@@ -93,9 +93,9 @@ export function resolveReleaseBuildScope(
       include: stage === "native" ? selected.filter((entry) => entry.platform !== "win") : selected,
     },
     cua_matrix: { include: selected.filter((entry) => entry.platform !== "win") },
-    prepare_cua:
-      (stage === "native" || stage === "artifact") &&
-      selected.some((entry) => entry.platform !== "win"),
+    // Artifact runs provision on their own packaging runners. The separate
+    // matrix is only needed for build-only native validation and benchmarks.
+    prepare_cua: stage === "native",
     build_icon:
       stage === "icon" ||
       (stage === "artifact" && selected.some((entry) => entry.platform === "mac")),
