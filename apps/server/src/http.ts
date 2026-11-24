@@ -1533,6 +1533,64 @@ export const attachmentsEffectRouteLayer = HttpRouter.add(
   }).pipe(Effect.catchTag("AuthError", (error) => Effect.succeed(authErrorResponse(error)))),
 );
 
+interface CachedImmutableStaticAsset {
+  readonly data: Uint8Array;
+  readonly etag: string;
+  readonly contentType: string;
+  readonly encoding: string | undefined;
+  readonly byteLength: number;
+}
+
+const IMMUTABLE_STATIC_CACHE_MAX_BYTES = 24 * 1024 * 1024;
+const immutableStaticAssetCache = new Map<string, CachedImmutableStaticAsset>();
+let immutableStaticAssetCacheBytes = 0;
+
+function getCachedImmutableStaticAsset(key: string): CachedImmutableStaticAsset | undefined {
+  const hit = immutableStaticAssetCache.get(key);
+  if (!hit) return undefined;
+  immutableStaticAssetCache.delete(key);
+  immutableStaticAssetCache.set(key, hit);
+  return hit;
+}
+
+function setCachedImmutableStaticAsset(key: string, entry: CachedImmutableStaticAsset): void {
+  if (entry.byteLength > IMMUTABLE_STATIC_CACHE_MAX_BYTES / 4) return;
+  const previous = immutableStaticAssetCache.get(key);
+  if (previous) {
+    immutableStaticAssetCacheBytes -= previous.byteLength;
+    immutableStaticAssetCache.delete(key);
+  }
+  while (
+    immutableStaticAssetCacheBytes + entry.byteLength > IMMUTABLE_STATIC_CACHE_MAX_BYTES &&
+    immutableStaticAssetCache.size > 0
+  ) {
+    const oldestKey = immutableStaticAssetCache.keys().next().value;
+    if (oldestKey === undefined) break;
+    const oldest = immutableStaticAssetCache.get(oldestKey);
+    immutableStaticAssetCache.delete(oldestKey);
+    if (oldest) immutableStaticAssetCacheBytes -= oldest.byteLength;
+  }
+  immutableStaticAssetCache.set(key, entry);
+  immutableStaticAssetCacheBytes += entry.byteLength;
+}
+
+function cachedImmutableStaticResponse(
+  cached: CachedImmutableStaticAsset,
+  cacheHeaders: { readonly "Cache-Control": string; readonly Vary: string },
+  ifNoneMatch: string | undefined,
+) {
+  const encodingHeaders = cached.encoding ? { "Content-Encoding": cached.encoding } : {};
+  const headers = { ...cacheHeaders, ...encodingHeaders, ETag: cached.etag };
+  if (ifNoneMatchSatisfies(ifNoneMatch, cached.etag)) {
+    return HttpServerResponse.empty({ status: 304, headers });
+  }
+  return HttpServerResponse.uint8Array(cached.data, {
+    status: 200,
+    contentType: cached.contentType,
+    headers,
+  });
+}
+
 export const staticAndDevEffectRouteLayer = HttpRouter.add(
   "GET",
   "*",
@@ -1574,27 +1632,17 @@ export const staticAndDevEffectRouteLayer = HttpRouter.add(
       candidate === staticRoot ||
       candidate.startsWith(staticRoot.endsWith(path.sep) ? staticRoot : `${staticRoot}${path.sep}`);
 
-    // Lexical containment is not containment: stat and readFile follow
-    // symlinks, so a link inside the root pointing outside it would be served.
-    // Canonicalize before opening anything. The root itself is canonicalized
-    // too, otherwise a symlinked staticDir would fail its own check.
+    // Resolve the root and the file for each request. A symlinked build can be
+    // replaced while the server is still running, including when assets are cached.
     const canonicalStaticRoot = yield* fileSystem
       .realPath(staticRoot)
-      .pipe(Effect.catch(() => Effect.succeed(staticRoot)));
-    const isWithinCanonicalRoot = (candidate: string) =>
-      candidate === canonicalStaticRoot ||
-      candidate.startsWith(
-        canonicalStaticRoot.endsWith(path.sep)
-          ? canonicalStaticRoot
-          : `${canonicalStaticRoot}${path.sep}`,
-      );
-    const resolvesInsideRoot = Effect.fn(function* (candidate: string) {
-      const real = yield* fileSystem
-        .realPath(candidate)
-        .pipe(Effect.catch(() => Effect.succeed(null)));
-      // A path that cannot be canonicalized does not exist; the caller's own
-      // stat/readFile will fail it, and refusing here keeps 404 semantics.
-      return real === null ? false : isWithinCanonicalRoot(real);
+      .pipe(Effect.orElseSucceed(() => staticRoot));
+    const canonicalPrefix = canonicalStaticRoot.endsWith(path.sep)
+      ? canonicalStaticRoot
+      : `${canonicalStaticRoot}${path.sep}`;
+    const resolveStaticFile = Effect.fn(function* (candidate: string) {
+      const real = yield* fileSystem.realPath(candidate).pipe(Effect.orElseSucceed(() => null));
+      return real !== null && real.startsWith(canonicalPrefix) ? real : null;
     });
 
     let filePath = path.resolve(staticRoot, relativePath);
@@ -1616,8 +1664,11 @@ export const staticAndDevEffectRouteLayer = HttpRouter.add(
     // when a sidecar is served, so validators differ per encoding), making
     // no-cache revalidation a 304 instead of a full re-transfer.
     const serveStaticFile = Effect.fn(function* (resolvedPath: string) {
+      const relativeResolved = path.relative(staticRoot, resolvedPath).replaceAll("\\", "/");
+      const cacheControl = staticCacheControl(relativeResolved);
+      const isImmutableAsset = relativeResolved.startsWith("assets/");
       const cacheHeaders = {
-        "Cache-Control": staticCacheControl(path.relative(staticRoot, resolvedPath)),
+        "Cache-Control": cacheControl,
         Vary: "Accept-Encoding",
       };
       const ifNoneMatch = request.headers["if-none-match"];
@@ -1625,12 +1676,16 @@ export const staticAndDevEffectRouteLayer = HttpRouter.add(
       const contentType =
         baseContentType === "text/html" ? "text/html; charset=utf-8" : baseContentType;
       const respond = Effect.fn(function* (servedPath: string, encoding?: string) {
-        // Canonicalize before opening: a symlink inside the root pointing
-        // outside it passes the lexical guard but must not be served.
-        if (!(yield* resolvesInsideRoot(servedPath))) return null;
-        const info = yield* fileSystem
-          .stat(servedPath)
-          .pipe(Effect.catch(() => Effect.succeed(null)));
+        const real = yield* resolveStaticFile(servedPath);
+        if (real === null) return null;
+        // Include the representation URL so aliases with different MIME types
+        // never share cached headers even when they resolve to the same file.
+        const cacheKey = isImmutableAsset ? `${canonicalStaticRoot}\0${servedPath}\0${real}` : null;
+        if (cacheKey !== null) {
+          const cached = getCachedImmutableStaticAsset(cacheKey);
+          if (cached) return cachedImmutableStaticResponse(cached, cacheHeaders, ifNoneMatch);
+        }
+        const info = yield* fileSystem.stat(real).pipe(Effect.orElseSucceed(() => null));
         if (!info || info.type !== "File") return null;
         const etag = staticEtag(Number(info.size), info.mtime?.getTime() ?? 0, encoding);
         const encodingHeaders = encoding ? { "Content-Encoding": encoding } : {};
@@ -1639,9 +1694,18 @@ export const staticAndDevEffectRouteLayer = HttpRouter.add(
           return HttpServerResponse.empty({ status: 304, headers });
         }
         const data = yield* fileSystem
-          .readFile(servedPath)
+          .readFile(real)
           .pipe(Effect.catch(() => Effect.succeed(null)));
         if (!data) return null;
+        if (cacheKey !== null) {
+          setCachedImmutableStaticAsset(cacheKey, {
+            data,
+            etag,
+            contentType,
+            encoding,
+            byteLength: data.byteLength,
+          });
+        }
         return HttpServerResponse.uint8Array(data, { status: 200, contentType, headers });
       });
       const preference = negotiateStaticEncodingPreference(request.headers["accept-encoding"]);

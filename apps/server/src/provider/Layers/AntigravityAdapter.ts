@@ -14,6 +14,7 @@ import {
   EventId,
   type ProviderApprovalDecision,
   type ProviderComposerCapabilities,
+  type ProviderInteractionMode,
   type ProviderListModelsResult,
   type ProviderRuntimeEvent,
   type ProviderSession,
@@ -21,7 +22,9 @@ import {
   RuntimeRequestId,
   type ThreadId,
   TurnId,
+  type UserInputQuestion,
 } from "@synara/contracts";
+import { unsupportedAutoRuntimeModeMessage } from "@synara/shared/runtimeMode";
 import {
   Cause,
   DateTime,
@@ -96,21 +99,42 @@ import {
   stampAcpRuntimeEventLifecycleGeneration,
 } from "../acp/AcpCoreRuntimeEvents.ts";
 import { makeAcpNativeLoggers } from "../acp/AcpNativeLogging.ts";
-import { type AcpToolCallState, parsePermissionRequest } from "../acp/AcpRuntimeModel.ts";
+import {
+  type AcpToolCallState,
+  findSessionConfigOption,
+  parsePermissionRequest,
+} from "../acp/AcpRuntimeModel.ts";
 import { type AcpSessionRuntimeShape } from "../acp/AcpSessionRuntime.ts";
 import {
   isAcpTurnProgressEventTag,
   resolveAcpTurnIdleTimeoutMs,
 } from "../acp/AcpTurnIdleWatchdog.ts";
-import { findSelectConfig, flattenConfigOptions } from "../acp/AcpConfigOptions.ts";
+import {
+  buildAcpModelDescriptor,
+  findSelectConfig,
+  flattenConfigOptions,
+} from "../acp/AcpConfigOptions.ts";
 import {
   type AntigravityAcpModel,
+  antigravityInteractionQuestion,
+  antigravityModelConfig,
+  antigravitySupportsTurnSteering,
+  antigravityThoughtLevelConfig,
+  buildAntigravityAcpSpawnInput,
   chooseAntigravityAcpModel,
   makeAntigravityAcpRuntime,
   readAntigravityAcpModels,
+  readAntigravityConfigModels,
+  resolveAntigravityAcpModelId,
   setAntigravityAcpModel,
   withAntigravityToolSummary,
 } from "../acp/AntigravityAcpSupport.ts";
+import {
+  type AntigravityChildWork,
+  asAntigravitySubagentCall,
+  readAntigravityChildWork,
+  resolveAntigravityProfile,
+} from "../acp/AntigravityChildWork.ts";
 import {
   elicitationQuestionsFromRequest,
   elicitationResponseFromAnswers,
@@ -189,6 +213,7 @@ interface AntigravitySessionContext {
   readonly scope: Scope.Closeable;
   readonly acp: AcpSessionRuntimeShape;
   readonly acpSessionId: string;
+  readonly antigravityProfile: string;
   readonly availableModels: ReadonlyArray<AntigravityAcpModel>;
   appliedModelId: string | undefined;
   notificationFiber: Fiber.Fiber<void, never> | undefined;
@@ -196,17 +221,28 @@ interface AntigravitySessionContext {
   readonly pendingUserInputs: Map<ApprovalRequestId, PendingUserInput>;
   readonly turns: Array<{ id: TurnId; items: Array<unknown> }>;
   lastPlanFingerprint: string | undefined;
-  activeInteractionMode: undefined;
+  activeInteractionMode: ProviderInteractionMode | undefined;
   activeTurnId: TurnId | undefined;
   activeTurnHadAssistantContent: boolean;
   readonly activeAssistantItemsWithContent: Set<string>;
   activeTurnFailedToolDetail: string | undefined;
   activePromptFiber: Fiber.Fiber<void, never> | undefined;
+  activeSteerRequests: number;
+  activeSteerCompletion: Pick<TurnOutcome, "state" | "stopReason" | "errorMessage"> | undefined;
   lastTurnActivityAt: number | undefined;
+  finishingTurnId: TurnId | undefined;
   /** Recent tool calls and outstanding calls that can still report after their turn ends. */
   readonly toolCallOwners: Map<string, { readonly turnId: TurnId; readonly settled: boolean }>;
   /** Non-daemon tool calls of the active turn that have not settled yet. */
   readonly runningToolCallIds: Set<string>;
+  readonly subagentCalls: Map<
+    string,
+    {
+      readonly toolCall: AcpToolCallState;
+      readonly rawPayload: unknown;
+    }
+  >;
+  subagentChildren: ReadonlyMap<string, ReadonlyArray<AntigravityChildWork>>;
   /** Set while a turn whose prompt returned waits for background commands. */
   backgroundWaitTurnId: TurnId | undefined;
   /** Resolves once the requested model is applied; turns wait on it. */
@@ -216,8 +252,6 @@ interface AntigravitySessionContext {
   sessionUpdatesProcessed: number;
   turnStarting: boolean;
   pendingTurnInterrupted: boolean;
-  /** The next turn was requested by background maintenance (idle compaction). */
-  pendingMaintenanceTurn: boolean;
   stopped: boolean;
 }
 
@@ -273,6 +307,14 @@ function sessionModelName(
   const name = availableModels.find((model) => model.modelId === modelId)?.name;
   return name ? (parseAntigravityCliModelLabel(name)?.model ?? name) : undefined;
 }
+
+// The advertised config value wins over the deprecated session mode state.
+const readAntigravityPermissionMode = Effect.fnUntraced(function* (acp: AcpSessionRuntimeShape) {
+  const config = findSelectConfig(yield* acp.getConfigOptions, { id: "mode", category: "mode" });
+  if (config) return { id: config.currentValue, configId: config.id };
+  const legacyMode = yield* acp.getModeState;
+  return legacyMode ? { id: legacyMode.currentModeId } : undefined;
+});
 
 export function makeAntigravityAdapter(dependencies: AntigravityAdapterDependencies = {}) {
   return Effect.gen(function* () {
@@ -414,23 +456,172 @@ export function makeAntigravityAdapter(dependencies: AntigravityAdapterDependenc
         ),
       );
 
-    /**
-     * Applies the requested model; never substitutes another model. Returns
-     * the exact ACP model id when known, or undefined when agy chose the
-     * thinking level for a base model.
-     */
+    const emitToolCall = (
+      ctx: AntigravitySessionContext,
+      toolCall: AcpToolCallState,
+      turnId: TurnId,
+      rawPayload: unknown,
+    ) =>
+      Effect.gen(function* () {
+        const children =
+          turnId === ctx.activeTurnId ? ctx.subagentChildren.get(toolCall.toolCallId) : undefined;
+        const enrichedCall =
+          children && children.length > 0
+            ? {
+                ...toolCall,
+                data: {
+                  ...toolCall.data,
+                  receiverAgents: children.map((child) => ({
+                    threadId: child.threadId,
+                    agentRole: child.role,
+                    prompt: child.prompt,
+                  })),
+                  agentStates: Object.fromEntries(
+                    children.map((child) => [
+                      child.threadId,
+                      {
+                        status: child.status ?? (child.atWork ? "running" : "unreported"),
+                        ...(child.latestUpdate ? { latestUpdate: child.latestUpdate } : {}),
+                      },
+                    ]),
+                  ),
+                },
+              }
+            : toolCall;
+        yield* offerRuntimeEvent(
+          ctx.lifecycleGeneration,
+          makeAcpToolCallEvent({
+            stamp: yield* makeEventStamp(),
+            provider: PROVIDER,
+            threadId: ctx.threadId,
+            turnId,
+            toolCall: scopeAcpToolCallStateForTurn(
+              PROVIDER,
+              turnId,
+              withAntigravityToolSummary(enrichedCall),
+            ),
+            rawPayload,
+          }),
+        );
+      });
+
+    /** Applies a saved model and its model-specific thought level before any prompt is sent. */
     const applyModelSelection = (
-      ctx: Pick<
-        AntigravitySessionContext,
-        "acp" | "acpSessionId" | "availableModels" | "appliedModelId" | "threadId"
-      >,
+      ctx: AntigravitySessionContext,
       selection: { readonly model: string; readonly reasoningEffort?: string | undefined },
     ) =>
       Effect.gen(function* () {
+        const configError = (cause: Parameters<typeof mapAcpToAdapterError>[3]) =>
+          mapAcpToAdapterError(PROVIDER, ctx.threadId, "session/set_config_option", cause);
+        const setConfig = (id: string, value: string) =>
+          withAcpTimeout(
+            "session/set_config_option",
+            ctx.acp.setConfigOption(id, value).pipe(Effect.mapError(configError)),
+          );
+        const configOptions = yield* ctx.acp.getConfigOptions.pipe(Effect.mapError(configError));
+        const modelConfig = antigravityModelConfig(configOptions);
+        if (modelConfig) {
+          const { availableModels, currentModelId } = readAntigravityConfigModels(modelConfig);
+          const parsed = parseAntigravityCliModelLabel(selection.model);
+          const bareOrchestrator = parsed?.model.toLowerCase() === "orchestrator";
+          const effort = selection.reasoningEffort ?? parsed?.effort;
+          const savedLabel = resolveAntigravityCliModelLabel(
+            selection.model,
+            effort ? { reasoningEffort: effort } : undefined,
+          );
+          const baseMatches = availableModels.filter(
+            (model) =>
+              parseAntigravityCliModelLabel(model.name)?.model.toLowerCase() ===
+              parsed?.model.toLowerCase(),
+          );
+          const savedAlias =
+            !bareOrchestrator &&
+            parsed?.effort &&
+            (parsed.effort === "low" ||
+              parsed.effort === "medium" ||
+              parsed.effort === "high" ||
+              parsed.effort === "thinking")
+              ? resolveAntigravityAcpModelId(availableModels, parsed.model)
+              : undefined;
+          const legacyPlanner =
+            bareOrchestrator && !effort
+              ? (baseMatches.find((model) => model.modelId === currentModelId)?.modelId ??
+                (baseMatches.length === 1 ? baseMatches[0]?.modelId : undefined))
+              : undefined;
+          const exactId =
+            bareOrchestrator && effort
+              ? undefined
+              : availableModels.find((model) => model.modelId === selection.model)?.modelId;
+          const variant = effort
+            ? resolveAntigravityAcpModelId(availableModels, savedLabel)
+            : undefined;
+          const modelId =
+            exactId ??
+            variant ??
+            (!(bareOrchestrator && effort)
+              ? resolveAntigravityAcpModelId(availableModels, selection.model)
+              : undefined) ??
+            savedAlias ??
+            legacyPlanner;
+          if (!modelId) {
+            return yield* new ProviderAdapterValidationError({
+              provider: PROVIDER,
+              operation: "session/set_config_option",
+              issue: `Antigravity does not offer the model '${effort ? savedLabel : selection.model}'. Refresh the model list and pick an available model.`,
+            });
+          }
+          yield* Effect.gen(function* () {
+            const selectedConfig =
+              modelId === currentModelId
+                ? configOptions
+                : (yield* setConfig(modelConfig.id, modelId)).configOptions;
+            if (!effort || (bareOrchestrator && variant === modelId)) return;
+            // A model switch replaces the thought-level choices. Validate the new model's menu.
+            const thoughtLevel = antigravityThoughtLevelConfig(selectedConfig);
+            const levelOptions = thoughtLevel ? flattenConfigOptions(thoughtLevel.options) : [];
+            const byLabel = levelOptions.filter(
+              (option) => option.name.toLowerCase() === effort.toLowerCase(),
+            );
+            const level =
+              levelOptions.find((option) => option.value === effort) ??
+              (byLabel.length === 1 ? byLabel[0] : undefined);
+            if (thoughtLevel && level) {
+              if (level.value !== thoughtLevel.currentValue)
+                yield* setConfig(thoughtLevel.id, level.value);
+            } else if (variant !== modelId || thoughtLevel) {
+              return yield* new ProviderAdapterValidationError({
+                provider: PROVIDER,
+                operation: "session/set_config_option",
+                issue: `Antigravity model '${selection.model}' does not offer '${effort}' as a thinking level.`,
+              });
+            }
+          }).pipe(
+            Effect.onError(() =>
+              Effect.gen(function* () {
+                // Changing the model can succeed before setting its effort fails. Restore both values.
+                const previousLevel = antigravityThoughtLevelConfig(configOptions);
+                if (modelId !== currentModelId) yield* setConfig(modelConfig.id, currentModelId);
+                if (previousLevel) yield* setConfig(previousLevel.id, previousLevel.currentValue);
+              }).pipe(
+                Effect.catch(() =>
+                  stopSessionInternal(ctx, {
+                    exitKind: "error",
+                    reason: "Antigravity could not restore the session's model settings.",
+                    awaitTermination: false,
+                  }),
+                ),
+              ),
+            ),
+          );
+          return modelId;
+        }
+
         const label = resolveAntigravityCliModelLabel(
           selection.model,
           selection.reasoningEffort ? { reasoningEffort: selection.reasoningEffort } : undefined,
-          defaultEffortByModel.get(selection.model),
+          defaultEffortByModel.get(
+            `${ctx.session.providerInstanceId ?? PROVIDER}\0${selection.model}`,
+          ),
         );
         const choice = chooseAntigravityAcpModel(ctx.availableModels, label, ctx.appliedModelId);
         switch (choice.kind) {
@@ -453,80 +644,74 @@ export function makeAntigravityAdapter(dependencies: AntigravityAdapterDependenc
             }
             return choice.modelId;
           case "base": {
-            const configOptions = yield* ctx.acp.getConfigOptions.pipe(
-              Effect.mapError((cause) =>
-                mapAcpToAdapterError(PROVIDER, ctx.threadId, "session/set_config_option", cause),
-              ),
-            );
-            const modelConfig = findSelectConfig(configOptions, { id: "model", category: "model" });
-            const option = modelConfig
-              ? flattenConfigOptions(modelConfig.options).find(
-                  (entry) => entry.name.trim().toLowerCase() === choice.baseName.toLowerCase(),
-                )
-              : undefined;
-            if (!modelConfig || !option) {
-              return yield* new ProviderAdapterValidationError({
-                provider: PROVIDER,
-                operation: "session/set_config_option",
-                issue: `Antigravity does not offer the model '${choice.baseName}'. Refresh the model list and pick an available model.`,
-              });
-            }
-            yield* withAcpTimeout(
-              "session/set_config_option",
-              ctx.acp
-                .setConfigOption(modelConfig.id, option.value)
-                .pipe(
-                  Effect.mapError((cause) =>
-                    mapAcpToAdapterError(
-                      PROVIDER,
-                      ctx.threadId,
-                      "session/set_config_option",
-                      cause,
-                    ),
-                  ),
-                ),
-            );
-            return undefined;
+            return yield* new ProviderAdapterValidationError({
+              provider: PROVIDER,
+              operation: "session/set_model",
+              issue: `Antigravity does not offer a selectable model for '${choice.baseName}'. Refresh the model list and pick an available model.`,
+            });
           }
         }
       });
 
     /** Emits the single terminal turn.completed for `turnId`; idempotent. */
-    const settleTurn = (ctx: AntigravitySessionContext, turnId: TurnId, outcome: TurnOutcome) =>
-      Effect.gen(function* () {
-        if (ctx.activeTurnId !== turnId) return false;
-        yield* cancelAgentGatewayTurn(ctx.gatewaySessionLease, turnId);
-        if (!clearAcpActiveTurn(ctx, turnId)) return false;
-        ctx.backgroundWaitTurnId = undefined;
-        ctx.runningToolCallIds.clear();
-        const completedCost = finalizeAcpActiveTurnCost(ctx);
-        ctx.turns.push({ id: turnId, items: [outcome.item] });
-        const { lastError: _lastError, ...sessionWithoutLastError } = ctx.session;
-        const updatedAt = yield* nowIso;
-        ctx.session =
-          outcome.state === "failed"
-            ? {
-                ...sessionWithoutLastError,
-                status: "error",
-                updatedAt,
-                ...(outcome.errorMessage ? { lastError: outcome.errorMessage } : {}),
-              }
-            : { ...sessionWithoutLastError, status: "ready", updatedAt };
-        yield* offerRuntimeEvent(ctx.lifecycleGeneration, {
-          type: "turn.completed",
-          ...(yield* makeEventStamp()),
-          provider: PROVIDER,
-          threadId: ctx.threadId,
-          turnId,
-          payload: {
-            state: outcome.state,
-            stopReason: outcome.stopReason,
-            ...(outcome.errorMessage !== undefined ? { errorMessage: outcome.errorMessage } : {}),
-            ...(outcome.usage !== undefined ? { usage: outcome.usage } : {}),
-            ...completedCost,
-          },
-        } as ProviderRuntimeEvent);
-        return true;
+    const settleTurn = (
+      ctx: AntigravitySessionContext,
+      turnId: TurnId,
+      initialOutcome: TurnOutcome,
+    ) =>
+      Effect.suspend(() => {
+        if (ctx.activeTurnId !== turnId || ctx.finishingTurnId === turnId)
+          return Effect.succeed(false);
+        ctx.finishingTurnId = turnId;
+        // An explicit Stop or transport failure retains ownership of the outcome.
+        const outcome =
+          initialOutcome.state === "completed" && ctx.activeSteerCompletion
+            ? { ...initialOutcome, ...ctx.activeSteerCompletion }
+            : initialOutcome;
+        return Effect.gen(function* () {
+          yield* cancelAgentGatewayTurn(ctx.gatewaySessionLease, turnId);
+          yield* settleAcpPendingApprovalsAsCancelled(ctx.pendingApprovals);
+          if (!clearAcpActiveTurn(ctx, turnId)) return false;
+          ctx.backgroundWaitTurnId = undefined;
+          ctx.activeSteerCompletion = undefined;
+          ctx.runningToolCallIds.clear();
+          const completedCost = finalizeAcpActiveTurnCost(ctx);
+          ctx.turns.push({ id: turnId, items: [outcome.item] });
+          const { lastError: _lastError, ...sessionWithoutLastError } = ctx.session;
+          const updatedAt = yield* nowIso;
+          ctx.session =
+            outcome.state === "failed"
+              ? {
+                  ...sessionWithoutLastError,
+                  status: "error",
+                  updatedAt,
+                  ...(outcome.errorMessage ? { lastError: outcome.errorMessage } : {}),
+                }
+              : { ...sessionWithoutLastError, status: "ready", updatedAt };
+          const stamp = yield* makeEventStamp();
+          ctx.finishingTurnId = undefined;
+          yield* offerRuntimeEvent(ctx.lifecycleGeneration, {
+            type: "turn.completed",
+            ...stamp,
+            provider: PROVIDER,
+            threadId: ctx.threadId,
+            turnId,
+            payload: {
+              state: outcome.state,
+              stopReason: outcome.stopReason,
+              ...(outcome.errorMessage !== undefined ? { errorMessage: outcome.errorMessage } : {}),
+              ...(outcome.usage !== undefined ? { usage: outcome.usage } : {}),
+              ...completedCost,
+            },
+          } as ProviderRuntimeEvent);
+          return true;
+        }).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              if (ctx.finishingTurnId === turnId) ctx.finishingTurnId = undefined;
+            }),
+          ),
+        );
       });
 
     /**
@@ -541,10 +726,67 @@ export function makeAntigravityAdapter(dependencies: AntigravityAdapterDependenc
       Effect.gen(function* () {
         ctx.backgroundWaitTurnId = turnId;
         const startedAt = Date.now();
+        let nextChildScanAt = startedAt;
+        let waking = false;
         while (ctx.activeTurnId === turnId && !ctx.stopped) {
+          if (ctx.pendingTurnInterrupted) return;
+          if (Date.now() >= nextChildScanAt && ctx.subagentCalls.size > 0) {
+            const children = yield* readAntigravityChildWork({
+              profile: ctx.antigravityProfile,
+              sessionId: ctx.acpSessionId,
+              toolCallIds: new Set(ctx.subagentCalls.keys()),
+            }).pipe(Effect.timeoutOption(1_000));
+            nextChildScanAt = Date.now() + 1_000;
+            if (ctx.activeTurnId !== turnId || ctx.stopped || ctx.pendingTurnInterrupted) return;
+            const observed = Option.getOrUndefined(children);
+            if (observed) {
+              if (waking !== observed.waking) ctx.lastTurnActivityAt = Date.now();
+              waking = observed.waking;
+              const previous = ctx.subagentChildren;
+              ctx.subagentChildren = observed.children;
+              for (const [id, current] of observed.children) {
+                if (JSON.stringify(current) === JSON.stringify(previous.get(id))) continue;
+                const call = ctx.subagentCalls.get(id);
+                if (call) {
+                  ctx.lastTurnActivityAt = Date.now();
+                  yield* emitToolCall(ctx, call.toolCall, turnId, call.rawPayload);
+                }
+              }
+            }
+          }
+          const childrenAtWork = [...ctx.subagentChildren.values()].some((children) =>
+            children.some((child) => child.atWork),
+          );
           const quietFor = Date.now() - (ctx.lastTurnActivityAt ?? startedAt);
-          if (ctx.runningToolCallIds.size === 0 && quietFor >= backgroundQuietMs) break;
-          if (Date.now() - startedAt >= ANTIGRAVITY_BACKGROUND_MAX_WAIT_MS) {
+          if (ctx.pendingUserInputs.size > 0 || ctx.pendingApprovals.size > 0) {
+            yield* Effect.sleep(ANTIGRAVITY_BACKGROUND_POLL_MS);
+            continue;
+          }
+          if (
+            !waking &&
+            !childrenAtWork &&
+            ctx.runningToolCallIds.size === 0 &&
+            ctx.activeSteerRequests === 0 &&
+            quietFor >= backgroundQuietMs
+          ) {
+            yield* waitForQueuedTurnEventsDrained(ctx);
+            if (
+              !ctx.pendingTurnInterrupted &&
+              ctx.runningToolCallIds.size === 0 &&
+              ctx.activeSteerRequests === 0 &&
+              ctx.pendingUserInputs.size === 0 &&
+              ctx.pendingApprovals.size === 0 &&
+              Date.now() - (ctx.lastTurnActivityAt ?? startedAt) >= backgroundQuietMs
+            ) {
+              yield* settleTurn(ctx, turnId, outcome);
+              return;
+            }
+            continue;
+          }
+          if (
+            ctx.activeSteerRequests === 0 &&
+            Date.now() - startedAt >= ANTIGRAVITY_BACKGROUND_MAX_WAIT_MS
+          ) {
             yield* Effect.logWarning("antigravity.acp.background_wait_expired", {
               threadId: ctx.threadId,
               turnId,
@@ -569,12 +811,11 @@ export function makeAntigravityAdapter(dependencies: AntigravityAdapterDependenc
               issue: `Expected provider '${PROVIDER}' but received '${input.provider}'.`,
             });
           }
-          if (input.runtimeMode !== "full-access") {
+          if (input.runtimeMode === "auto") {
             return yield* new ProviderAdapterValidationError({
               provider: PROVIDER,
               operation: "session/start",
-              issue:
-                "Synara runs Antigravity with full access because the CLI does not surface per-call approvals. Select Full access to use this provider.",
+              issue: unsupportedAutoRuntimeModeMessage(PROVIDER),
             });
           }
           yield* sessionTeardownGate.awaitPending(input.threadId);
@@ -613,15 +854,67 @@ export function makeAntigravityAdapter(dependencies: AntigravityAdapterDependenc
           );
           let ctx!: AntigravitySessionContext;
 
+          // Capture turn ownership at open so a late resolution cannot attach to a later turn.
+          const requestUserInput = (
+            questions: ReadonlyArray<UserInputQuestion>,
+            method: string,
+            params: unknown,
+            validate?: (answers: ProviderUserInputAnswers) => boolean,
+          ) =>
+            Effect.uninterruptibleMask((restore) =>
+              Effect.gen(function* () {
+                const turnId = ctx?.activeTurnId;
+                const requestId = ApprovalRequestId.makeUnsafe(crypto.randomUUID());
+                const runtimeRequestId = RuntimeRequestId.makeUnsafe(requestId);
+                const answers = yield* Deferred.make<ProviderUserInputAnswers>();
+                if (
+                  ctx?.stopped ||
+                  ctx?.pendingTurnInterrupted ||
+                  ctx?.finishingTurnId !== undefined ||
+                  (validate && !turnId)
+                )
+                  return {};
+                pendingUserInputs.set(requestId, { answers });
+                yield* offerRuntimeEvent(input.lifecycleGeneration, {
+                  type: "user-input.requested",
+                  ...(yield* makeEventStamp()),
+                  provider: PROVIDER,
+                  threadId: input.threadId,
+                  turnId,
+                  requestId: runtimeRequestId,
+                  payload: { questions },
+                  raw: { source: "acp.jsonrpc", method, payload: params },
+                });
+                const result = yield* Effect.exit(restore(Deferred.await(answers)));
+                const resolved =
+                  Exit.isSuccess(result) && (validate?.(result.value) ?? true) ? result.value : {};
+                pendingUserInputs.delete(requestId);
+                yield* offerRuntimeEvent(input.lifecycleGeneration, {
+                  type: "user-input.resolved",
+                  ...(yield* makeEventStamp()),
+                  provider: PROVIDER,
+                  threadId: input.threadId,
+                  turnId,
+                  requestId: runtimeRequestId,
+                  payload: { answers: resolved },
+                });
+                return resolved;
+              }),
+            );
+
           const resumeSessionId = readAntigravityResumeSessionId(input.resumeCursor);
           const providerOptions = input.providerOptions?.antigravity;
+          const antigravitySettings = {
+            ...(providerOptions?.binaryPath ? { binaryPath: providerOptions.binaryPath } : {}),
+            ...(providerOptions?.environment ? { environment: providerOptions.environment } : {}),
+          };
           const acp = yield* makeRuntime({
-            antigravitySettings: {
-              ...(providerOptions?.binaryPath ? { binaryPath: providerOptions.binaryPath } : {}),
-              ...(providerOptions?.environment ? { environment: providerOptions.environment } : {}),
-            },
+            antigravitySettings,
             childProcessSpawner,
             cwd,
+            ...(input.additionalDirectories !== undefined
+              ? { additionalDirectories: input.additionalDirectories }
+              : {}),
             ...(resumeSessionId ? { resumeSessionId } : {}),
             // Antigravity asks clarifying questions as ACP form elicitations when
             // the client supports them, and as plain chat text otherwise.
@@ -654,11 +947,56 @@ export function makeAntigravityAdapter(dependencies: AntigravityAdapterDependenc
 
           yield* acp.handleRequestPermission((params) =>
             Effect.gen(function* () {
+              const cancelled = { outcome: { outcome: "cancelled" as const } };
+              const turnId = ctx?.activeTurnId;
+              if (turnId === undefined || params.sessionId !== ctx.acpSessionId) return cancelled;
+              // Earlier background calls can still report after another turn starts.
+              const ownsTurn = () => {
+                const toolOwner = ctx.toolCallOwners.get(params.toolCall.toolCallId);
+                return (
+                  ctx.activeTurnId === turnId &&
+                  (toolOwner === undefined || toolOwner.turnId === turnId) &&
+                  !ctx.pendingTurnInterrupted &&
+                  ctx.finishingTurnId === undefined &&
+                  !ctx.stopped
+                );
+              };
+              if (!ownsTurn()) return cancelled;
               yield* logNative(input.threadId, "session/request_permission", params);
+              if (!ownsTurn()) return cancelled;
+              if (params.toolCall.toolCallId.startsWith("interaction_")) {
+                const question = antigravityInteractionQuestion(params);
+                if (!question) return cancelled;
+                ctx.lastTurnActivityAt = Date.now();
+                const answers = yield* requestUserInput(
+                  [question],
+                  "session/request_permission",
+                  params,
+                  (reply) =>
+                    Object.keys(reply).length === 1 &&
+                    typeof reply[question.id] === "string" &&
+                    question.options.some((option) => option.value === reply[question.id]),
+                );
+                ctx.lastTurnActivityAt = Date.now();
+                const optionId = answers[question.id];
+                return ownsTurn() && typeof optionId === "string"
+                  ? { outcome: { outcome: "selected" as const, optionId } }
+                  : cancelled;
+              }
+              const nativeMode = yield* Effect.exit(readAntigravityPermissionMode(acp));
+              if (Exit.isFailure(nativeMode) || !ownsTurn()) return cancelled;
+              // Full access may grant this call but must not install a lasting native rule.
+              const policyOptions = params.options.filter(
+                (option) => option.kind !== "allow_always",
+              );
+              const hasOneTimeGrant = policyOptions.some(
+                (option) => option.kind === "allow_once" && option.optionId.trim(),
+              );
               const policyOutcome = resolveAcpPermissionPolicy({
-                runtimeMode: input.runtimeMode,
-                interactionMode: undefined,
-                options: params.options,
+                runtimeMode: hasOneTimeGrant ? ctx.session.runtimeMode : "approval-required",
+                interactionMode:
+                  nativeMode.value?.id === "plan" ? "plan" : ctx.activeInteractionMode,
+                options: policyOptions,
                 computerControlEnabled: ctx?.enableComputerControl === true,
                 activeTurn: ctx?.activeTurnId !== undefined,
                 toolCall: params.toolCall,
@@ -677,47 +1015,50 @@ export function makeAntigravityAdapter(dependencies: AntigravityAdapterDependenc
               const requestId = ApprovalRequestId.makeUnsafe(crypto.randomUUID());
               const runtimeRequestId = RuntimeRequestId.makeUnsafe(requestId);
               const decision = yield* Deferred.make<ProviderApprovalDecision>();
+              if (!ownsTurn()) return cancelled;
               pendingApprovals.set(requestId, { decision, kind: permissionRequest.kind });
-              yield* offerRuntimeEvent(
-                input.lifecycleGeneration,
-                makeAcpRequestOpenedEvent({
-                  stamp: yield* makeEventStamp(),
-                  provider: PROVIDER,
-                  threadId: input.threadId,
-                  turnId: ctx?.activeTurnId,
-                  requestId: runtimeRequestId,
-                  permissionRequest,
-                  detail: permissionRequest.detail ?? JSON.stringify(params).slice(0, 2000),
-                  args: params,
-                  source: "acp.jsonrpc",
-                  method: "session/request_permission",
-                  rawPayload: params,
-                }),
-              );
-              const resolved = yield* Deferred.await(decision);
-              pendingApprovals.delete(requestId);
-              yield* offerRuntimeEvent(
-                input.lifecycleGeneration,
-                makeAcpRequestResolvedEvent({
-                  stamp: yield* makeEventStamp(),
-                  provider: PROVIDER,
-                  threadId: input.threadId,
-                  turnId: ctx?.activeTurnId,
-                  requestId: runtimeRequestId,
-                  permissionRequest,
-                  decision: resolved,
-                }),
-              );
-              const selectedOptionId =
-                resolved === "cancel"
-                  ? undefined
-                  : selectAcpPermissionOptionId(resolved, params.options);
-              return {
-                outcome:
-                  selectedOptionId === undefined
-                    ? ({ outcome: "cancelled" } as const)
-                    : ({ outcome: "selected", optionId: selectedOptionId } as const),
-              };
+              return yield* Effect.gen(function* () {
+                yield* offerRuntimeEvent(
+                  input.lifecycleGeneration,
+                  makeAcpRequestOpenedEvent({
+                    stamp: yield* makeEventStamp(),
+                    provider: PROVIDER,
+                    threadId: input.threadId,
+                    turnId,
+                    requestId: runtimeRequestId,
+                    permissionRequest,
+                    detail: permissionRequest.detail ?? JSON.stringify(params).slice(0, 2000),
+                    args: params,
+                    source: "acp.jsonrpc",
+                    method: "session/request_permission",
+                    rawPayload: params,
+                  }),
+                );
+                const response = yield* Deferred.await(decision);
+                const stamp = yield* makeEventStamp();
+                const selectedOptionId = selectAcpPermissionOptionId(
+                  ownsTurn() ? response : "cancel",
+                  response === "accept"
+                    ? params.options.filter((option) => option.kind === "allow_once")
+                    : params.options,
+                );
+                yield* offerRuntimeEvent(
+                  input.lifecycleGeneration,
+                  makeAcpRequestResolvedEvent({
+                    stamp,
+                    provider: PROVIDER,
+                    threadId: input.threadId,
+                    turnId,
+                    requestId: runtimeRequestId,
+                    permissionRequest,
+                    decision: selectedOptionId === undefined ? "cancel" : response,
+                  }),
+                );
+                // Publishing can wait on subscribers. Stop must still cancel the ACP response.
+                return selectedOptionId === undefined || !ownsTurn()
+                  ? cancelled
+                  : { outcome: { outcome: "selected" as const, optionId: selectedOptionId } };
+              }).pipe(Effect.ensuring(Effect.sync(() => void pendingApprovals.delete(requestId))));
             }),
           );
 
@@ -731,31 +1072,7 @@ export function makeAntigravityAdapter(dependencies: AntigravityAdapterDependenc
               if (questions.length === 0) {
                 return { action: "decline" as const };
               }
-              const requestId = ApprovalRequestId.makeUnsafe(crypto.randomUUID());
-              const runtimeRequestId = RuntimeRequestId.makeUnsafe(requestId);
-              const answers = yield* Deferred.make<ProviderUserInputAnswers>();
-              pendingUserInputs.set(requestId, { answers });
-              yield* offerRuntimeEvent(input.lifecycleGeneration, {
-                type: "user-input.requested",
-                ...(yield* makeEventStamp()),
-                provider: PROVIDER,
-                threadId: input.threadId,
-                turnId: ctx?.activeTurnId,
-                requestId: runtimeRequestId,
-                payload: { questions },
-                raw: { source: "acp.jsonrpc", method: "session/elicitation", payload: params },
-              });
-              const resolved = yield* Deferred.await(answers);
-              pendingUserInputs.delete(requestId);
-              yield* offerRuntimeEvent(input.lifecycleGeneration, {
-                type: "user-input.resolved",
-                ...(yield* makeEventStamp()),
-                provider: PROVIDER,
-                threadId: input.threadId,
-                turnId: ctx?.activeTurnId,
-                requestId: runtimeRequestId,
-                payload: { answers: resolved },
-              });
+              const resolved = yield* requestUserInput(questions, "session/elicitation", params);
               return elicitationResponseFromAnswers(params, resolved);
             }),
           );
@@ -780,19 +1097,34 @@ export function makeAntigravityAdapter(dependencies: AntigravityAdapterDependenc
                 "Antigravity could not resume the requested conversation. Synara refused the fresh fallback to avoid silently losing conversation context.",
             });
           }
+          if (gatewaySessionLease) {
+            yield* Effect.logDebug("antigravity.acp.gateway_configured", {
+              threadId: input.threadId,
+              setupMethod: started.sessionSetupMethod,
+              transport:
+                started.initializeResult.agentCapabilities?.mcpCapabilities?.http === true
+                  ? "http"
+                  : "stdio",
+            });
+          }
 
           const models = readAntigravityAcpModels(started.sessionSetupResult);
+          const modelConfig = antigravityModelConfig(
+            started.sessionSetupResult.configOptions ?? [],
+          );
           const sessionConfigReady = yield* Deferred.make<void>();
           const teardownComplete = yield* Deferred.make<void>();
           const now = yield* nowIso;
           const sessionModel =
             modelSelection?.model ??
+            modelConfig?.currentValue ??
             sessionModelName(models.availableModels, models.currentModelId);
           const session: ProviderSession = {
             provider: PROVIDER,
             ...(input.providerInstanceId ? { providerInstanceId: input.providerInstanceId } : {}),
             status: "ready",
             runtimeMode: input.runtimeMode,
+            supportsNativeTurnSteering: antigravitySupportsTurnSteering(started.initializeResult),
             cwd,
             ...(sessionModel ? { model: sessionModel } : {}),
             threadId: input.threadId,
@@ -814,6 +1146,10 @@ export function makeAntigravityAdapter(dependencies: AntigravityAdapterDependenc
             scope: sessionScope,
             acp,
             acpSessionId: started.sessionId,
+            antigravityProfile: resolveAntigravityProfile(
+              cwd,
+              buildAntigravityAcpSpawnInput(antigravitySettings, cwd).env ?? {},
+            ),
             availableModels: models.availableModels,
             appliedModelId: models.currentModelId,
             notificationFiber: undefined,
@@ -827,9 +1163,14 @@ export function makeAntigravityAdapter(dependencies: AntigravityAdapterDependenc
             activeAssistantItemsWithContent: new Set(),
             activeTurnFailedToolDetail: undefined,
             activePromptFiber: undefined,
+            activeSteerRequests: 0,
+            activeSteerCompletion: undefined,
             lastTurnActivityAt: undefined,
+            finishingTurnId: undefined,
             toolCallOwners: new Map(),
             runningToolCallIds: new Set(),
+            subagentCalls: new Map(),
+            subagentChildren: new Map(),
             backgroundWaitTurnId: undefined,
             sessionConfigReady,
             teardownComplete,
@@ -837,7 +1178,6 @@ export function makeAntigravityAdapter(dependencies: AntigravityAdapterDependenc
             sessionUpdatesProcessed: 0,
             turnStarting: false,
             pendingTurnInterrupted: false,
-            pendingMaintenanceTurn: false,
             stopped: false,
           };
 
@@ -851,25 +1191,6 @@ export function makeAntigravityAdapter(dependencies: AntigravityAdapterDependenc
                 });
               }
               return ctx.activeTurnId;
-            });
-
-          const emitToolCall = (toolCall: AcpToolCallState, turnId: TurnId, rawPayload: unknown) =>
-            Effect.gen(function* () {
-              yield* offerRuntimeEvent(
-                ctx.lifecycleGeneration,
-                makeAcpToolCallEvent({
-                  stamp: yield* makeEventStamp(),
-                  provider: PROVIDER,
-                  threadId: ctx.threadId,
-                  turnId,
-                  toolCall: scopeAcpToolCallStateForTurn(
-                    PROVIDER,
-                    turnId,
-                    withAntigravityToolSummary(toolCall),
-                  ),
-                  rawPayload,
-                }),
-              );
             });
 
           const handleEvent = (
@@ -922,7 +1243,11 @@ export function makeAntigravityAdapter(dependencies: AntigravityAdapterDependenc
                   return;
                 }
                 case "ToolCallUpdated": {
-                  const { toolCall } = event;
+                  const preparedLaunch = asAntigravitySubagentCall(
+                    event.toolCall,
+                    ctx.subagentCalls.get(event.toolCall.toolCallId)?.toolCall,
+                  );
+                  const toolCall = preparedLaunch ?? event.toolCall;
                   const owner = ctx.toolCallOwners.get(toolCall.toolCallId);
                   const turnId = owner?.turnId ?? (yield* activeTurnIdFor(event._tag));
                   if (turnId === undefined) return;
@@ -930,10 +1255,16 @@ export function makeAntigravityAdapter(dependencies: AntigravityAdapterDependenc
                   ctx.toolCallOwners.set(toolCall.toolCallId, { turnId, settled });
                   if (turnId !== ctx.activeTurnId) {
                     yield* logNative(ctx.threadId, "session/update", event.rawPayload);
-                    yield* emitToolCall(toolCall, turnId, event.rawPayload);
+                    yield* emitToolCall(ctx, toolCall, turnId, event.rawPayload);
                     return;
                   }
                   ctx.lastTurnActivityAt = Date.now();
+                  if (preparedLaunch) {
+                    ctx.subagentCalls.set(toolCall.toolCallId, {
+                      toolCall,
+                      rawPayload: event.rawPayload,
+                    });
+                  }
                   if (settled) {
                     ctx.runningToolCallIds.delete(toolCall.toolCallId);
                   } else if (!isAntigravityDaemonToolCall(toolCall)) {
@@ -944,7 +1275,7 @@ export function makeAntigravityAdapter(dependencies: AntigravityAdapterDependenc
                   if (failedToolDetail !== undefined) {
                     ctx.activeTurnFailedToolDetail = failedToolDetail;
                   }
-                  yield* emitToolCall(toolCall, turnId, event.rawPayload);
+                  yield* emitToolCall(ctx, toolCall, turnId, event.rawPayload);
                   return;
                 }
                 case "ContentDelta": {
@@ -1074,6 +1405,37 @@ export function makeAntigravityAdapter(dependencies: AntigravityAdapterDependenc
             ),
           );
 
+          // Once a prompt has returned, no pending prompt RPC will announce a lost ACP process.
+          yield* acp.awaitExit.pipe(
+            Effect.andThen(
+              Effect.gen(function* () {
+                if (
+                  ctx.stopped ||
+                  (ctx.activeTurnId !== undefined &&
+                    (ctx.pendingTurnInterrupted || ctx.backgroundWaitTurnId === undefined))
+                )
+                  return;
+                const turnId = ctx.backgroundWaitTurnId;
+                const reason = "Antigravity ACP exited while the session was open.";
+                if (turnId !== undefined) {
+                  yield* settleAcpPendingApprovalsAsCancelled(ctx.pendingApprovals);
+                  yield* settleAcpPendingUserInputsAsEmptyAnswers(ctx.pendingUserInputs);
+                  yield* settleTurn(ctx, turnId, {
+                    state: "failed",
+                    stopReason: null,
+                    errorMessage: reason,
+                    item: { prompt: turnId, exited: true },
+                  });
+                }
+                yield* stopSessionInternal(ctx, {
+                  exitKind: "error",
+                  reason,
+                  awaitTermination: false,
+                });
+              }),
+            ),
+            Effect.forkIn(sessionScope),
+          );
           return session;
         }).pipe(Effect.scoped),
       );
@@ -1104,6 +1466,38 @@ export function makeAntigravityAdapter(dependencies: AntigravityAdapterDependenc
           reason: detail,
           awaitTermination: false,
         });
+      });
+
+    // Both fresh prompts and steers use the same attachment and reference projection.
+    const buildPromptParts = (input: Parameters<AntigravityAdapterShape["sendTurn"]>[0]) =>
+      Effect.gen(function* () {
+        const text = appendFileAttachmentsPromptBlock({
+          text: appendProviderReferencesPromptBlock({
+            text: trim(input.input),
+            mentions: input.mentions,
+          }),
+          attachments: input.attachments,
+          attachmentsDir: serverConfig.attachmentsDir,
+          include: "all-files",
+        });
+        const parts: Array<Acp.ContentBlock> = text ? [{ type: "text", text }] : [];
+        parts.push(
+          ...(yield* loadProviderPromptImageBlocks({
+            attachments: input.attachments,
+            attachmentsDir: serverConfig.attachmentsDir,
+            provider: PROVIDER,
+            method: "session/prompt",
+            readFile: fileSystem.readFile,
+          })),
+        );
+        if (parts.length === 0) {
+          return yield* new ProviderAdapterValidationError({
+            provider: PROVIDER,
+            operation: "session/prompt",
+            issue: "Turn requires non-empty text or attachments.",
+          });
+        }
+        return parts;
       });
 
     const startTurn = (
@@ -1147,38 +1541,54 @@ export function makeAntigravityAdapter(dependencies: AntigravityAdapterDependenc
         }
         const model = turnModelSelection?.model ?? ctx.session.model;
 
-        const promptParts: Array<Acp.ContentBlock> = [];
-        const promptText = appendFileAttachmentsPromptBlock({
-          text: appendProviderReferencesPromptBlock({
-            text: trim(input.input),
-            mentions: input.mentions,
-          }),
-          attachments: input.attachments,
-          attachmentsDir: serverConfig.attachmentsDir,
-          include: "all-files",
-        });
-        if (promptText) {
-          promptParts.push({ type: "text", text: promptText });
-        }
-        promptParts.push(
-          ...(yield* loadProviderPromptImageBlocks({
-            attachments: input.attachments,
-            attachmentsDir: serverConfig.attachmentsDir,
-            provider: PROVIDER,
-            method: "session/prompt",
-            readFile: fileSystem.readFile,
-          })),
+        const promptParts = yield* buildPromptParts(input);
+        // Check after model selection, which can replace the native config options.
+        const nativeMode = yield* readAntigravityPermissionMode(ctx.acp).pipe(
+          Effect.mapError((error) =>
+            mapAcpToAdapterError(PROVIDER, ctx.threadId, "session/mode", error),
+          ),
         );
-        if (promptParts.length === 0) {
-          return yield* new ProviderAdapterValidationError({
-            provider: PROVIDER,
-            operation: "sendTurn",
-            issue: "Turn requires non-empty text or attachments.",
-          });
+        if (nativeMode && nativeMode.id !== "default" && nativeMode.id !== "plan") {
+          if (nativeMode.configId === undefined) {
+            yield* withAcpTimeout(
+              "session/set_mode",
+              ctx.acp
+                .setMode("default", { legacy: true })
+                .pipe(
+                  Effect.mapError((error) =>
+                    mapAcpToAdapterError(PROVIDER, ctx.threadId, "session/set_mode", error),
+                  ),
+                ),
+            );
+          } else {
+            const config = yield* withAcpTimeout(
+              "session/set_config_option",
+              ctx.acp
+                .setConfigOption(nativeMode.configId, "default")
+                .pipe(
+                  Effect.mapError((error) =>
+                    mapAcpToAdapterError(
+                      PROVIDER,
+                      ctx.threadId,
+                      "session/set_config_option",
+                      error,
+                    ),
+                  ),
+                ),
+            );
+            const mode = findSessionConfigOption(config.configOptions, nativeMode.configId);
+            if (mode?.type !== "select" || mode.currentValue !== "default") {
+              return yield* new ProviderAdapterRequestError({
+                provider: PROVIDER,
+                method: "session/set_config_option",
+                detail: "Antigravity did not confirm the native Default permission mode.",
+              });
+            }
+          }
         }
         const harnessPolicy = takeAntigravitySynaraHarnessPolicyTextPart(
           ctx,
-          agentGatewayCredentials !== undefined,
+          ctx.gatewaySessionLease !== undefined,
         );
         if (harnessPolicy) {
           promptParts.unshift(harnessPolicy);
@@ -1192,6 +1602,7 @@ export function makeAntigravityAdapter(dependencies: AntigravityAdapterDependenc
 
         const turnId = TurnId.makeUnsafe(crypto.randomUUID());
         ctx.activeTurnId = turnId;
+        ctx.activeInteractionMode = input.interactionMode ?? "default";
         ctx.activeTurnHadAssistantContent = false;
         ctx.activeAssistantItemsWithContent.clear();
         ctx.activeTurnFailedToolDetail = undefined;
@@ -1199,6 +1610,8 @@ export function makeAntigravityAdapter(dependencies: AntigravityAdapterDependenc
           if (owner.settled) ctx.toolCallOwners.delete(toolCallId);
         }
         ctx.runningToolCallIds.clear();
+        ctx.subagentCalls.clear();
+        ctx.subagentChildren = new Map();
         ctx.lastPlanFingerprint = undefined;
         ctx.lastTurnActivityAt = Date.now();
         const { lastError: _lastError, ...sessionWithoutLastError } = ctx.session;
@@ -1217,10 +1630,11 @@ export function makeAntigravityAdapter(dependencies: AntigravityAdapterDependenc
           turnId,
           payload: {
             ...(model ? { model } : {}),
-            ...(ctx.pendingMaintenanceTurn ? { purpose: "maintenance" as const } : {}),
+            ...(ctx.session.supportsNativeTurnSteering !== undefined
+              ? { supportsNativeTurnSteering: ctx.session.supportsNativeTurnSteering }
+              : {}),
           },
         });
-        ctx.pendingMaintenanceTurn = false;
 
         ctx.activePromptFiber = yield* Effect.suspend(() =>
           ctx.pendingTurnInterrupted || ctx.stopped
@@ -1234,6 +1648,7 @@ export function makeAntigravityAdapter(dependencies: AntigravityAdapterDependenc
             onFailure: (error) =>
               Effect.gen(function* () {
                 yield* waitForQueuedTurnEventsDrained(ctx);
+                if (ctx.pendingTurnInterrupted) return;
                 const settled = yield* settleTurn(ctx, turnId, {
                   state: "failed",
                   stopReason: null,
@@ -1253,7 +1668,7 @@ export function makeAntigravityAdapter(dependencies: AntigravityAdapterDependenc
             onSuccess: (result) =>
               Effect.gen(function* () {
                 yield* waitForQueuedTurnEventsDrained(ctx);
-                if (ctx.activeTurnId !== turnId) return;
+                if (ctx.activeTurnId !== turnId || ctx.pendingTurnInterrupted) return;
                 const completion = classifyAcpPromptTurnCompletion({
                   stopReason: result.stopReason,
                   ...(ctx.activeTurnFailedToolDetail !== undefined
@@ -1269,7 +1684,14 @@ export function makeAntigravityAdapter(dependencies: AntigravityAdapterDependenc
                   ...(result.usage ? { usage: result.usage } : {}),
                   item: { prompt: promptParts, result },
                 };
-                if (completion.state === "completed" && ctx.runningToolCallIds.size > 0) {
+                if (
+                  completion.state === "completed" &&
+                  (ctx.runningToolCallIds.size > 0 ||
+                    ctx.activeSteerRequests > 0 ||
+                    ctx.subagentCalls.size > 0 ||
+                    ctx.pendingUserInputs.size > 0 ||
+                    ctx.pendingApprovals.size > 0)
+                ) {
                   yield* awaitBackgroundCommands(ctx, turnId, outcome);
                   return;
                 }
@@ -1312,7 +1734,11 @@ export function makeAntigravityAdapter(dependencies: AntigravityAdapterDependenc
     const sendTurn: AntigravityAdapterShape["sendTurn"] = (input) =>
       Effect.gen(function* () {
         const ctx = yield* requireSession(input.threadId);
-        if (ctx.turnStarting) {
+        if (
+          ctx.turnStarting ||
+          ctx.finishingTurnId !== undefined ||
+          (ctx.activeTurnId !== undefined && ctx.pendingTurnInterrupted)
+        ) {
           return yield* new ProviderAdapterValidationError({
             provider: PROVIDER,
             operation: "sendTurn",
@@ -1330,34 +1756,102 @@ export function makeAntigravityAdapter(dependencies: AntigravityAdapterDependenc
         );
       });
 
-    // agy >= 1.5.9 advertises `compact` in available_commands and performs a
-    // real context compaction when it receives the command in a prompt. Older
-    // runtimes would read "/compact" as plain text, so the command is only
-    // dispatched when the session announces it.
-    const compactThread: NonNullable<AntigravityAdapterShape["compactThread"]> = (input) =>
+    const steerTurn: NonNullable<AntigravityAdapterShape["steerTurn"]> = (input, options) =>
       Effect.gen(function* () {
         const ctx = yield* requireSession(input.threadId);
-        const commands = yield* ctx.acp.getAvailableCommands.pipe(
-          Effect.mapError((cause) =>
-            mapAcpToAdapterError(PROVIDER, input.threadId, "session/commands", cause),
-          ),
-        );
-        if (!commands.some((command) => command.name === "compact")) {
-          return;
+        const turnId = ctx.activeTurnId;
+        const prompt = yield* buildPromptParts(input);
+        if (
+          ctx.session.supportsNativeTurnSteering !== true ||
+          turnId === undefined ||
+          ctx.activeTurnId !== turnId ||
+          (options?.expectedTurnId !== undefined && options.expectedTurnId !== turnId) ||
+          ctx.pendingTurnInterrupted ||
+          ctx.finishingTurnId !== undefined ||
+          ctx.stopped
+        ) {
+          return yield* new ProviderAdapterValidationError({
+            provider: PROVIDER,
+            operation: "turn/steer.stale",
+            issue: "Antigravity has no active turn that supports live steering.",
+          });
         }
-        ctx.pendingMaintenanceTurn = input.purpose === "maintenance";
-        yield* sendTurn({ threadId: input.threadId, input: "/compact" });
+        const reportDeliveryFailure = (detail: string) =>
+          options?.onSteerDeliveryFailure?.(detail) ??
+          Effect.gen(function* () {
+            yield* offerRuntimeEvent(ctx.lifecycleGeneration, {
+              type: "runtime.warning",
+              ...(yield* makeEventStamp()),
+              provider: PROVIDER,
+              threadId: ctx.threadId,
+              turnId,
+              payload: {
+                message: "Antigravity could not deliver the steering message.",
+                detail,
+              },
+            });
+          });
+        ctx.activeSteerRequests += 1;
+        ctx.lastTurnActivityAt = Date.now();
+        // Only the ACP call is interruptible so a rejected send can report its outcome.
+        yield* Effect.uninterruptibleMask((restore) =>
+          Effect.suspend(() =>
+            ctx.pendingTurnInterrupted ||
+            ctx.finishingTurnId !== undefined ||
+            ctx.stopped ||
+            ctx.activeTurnId !== turnId
+              ? reportDeliveryFailure("The active turn ended before the steering message was sent.")
+              : restore(ctx.acp.prompt({ prompt }, { continueActiveTurn: true })).pipe(
+                  Effect.tap((result) =>
+                    Effect.gen(function* () {
+                      if (result.stopReason !== "cancelled") return;
+                      // Apply late tool failures before releasing the background wait.
+                      yield* waitForQueuedTurnEventsDrained(ctx);
+                      if (
+                        ctx.activeTurnId !== turnId ||
+                        ctx.pendingTurnInterrupted ||
+                        ctx.finishingTurnId !== undefined ||
+                        ctx.stopped ||
+                        ctx.activeSteerCompletion?.state === "failed"
+                      )
+                        return;
+                      ctx.activeSteerCompletion = {
+                        ...classifyAcpPromptTurnCompletion({
+                          stopReason: result.stopReason,
+                          failedToolDetail: ctx.activeTurnFailedToolDetail,
+                        }),
+                        stopReason: result.stopReason,
+                      };
+                    }),
+                  ),
+                  Effect.catch((error) =>
+                    error._tag === "AcpRequestError" ||
+                    (!ctx.pendingTurnInterrupted && !ctx.stopped && ctx.activeTurnId === turnId)
+                      ? reportDeliveryFailure(error.message)
+                      : Effect.void,
+                  ),
+                ),
+          ),
+        ).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              ctx.activeSteerRequests -= 1;
+              if (ctx.activeTurnId === turnId) ctx.lastTurnActivityAt = Date.now();
+            }),
+          ),
+          Effect.forkIn(ctx.scope, { startImmediately: true }),
+        );
+        return { threadId: input.threadId, turnId, resumeCursor: ctx.acpSessionId };
       });
 
     const interruptTurn: AntigravityAdapterShape["interruptTurn"] = (threadId, turnId) =>
       Effect.gen(function* () {
         const ctx = yield* requireSession(threadId);
         if (turnId !== undefined && turnId !== ctx.activeTurnId) return;
+        if (ctx.finishingTurnId !== undefined) return;
         if (!ctx.turnStarting && ctx.activeTurnId === undefined) return;
         const activeTurnId = turnId ?? ctx.activeTurnId;
-        if (ctx.turnStarting && ctx.activePromptFiber === undefined) {
-          ctx.pendingTurnInterrupted = true;
-        }
+        ctx.pendingTurnInterrupted = true;
         yield* withAgentGatewayTurnCancellation(
           ctx.gatewaySessionLease,
           activeTurnId,
@@ -1369,6 +1863,12 @@ export function makeAntigravityAdapter(dependencies: AntigravityAdapterDependenc
               // agy stops a session's background tasks when it is closed, so
               // settle the turn and close the session; the next message
               // resumes the same conversation.
+              if (ctx.activeSteerRequests > 0) {
+                yield* ctx.acp.cancel.pipe(
+                  Effect.timeoutOption(ANTIGRAVITY_CANCEL_GRACE_MS),
+                  Effect.ignore,
+                );
+              }
               yield* settleTurn(ctx, activeTurnId, {
                 state: "cancelled",
                 stopReason: "cancelled",
@@ -1395,7 +1895,11 @@ export function makeAntigravityAdapter(dependencies: AntigravityAdapterDependenc
                 item: { prompt: activeTurnId, interrupted: true },
               });
             }
-            if (result.prompt === "timedOut") {
+            if (
+              result.prompt === "timedOut" ||
+              result.cancelRequest !== "sent" ||
+              ctx.activeSteerRequests > 0
+            ) {
               yield* stopSessionInternal(ctx, {
                 exitKind: "error",
                 reason: "Antigravity did not stop the turn after cancellation.",
@@ -1477,7 +1981,7 @@ export function makeAntigravityAdapter(dependencies: AntigravityAdapterDependenc
         }),
       );
 
-    const listModels: NonNullable<AntigravityAdapterShape["listModels"]> = (input) =>
+    const listLegacyModels: NonNullable<AntigravityAdapterShape["listModels"]> = (input) =>
       Effect.tryPromise({
         try: async () => {
           const result = await runHelper(trim(input.binaryPath) ?? "agy", ["models"], {
@@ -1489,7 +1993,10 @@ export function makeAntigravityAdapter(dependencies: AntigravityAdapterDependenc
           const models = parseAntigravityModelLines(result.stdout);
           for (const model of models) {
             if (model.defaultReasoningEffort) {
-              defaultEffortByModel.set(model.slug, model.defaultReasoningEffort);
+              defaultEffortByModel.set(
+                `${input.instanceId ?? PROVIDER}\0${model.slug}`,
+                model.defaultReasoningEffort,
+              );
             }
           }
           return {
@@ -1510,6 +2017,71 @@ export function makeAntigravityAdapter(dependencies: AntigravityAdapterDependenc
           }),
       });
 
+    const listModels: NonNullable<AntigravityAdapterShape["listModels"]> = (input) =>
+      Effect.gen(function* () {
+        const cwd = resolveAntigravitySessionCwd(input.cwd, serverConfig);
+        if (!cwd) return yield* listLegacyModels(input);
+        // A disposable session reads this instance's catalog without changing the active thread.
+        const discovered = yield* Effect.gen(function* () {
+          const acp = yield* makeRuntime({
+            cwd,
+            childProcessSpawner,
+            antigravitySettings: {
+              ...(input.binaryPath ? { binaryPath: input.binaryPath } : {}),
+              environment: {
+                ...input.environment,
+                AGY_CLI_DISABLE_AUTO_UPDATE: "true",
+                NO_BROWSER: "true",
+              },
+            },
+            clientInfo: { name: "Synara", version: "0.0.0" },
+          });
+          yield* acp.handleRequestPermission(() =>
+            Effect.succeed({ outcome: { outcome: "cancelled" } }),
+          );
+          const started = yield* acp
+            .start()
+            .pipe(Effect.timeoutOption(ANTIGRAVITY_MODEL_DISCOVERY_TIMEOUT_MS));
+          if (Option.isNone(started)) return undefined;
+          const configOptions = yield* acp.getConfigOptions;
+          const modelConfig = antigravityModelConfig(configOptions);
+          if (!modelConfig) return undefined;
+          const modelOptions = flattenConfigOptions(modelConfig.options);
+          const descriptors = new Map<string, ReturnType<typeof buildAcpModelDescriptor>>();
+          yield* Effect.forEach(
+            modelOptions,
+            (option) =>
+              Effect.gen(function* () {
+                const response = yield* acp.setConfigOption(modelConfig.id, option.value).pipe(
+                  Effect.timeoutOption(1_000),
+                  Effect.orElseSucceed(() => Option.none()),
+                );
+                const config = Option.getOrUndefined(response)?.configOptions;
+                descriptors.set(
+                  option.value,
+                  buildAcpModelDescriptor(
+                    option,
+                    config ? antigravityThoughtLevelConfig(config) : undefined,
+                  ),
+                );
+              }),
+            { discard: true },
+          ).pipe(Effect.timeoutOption(5_000));
+          const models = modelOptions.map(
+            (option) => descriptors.get(option.value) ?? buildAcpModelDescriptor(option, undefined),
+          );
+          return {
+            models,
+            source: "antigravity.acp",
+            cached: false,
+          } satisfies ProviderListModelsResult;
+        }).pipe(
+          Effect.scoped,
+          Effect.orElseSucceed(() => undefined),
+        );
+        return discovered ?? (yield* listLegacyModels(input));
+      });
+
     const stopAll = () => settleConcurrentTeardowns(sessions.values(), stopSessionInternal);
 
     yield* Effect.addFinalizer(() =>
@@ -1522,11 +2094,12 @@ export function makeAntigravityAdapter(dependencies: AntigravityAdapterDependenc
         sessionModelSwitch: "restart-session",
         conversationRollback: "restart-session",
         supportsRuntimeModelList: true,
+        supportsTurnSteering: true,
         supportsLiveTurnDiffPatch: false,
       },
       startSession,
       sendTurn,
-      compactThread,
+      steerTurn,
       interruptTurn,
       respondToRequest,
       respondToUserInput,

@@ -120,7 +120,6 @@ export interface ProviderServiceShape {
     readonly threadId: ThreadId;
     readonly turnId: TurnId;
     readonly cancellation?: Deferred.Deferred<void>;
-    readonly purpose?: "maintenance";
   }) => Effect.Effect<ProviderTurnStartResult, ProviderServiceError>;
   /** Signal local compaction preparation cancellation without delivering a provider command. */
   readonly cancelClaudeCompactionDiscovery?: (
@@ -358,7 +357,6 @@ export interface ProviderServiceShape {
    */
   readonly compactThread: (input: {
     readonly threadId: ThreadId;
-    readonly purpose?: "maintenance" | undefined;
   }) => Effect.Effect<void, ProviderServiceError>;
 
   /**

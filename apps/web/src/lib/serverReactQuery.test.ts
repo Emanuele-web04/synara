@@ -2,9 +2,14 @@
 // Purpose: Locks down server React Query polling profiles and cache options.
 // Layer: Web data-fetching unit tests
 
-import { type ServerConfig, type ServerProviderStatus } from "@synara/contracts";
+import type {
+  ServerConfig,
+  ServerListProviderUsageInput,
+  ServerProviderStatus,
+  ServerProviderUsageSnapshot,
+} from "@synara/contracts";
 import { QueryClient, QueryObserver } from "@tanstack/react-query";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   hasReconciledServerProviderStatuses,
@@ -12,22 +17,51 @@ import {
   LOCAL_SERVERS_VISIBLE_REFETCH_INTERVAL_MS,
   reconcileServerProviderStatuses,
   refreshServerConfigAfterTransportOpen,
+  serverAllProviderUsageQueryOptions,
+  serverConfigQueryOptions,
   serverProviderUsageSnapshotQueryOptions,
   serverQueryKeys,
   serverRecapQueryOptions,
+  serverSettingsQueryOptions,
   sidebarLocalServersQueryOptions,
 } from "./serverReactQuery";
 
 const nativeApiMocks = vi.hoisted(() => ({
   getConfig: vi.fn<() => Promise<ServerConfig>>(),
+  getSettings: vi.fn<() => Promise<unknown>>(),
   getRecap: vi.fn(),
+  listProviderUsage: vi.fn(),
+  ensureNativeApiCalls: { count: 0 },
 }));
 vi.mock("~/nativeApi", () => ({
-  ensureNativeApi: () => ({
-    server: { getConfig: nativeApiMocks.getConfig },
-    stats: { getRecap: nativeApiMocks.getRecap },
-  }),
+  ensureNativeApi: () => {
+    nativeApiMocks.ensureNativeApiCalls.count += 1;
+    return {
+      server: {
+        getConfig: nativeApiMocks.getConfig,
+        getSettings: nativeApiMocks.getSettings,
+        listProviderUsage: nativeApiMocks.listProviderUsage,
+      },
+      stats: { getRecap: nativeApiMocks.getRecap },
+    };
+  },
 }));
+const streamSnapshotMocks = vi.hoisted(() => ({
+  readLatestServerConfigSnapshot: vi.fn<() => ServerConfig | null>(),
+  waitForInitialServerConfigSnapshot: vi.fn<() => Promise<ServerConfig | null> | null>(),
+  readLatestServerSettingsSnapshot: vi.fn<() => unknown>(),
+  waitForInitialServerSettingsSnapshot: vi.fn<() => Promise<unknown> | null>(),
+}));
+vi.mock("~/wsNativeApi", () => streamSnapshotMocks);
+
+beforeEach(() => {
+  nativeApiMocks.ensureNativeApiCalls.count = 0;
+  // No transport by default, as in the suites below that never open one.
+  streamSnapshotMocks.readLatestServerConfigSnapshot.mockReset().mockReturnValue(null);
+  streamSnapshotMocks.waitForInitialServerConfigSnapshot.mockReset().mockReturnValue(null);
+  streamSnapshotMocks.readLatestServerSettingsSnapshot.mockReset().mockReturnValue(null);
+  streamSnapshotMocks.waitForInitialServerSettingsSnapshot.mockReset().mockReturnValue(null);
+});
 
 const READY_CODEX_STATUS = {
   provider: "codex",
@@ -520,6 +554,106 @@ describe("server provider status reconciliation", () => {
   });
 });
 
+describe("server config and settings boot snapshots", () => {
+  it("seeds an empty config cache from the boot snapshot without a server read", async () => {
+    nativeApiMocks.getConfig.mockReset();
+    const snapshot = makeServerConfig([READY_CODEX_STATUS]);
+    streamSnapshotMocks.readLatestServerConfigSnapshot.mockReturnValue(snapshot);
+    const queryClient = new QueryClient();
+
+    const config = await queryClient.fetchQuery(serverConfigQueryOptions());
+
+    expect(config.providers).toEqual([READY_CODEX_STATUS]);
+    expect(nativeApiMocks.getConfig).not.toHaveBeenCalled();
+  });
+
+  it("reads the config from the server when a hydrated cache is invalidated", async () => {
+    const snapshot = makeServerConfig([{ ...READY_CODEX_STATUS, status: "warning" }]);
+    streamSnapshotMocks.readLatestServerConfigSnapshot.mockReturnValue(snapshot);
+    nativeApiMocks.getConfig.mockReset().mockResolvedValue(makeServerConfig([READY_CODEX_STATUS]));
+    const queryClient = new QueryClient();
+    await queryClient.fetchQuery(serverConfigQueryOptions());
+
+    // The snapshot is the server's state at subscribe time; the refetch must
+    // not write it back over whatever changed since.
+    await queryClient.invalidateQueries({ queryKey: serverQueryKeys.config() });
+    const refreshed = await queryClient.fetchQuery(serverConfigQueryOptions());
+
+    expect(nativeApiMocks.getConfig).toHaveBeenCalledTimes(1);
+    expect(refreshed.providers).toEqual([READY_CODEX_STATUS]);
+  });
+
+  it("keeps a provider update that arrives while the first config query is waiting", async () => {
+    nativeApiMocks.getConfig.mockReset();
+    let resolveSnapshot!: (config: ServerConfig) => void;
+    streamSnapshotMocks.waitForInitialServerConfigSnapshot.mockReturnValue(
+      new Promise((resolve) => {
+        resolveSnapshot = resolve;
+      }),
+    );
+    const queryClient = new QueryClient();
+    const config = queryClient.fetchQuery(serverConfigQueryOptions());
+    const reconciled = reconcileServerProviderStatuses(queryClient, [READY_CODEX_STATUS]);
+
+    resolveSnapshot(
+      makeServerConfig([
+        {
+          ...READY_CODEX_STATUS,
+          status: "warning",
+          checkedAt: "2026-07-26T16:41:37.000Z",
+        },
+      ]),
+    );
+
+    expect((await config).providers).toEqual([READY_CODEX_STATUS]);
+    await reconciled;
+    expect(queryClient.getQueryData(serverQueryKeys.config())).toMatchObject({
+      providers: [READY_CODEX_STATUS],
+    });
+    expect(nativeApiMocks.getConfig).not.toHaveBeenCalled();
+  });
+
+  it("does not resolve the native API again after waiting for the boot snapshot", async () => {
+    // Resolving it again would open a new connection for a query whose
+    // transport was disposed while it waited.
+    let releaseWait: (config: ServerConfig | null) => void = () => undefined;
+    streamSnapshotMocks.waitForInitialServerConfigSnapshot.mockReturnValue(
+      new Promise<ServerConfig | null>((resolve) => {
+        releaseWait = resolve;
+      }),
+    );
+    nativeApiMocks.getConfig.mockReset().mockResolvedValue(makeServerConfig([READY_CODEX_STATUS]));
+    const queryClient = new QueryClient();
+
+    const pending = queryClient.fetchQuery(serverConfigQueryOptions());
+    await Promise.resolve();
+    const callsBeforeWaitEnded = nativeApiMocks.ensureNativeApiCalls.count;
+    releaseWait(null);
+    await pending;
+
+    expect(callsBeforeWaitEnded).toBe(1);
+    expect(nativeApiMocks.ensureNativeApiCalls.count).toBe(1);
+    expect(nativeApiMocks.getConfig).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads settings from the server when a hydrated cache is invalidated", async () => {
+    streamSnapshotMocks.readLatestServerSettingsSnapshot.mockReturnValue({ source: "stream" });
+    nativeApiMocks.getSettings.mockReset().mockResolvedValue({ source: "server" });
+    const queryClient = new QueryClient();
+
+    expect(await queryClient.fetchQuery(serverSettingsQueryOptions())).toEqual({
+      source: "stream",
+    });
+    expect(nativeApiMocks.getSettings).not.toHaveBeenCalled();
+
+    await queryClient.invalidateQueries({ queryKey: serverQueryKeys.settings() });
+    expect(await queryClient.fetchQuery(serverSettingsQueryOptions())).toEqual({
+      source: "server",
+    });
+    expect(nativeApiMocks.getSettings).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("sidebarLocalServersQueryOptions", () => {
   it("keeps sidebar attribution enabled without idle polling", () => {
     const options = sidebarLocalServersQueryOptions({
@@ -553,15 +687,59 @@ describe("sidebarLocalServersQueryOptions", () => {
   });
 });
 
+describe("scoped provider usage", () => {
+  it("keeps other quota independent when selected Antigravity has not replied", async () => {
+    const queryClient = new QueryClient();
+    const codex: ServerProviderUsageSnapshot = {
+      provider: "codex",
+      updatedAt: "2026-11-23T12:00:00Z",
+      limits: [],
+      usageLines: [],
+      source: "test",
+    };
+    const antigravity: ServerProviderUsageSnapshot = { ...codex, provider: "antigravity" };
+    let replyToAntigravity!: (snapshots: ServerProviderUsageSnapshot[]) => void;
+    const waiting = new Promise<ServerProviderUsageSnapshot[]>((resolve) => {
+      replyToAntigravity = resolve;
+    });
+    // Simulate an older host ignoring the exclusion and returning its full batch.
+    nativeApiMocks.listProviderUsage
+      .mockReset()
+      .mockImplementation((input: ServerListProviderUsageInput) =>
+        input.provider === "antigravity" ? waiting : Promise.resolve([codex, antigravity]),
+      );
+
+    const selectedAntigravity = queryClient.fetchQuery(
+      serverAllProviderUsageQueryOptions({ scope: "antigravity" }),
+    );
+    const other = queryClient.fetchQuery(serverAllProviderUsageQueryOptions({ scope: "other" }));
+
+    try {
+      await expect(other).resolves.toEqual([codex]);
+      expect(nativeApiMocks.listProviderUsage.mock.calls).toEqual([
+        [{ provider: "antigravity" }],
+        [{ excludeProvider: "antigravity" }],
+      ]);
+    } finally {
+      replyToAntigravity([antigravity]);
+      await selectedAntigravity;
+    }
+  });
+});
+
 describe("invalidateProviderUsageQueries", () => {
   it("invalidates batch and provider-scoped caches after enablement changes", async () => {
     const queryClient = new QueryClient();
     queryClient.setQueryData(serverQueryKeys.allProviderUsage(), []);
+    queryClient.setQueryData(serverQueryKeys.scopedProviderUsage("other"), []);
     queryClient.setQueryData(serverQueryKeys.providerUsage("codex", null), null);
 
     await invalidateProviderUsageQueries(queryClient);
 
     expect(queryClient.getQueryState(serverQueryKeys.allProviderUsage())?.isInvalidated).toBe(true);
+    expect(
+      queryClient.getQueryState(serverQueryKeys.scopedProviderUsage("other"))?.isInvalidated,
+    ).toBe(true);
     expect(
       queryClient.getQueryState(serverQueryKeys.providerUsage("codex", null))?.isInvalidated,
     ).toBe(true);

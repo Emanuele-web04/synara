@@ -563,10 +563,6 @@
     "./releaseDownloads": {
       "types": "./src/releaseDownloads.ts",
       "import": "./src/releaseDownloads.ts"
-    },
-    "./idleCompaction": {
-      "types": "./src/idleCompaction.ts",
-      "import": "./src/idleCompaction.ts"
     }
   },
   "scripts": {

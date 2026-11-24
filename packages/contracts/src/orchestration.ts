@@ -862,6 +862,7 @@ export const OrchestrationSession = Schema.Struct({
   status: OrchestrationSessionStatus,
   providerName: Schema.NullOr(TrimmedNonEmptyString),
   providerInstanceId: Schema.optional(ProviderInstanceId),
+  supportsNativeTurnSteering: Schema.optional(Schema.Boolean),
   runtimeMode: RuntimeMode.pipe(Schema.withDecodingDefault(() => DEFAULT_RUNTIME_MODE)),
   activeTurnId: Schema.NullOr(TurnId),
   lastError: Schema.NullOr(TrimmedNonEmptyString),
@@ -943,9 +944,6 @@ export const OrchestrationLatestTurn = Schema.Struct({
   completedAt: Schema.NullOr(IsoDateTime),
   assistantMessageId: Schema.NullOr(MessageId),
   sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
-  // Marks turns dispatched by background maintenance (e.g. pre-expiry idle
-  // compaction) so clients can exclude them from completion alerts.
-  purpose: Schema.optional(Schema.Literals(["maintenance"])),
 });
 export type OrchestrationLatestTurn = typeof OrchestrationLatestTurn.Type;
 
@@ -1833,6 +1831,16 @@ export const ThreadTurnStartCommand = Schema.Struct({
   // taken (the recorded turn itself, or any later one). Clients cannot set it:
   // ClientThreadTurnStartCommand omits the field, so decoding strips a spoofed value.
   resumePrecondition: Schema.optional(ThreadResumePreconditionSchema),
+  // Server-only conditional dispatch for a completed wave of delegated work.
+  gatewayCompletionPrecondition: Schema.optional(
+    Schema.Struct({
+      sourceTurnId: TurnId,
+      provider: ProviderKind,
+      instanceId: Schema.optional(ProviderInstanceId),
+      runtimeMode: RuntimeMode,
+      latestUserMessageAt: Schema.NullOr(IsoDateTime),
+    }),
+  ),
   createdAt: IsoDateTime,
 });
 
@@ -2850,8 +2858,6 @@ export const ThreadSessionSetPayload = Schema.Struct({
   threadId: ThreadId,
   session: OrchestrationSession,
   pendingResumeMessageId: Schema.optional(MessageId),
-  // Purpose of the active turn when the runtime marked it as maintenance.
-  turnPurpose: Schema.optional(Schema.Literals(["maintenance"])),
 });
 
 export const ThreadProposedPlanUpsertedPayload = Schema.Struct({

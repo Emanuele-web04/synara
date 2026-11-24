@@ -24,6 +24,7 @@ import { WORKTREE_BRANCH_PREFIX } from "@synara/shared/git";
 import { parseGitHubRepositoryNameWithOwnerFromPullRequestUrl } from "@synara/shared/githubRepository";
 import {
   autoRuntimeModeSelectionIssue,
+  providerSupportsDelegatedRuntimeMode,
   runtimeModeEscalatesPrivilege,
 } from "@synara/shared/runtimeMode";
 import { Cause, Effect, Option, Semaphore } from "effect";
@@ -228,6 +229,7 @@ interface CreationOperationStore {
     readonly requestId: string;
     readonly fingerprint: string;
     readonly requestedCount: number;
+    readonly resumeContextJson?: string;
     readonly planJson: string;
     readonly now: string;
   }) => Effect.Effect<
@@ -238,6 +240,11 @@ interface CreationOperationStore {
     | {
         readonly kind: "concurrency_limited";
         readonly activeCount: number;
+        readonly limit: number;
+      }
+    | {
+        readonly kind: "turn_creation_limit";
+        readonly usedCount: number;
         readonly limit: number;
       },
     Error
@@ -378,7 +385,8 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
       }
       if (
         (context.kind !== "provider-session" || context.remoteCaller) &&
-        input.threads.some((spec) => spec.notifyCreatorOnComplete)
+        (input.resumeCreatorOnComplete ||
+          input.threads.some((spec) => spec.notifyCreatorOnComplete))
       ) {
         return yield* Effect.fail(
           new GatewayToolError(
@@ -435,6 +443,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
                   callerThreadId: context.callerThreadId,
                   callerTurnId: callerTurnId!,
                   operationKind: "create_threads",
+                  ...(context.kind === "provider-session" ? { requestId: input.requestId } : {}),
                 }),
               getById: operationRepository.getById,
               reserve: (reservation) =>
@@ -443,6 +452,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
                   callerThreadId: context.callerThreadId,
                   callerTurnId: callerTurnId!,
                   operationKind: "create_threads",
+                  allowAdditionalPlans: context.kind === "provider-session",
                 }),
               markDispatching: operationRepository.markDispatching,
               recordWorktreeCreated: operationRepository.recordWorktreeCreated,
@@ -490,23 +500,6 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
         .pipe(Effect.mapError((error) => new ToolInputError(errorText(error))));
       if (existingOperation !== null) {
         yield* context.assertAuthority();
-        if (
-          context.kind === "provider-session" &&
-          existingOperation.requestId !== input.requestId
-        ) {
-          return yield* Effect.fail(
-            new GatewayToolError(
-              "creation_plan_locked",
-              "This caller turn already committed a different thread-creation plan. A new user turn is required for another plan.",
-              {
-                operationId: existingOperation.operationId,
-                requestId: existingOperation.requestId,
-                requestedCount: existingOperation.requestedCount,
-                status: existingOperation.status,
-              },
-            ),
-          );
-        }
         if (existingOperation.fingerprint !== fingerprint) {
           return yield* Effect.fail(
             new GatewayToolError(
@@ -536,6 +529,32 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
           existingOperation.operationId,
           context.assertAuthority,
         );
+      }
+      let resumeContextJson: string | undefined;
+      if (input.resumeCreatorOnComplete) {
+        // Only a fresh human request can arm a follow-up. An automatically
+        // resumed turn can delegate and wait, but cannot recursively rearm itself.
+        if (
+          !caller ||
+          !("modelSelection" in caller) ||
+          caller.latestHumanMessageAt == null ||
+          caller.latestHumanMessageAt !== caller.latestUserMessageAt ||
+          caller.latestTurn === null ||
+          caller.latestHumanMessageAt > caller.latestTurn.requestedAt
+        ) {
+          return yield* Effect.fail(
+            new GatewayToolError(
+              "capability_denied",
+              "Asynchronous continuation can only be armed by the current human-started turn.",
+            ),
+          );
+        }
+        resumeContextJson = JSON.stringify({
+          provider: caller.modelSelection.provider,
+          instanceId: caller.modelSelection.instanceId,
+          runtimeMode: caller.runtimeMode,
+          latestUserMessageAt: caller.latestUserMessageAt,
+        });
       }
       if (
         authorizeManagedGoalCreation &&
@@ -641,6 +660,15 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
             return yield* Effect.fail(
               new ToolInputError(
                 `Your thread runs in "${caller!.runtimeMode}" mode, so created threads cannot use higher-privileged "${runtimeMode}".`,
+              ),
+            );
+          }
+          if (!providerSupportsDelegatedRuntimeMode(target.provider, runtimeMode)) {
+            return yield* Effect.fail(
+              new GatewayToolError(
+                "runtime_mode_unavailable",
+                `Provider "${target.provider}" cannot run in "${runtimeMode}" mode. Check compatibleRuntimeModes in synara_capabilities before selecting a target.`,
+                { provider: target.provider, instanceId: target.instanceId, runtimeMode },
               ),
             );
           }
@@ -1019,6 +1047,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
               requestId: input.requestId,
               fingerprint,
               requestedCount: prepared.length,
+              ...(resumeContextJson ? { resumeContextJson } : {}),
               planJson: canonicalJson(
                 prepared.map((entry) => ({
                   index: entry.index,
@@ -1052,6 +1081,19 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
               new GatewayToolError(
                 "concurrency_limited",
                 `This integration already has ${reservation.activeCount} active externally created tasks/operations (limit ${reservation.limit}).`,
+              ),
+            );
+          }
+          if (reservation.kind === "turn_creation_limit") {
+            return yield* Effect.fail(
+              new GatewayToolError(
+                "creation_limit_exceeded",
+                `This turn has reserved ${reservation.usedCount} of its ${reservation.limit} delegated task slots.`,
+                {
+                  usedCount: reservation.usedCount,
+                  limit: reservation.limit,
+                  requestedCount: prepared.length,
+                },
               ),
             );
           }

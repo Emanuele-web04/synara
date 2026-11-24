@@ -1320,15 +1320,51 @@ const make = Effect.gen(function* () {
   // PERF: cheap counterpart to getThreadDetail for events that never read the
   // heavy thread arrays. Loads only the shell projection and promotes it with
   // empty arrays. See eventNeedsHeavyThreadDetail.
+  // Cache shell details across consecutive `content.delta` events (invalidated
+  // immediately on any non-delta event for the thread or after 500ms) so rapid
+  // token streaming doesn't run a 3-query SQLite transaction per delta.
+  const DELTA_THREAD_SHELL_CACHE_TTL_MS = 500;
+  const deltaThreadShellCache = new Map<
+    ThreadId,
+    {
+      readonly detail: OrchestrationThreadWithoutActivities;
+      readonly expiresAtMs: number;
+    }
+  >();
+
   const getThreadShellDetail = Effect.fnUntraced(function* (
     threadId: ThreadId,
+    options?: { readonly allowDeltaCache?: boolean },
   ): Effect.fn.Return<OrchestrationThreadWithoutActivities | undefined> {
+    if (options?.allowDeltaCache) {
+      const cached = deltaThreadShellCache.get(threadId);
+      if (cached && cached.expiresAtMs > Date.now()) {
+        return cached.detail;
+      }
+      deltaThreadShellCache.delete(threadId);
+    } else {
+      deltaThreadShellCache.delete(threadId);
+    }
     const shell = Option.getOrUndefined(
       yield* projectionSnapshotQuery
         .getThreadShellById(threadId)
         .pipe(Effect.catch(() => Effect.succeed(Option.none()))),
     );
-    return shell ? threadDetailFromShell(shell) : undefined;
+    if (!shell) {
+      deltaThreadShellCache.delete(threadId);
+      return undefined;
+    }
+    const detail = threadDetailFromShell(shell);
+    if (options?.allowDeltaCache) {
+      if (deltaThreadShellCache.size >= 128) {
+        deltaThreadShellCache.clear();
+      }
+      deltaThreadShellCache.set(threadId, {
+        detail,
+        expiresAtMs: Date.now() + DELTA_THREAD_SHELL_CACHE_TTL_MS,
+      });
+    }
+    return detail;
   });
 
   const getProjectShell = Effect.fnUntraced(function* (
@@ -2487,9 +2523,15 @@ const make = Effect.gen(function* () {
       // shell so high-frequency streaming events don't re-decode the whole
       // transcript. See eventNeedsHeavyThreadDetail for the safety rationale.
       const needsHeavyThreadDetail = eventNeedsHeavyThreadDetail(event);
+      const allowDeltaShellCache = !needsHeavyThreadDetail && event.type === "content.delta";
+      if (!allowDeltaShellCache) {
+        deltaThreadShellCache.delete(event.threadId);
+      }
       const parentThread = needsHeavyThreadDetail
         ? yield* getThreadDetail(event.threadId)
-        : yield* getThreadShellDetail(event.threadId);
+        : yield* getThreadShellDetail(event.threadId, {
+            allowDeltaCache: allowDeltaShellCache,
+          });
       if (!parentThread) return;
 
       // A subagent launched from inside another subagent's conversation (a
@@ -3112,18 +3154,15 @@ const make = Effect.gen(function* () {
             }
           }
 
-          // Adapters flag background maintenance turns (e.g. pre-expiry idle
-          // compaction) in turn.started so the projector can mark the latest
-          // turn and clients can exclude it from completion alerts.
-          const turnPurpose =
-            event.type === "turn.started" && runtimePayloadRecord(event)?.purpose === "maintenance"
-              ? ("maintenance" as const)
-              : undefined;
-
+          const negotiatedSteering =
+            event.type === "turn.started" && event.provider === "antigravity"
+              ? event.payload.supportsNativeTurnSteering
+              : event.type !== "session.exited" && thread.session?.providerName === event.provider
+                ? thread.session.supportsNativeTurnSteering
+                : undefined;
           yield* orchestrationEngine.dispatch({
             type: "thread.session.set",
             ...(terminalRecovery ? { usageLimitRecovery: terminalRecovery } : {}),
-            ...(turnPurpose !== undefined ? { turnPurpose } : {}),
             commandId: providerCommandId(event, "thread-session-set", thread.id),
             threadId: thread.id,
             session: {
@@ -3135,6 +3174,9 @@ const make = Effect.gen(function* () {
                 thread.session?.providerInstanceId ??
                 readModelSelectionProviderInstanceId(thread.modelSelection),
               runtimeMode: thread.session?.runtimeMode ?? "full-access",
+              ...(negotiatedSteering !== undefined
+                ? { supportsNativeTurnSteering: negotiatedSteering }
+                : {}),
               activeTurnId: nextActiveTurnId,
               lastError,
               updatedAt: now,
@@ -4130,7 +4172,10 @@ const make = Effect.gen(function* () {
       const isNativeSteer =
         event.payload.dispatchMode === "steer" &&
         steerProvider !== undefined &&
-        providerSupportsNativeTurnSteering(steerProvider);
+        providerSupportsNativeTurnSteering(
+          steerProvider,
+          thread?.session?.supportsNativeTurnSteering,
+        );
       let deliveryTurnId: TurnId | undefined;
       if (isNativeSteer) {
         let activeTurnId = thread?.session?.activeTurnId ?? undefined;

@@ -448,7 +448,6 @@ describe("wsNativeApi", () => {
             homePath: "",
             selectedAccountId: "default",
             accounts: [],
-            compactIdleThreads: false,
             customModels: [],
           },
           claudeAgent: {
@@ -458,17 +457,11 @@ describe("wsNativeApi", () => {
             launchArgs: "",
             enableArtifacts: false,
             confirmColdCacheResume: false,
-            compactIdleThreads: false,
             customModels: [],
           },
           cursor: { enabled: false, binaryPath: "agent", apiEndpoint: "", customModels: [] },
           devin: { enabled: true, binaryPath: "devin", customModels: [] },
-          antigravity: {
-            enabled: true,
-            binaryPath: "agy",
-            compactIdleThreads: false,
-            customModels: [],
-          },
+          antigravity: { enabled: true, binaryPath: "agy", customModels: [] },
           grok: { enabled: true, binaryPath: "grok", customModels: [] },
           droid: { enabled: true, binaryPath: "droid", customModels: [] },
           opencode: {

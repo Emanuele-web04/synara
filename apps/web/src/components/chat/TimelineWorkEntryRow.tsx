@@ -79,7 +79,7 @@ import { ToolCallDetailsContent } from "./ToolCallDetailsDialog";
 import { DisclosureChevron } from "../ui/DisclosureChevron";
 import { DisclosureRegion } from "../ui/DisclosureRegion";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-import { fileDiffStatsByPath, resolveFileDiffStatByChangedPath } from "~/lib/diffRendering";
+import { fileDiffStatsByPath, resolveFileDiffStatByChangedPath } from "~/lib/diffTheme";
 import {
   extractToolArgumentField,
   isPrefixedToolArgumentSummary,

@@ -7,7 +7,7 @@ import { isAutomationRunThread } from "@synara/shared/automationMode";
 import { isSidechatThread, sidechatContextMatchesGitHubItem } from "@synara/shared/sidechatThread";
 import { collectSubagentDescendants } from "@synara/shared/threadHierarchy";
 
-import type { AppState } from "./storeState";
+import { EMPTY_THREAD_IDS, type AppState } from "./storeState";
 import { ACCOUNT_RATE_LIMIT_ACTIVITY_KINDS } from "./lib/rateLimits";
 import { resolveThreadDisplayProvider } from "./lib/threadDisplayProvider";
 import { collectByIds, getThreadFromState, getThreadsFromState } from "./threadDerivation";
@@ -113,6 +113,62 @@ export function createAllThreadsSelector(): (state: AppState) => readonly Thread
     previousProposedPlanByThreadId = state.proposedPlanByThreadId;
     previousTurnDiffIdsByThreadId = state.turnDiffIdsByThreadId;
     previousTurnDiffSummaryByThreadId = state.turnDiffSummaryByThreadId;
+    previousThreads = getThreadsFromState(state);
+    return previousThreads;
+  };
+}
+
+// Shell fields read by the completion and attention collectors. Streaming timestamps
+// and other shell changes leave notification candidates untouched.
+function notificationShellsEqual(left: ThreadShell | undefined, right: ThreadShell | undefined) {
+  return (
+    left === right ||
+    (left !== undefined &&
+      right !== undefined &&
+      left.title === right.title &&
+      left.projectId === right.projectId &&
+      left.snoozedUntil === right.snoozedUntil &&
+      left.parentThreadId === right.parentThreadId &&
+      left.pendingBackgroundTaskCount === right.pendingBackgroundTaskCount &&
+      left.pendingInteractions === right.pendingInteractions &&
+      left.hasPendingApprovals === right.hasPendingApprovals &&
+      left.hasPendingUserInput === right.hasPendingUserInput)
+  );
+}
+
+/** Retains the notification projection until an input that can change a candidate does. */
+export function createNotificationThreadsSelector(): (state: AppState) => readonly Thread[] {
+  let previousThreadIds: readonly ThreadId[] | undefined;
+  let previousThreadShellById = {} as AppState["threadShellById"];
+  let previousThreadSessionById = {} as AppState["threadSessionById"];
+  let previousThreadTurnStateById = {} as AppState["threadTurnStateById"];
+  let previousActivityIdsByThreadId = {} as AppState["activityIdsByThreadId"];
+  let previousActivityByThreadId = {} as AppState["activityByThreadId"];
+  let previousThreads: readonly Thread[] = [];
+
+  return (state) => {
+    const shellInputsUnchanged =
+      previousThreadIds === state.threadIds &&
+      (previousThreadShellById === state.threadShellById ||
+        (state.threadIds ?? EMPTY_THREAD_IDS).every((id) =>
+          notificationShellsEqual(previousThreadShellById?.[id], state.threadShellById?.[id]),
+        ));
+    previousThreadShellById = state.threadShellById;
+    if (
+      shellInputsUnchanged &&
+      previousThreadSessionById === state.threadSessionById &&
+      previousThreadTurnStateById === state.threadTurnStateById &&
+      previousActivityIdsByThreadId === state.activityIdsByThreadId &&
+      previousActivityByThreadId === state.activityByThreadId
+    ) {
+      return previousThreads;
+    }
+
+    previousThreadIds = state.threadIds;
+    previousThreadSessionById = state.threadSessionById;
+    previousThreadTurnStateById = state.threadTurnStateById;
+    previousActivityIdsByThreadId = state.activityIdsByThreadId;
+    previousActivityByThreadId = state.activityByThreadId;
     previousThreads = getThreadsFromState(state);
     return previousThreads;
   };

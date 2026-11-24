@@ -435,9 +435,13 @@ const makeEventStore = Effect.gen(function* () {
       Effect.flatMap((settings) => decodePersistedEventRow(operation, row, settings)),
     );
 
+  const AppendSequenceRowSchema = Schema.Struct({
+    sequence: NonNegativeInt,
+  });
+
   const appendEventRow = SqlSchema.findOne({
     Request: AppendEventRequestSchema,
-    Result: RawPersistedEventRowSchema,
+    Result: AppendSequenceRowSchema,
     execute: (request) =>
       sql`
         INSERT INTO orchestration_events (
@@ -478,18 +482,7 @@ const makeEventStore = Effect.gen(function* () {
           ${request.payloadJson},
           ${request.metadataJson}
         )
-        RETURNING
-          sequence,
-          event_id AS "eventId",
-          event_type AS "type",
-          aggregate_kind AS "aggregateKind",
-          stream_id AS "aggregateId",
-          occurred_at AS "occurredAt",
-          command_id AS "commandId",
-          causation_event_id AS "causationEventId",
-          correlation_id AS "correlationId",
-          payload_json AS "payloadJson",
-          metadata_json AS "metadataJson"
+        RETURNING sequence
       `,
   });
 
@@ -677,15 +670,53 @@ const makeEventStore = Effect.gen(function* () {
           "OrchestrationEventStore.append:decodeRow",
         ),
       ),
-      Effect.flatMap((row) =>
-        decodeRowWithSettings("OrchestrationEventStore.append:rowToEvent", row).pipe(
-          // Durable JSON is sanitized above, while the just-committed in-memory
-          // event keeps transient launch credentials for internal runtime consumers.
-          Effect.map((savedEvent) =>
+      Effect.flatMap((row) => {
+        // Durable JSON was already sanitized before insert; attach the assigned
+        // sequence directly to the in-memory event instead of reading back and
+        // re-parsing JSON from SQLite. For high-frequency streaming events
+        // (`thread.message-sent` and `thread.activity-appended`) apply the
+        // known schema defaults directly without re-running the 40-branch union
+        // decoder on every token delta.
+        if (sanitizedEvent.type === "thread.message-sent") {
+          const messagePayload = sanitizedEvent.payload as Extract<
+            OrchestrationEvent,
+            { readonly type: "thread.message-sent" }
+          >["payload"];
+          const payload =
+            messagePayload.source === undefined
+              ? { ...messagePayload, source: "native" as const }
+              : messagePayload;
+          const savedEvent = {
+            ...sanitizedEvent,
+            sequence: row.sequence,
+            payload,
+          } as OrchestrationEvent;
+          return Effect.succeed(
             restoreTransientOrchestrationEventProviderOptions(savedEvent, event),
+          );
+        }
+        if (sanitizedEvent.type === "thread.activity-appended") {
+          const savedEvent = {
+            ...sanitizedEvent,
+            sequence: row.sequence,
+          } as OrchestrationEvent;
+          return Effect.succeed(
+            restoreTransientOrchestrationEventProviderOptions(savedEvent, event),
+          );
+        }
+        return decodeEvent({
+          ...sanitizedEvent,
+          sequence: row.sequence,
+        }).pipe(
+          Effect.map((savedEvent) =>
+            restoreTransientOrchestrationEventProviderOptions(
+              sanitizeOrchestrationEventProviderOptions(savedEvent),
+              event,
+            ),
           ),
-        ),
-      ),
+          Effect.mapError(toPersistenceDecodeError("OrchestrationEventStore.append:rowToEvent")),
+        );
+      }),
     );
   };
 

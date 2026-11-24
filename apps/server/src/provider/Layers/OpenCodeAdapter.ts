@@ -4734,9 +4734,9 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         },
       );
 
-      const compactThread: NonNullable<OpenCodeAdapterShape["compactThread"]> = (input) =>
+      const compactThread: NonNullable<OpenCodeAdapterShape["compactThread"]> = (threadId) =>
         Effect.gen(function* () {
-          const context = ensureAdapterSessionContext(input.threadId);
+          const context = ensureAdapterSessionContext(threadId);
           if (isOpenCodeV2Client(context.client)) context.allowNativeContinuation = true;
           const parsedModel = parseOpenCodeModelSlug(context.session.model);
           if (!parsedModel) {

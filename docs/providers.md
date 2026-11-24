@@ -297,6 +297,26 @@ provider feature is supported through Synara.
 5. **Start a small test task.** Use a harmless objective in a test repository before relying on a
    newly configured provider for important work.
 
+### Devin CLI
+
+On the machine running Synara, check the installed CLI with `devin --version` and the default
+CLI account with `devin auth status`. If the CLI is signed out, run `devin auth login`. For a
+separate Synara account profile, use **Sign in** on that profile so Devin saves the login in
+the selected account environment.
+
+If a turn stalls, run `devin update`, then start a new Devin thread in Synara to launch the
+updated executable. Cognition's 3000.14.30821 stable release shortened stalled model stream
+retries from four minutes to 40 seconds. See the [Devin CLI changelog](https://docs.devin.ai/cli/changelog/stable).
+
+Synara passes its thread-scoped orchestration tools and granted connectors through ACP when
+creating or reopening a Devin session. Devin keeps using its own login, skills, and MCP settings.
+Call `synara_capabilities` from a Devin thread to inspect the available Orchestrator v2 targets
+and runtime modes. A coordinator can pre-approve recognized Synara MCP tools for one call.
+**Approval required** keeps command approval for tracked shell calls when Devin omits the
+type from its ACP permission request.
+On Windows, Synara prepares process tracking before launching Devin so Stop can verify that the
+CLI and its child processes have exited before Synara starts a replacement runtime.
+
 ## Enable or disable providers
 
 In **Settings → Providers → Enabled providers**, turn a provider off to hide it
@@ -320,6 +340,10 @@ Providers expose different selection models:
 
 Synara normalizes these choices into the composer where possible without pretending that every
 provider has identical capabilities.
+
+Antigravity uses the active ACP session's model catalog when available. Its model picker keeps
+planner IDs distinct and shows the thinking levels each model advertises. Older runtimes use
+the CLI catalog. A saved planner that the session no longer offers requires a new selection.
 
 OMP's internal sub-agent roles are not user-selectable models. Synara discovers the runtime's
 model catalog without reading `modelRoles` from repository configuration. A stale saved `role:`
@@ -459,7 +483,21 @@ The session may preserve provider-specific behavior such as:
 
 Capabilities vary. Do not assume a control available for one provider exists for all of them.
 
+Antigravity runs Google's official `agy acp` and uses the sign-in saved by the CLI.
+Use **Approval required** to review native permission requests in the conversation.
+**Full access** can grant a request once. Native Plan mode keeps its tool restrictions.
+Google documents personal Google sign-in for interactive, single-user development
+with eligible Gemini models. For automated Gemini workflows, use a Gemini API key
+or Gemini Enterprise. [Google ACP guidance](https://antigravity.google/docs/ide/extensions/acp/)
+
+Antigravity shows native questions in the composer, including in Full Access. For ACP
+sessions that identify Antigravity 1.5.0 or newer, steering sends the message to the active
+session and lets its child work continue. Older or unidentified runtimes use interrupt and queue.
+
 ### Provider-native subagents
+
+Antigravity shows native launch roles and prompts in the transcript. Child details appear when
+the active provider profile records that the child belongs to that launch.
 
 Each subagent a Claude or Codex agent launches gets its own child thread under the task. Its
 brief, and any later message its launcher sends it on resume, opens the child thread as a
@@ -742,6 +780,9 @@ same account as the login. Imported directories and explicit environment values 
 These account environments block ambient API credentials; explicitly configured secrets remain
 available to managed sessions and the selected login process, and are never written into terminal shims.
 
+Antigravity account limits appear in **Settings → Usage**. Synara runs the official CLI quota
+report in the background with the selected account, using the sign-in already managed by Antigravity.
+
 On macOS, managed Claude accounts keep the system home and username for Keychain access.
 Separate `CLAUDE_CONFIG_DIR` and `CLAUDE_SECURESTORAGE_CONFIG_DIR` values isolate each account;
 login, chats, health checks, and usage use the same resolved account directories. Explicit home
@@ -878,9 +919,21 @@ Sources: [OpenAI app-server documentation](https://developers.openai.com/codex/a
 
 ## Passive results from delegated tasks
 
+Use `synara_capabilities` with `instanceId` for a specific provider account's catalog. The
+response lists `runtimeModes` and `compatibleRuntimeModes` for the caller. The Agent Gateway
+requires Full access to delegate to Antigravity. The gateway enforces this before creating
+a thread or worktree. An external OpenCode
+server configured by URL does not receive the thread-scoped Synara MCP credential.
+
+Ordinary Synara threads may submit successive creation batches in the same active turn, up
+to 20 tasks across all batches on that destination. Use a new `requestId` for each phase and
+repeat the exact ID and arguments for a retry. Hub work continues to use its existing durable
+task keys and worker queue.
+
 When an orchestrator needs delegated results to finish the user's request, it must keep calling
 `synara_wait_for_threads` with the returned `runIds` until `allTerminal` is true, then read and
-synthesize the results. A timeout reports progress; it is not completion. Native provider
+synthesize the results, or use the explicitly requested asynchronous continuation described
+below. A timeout reports progress; it is not completion. Native provider
 subagents use their provider's own completion mechanism. Neither launching work nor opting
 into passive receipts is a substitute for collecting required results before ending the turn.
 
@@ -907,6 +960,16 @@ set during the initial run, Synara reports that limitation rather than claiming
 the goal finished at an intermediate turn. Later conversational turns do not
 produce further notifications. External MCP integrations cannot opt in because
 they have no authenticated creating task.
+
+For asynchronous continuation on a local, ordinary thread, use `resumeCreatorOnComplete: true`
+when the user asks the creator to continue automatically. Synara durably collects a receipt
+for each initial run in the batch. It starts one agent-originated follow-up only if the
+original creator turn completed and still owns an idle, eligible thread. A newer message,
+changed account or approval mode, interruption, Stop, snooze, or archive can supersede the
+follow-up. Synara passes child thread IDs to the creator so it can read the results as untrusted
+reference data. Remote creation and Hub work use their existing result delivery.
+Only a human-started turn can arm a follow-up. A resumed agent can delegate and wait
+within its own turn.
 
 Delivery survives restart and duplicate events. An archived or deleted creator
 is not reopened; the result remains in the child and delivery is recorded as

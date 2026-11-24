@@ -374,9 +374,6 @@ export const AppSettingsSchema = Schema.Struct({
   claudeBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   claudeEnableArtifacts: Schema.Boolean.pipe(withDefaults(() => false)),
   claudeConfirmColdCacheResume: Schema.Boolean.pipe(withDefaults(() => true)),
-  claudeCompactIdleThreads: Schema.Boolean.pipe(withDefaults(() => false)),
-  codexCompactIdleThreads: Schema.Boolean.pipe(withDefaults(() => false)),
-  antigravityCompactIdleThreads: Schema.Boolean.pipe(withDefaults(() => false)),
   // Server-backed first-run marker; see ServerSettings.onboardingCompletedAt.
   onboardingCompletedAt: Schema.NullOr(Schema.String).pipe(withDefaults((): string | null => null)),
   claudeHomePath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
@@ -1672,10 +1669,8 @@ export function serverSettingsToAppSettings(settings: ServerSettingsView): Parti
     claudeBinaryPath: settings.providers.claudeAgent.binaryPath,
     claudeEnableArtifacts: settings.providers.claudeAgent.enableArtifacts,
     claudeConfirmColdCacheResume: settings.providers.claudeAgent.confirmColdCacheResume,
-    claudeCompactIdleThreads: settings.providers.claudeAgent.compactIdleThreads,
     claudeHomePath: settings.providers.claudeAgent.homePath,
     codexBinaryPath: settings.providers.codex.binaryPath,
-    codexCompactIdleThreads: settings.providers.codex.compactIdleThreads,
     codexHomePath: settings.providers.codex.homePath,
     codexAccounts: settings.providers.codex.accounts,
     selectedCodexAccountId: settings.providers.codex.selectedAccountId,
@@ -1690,7 +1685,6 @@ export function serverSettingsToAppSettings(settings: ServerSettingsView): Parti
     keepAwakeMode: settings.keepAwakeMode,
     lowerProviderProcessPriority: settings.lowerProviderProcessPriority,
     antigravityBinaryPath: settings.providers.antigravity.binaryPath,
-    antigravityCompactIdleThreads: settings.providers.antigravity.compactIdleThreads,
     grokBinaryPath: settings.providers.grok.binaryPath,
     droidBinaryPath: settings.providers.droid.binaryPath,
     openCodeBinaryPath: settings.providers.opencode.binaryPath,
@@ -1885,7 +1879,6 @@ export function appSettingsPatchToServerSettingsPatch(
     hasOwn(patch, "codexHomePath") ||
     hasOwn(patch, "codexAccounts") ||
     hasOwn(patch, "selectedCodexAccountId") ||
-    hasOwn(patch, "codexCompactIdleThreads") ||
     hasOwn(patch, "customCodexModels")
   ) {
     const codexAccounts = patch.codexAccounts
@@ -1899,9 +1892,6 @@ export function appSettingsPatchToServerSettingsPatch(
       ...(selectedCodexAccountId && isValidCodexAccountId(selectedCodexAccountId)
         ? { selectedAccountId: selectedCodexAccountId }
         : {}),
-      ...(hasOwn(patch, "codexCompactIdleThreads")
-        ? { compactIdleThreads: Boolean(patch.codexCompactIdleThreads) }
-        : {}),
       ...(hasOwn(patch, "customCodexModels")
         ? { customModels: patch.customCodexModels ?? [] }
         : {}),
@@ -1911,7 +1901,6 @@ export function appSettingsPatchToServerSettingsPatch(
     hasOwn(patch, "claudeBinaryPath") ||
     hasOwn(patch, "claudeEnableArtifacts") ||
     hasOwn(patch, "claudeConfirmColdCacheResume") ||
-    hasOwn(patch, "claudeCompactIdleThreads") ||
     hasOwn(patch, "claudeHomePath") ||
     hasOwn(patch, "customClaudeModels")
   ) {
@@ -1922,9 +1911,6 @@ export function appSettingsPatchToServerSettingsPatch(
         : {}),
       ...(hasOwn(patch, "claudeConfirmColdCacheResume")
         ? { confirmColdCacheResume: Boolean(patch.claudeConfirmColdCacheResume) }
-        : {}),
-      ...(hasOwn(patch, "claudeCompactIdleThreads")
-        ? { compactIdleThreads: Boolean(patch.claudeCompactIdleThreads) }
         : {}),
       ...(hasOwn(patch, "claudeHomePath") ? { homePath: patch.claudeHomePath ?? "" } : {}),
       ...(hasOwn(patch, "customClaudeModels")
@@ -1953,17 +1939,10 @@ export function appSettingsPatchToServerSettingsPatch(
         : {}),
     };
   }
-  if (
-    hasOwn(patch, "antigravityBinaryPath") ||
-    hasOwn(patch, "antigravityCompactIdleThreads") ||
-    hasOwn(patch, "customAntigravityModels")
-  ) {
+  if (hasOwn(patch, "antigravityBinaryPath") || hasOwn(patch, "customAntigravityModels")) {
     providers.antigravity = {
       ...(hasOwn(patch, "antigravityBinaryPath")
         ? { binaryPath: patch.antigravityBinaryPath ?? "" }
-        : {}),
-      ...(hasOwn(patch, "antigravityCompactIdleThreads")
-        ? { compactIdleThreads: Boolean(patch.antigravityCompactIdleThreads) }
         : {}),
       ...(hasOwn(patch, "customAntigravityModels")
         ? { customModels: patch.customAntigravityModels ?? [] }
@@ -2846,6 +2825,9 @@ function resolveAppSettings(
   return settings;
 }
 
+let lastNormalizedLocalSettingsRef: AppSettings | null = null;
+let lastNormalizedMigrationCompleted: boolean | null = null;
+
 export function useAppSettings() {
   const queryClient = useQueryClient();
   const serverSettingsQuery = useQuery(serverSettingsQueryOptions());
@@ -2880,18 +2862,31 @@ export function useAppSettings() {
       return;
     }
     normalizedStoredSettingsRef.current = true;
+    const migrationCompleted = hasCompletedServerSettingsMigration();
+    if (
+      lastNormalizedLocalSettingsRef === localSettings &&
+      lastNormalizedMigrationCompleted === migrationCompleted
+    ) {
+      return;
+    }
 
     setSettings((previous) => {
-      const migrationCompleted = hasCompletedServerSettingsMigration();
-      if (!migrationCompleted) {
+      const currentMigrationCompleted = hasCompletedServerSettingsMigration();
+      if (!currentMigrationCompleted) {
         pendingServerSettingsMigrationPatchRef.current =
           buildInitialServerSettingsMigrationPatch(previous);
       }
       // Legacy localStorage may be the only remaining plaintext source until
       // the server confirms migration; redact it immediately after that write.
-      return normalizeInitialStoredAppSettingsForServerMigration(previous, migrationCompleted);
+      const next = normalizeInitialStoredAppSettingsForServerMigration(
+        previous,
+        currentMigrationCompleted,
+      );
+      lastNormalizedLocalSettingsRef = next;
+      lastNormalizedMigrationCompleted = currentMigrationCompleted;
+      return next;
     });
-  }, [setSettings]);
+  }, [localSettings, setSettings]);
 
   useEffect(() => {
     if (

@@ -42,7 +42,6 @@ import {
   buildDevinPromptMeta,
   buildDevinStaticModelDescriptors,
   canRecoverDevinWedge,
-  closeDevinSessionResources,
   evaluateDevinWedgeSignal,
   makeCachedDevinModelDiscovery,
   mergeDevinModelDescriptors,
@@ -1955,6 +1954,27 @@ describe("applyDevinSessionConfiguration", () => {
       expect(calls).toEqual([]);
     },
   );
+
+  it("rejects Auto even when Devin advertises Full Access", async () => {
+    const { runtime, calls } = makeFakeAcpRuntime({
+      currentModeId: "accept-edits",
+      availableModes: [
+        { id: "accept-edits", name: "Code" },
+        { id: "bypass", name: "Full Access" },
+      ],
+    });
+
+    await expect(
+      Effect.runPromise(
+        applyDevinSessionConfiguration({
+          runtime,
+          runtimeMode: "auto",
+          interactionMode: "default",
+        }),
+      ),
+    ).rejects.toMatchObject({ _tag: "ProviderAdapterValidationError" });
+    expect(calls).toEqual([]);
+  });
 });
 
 describe("resolveRequestedModeId", () => {
@@ -2015,7 +2035,7 @@ describe("resolveRequestedModeId", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("keeps Plan precedence and never maps approval-required to Smart or Ask", async () => {
+  it("keeps Plan precedence and rejects unrecognized approval modes", async () => {
     await expect(
       Effect.runPromise(
         resolveRequestedModeId({
@@ -2031,6 +2051,7 @@ describe("resolveRequestedModeId", () => {
       [
         { id: "smart", name: "Smart" },
         { id: "ask", name: "Ask" },
+        { id: "code-bypass", name: "Code Bypass" },
       ],
     ]) {
       await expect(
@@ -2546,38 +2567,6 @@ describe("pruneDevinToolCallTurnIds", () => {
   });
 });
 
-describe("closeDevinSessionResources", () => {
-  it("closes the ACP scope before config cleanup and contains cleanup failure", async () => {
-    const calls: string[] = [];
-    const scope = await Effect.runPromise(Scope.make("sequential"));
-    await Effect.runPromise(
-      Scope.addFinalizer(
-        scope,
-        Effect.sync(() => {
-          calls.push("scope");
-        }),
-      ),
-    );
-
-    await expect(
-      Effect.runPromise(
-        closeDevinSessionResources({
-          scope,
-          config: {
-            cleanup: async () => {
-              calls.push("config");
-              throw new Error("cleanup rejected");
-            },
-          },
-        }),
-      ),
-    ).resolves.toBeUndefined();
-
-    expect(calls).toEqual(["scope", "config"]);
-    expect(await Effect.runPromise(Scope.close(scope, Exit.void))).toBeUndefined();
-  });
-});
-
 describe("Devin startup timeout recovery", () => {
   it.each([false, true])(
     "requires successful cleanup before rejecting startup (cleanup fails: %s)",
@@ -2896,6 +2885,66 @@ function makeFakeAgentGatewayCredentials(): AgentGatewayCredentialsShape {
     stdioProxy: { command: "/bin/true", args: [] },
   };
 }
+
+it("reopens Devin with the thread's gateway and connector over ACP", async () => {
+  const handles = makePermissionRuntime();
+  let runtimeInput: DevinAcpRuntimeInput | undefined;
+  const credentials = {
+    ...makeFakeAgentGatewayCredentials(),
+    connectionForThread: () => ({
+      url: "http://127.0.0.1:9/mcp",
+      bearerToken: "thread-bearer",
+      connectors: [{ name: "notion", url: "http://127.0.0.1:9/mcp/connectors/notion" }],
+    }),
+  };
+  const adapterLayer = makeDevinAdapterLive(
+    {},
+    {
+      makeAcpRuntime: (input) => {
+        runtimeInput = input;
+        return Effect.succeed(handles.runtime);
+      },
+    },
+  ).pipe(
+    Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "devin-adapter-test-" })),
+    Layer.provideMerge(NodeServices.layer),
+    Layer.provideMerge(Layer.succeed(AgentGatewayCredentials, credentials)),
+  );
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const adapter = yield* DevinAdapter;
+      const threadId = ThreadId.makeUnsafe("devin-resume-with-mcp");
+      yield* adapter.startSession({
+        provider: "devin",
+        threadId,
+        runtimeMode: "full-access",
+        resumeCursor: { schemaVersion: 1, sessionId: "devin-test-session" },
+      });
+      expect(runtimeInput?.resumeSessionId).toBe("devin-test-session");
+      expect(
+        runtimeInput?.buildMcpServers?.({
+          protocolVersion: 1,
+          authMethods: [],
+          agentCapabilities: { mcpCapabilities: { http: true } },
+        }),
+      ).toEqual([
+        {
+          type: "http",
+          name: "synara",
+          url: "http://127.0.0.1:9/mcp",
+          headers: [{ name: "Authorization", value: "Bearer thread-bearer" }],
+        },
+        {
+          type: "http",
+          name: "notion",
+          url: "http://127.0.0.1:9/mcp/connectors/notion",
+          headers: [{ name: "Authorization", value: "Bearer thread-bearer" }],
+        },
+      ]);
+      yield* adapter.stopSession(threadId);
+    }).pipe(Effect.provide(adapterLayer), Effect.scoped),
+  );
+});
 
 describe("Devin permission requests", () => {
   it("labels the approval card with the tracked tool name and arguments", async () => {
@@ -3254,14 +3303,15 @@ describe("Devin permission requests", () => {
         yield* adapter.sendTurn({ threadId, input: "coordinate", attachments: [] });
 
         // A Synara gateway tool call resolves without ever surfacing a prompt.
-        const gateway = yield* handles.requestPermission(
-          makePermissionParams("call-gw", {
+        yield* handles.emitToolCall("call-gw", "pending", {
+          kind: "other",
+          data: {
             kind: "other",
-            rawInput: {
-              _toolName: "synara_list_threads",
-              arguments: { limit: 3 },
-            },
-          }),
+            rawInput: { _toolName: "synara_list_threads", arguments: { limit: 3 } },
+          },
+        });
+        const gateway = yield* handles.requestPermission(
+          makePermissionParams("call-gw", { kind: null }),
         );
         expect(gateway).toEqual({
           outcome: { outcome: "selected", optionId: "allow-once" },
@@ -3336,6 +3386,16 @@ describe("Devin permission requests", () => {
 
         const openedCount = () =>
           runtimeEvents.filter((event) => event.type === "request.opened").length;
+        // Devin can report execute in session/update and omit the kind from
+        // the subsequent permission request. Keep the shell classification.
+        yield* handles.emitToolCall("sparse-execute", "pending", {
+          kind: "execute",
+          command: "pwd",
+          data: {
+            kind: "execute",
+            rawInput: { _toolName: "synara_list_threads", command: "pwd" },
+          },
+        });
         const promptCases: Array<{
           toolCallId: string;
           toolCall: Partial<Acp.RequestPermissionRequest["toolCall"]>;
@@ -3354,6 +3414,10 @@ describe("Devin permission requests", () => {
               kind: "execute",
               rawInput: { _toolName: "synara_list_threads", command: "rm -rf y" },
             },
+          },
+          {
+            toolCallId: "sparse-execute",
+            toolCall: { kind: null },
           },
           // The mcp__synara__ prefix alone names nothing: the part after it
           // must be a real catalog tool.
@@ -3379,6 +3443,9 @@ describe("Devin permission requests", () => {
           yield* flushTimers();
           expect(openedCount(), promptCase.toolCallId).toBe(before + 1);
           const opened = runtimeEvents.findLast((event) => event.type === "request.opened");
+          if (promptCase.toolCallId === "sparse-execute") {
+            expect(opened?.payload?.requestType).toBe("exec_command_approval");
+          }
           yield* adapter.respondToRequest(threadId, opened!.requestId as never, "cancel");
           expect(yield* Fiber.join(pending)).toEqual({ outcome: { outcome: "cancelled" } });
         }

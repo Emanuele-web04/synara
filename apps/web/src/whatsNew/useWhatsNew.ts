@@ -13,8 +13,8 @@ import { useEffect, useRef, useState } from "react";
 import { APP_VERSION } from "../branding";
 import { useAnnouncementSheetSlot } from "../components/announcementSheetSlot";
 import { useLocalStorage } from "../hooks/useLocalStorage";
-import { WHATS_NEW_ENTRIES } from "./entries";
 import {
+  compareVersions,
   resolveWhatsNewState,
   type WhatsNewEntry,
   type WhatsNewInputs,
@@ -83,7 +83,7 @@ export function useWhatsNew(options?: {
   readonly entries?: readonly WhatsNewEntry[];
   readonly currentVersion?: string;
 }): UseWhatsNewResult {
-  const entries = options?.entries ?? WHATS_NEW_ENTRIES;
+  const providedEntries = options?.entries;
   const currentVersion = options?.currentVersion ?? APP_VERSION;
 
   const [storage, setStorage] = useLocalStorage(
@@ -96,15 +96,39 @@ export function useWhatsNew(options?: {
   // that updating localStorage (e.g. acknowledging the dialog) doesn't flip
   // the UI back and forth while animations are still running.
   const [initialLastSeenVersion] = useState(() => storage.lastSeenVersion);
-  const initialState: WhatsNewState = resolveWhatsNewState({
-    entries,
-    currentVersion,
-    lastSeenVersion: initialLastSeenVersion,
-  } satisfies WhatsNewInputs);
+  const needsAsyncEntries =
+    providedEntries === undefined &&
+    initialLastSeenVersion !== null &&
+    compareVersions(currentVersion, initialLastSeenVersion) > 0;
+  const [loadedEntries, setLoadedEntries] = useState<readonly WhatsNewEntry[] | null>(null);
+
+  useEffect(() => {
+    if (!needsAsyncEntries || loadedEntries !== null) return;
+    let cancelled = false;
+    void import("./entries").then(({ WHATS_NEW_ENTRIES }) => {
+      if (!cancelled) setLoadedEntries(WHATS_NEW_ENTRIES);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [needsAsyncEntries, loadedEntries]);
+
+  const effectiveEntries = providedEntries ?? loadedEntries;
+  const initialState: WhatsNewState =
+    effectiveEntries === null
+      ? initialLastSeenVersion === null
+        ? { kind: "silent-bootstrap", nextLastSeenVersion: currentVersion }
+        : { kind: "noop" }
+      : resolveWhatsNewState({
+          entries: effectiveEntries,
+          currentVersion,
+          lastSeenVersion: initialLastSeenVersion,
+        } satisfies WhatsNewInputs);
 
   // The popout starts visible only when we actually have something to show.
-  const [isPopoutVisible, setIsPopoutVisible] = useState(initialState.kind === "show");
+  const [dismissed, setDismissed] = useState(false);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const isPopoutVisible = !dismissed && initialState.kind === "show";
   // Keep one claim across the card → notes transition. Queuing never marks notes
   // seen; only the existing explicit dismissal/close handlers acknowledge them.
   const { open } = useAnnouncementSheetSlot(isPopoutVisible || isDialogOpen);
@@ -145,7 +169,7 @@ export function useWhatsNew(options?: {
   const dismissPopout = () => {
     // X on the card: treat as "I've acknowledged this update". Mark as seen
     // and hide the popout forever (for this version).
-    setIsPopoutVisible(false);
+    setDismissed(true);
     markSeen();
   };
 
@@ -155,7 +179,7 @@ export function useWhatsNew(options?: {
       // Dismissing the dialog = finished reading the notes. Hide the
       // popout too so we don't leave the "click me" affordance lingering
       // after the user clearly engaged.
-      setIsPopoutVisible(false);
+      setDismissed(true);
       markSeen();
     }
   };

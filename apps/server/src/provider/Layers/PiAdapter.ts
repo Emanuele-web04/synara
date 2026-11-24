@@ -3978,8 +3978,8 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         return snapshotThread(context);
       });
 
-    const compactThread: NonNullable<PiAdapterShape["compactThread"]> = (input) =>
-      requireSession(input.threadId).pipe(
+    const compactThread: NonNullable<PiAdapterShape["compactThread"]> = (threadId) =>
+      requireSession(threadId).pipe(
         Effect.flatMap((context) =>
           Effect.tryPromise({
             try: () => context.runtime.session.compact(),

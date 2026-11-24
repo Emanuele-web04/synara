@@ -512,8 +512,7 @@ function makeFakeCodexAdapter(
   );
 
   const compactThread = vi.fn(
-    (_input: { readonly threadId: ThreadId }): Effect.Effect<void, ProviderAdapterError> =>
-      Effect.void,
+    (_threadId: ThreadId): Effect.Effect<void, ProviderAdapterError> => Effect.void,
   );
 
   const forkThread = vi.fn(
@@ -9768,9 +9767,9 @@ idleCleanup.layer("ProviderServiceLive idle cleanup", (it) => {
       );
 
       idleCleanup.codex.stopSession.mockClear();
-      idleCleanup.codex.compactThread.mockImplementationOnce((input) =>
+      idleCleanup.codex.compactThread.mockImplementationOnce((inputThreadId) =>
         Effect.sync(() => {
-          idleCleanup.codex.updateSession(input.threadId, (existing) => ({
+          idleCleanup.codex.updateSession(inputThreadId, (existing) => ({
             ...existing,
             status: "running",
             activeTurnId: undefined,

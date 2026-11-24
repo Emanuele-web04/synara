@@ -2030,10 +2030,20 @@ async function waitForWorktreeCheckbox(): Promise<HTMLElement> {
   );
 }
 
+// The config subscription opens with a full snapshot that seeds the client
+// cache at boot, so a separate `server.getConfig` request is not guaranteed.
+function hasRequestedServerConfig(): boolean {
+  return wsRequests.some(
+    (request) =>
+      request._tag === WS_METHODS.serverGetConfig ||
+      request._tag === WS_METHODS.subscribeServerConfig,
+  );
+}
+
 async function waitForServerConfigToApply(): Promise<void> {
   await vi.waitFor(
     () => {
-      expect(wsRequests.some((request) => request._tag === WS_METHODS.serverGetConfig)).toBe(true);
+      expect(hasRequestedServerConfig()).toBe(true);
     },
     { timeout: 8_000, interval: 16 },
   );
@@ -2316,10 +2326,7 @@ async function waitForMountedChatReady(options: {
         options.host.querySelector("[data-chat-composer-form='true']"),
         "Chat composer did not mount.",
       ).toBeTruthy();
-      expect(
-        wsRequests.some((request) => request._tag === WS_METHODS.serverGetConfig),
-        "Browser RPC configuration did not load.",
-      ).toBe(true);
+      expect(hasRequestedServerConfig(), "Browser RPC configuration did not load.").toBe(true);
 
       if (!expectedThread) return;
       const state = useStore.getState();

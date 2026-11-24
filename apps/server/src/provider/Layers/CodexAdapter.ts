@@ -2224,10 +2224,6 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
     // decision pauses it), driven by one shared ticker because codex activity
     // arrives on a single manager event stream instead of per-session fibers.
     const turnWatchdogs = new Map<ThreadId, CodexTurnWatchdogEntry>();
-    // Threads whose requested compaction was dispatched by background
-    // maintenance; marks the native turn it produces (bounded by recency so a
-    // compaction that yields no turn cannot mislabel a later user turn).
-    const maintenanceCompactionRequestedAt = new Map<ThreadId, number>();
 
     const armTurnWatchdog = (threadId: ThreadId, turnId: TurnId): void => {
       turnWatchdogs.set(threadId, { turnId, lastActivityAt: Date.now() });
@@ -2545,22 +2541,11 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
       );
     };
 
-    const compactThread: NonNullable<CodexAdapterShape["compactThread"]> = (input) =>
+    const compactThread: NonNullable<CodexAdapterShape["compactThread"]> = (threadId) =>
       Effect.tryPromise({
-        try: () => {
-          if (input.purpose === "maintenance") {
-            maintenanceCompactionRequestedAt.set(input.threadId, Date.now());
-          }
-          return manager.compactThread(input.threadId);
-        },
-        catch: (cause) => toRequestError(input.threadId, "thread/compact/start", cause),
-      }).pipe(
-        Effect.tapError(() =>
-          Effect.sync(() => {
-            maintenanceCompactionRequestedAt.delete(input.threadId);
-          }),
-        ),
-      );
+        try: () => manager.compactThread(threadId),
+        catch: (cause) => toRequestError(threadId, "thread/compact/start", cause),
+      });
 
     const forkThread: CodexAdapterShape["forkThread"] = (input) =>
       Effect.tryPromise({
@@ -2890,29 +2875,7 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
           const sizedRuntimeEvents = filterRuntimeEvents(stampedEvent, mappedRuntimeEvents).map(
             compactProviderRuntimeEventForIngress,
           );
-          const maintenanceMarkAt = maintenanceCompactionRequestedAt.get(stampedEvent.threadId);
-          const maintenanceMarked =
-            maintenanceMarkAt !== undefined && Date.now() - maintenanceMarkAt < 120_000;
-          if (!maintenanceMarked) {
-            maintenanceCompactionRequestedAt.delete(stampedEvent.threadId);
-          }
-          let runtimeEvents = sizedRuntimeEvents.map((item) => item.event);
-          if (maintenanceMarked) {
-            let consumed = false;
-            runtimeEvents = runtimeEvents.map((runtimeEvent) => {
-              if (consumed || runtimeEvent.type !== "turn.started") {
-                return runtimeEvent;
-              }
-              consumed = true;
-              return {
-                ...runtimeEvent,
-                payload: { ...runtimeEvent.payload, purpose: "maintenance" as const },
-              };
-            });
-            if (consumed) {
-              maintenanceCompactionRequestedAt.delete(stampedEvent.threadId);
-            }
-          }
+          const runtimeEvents = sizedRuntimeEvents.map((item) => item.event);
           trackTurnWatchdogActivity(stampedEvent.threadId, runtimeEvents);
           const nativeEvent = compactCodexNativeEventForIngress(
             hasUnmappedEvent ||

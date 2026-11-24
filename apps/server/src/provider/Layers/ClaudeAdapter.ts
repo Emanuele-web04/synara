@@ -7721,10 +7721,8 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
                   ? "default"
                   : undefined));
         const settings = {
-          // Pin only explicit non-native overrides. Otherwise Claude Code owns
-          // resolution via server tuning, settings.json, and
-          // CLAUDE_CODE_AUTO_COMPACT_WINDOW.
-          autoCompactEnabled: true,
+          // Pass an explicit window override when selected, and leave the
+          // auto-compact switch and defaults to the native Claude profile.
           ...(requestedAutoCompactWindowTokens !== undefined
             ? { autoCompactWindow: requestedAutoCompactWindowTokens }
             : {}),
@@ -8215,7 +8213,6 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
       input: ProviderSendTurnInput,
       compactionTurnId?: TurnId,
       cancelled?: Deferred.Deferred<void>,
-      maintenancePurpose = false,
     ): ReturnType<ClaudeAdapterShape["sendTurn"]> =>
       Effect.gen(function* () {
         const context = yield* requireSession(input.threadId);
@@ -8550,14 +8547,11 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             createdAt: turnStartedStamp.createdAt,
             threadId: context.session.threadId,
             turnId,
-            payload: {
-              ...(context.currentApiModelId
-                ? { model: stripClaudeContextWindowSuffix(context.currentApiModelId) }
-                : modelSelection?.model
-                  ? { model: modelSelection.model }
-                  : {}),
-              ...(maintenancePurpose ? { purpose: "maintenance" as const } : {}),
-            },
+            payload: context.currentApiModelId
+              ? { model: stripClaudeContextWindowSuffix(context.currentApiModelId) }
+              : modelSelection?.model
+                ? { model: modelSelection.model }
+                : {},
             providerRefs: {},
           });
 
@@ -8712,7 +8706,6 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             { threadId: input.threadId, input: "/compact", attachments: [] },
             input.turnId,
             cancelled,
-            input.purpose === "maintenance",
           ),
         input.cancellation,
       );

@@ -5,7 +5,6 @@ import { CheckpointReactor } from "../Services/CheckpointReactor.ts";
 import { ProviderCommandReactor } from "../Services/ProviderCommandReactor.ts";
 import { ProviderRuntimeIngestionService } from "../Services/ProviderRuntimeIngestion.ts";
 import { SidechatExpiryReactor } from "../Services/SidechatExpiryReactor.ts";
-import { IdleCompactionReactor } from "../Services/IdleCompactionReactor.ts";
 import { HubOutputReactor } from "../Services/HubOutputReactor.ts";
 import { ThreadGitMetadataReactor } from "../Services/ThreadGitMetadataReactor.ts";
 import { OrchestrationReactor } from "../Services/OrchestrationReactor.ts";
@@ -38,16 +37,6 @@ describe("OrchestrationReactor", () => {
             ),
             viewStarted: () => Effect.void,
             viewEnded: () => Effect.void,
-          }),
-        ),
-        Layer.provideMerge(
-          Layer.succeed(IdleCompactionReactor, {
-            start: Effect.acquireRelease(
-              Effect.sync(() => {
-                started.push("idle-compaction-reactor");
-              }),
-              () => Effect.sync(() => stopped.push("idle-compaction-reactor")),
-            ),
           }),
         ),
         Layer.provideMerge(
@@ -128,7 +117,6 @@ describe("OrchestrationReactor", () => {
       "thread-git-metadata-reactor",
       "provider-runtime-ingestion",
       "sidechat-expiry-reactor",
-      "idle-compaction-reactor",
       "provider-command-reactor",
     ]);
     expect(reconciledOpenTurns).toBe(1);
@@ -136,7 +124,6 @@ describe("OrchestrationReactor", () => {
     await Effect.runPromise(Scope.close(scope, Exit.void));
     expect(stopped).toEqual([
       "provider-command-reactor",
-      "idle-compaction-reactor",
       "sidechat-expiry-reactor",
       "provider-runtime-ingestion",
       "thread-git-metadata-reactor",

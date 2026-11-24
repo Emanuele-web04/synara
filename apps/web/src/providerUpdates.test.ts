@@ -76,7 +76,6 @@ function serverSettings(overrides: Partial<ServerSettings["providers"]> = {}): S
         homePath: "",
         selectedAccountId: "default",
         accounts: [],
-        compactIdleThreads: false,
       },
       claudeAgent: {
         ...provider,
@@ -85,11 +84,10 @@ function serverSettings(overrides: Partial<ServerSettings["providers"]> = {}): S
         launchArgs: "",
         enableArtifacts: false,
         confirmColdCacheResume: false,
-        compactIdleThreads: false,
       },
       cursor: { ...provider, binaryPath: "cursor-agent", apiEndpoint: "" },
       devin: { ...provider, binaryPath: "devin" },
-      antigravity: { ...provider, binaryPath: "agy", compactIdleThreads: false },
+      antigravity: { ...provider, binaryPath: "agy" },
       grok: { ...provider, binaryPath: "grok" },
       droid: { ...provider, binaryPath: "droid" },
       opencode: {
@@ -145,7 +143,6 @@ describe("getVisibleProviderUpdateStatuses", () => {
           launchArgs: "",
           enableArtifacts: false,
           confirmColdCacheResume: false,
-          compactIdleThreads: false,
           customModels: [],
         },
       });

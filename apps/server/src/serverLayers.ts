@@ -25,7 +25,6 @@ import { ProviderCommandReactorLive } from "./orchestration/Layers/ProviderComma
 import { ProviderRuntimeIngestionLive } from "./orchestration/Layers/ProviderRuntimeIngestion";
 import { RuntimeReceiptBusLive } from "./orchestration/Layers/RuntimeReceiptBus";
 import { SidechatExpiryReactorLive } from "./orchestration/Layers/SidechatExpiryReactor";
-import { IdleCompactionReactorLive } from "./orchestration/Layers/IdleCompactionReactor";
 import { ThreadSnoozeReactorLive } from "./orchestration/Layers/ThreadSnoozeReactor";
 import { UsageLimitRecoveryReactorLive } from "./orchestration/Layers/UsageLimitRecoveryReactor";
 import { ThreadDeletionReactorLive } from "./orchestration/Layers/ThreadDeletionReactor";
@@ -179,10 +178,6 @@ export function makeServerRuntimeServicesLayer(
   const sidechatExpiryReactorLayer = SidechatExpiryReactorLive.pipe(
     Layer.provideMerge(runtimeServicesLayer),
   );
-  const idleCompactionReactorLayer = IdleCompactionReactorLive.pipe(
-    Layer.provideMerge(runtimeServicesLayer),
-    Layer.provideMerge(serverSettingsLayer),
-  );
   const threadSnoozeReactorLayer = ThreadSnoozeReactorLive.pipe(
     Layer.provideMerge(OrchestrationLayerLive),
   );
@@ -201,7 +196,6 @@ export function makeServerRuntimeServicesLayer(
     Layer.provideMerge(hubOutputReactorLayer),
     Layer.provideMerge(threadGitMetadataReactorLayer),
     Layer.provideMerge(sidechatExpiryReactorLayer),
-    Layer.provideMerge(idleCompactionReactorLayer),
   );
   const threadDeletionReactorLayer = provideThreadDeletionReactorDeviceService(
     ThreadDeletionReactorLive.pipe(

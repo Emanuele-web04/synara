@@ -12,7 +12,6 @@ import type {
   ClaudeCacheObservation,
   ProviderComposerCapabilities,
   ProviderApprovalDecision,
-  ProviderCompactThreadInput,
   ProviderForkThreadInput,
   ProviderForkThreadResult,
   ProviderKind,
@@ -78,6 +77,8 @@ export interface ProviderSteerSubagentPayload {
 /** Local preparation controls; never serialized into provider input or persisted history. */
 export interface ProviderTurnDispatchOptions {
   readonly claudeCompactionCancellation?: Deferred.Deferred<void>;
+  readonly expectedTurnId?: TurnId;
+  readonly onSteerDeliveryFailure?: (detail: string) => Effect.Effect<void>;
 }
 
 export type ProviderConversationRollbackMode = "native" | "restart-session";
@@ -336,7 +337,7 @@ export interface ProviderAdapterShape<TError> {
   /**
    * Trigger provider-native context compaction for a thread when supported.
    */
-  readonly compactThread?: (input: ProviderCompactThreadInput) => Effect.Effect<void, TError>;
+  readonly compactThread?: (threadId: ThreadId) => Effect.Effect<void, TError>;
 
   /** Queue native Claude compaction; terminal events report whether it actually compacted. */
   readonly startClaudeCompaction?: (input: {
@@ -344,8 +345,6 @@ export interface ProviderAdapterShape<TError> {
     readonly turnId: TurnId;
     /** Request-owned cancellation remains valid before adapter discovery is registered. */
     readonly cancellation?: Deferred.Deferred<void>;
-    /** Marks the compaction as background maintenance, not user-requested work. */
-    readonly purpose?: "maintenance";
   }) => Effect.Effect<ProviderTurnStartResult, TError>;
 
   /** Cancel active local compaction preparation before prompt dispatch. */

@@ -84,7 +84,7 @@ function RailFixture({
     });
     queryClient.setQueryData(serverQueryKeys.settings(), DEFAULT_SERVER_SETTINGS_VIEW);
     queryClient.setQueryData(
-      serverQueryKeys.allProviderUsage(),
+      serverQueryKeys.scopedProviderUsage("other"),
       ["codex", "claudeAgent"].map((provider) => ({
         provider,
         updatedAt: new Date().toISOString(),

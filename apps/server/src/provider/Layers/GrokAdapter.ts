@@ -2307,9 +2307,8 @@ export function makeGrokAdapter(
         supportsThreadImport: false,
       } satisfies ProviderComposerCapabilities);
 
-    const compactThread: NonNullable<GrokAdapterShape["compactThread"]> = (input) =>
+    const compactThread: NonNullable<GrokAdapterShape["compactThread"]> = (threadId) =>
       Effect.gen(function* () {
-        const { threadId } = input;
         // Startup registers the session before its configuration settles, so
         // compaction must wait before taking the thread lock.
         const preLockCtx = yield* requireSession(threadId);

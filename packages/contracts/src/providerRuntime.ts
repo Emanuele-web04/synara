@@ -389,9 +389,7 @@ export type ThreadRealtimeClosedPayload = typeof ThreadRealtimeClosedPayload.Typ
 const TurnStartedPayload = Schema.Struct({
   model: Schema.optional(TrimmedNonEmptyStringSchema),
   effort: Schema.optional(TrimmedNonEmptyStringSchema),
-  // Set when the turn exists only for background maintenance (e.g. pre-expiry
-  // idle compaction), not for user-requested work.
-  purpose: Schema.optional(Schema.Literal("maintenance")),
+  supportsNativeTurnSteering: Schema.optional(Schema.Boolean),
 });
 export type TurnStartedPayload = typeof TurnStartedPayload.Type;
 
@@ -498,6 +496,8 @@ const RequestResolvedPayload = Schema.Struct({
 export type RequestResolvedPayload = typeof RequestResolvedPayload.Type;
 
 const UserInputQuestionOption = Schema.Struct({
+  // Some provider protocols identify choices independently of their display labels.
+  value: Schema.optional(Schema.String),
   label: TrimmedNonEmptyStringSchema,
   description: TrimmedNonEmptyStringSchema,
 });
@@ -508,6 +508,7 @@ export const UserInputQuestion = Schema.Struct({
   header: TrimmedNonEmptyStringSchema,
   question: TrimmedNonEmptyStringSchema,
   options: Schema.Array(UserInputQuestionOption),
+  allowCustomAnswer: Schema.optional(Schema.Boolean),
   multiSelect: Schema.optional(Schema.Boolean).pipe(
     Schema.withConstructorDefault(() => Option.some(false)),
   ),

@@ -189,7 +189,7 @@ Multi-folder projects have these limits for now:
 
 - Worktree mode isolates only the primary folder. The chat works in a worktree of the primary
   folder, while the other folders are edited directly.
-- Only Codex and Claude can be granted the extra folders. Other providers refuse the chat instead
+- Codex, Claude and Antigravity can be granted the extra folders. Other providers refuse the chat instead
   of silently working without them.
 - **Edit project** adds and removes the other folders; the primary folder moves only with
   **Change project path**. A running chat picks up the new folder set on its next turn.

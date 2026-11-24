@@ -1450,6 +1450,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             status: event.payload.session.status,
             providerName: event.payload.session.providerName,
             providerInstanceId: event.payload.session.providerInstanceId ?? null,
+            supportsNativeTurnSteering: event.payload.session.supportsNativeTurnSteering ?? null,
             runtimeMode: event.payload.session.runtimeMode,
             activeTurnId: event.payload.session.activeTurnId,
             lastError: event.payload.session.lastError,
@@ -2172,25 +2173,51 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
       };
 
       yield* Effect.forEach(selectedProjectors, (projector) =>
-        projector.apply(event, attachmentSideEffects).pipe(
-          Effect.flatMap(() => {
-            if (projector.name === phaseCursor) {
-              return Effect.void;
-            }
-            return projectionStateRepository.upsert({
-              projector: projector.name,
-              lastAppliedSequence: event.sequence,
-              updatedAt: event.occurredAt,
-            });
-          }),
-        ),
+        projector.apply(event, attachmentSideEffects),
       );
+      const cursorProjectors: ProjectorName[] = [];
+      for (const projector of selectedProjectors) {
+        if (projector.name !== phaseCursor) {
+          cursorProjectors.push(projector.name);
+        }
+      }
       if (phaseCursor !== undefined) {
+        cursorProjectors.push(phaseCursor);
+      }
+      if (cursorProjectors.length === 1) {
         yield* projectionStateRepository.upsert({
-          projector: phaseCursor,
+          projector: cursorProjectors[0]!,
           lastAppliedSequence: event.sequence,
           updatedAt: event.occurredAt,
         });
+      } else if (cursorProjectors.length > 1) {
+        // Same monotonic guard as ProjectionStateRepository.upsert: a re-applied
+        // older event must never move a cursor that is already ahead.
+        const rows = cursorProjectors.map((projector) => ({
+          projector,
+          last_applied_sequence: event.sequence,
+          updated_at: event.occurredAt,
+        }));
+        yield* sql`
+          INSERT INTO projection_state ${sql.insert(rows)}
+          ON CONFLICT (projector)
+          DO UPDATE SET
+            last_applied_sequence = CASE
+              WHEN excluded.last_applied_sequence > projection_state.last_applied_sequence
+              THEN excluded.last_applied_sequence
+              ELSE projection_state.last_applied_sequence
+            END,
+            updated_at = CASE
+              WHEN excluded.last_applied_sequence >= projection_state.last_applied_sequence
+              THEN excluded.updated_at
+              ELSE projection_state.updated_at
+            END
+        `.pipe(
+          Effect.asVoid,
+          Effect.mapError(
+            toPersistenceSqlError("ProjectionPipeline.batchUpsertProjectionStates:query"),
+          ),
+        );
       }
       for (const threadId of attachmentSideEffects.deletedThreadIds) {
         yield* managedAttachments.markCleanupByThread({

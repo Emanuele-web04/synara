@@ -4268,7 +4268,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             const routed = yield* resolveRoutableSession({
               threadId: input.threadId,
               operation: "ProviderService.steerTurn",
-              allowRecovery: true,
+              allowRecovery: options?.expectedTurnId === undefined,
             });
             if (
               !routed.adapter.steerTurn ||
@@ -5642,7 +5642,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                 `Context compaction is unavailable for provider '${routed.adapter.provider}'.`,
               );
             }
-            yield* routed.adapter.compactThread(input);
+            yield* routed.adapter.compactThread(input.threadId);
             const binding = Option.getOrUndefined(yield* directory.getBinding(input.threadId));
             if (binding) {
               yield* directory.upsert({
