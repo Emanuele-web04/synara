@@ -7,6 +7,18 @@ import {
   readClaudeImportMessageDates,
 } from "./claudeProjectImport.ts";
 
+function queuedCommandSourceUuid(entry: Record<string, unknown>): string | undefined {
+  if (entry.type !== "attachment") return undefined;
+  const attachment = entry.attachment;
+  if (typeof attachment !== "object" || attachment === null) return undefined;
+  const candidate = attachment as { type?: unknown; source_uuid?: unknown };
+  return candidate.type === "queued_command" &&
+    typeof candidate.source_uuid === "string" &&
+    candidate.source_uuid.length > 0
+    ? candidate.source_uuid
+    : undefined;
+}
+
 /** Restore original message dates only inside a newly created native copy. */
 export async function restoreClaudeImportedCopyDates(input: {
   readonly sourceSessionId: string;
@@ -55,9 +67,21 @@ export async function restoreClaudeImportedCopyDates(input: {
         typeof origin.messageUuid !== "string"
       )
         return line;
-      const timestamp = dates.get(origin.messageUuid);
+      // The SDK materializes a queued_command attachment as a user message
+      // keyed by attachment.source_uuid. When that reference names no copied
+      // entry the fork preserves it verbatim on the attachment itself, so the
+      // attachment carries this message's provenance instead of its own uuid.
+      let timestamp = dates.get(origin.messageUuid);
+      let provenanceUuid = origin.messageUuid;
+      if (timestamp === undefined) {
+        const queuedUuid = queuedCommandSourceUuid(entry);
+        if (queuedUuid !== undefined) {
+          timestamp = dates.get(queuedUuid);
+          provenanceUuid = queuedUuid;
+        }
+      }
       if (timestamp === undefined) return line;
-      matched.add(origin.messageUuid);
+      matched.add(provenanceUuid);
       if (entry.timestamp === timestamp) return line;
       changed = true;
       return JSON.stringify({ ...entry, timestamp });
