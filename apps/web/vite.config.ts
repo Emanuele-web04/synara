@@ -3,10 +3,8 @@
 // Layer: Web build config
 // Depends on: Vite, Tailwind, React compiler, TanStack Router.
 
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import zlib from "node:zlib";
 import { promisify } from "node:util";
 import tailwindcss from "@tailwindcss/vite";
@@ -14,15 +12,9 @@ import react from "@vitejs/plugin-react";
 import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import { defineConfig, type Plugin } from "vite";
 import pkg from "./package.json" with { type: "json" };
-import { compilerCacheFingerprint } from "./scripts/compiler-cache-key";
-import {
-  threadWorkerFactory,
-  transformWorkerCount,
-  withParallelTransform,
-} from "./scripts/parallel-transform";
+import { bootChunkGroups } from "./scripts/boot-chunk-groups";
 import { listFiles, pruneProductionIcons } from "./scripts/production-assets";
-import { createReactCompilerPlugin } from "./scripts/react-compiler-plugin.mjs";
-import { withTransformCache } from "./scripts/transform-cache";
+import { createViteReactCompilerPlugin } from "./scripts/react-compiler-vite";
 
 const port = Number(process.env.PORT ?? 5733);
 const sourcemapEnv = process.env.SYNARA_WEB_SOURCEMAP?.trim().toLowerCase();
@@ -33,6 +25,62 @@ const buildSourcemap =
     : sourcemapEnv === "hidden"
       ? "hidden"
       : false;
+
+const USED_SHIKI_THEMES = new Set(["github-light", "github-dark"]);
+const PRUNED_SHIKI_THEME_ID = "\0synara-pruned-shiki-theme";
+
+// Synara renders all code/diff highlighting via DIFF_THEME_NAMES (github-light,
+// github-dark) and @pierre/theme defaults (pierre-light/pierre-dark). Stub out
+// the other 60+ Shiki theme chunks that @pierre/theming and shiki reference
+// behind dynamic imports so they are not emitted into dist/assets.
+function pruneUnusedShikiThemesPlugin(): Plugin {
+  return {
+    name: "synara-prune-unused-shiki-themes",
+    apply: "build",
+    enforce: "pre",
+    resolveId: {
+      filter: { id: /^(?:@shikijs\/themes|shiki\/themes)\// },
+      handler(source) {
+        const match = /^(?:@shikijs\/themes|shiki\/themes)\/([^/]+)$/.exec(source);
+        if (match?.[1] && !USED_SHIKI_THEMES.has(match[1])) {
+          return PRUNED_SHIKI_THEME_ID;
+        }
+        return null;
+      },
+    },
+    load: {
+      filter: { id: /^\0synara-pruned-shiki-theme$/ },
+      handler() {
+        return "export default undefined;";
+      },
+    },
+  };
+}
+
+// Electron Chromium and all supported browsers load woff2 natively; strip
+// legacy woff and truetype fallbacks from KaTeX CSS so Vite does not emit
+// 40 unused .woff/.ttf font files (~0.8 MB).
+function katexWoff2OnlyPlugin(): Plugin {
+  return {
+    name: "synara-katex-woff2-only",
+    apply: "build",
+    enforce: "pre",
+    transform: {
+      filter: { id: /katex(?:\.min)?\.css/ },
+      handler(code, id) {
+        const normalized = id.replaceAll("\\", "/").split("?")[0] ?? "";
+        if (!/\/katex\/dist\/katex(?:\.min)?\.css$/.test(normalized)) {
+          return null;
+        }
+        const next = code.replace(
+          /,url\(fonts\/KaTeX_[^)]+\.woff\)\s*format\("woff"\),url\(fonts\/KaTeX_[^)]+\.ttf\)\s*format\("truetype"\)/g,
+          "",
+        );
+        return next === code ? null : { code: next, map: null };
+      },
+    },
+  };
+}
 
 // Prune before compression. closeBundle hooks are parallel by default;
 // enforce: "post" alone does not make the asynchronous compression hook wait.
@@ -64,28 +112,6 @@ function centralIconPrunePlugin(): Plugin {
       },
     },
   };
-}
-
-// Browser tests and the Desktop CI build opt into separate cache namespaces.
-const testTransformCacheDirectory =
-  process.env.VITEST === "true" ? process.env.SYNARA_WEB_TRANSFORM_CACHE_DIR?.trim() : undefined;
-
-function transformCacheSalt(productionBuild: boolean): string {
-  const hash = createHash("sha256")
-    .update(compilerCacheFingerprint(path.resolve(import.meta.dirname, "../..")))
-    .update("\0");
-  hash.update(`${process.env.BABEL_ENV ?? ""}\0${process.env.NODE_ENV ?? ""}\0`);
-  if (productionBuild) {
-    hash.update(
-      JSON.stringify([
-        "desktop-production",
-        buildSourcemap,
-        process.env.BROWSERSLIST,
-        process.env.BROWSERSLIST_ENV,
-      ]),
-    );
-  }
-  return hash.digest("hex");
 }
 
 const gzip = promisify(zlib.gzip);
@@ -168,6 +194,16 @@ function precompressPlugin(): Plugin {
   };
 }
 
+// Cold-boot steps after the entry, in load order: bootstrap.ts imports main.tsx once
+// connected, every route renders inside the _chat layout, and usePreloadRouteChunks
+// warms the thread route. The build fails if a root leaves the module graph, so a
+// rename cannot silently drop a step.
+const BOOT_STEPS = [
+  { name: "boot-main", root: "src/main.tsx" },
+  { name: "boot-chat", root: "src/routes/_chat.tsx?tsr-split=component" },
+  { name: "boot-thread", root: "src/routes/_chat.$threadId.tsx?tsr-split=component" },
+] as const;
+
 export default defineConfig({
   plugins: [
     tanstackRouter({
@@ -175,64 +211,18 @@ export default defineConfig({
       autoCodeSplitting: true,
     }),
     react(),
-    // React Compiler is a single-threaded Babel pass and nearly all of a
-    // production build's time (.github/CI.md). Worker threads run the same
-    // plugin's own hook. Opt-in CI caches only reuse identical inputs.
-    createReactCompilerPlugin().then((plugin) => {
-      const workers = transformWorkerCount();
-      const compiler =
-        workers > 0
-          ? withParallelTransform(plugin, {
-              workers,
-              createWorker: threadWorkerFactory(
-                pathToFileURL(
-                  path.resolve(import.meta.dirname, "scripts/parallel-transform.worker.mjs"),
-                ),
-              ),
-            })
-          : plugin;
-      let cacheWrapped = false;
-      return {
-        ...compiler,
-        // Large chat modules make the compiler expensive on cold loads and every
-        // edit. Oxc still provides JSX/TypeScript transforms and Fast Refresh.
-        // Keep production builds and browser tests compiled, with an opt-in for
-        // debugging compiler-specific behavior in the development app.
-        apply: ((_config, { command, mode }) => {
-          const productionBuild = command === "build" && mode === "production";
-          const cacheDirectory = productionBuild
-            ? process.env.SYNARA_WEB_BUILD_TRANSFORM_CACHE_DIR?.trim()
-            : mode === "test"
-              ? testTransformCacheDirectory
-              : undefined;
-          if (cacheDirectory && !cacheWrapped) {
-            withTransformCache(compiler, {
-              directory: path.resolve(import.meta.dirname, cacheDirectory),
-              salt: transformCacheSalt(productionBuild),
-              coordinateWrites:
-                !productionBuild && process.env.SYNARA_WEB_TRANSFORM_CACHE_SHARED === "true",
-            });
-            cacheWrapped = true;
-          }
-          return (
-            command === "build" ||
-            mode === "test" ||
-            /^(1|true)$/i.test(process.env.SYNARA_DEV_REACT_COMPILER?.trim() ?? "")
-          );
-        }) satisfies Plugin["apply"],
-      };
-    }),
+    createViteReactCompilerPlugin(buildSourcemap),
     tailwindcss(),
+    katexWoff2OnlyPlugin(),
+    pruneUnusedShikiThemesPlugin(),
     centralIconPrunePlugin(),
     precompressPlugin(),
   ],
+  worker: {
+    plugins: () => [pruneUnusedShikiThemesPlugin()],
+  },
   optimizeDeps: {
-    include: [
-      "@pierre/diffs",
-      "@pierre/diffs/react",
-      "@pierre/diffs/worker/worker.js",
-      "react-icons/gr",
-    ],
+    include: ["@pierre/diffs", "@pierre/diffs/react", "@pierre/diffs/worker/worker.js"],
   },
   define: {
     // In dev mode, tell the web app where the WebSocket server lives
@@ -257,13 +247,54 @@ export default defineConfig({
     outDir: "dist",
     emptyOutDir: true,
     sourcemap: buildSourcemap,
-    // The largest chunks are intentionally lazy-loaded editor grammars,
-    // terminal runtime code, and the chat route—not initial-load bundles.
+    // Above the limit: the lazy Monaco editor and CSS worker.
     chunkSizeWarningLimit: 850,
     rolldownOptions: {
       checks: {
         // React Compiler is expected to dominate transform time in this app.
         pluginTimings: false,
+      },
+      output: {
+        // Automatic chunking spreads a cold boot over ~300 small shared chunks, one
+        // per mix of lazy routes and components that also use a module; over HTTP/1.1
+        // they queue on six connections. These groups load it in about 30 files
+        // without growing what the entry evaluates before DOMContentLoaded:
+        // - The entry's static closure (rolldown's `$initial` tag) goes first, in three
+        //   chunks that download and compile in parallel. A broader group that took
+        //   one of these modules would make the entry import, and evaluate, the rest
+        //   of that group. Dependencies first: the last group holds the entry module,
+        //   and a group takes its modules' dependencies with it.
+        // - Each boot step is cut into acyclic bands of about 1 MB of source
+        //   (bootChunkGroups). One file per step would be fewer requests, but on a
+        //   slow CPU a 2 MB script adds a long main-thread task when it arrives.
+        // Everything else (other routes, dialogs, xterm, KaTeX, @pierre/diffs,
+        // locales) keeps automatic chunking and loads only when used.
+        // Measurements: benchmarks/web-boot/RESULTS.md.
+        codeSplitting: {
+          groups: [
+            {
+              name: "boot-vendor",
+              tags: ["$initial"],
+              test: /[\\/]node_modules[\\/]/,
+              priority: 1003,
+            },
+            {
+              name: "boot-shared",
+              tags: ["$initial"],
+              test: /[\\/]packages[\\/]/,
+              priority: 1002,
+            },
+            { name: "boot", tags: ["$initial"], priority: 1001 },
+            ...bootChunkGroups({
+              root: import.meta.dirname,
+              entry: "src/bootstrap.ts",
+              steps: BOOT_STEPS,
+              bandBytes: 1_000_000,
+              maxBandsPerStep: 40,
+              priority: 1000,
+            }),
+          ],
+        },
       },
     },
   },

@@ -1,0 +1,35 @@
+{
+  "portable": {
+    "desktopMainMaxBytes": 1572864,
+    "serverDistMaxBytes": 6291456,
+    "webClientMaxBytes": 36700160,
+    "webClientFontsMaxBytes": 786432,
+    "webClientPrecompressedMaxBytes": 17301504
+  },
+  "packaged": {
+    "mac-arm64": {
+      "installerMaxBytes": 330301440,
+      "updateZipMaxBytes": 298844160,
+      "appAsarMaxBytes": 136314880,
+      "installedAppMaxBytes": 739246080
+    },
+    "mac-x64": {
+      "installerMaxBytes": 361758720,
+      "updateZipMaxBytes": 330301440,
+      "appAsarMaxBytes": 141557760,
+      "installedAppMaxBytes": 781189120
+    },
+    "win-x64": {
+      "installerMaxBytes": 351272960,
+      "appAsarMaxBytes": 141557760
+    },
+    "linux-x64": {
+      "installerMaxBytes": 382730240,
+      "appAsarMaxBytes": 141557760
+    },
+    "linux-arm64": {
+      "installerMaxBytes": 382730240,
+      "appAsarMaxBytes": 141557760
+    }
+  }
+}

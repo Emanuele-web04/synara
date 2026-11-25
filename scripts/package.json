@@ -19,6 +19,7 @@
   "devDependencies": {
     "@effect/language-service": "catalog:",
     "@effect/vitest": "catalog:",
+    "@electron/asar": "3.4.1",
     "@types/bun": "catalog:",
     "electron-builder": "26.15.3",
     "typescript": "catalog:",

@@ -63,12 +63,7 @@ import type {
   SyncKeyPairingCode,
   SyncKeyPairingRequest,
 } from "@synara/contracts";
-import {
-  AccountApiError,
-  DEFAULT_ACCOUNT_URL,
-  resolveAccountUrl,
-  type AccountClient,
-} from "@synara/shared/account";
+import { AccountApiError, resolveAccountUrl, type AccountClient } from "@synara/shared/account";
 
 import {
   accountApiIssuer,

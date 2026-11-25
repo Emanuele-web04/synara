@@ -59,6 +59,12 @@ describe("createDesktopPlatformBuildConfig", () => {
     assert.deepStrictEqual(linux.linux?.desktop, { entry: { StartupWMClass: "synara-remote" } });
   });
 
+  it("prunes unused Electron locales to the supported UI locales", () => {
+    for (const flavor of SYNARA_PACKAGED_DESKTOP_FLAVORS) {
+      const config = createDesktopPlatformBuildConfig({ platform: "mac", target: "dir", flavor });
+      assert.deepStrictEqual(config.electronLanguages, ["en-US", "en-GB", "en_GB"]);
+    }
+  });
   it("retains TypeScript runtime libraries on every desktop platform", () => {
     const require = createRequire(import.meta.url);
     for (const platform of ["mac", "linux", "win"] as const) {
@@ -171,6 +177,7 @@ describe("createDesktopPlatformBuildConfig", () => {
     assert.ok(config.files?.includes(MAC_APPSNAP_HELPER_ASAR_EXCLUSION));
     assert.ok(config.files?.includes(MAC_WINDOW_MATERIAL_ADDON_ASAR_EXCLUSION));
     assert.ok(config.files?.includes("!apps/desktop/resources/cua-driver/**"));
+    assert.ok(config.files?.includes("!apps/desktop/prod-resources/cua-driver/**"));
     assert.deepStrictEqual(config.extraFiles, [
       {
         from: "apps/desktop/resources/cua-driver",

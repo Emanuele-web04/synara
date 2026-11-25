@@ -245,7 +245,6 @@ function HoverColumns(props: {
   return Array.from({ length: props.count }, (_, index) => (
     <rect
       // Days are positional: the column index is the day.
-      // oxlint-disable-next-line react/no-array-index-key
       key={index}
       x={props.left(index)}
       y={PLOT_TOP}

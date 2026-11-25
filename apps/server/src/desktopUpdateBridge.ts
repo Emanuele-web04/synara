@@ -52,6 +52,9 @@ export function initializeDesktopUpdateBridge(): void {
     }
     pending.clear();
   });
+  // The server owns its lifetime. A listening updater bridge must not keep the
+  // backend alive after the HTTP shutdown and runtime finalizers have finished.
+  process.channel?.unref();
 }
 
 export function requestDesktopUpdate(

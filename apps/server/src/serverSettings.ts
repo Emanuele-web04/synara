@@ -1307,8 +1307,17 @@ const makeServerSettings = Effect.gen(function* () {
     yield* Deferred.succeed(startedDeferred, undefined).pipe(Effect.orDie);
   });
 
-  const projectSettings = (settings: ServerSettings) =>
-    resolveTextGenerationProvider(gateBetaOnlyProviders(settings));
+  let cachedRawSettings: ServerSettings | undefined;
+  let cachedProjectedSettings: ServerSettings | undefined;
+  const projectSettings = (settings: ServerSettings) => {
+    if (settings === cachedRawSettings && cachedProjectedSettings !== undefined) {
+      return cachedProjectedSettings;
+    }
+    const projected = resolveTextGenerationProvider(gateBetaOnlyProviders(settings));
+    cachedRawSettings = settings;
+    cachedProjectedSettings = projected;
+    return projected;
+  };
   const getSettings = Ref.get(settingsRef).pipe(Effect.map(projectSettings));
   const updateSettings = (
     initialPatch: ServerUpdateSettingsInput,

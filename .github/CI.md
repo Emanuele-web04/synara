@@ -633,7 +633,7 @@ toolchain, so the Core lane now replays it for unchanged modules.
 keyed by:
 
 - the transform cache's fingerprint (`compiler-cache-key.ts`: Node version,
-  normalized lockfile, patches, compiler plugin definition, Vite config),
+  normalized lockfile, patches, compiler plugin definition and its Vite adapter),
 - the three harness files,
 - the installed `babel-plugin-react-compiler` and `@babel/core` versions and
   entry bytes,
@@ -1584,3 +1584,28 @@ or linking backend, so the 101.42- and 223.63-second samples do not isolate copy
 as their cause. Fresh native Windows checks and installation timing are recorded
 in the PR verification; a same-runner paired comparison is needed to attribute a
 repeatable percentage to cache placement alone.
+
+### Independent Cua provisioning during desktop packaging
+
+In v1.6.6 the shared Cua preparation matrix delayed every installer. The
+Apple Silicon job was cancelled after 15 minutes without a runner, and even
+the completed Linux preparation jobs could not proceed to packaging. The
+release now provisions Cua inside each macOS or Linux packaging job after
+portable outputs and any required icon catalog are ready. This removes a
+runner allocation and the same-run artifact transfer per platform. The
+separate native-only workflow stage still supports targeted qualification
+and benchmarks. Publication still requires all applicable native jobs and
+the full quality and server test gates.
+
+The packaging change in #2288 also invalidated Linux's Cua cache when only
+macOS symbol stripping changed. Future edits to the macOS strip script affect
+only the macOS key. The refactor changes shared provisioning code once, so it
+requires a fresh exact cache for each target before it has warm-run timings.
+
+Build-only dispatches use a separate concurrency group from publication.
+Tag-triggered and manual publication continue to share one serialized queue.
+
+The web compiler cache tracks the compiler plugin and its adapter separately
+from the rest of the Vite configuration. Packaging and bundling edits can
+reuse compiled modules when the compiler input bytes, module identity,
+toolchain and mode still match.

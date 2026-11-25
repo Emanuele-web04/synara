@@ -1,15 +1,8 @@
 import { useEffect } from "react";
 import { useRouter } from "@tanstack/react-router";
 
-/** Warms code-split route chunks once the browser is idle.
- *
- *  Settings and thread routes are reached through programmatic `navigate()`
- *  calls (sidebar gear, keyboard shortcut, the "New thread" button), so the
- *  router's intent-based preloading never fires for them — without this, the
- *  first open pays the chunk download/parse cost. For a brand-new thread that
- *  cost lands right on the draft-landing paint, so warming the thread chunk is
- *  the largest single lever for new-chat startup time.
- */
+/** Warms the programmatic routes that do not get Link intent preloading.
+ *  New chat needs its chunk immediately. Settings can warm after startup. */
 export function usePreloadRouteChunks() {
   const router = useRouter();
 
@@ -28,7 +21,6 @@ export function usePreloadRouteChunks() {
     void warmChunk("/_chat/$threadId");
 
     const preloadSettings = () => void warmChunk("/_chat/settings");
-
     if (typeof requestIdleCallback === "function") {
       const idleCallbackId = requestIdleCallback(preloadSettings, { timeout: 5000 });
       return () => cancelIdleCallback(idleCallbackId);

@@ -117,7 +117,6 @@ import {
   type DeviceRegistry,
   type HostGrantIssuer,
   type HostKeyRegistry,
-  type HostRecord,
   type HostSecretStore,
   type IdentityUser,
   type OrganizationRef,

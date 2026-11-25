@@ -5,6 +5,7 @@
 
 import { fileURLToPath } from "node:url";
 
+import { UI_LOCALES } from "@synara/contracts/uiLocale";
 import {
   SYNARA_BETA_WINDOWS_INSTALLER_GUID,
   SYNARA_STABLE_WINDOWS_INSTALLER_GUID,
@@ -66,6 +67,7 @@ export interface DesktopPlatformBuildConfig {
   readonly onNodeModuleFile?: string;
   readonly asarUnpack?: ReadonlyArray<string>;
   readonly dmg?: Record<string, unknown>;
+  readonly electronLanguages?: ReadonlyArray<string>;
   readonly extraFiles?: ReadonlyArray<Record<string, string>>;
   readonly extraResources?: ReadonlyArray<Record<string, string>>;
   readonly files?: ReadonlyArray<string>;
@@ -73,6 +75,14 @@ export interface DesktopPlatformBuildConfig {
   readonly mac?: Record<string, unknown>;
   readonly nsis?: Record<string, unknown>;
   readonly win?: Record<string, unknown>;
+}
+
+const ELECTRON_LOCALE_CODES: Readonly<Record<string, ReadonlyArray<string>>> = {
+  en: ["en-US", "en-GB", "en_GB"],
+};
+
+export function electronLanguagesForFlavor(): string[] {
+  return UI_LOCALES.flatMap((locale) => ELECTRON_LOCALE_CODES[locale] ?? [locale]);
 }
 
 export interface CreateDesktopPlatformBuildConfigInput {
@@ -127,6 +137,7 @@ export function createDesktopPlatformBuildConfig(
   const connectorResources = { from: "apps/desktop/resources/cloudflared", to: "cloudflared" };
   const nativePackaging = {
     asarUnpack: [...NODE_PTY_ASAR_UNPACK_GLOBS],
+    electronLanguages: electronLanguagesForFlavor(),
     files,
     extraResources: [connectorResources],
     // TypeScript reads these declarations at runtime in the intelligence worker.
@@ -209,6 +220,7 @@ export function createDesktopPlatformBuildConfig(
         MAC_APPSNAP_HELPER_ASAR_EXCLUSION,
         MAC_WINDOW_MATERIAL_ADDON_ASAR_EXCLUSION,
         "!apps/desktop/resources/cua-driver/**",
+        "!apps/desktop/prod-resources/cua-driver/**",
       ],
       extraFiles: [
         { from: "apps/desktop/resources/cua-driver", to: "Resources/cua-driver" },

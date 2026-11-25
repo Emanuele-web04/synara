@@ -54,7 +54,7 @@
  */
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomBytes } from "node:crypto";
@@ -68,7 +68,6 @@ import { computerApprovalGate } from "../../apps/server/src/computer/ComputerApp
 import {
   analyzeFocusSamples,
   parseFocusProbeLine,
-  type FocusProbeExpect,
   type FocusProbeLine,
   type FocusProbeSample,
 } from "../../apps/desktop/src/cuaFixtures/focusProbe";
@@ -210,23 +209,6 @@ async function stopProbe(): Promise<ReturnType<typeof analyzeFocusSamples> | und
 
 let endpoint = "";
 let capability = "";
-
-async function call<T = unknown>(
-  name: string,
-  args?: Record<string, unknown>,
-  timeoutMs = 30_000,
-): Promise<T> {
-  return cuaRequest<T>(
-    endpoint,
-    {
-      method: "call",
-      name,
-      ...(args ? { args } : {}),
-      capability,
-    },
-    { timeoutMs, mutation: true },
-  );
-}
 
 /** Per-tool wall-clock samples — aggregated into the report's speed
  * table (count/p50/p95/max per driver tool). */
@@ -506,8 +488,6 @@ if (existsSync(APPSNAP)) {
   escMonitor.start();
 }
 
-let failures = 0;
-let skips = 0;
 const t0 = Date.now();
 
 try {
@@ -2056,7 +2036,7 @@ end repeat`,
   }
 } catch (e) {
   console.error("HARNESS ERROR", e);
-  failures++;
+  row("harness", "fail", "Harness aborted. See HARNESS ERROR in the run output.");
 } finally {
   // ── focus-invariant ──
   const report = await stopProbe();
@@ -2122,8 +2102,6 @@ end repeat`,
 
   const failed = rows.filter((r) => r.verdict === "fail");
   const skipped = rows.filter((r) => r.verdict === "skipped");
-  failures += failed.length;
-  skips += skipped.length;
 
   const summary = {
     run: SENTINEL,

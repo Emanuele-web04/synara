@@ -48,6 +48,7 @@
     "test": "turbo run test",
     "test:web:focused": "bun run --cwd apps/web test",
     "brand:check": "node scripts/check-brand-identity.ts",
+    "bundle-size:check": "node scripts/check-bundle-size.ts --mode portable",
     "windows-runtime:check": "node scripts/check-windows-runtime-boundary.ts",
     "migrations:check": "node scripts/check-migration-lineage.ts",
     "test:desktop-smoke": "turbo run smoke-test --filter=@synara/desktop",

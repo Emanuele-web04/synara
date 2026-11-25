@@ -37,7 +37,8 @@ env:
   AZURE_TRUSTED_SIGNING_SUBJECT_DN: ${{ secrets.AZURE_TRUSTED_SIGNING_SUBJECT_DN }}
 
 concurrency:
-  group: synara-desktop-release
+  # Build-only diagnostics cannot hold the publishing queue.
+  group: ${{ (github.event_name == 'push' || inputs.publish_release) && 'synara-desktop-release' || 'synara-desktop-build-only' }}
   cancel-in-progress: false
 
 jobs:
@@ -62,7 +63,9 @@ jobs:
       source_tag: ${{ steps.source_provenance.outputs.source_tag }}
       lockfile_sha256: ${{ steps.source_provenance.outputs.lockfile_sha256 }}
       ref: ${{ steps.source_provenance.outputs.source_commit }}
-      matrix: ${{ steps.scope.outputs.matrix }}
+      mac_matrix: ${{ steps.scope.outputs.mac_matrix }}
+      non_mac_matrix: ${{ steps.scope.outputs.non_mac_matrix }}
+      package_non_mac: ${{ steps.scope.outputs.package_non_mac }}
       cua_matrix: ${{ steps.scope.outputs.cua_matrix }}
       prepare_cua: ${{ steps.scope.outputs.prepare_cua }}
       build_icon: ${{ steps.scope.outputs.build_icon }}
@@ -458,14 +461,6 @@ jobs:
         with:
           arch: ${{ matrix.arch }}
           benchmark-baseline: ${{ inputs.cua_benchmark_baseline || '' }}
-      - name: Upload prepared Cua for this candidate
-        if: needs.preflight.outputs.package_artifacts == 'true'
-        uses: actions/upload-artifact@v7
-        with:
-          name: prepared-cua-${{ matrix.platform }}-${{ matrix.arch }}
-          path: ${{ runner.temp }}/cua-artifact
-          retention-days: 30
-          if-no-files-found: error
       - name: Upload Cua benchmark evidence
         if: ${{ always() && needs.preflight.outputs.benchmark_native == 'true' }}
         uses: actions/upload-artifact@v7
@@ -474,21 +469,20 @@ jobs:
           path: ${{ runner.temp }}/cua-benchmark/evidence
           if-no-files-found: error
 
-  build:
+  build_mac:
     name: Build ${{ matrix.label }}
-    # Tests consume the same source independently; both publishers gate on them.
     # The icon catalog comes from exactly one source: a verified exact restore
     # (compile skipped) or the macOS 26 compile after a successful miss.
-    needs: [preflight, restore_mac_icon, build_mac_icon, build_portable, prepare_cua]
-    if: ${{ !cancelled() && needs.preflight.result == 'success' && needs.preflight.outputs.package_artifacts == 'true' && (needs.prepare_cua.result == 'success' || (needs.preflight.outputs.prepare_cua == 'false' && needs.prepare_cua.result == 'skipped')) && ((needs.restore_mac_icon.result == 'success' && ((needs.restore_mac_icon.outputs.hit == 'true' && needs.build_mac_icon.result == 'skipped') || (needs.restore_mac_icon.outputs.hit != 'true' && needs.build_mac_icon.result == 'success'))) || (needs.preflight.outputs.build_icon == 'false' && needs.restore_mac_icon.result == 'skipped' && needs.build_mac_icon.result == 'skipped')) && needs.build_portable.result == 'success' }}
+    needs: [preflight, restore_mac_icon, build_mac_icon, build_portable]
+    if: ${{ !cancelled() && needs.preflight.result == 'success' && needs.preflight.outputs.package_artifacts == 'true' && needs.preflight.outputs.build_icon == 'true' && needs.restore_mac_icon.result == 'success' && ((needs.restore_mac_icon.outputs.hit == 'true' && needs.build_mac_icon.result == 'skipped') || (needs.restore_mac_icon.outputs.hit != 'true' && needs.build_mac_icon.result == 'success')) && needs.build_portable.result == 'success' }}
     permissions:
       contents: read
       actions: read
     strategy:
       fail-fast: false
-      matrix: ${{ fromJSON(needs.preflight.outputs.matrix) }}
+      matrix: ${{ fromJSON(needs.preflight.outputs.mac_matrix) }}
     uses: ./.github/workflows/release-platform.yml
-    with:
+    with: &release_platform_inputs
       runner: ${{ matrix.runner }}
       label: ${{ matrix.label }}
       platform: ${{ matrix.platform }}
@@ -503,11 +497,26 @@ jobs:
       allow_unsigned_windows_publication: ${{ vars.SYNARA_ALLOW_UNSIGNED_WINDOWS_RELEASE == needs.preflight.outputs.version }}
     secrets: inherit
 
+  build:
+    name: Build ${{ matrix.label }}
+    # Non-macOS installers do not consume the Mac icon catalog.
+    needs: [preflight, build_portable]
+    if: ${{ !cancelled() && needs.preflight.result == 'success' && needs.preflight.outputs.package_non_mac == 'true' && needs.build_portable.result == 'success' }}
+    permissions:
+      contents: read
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.preflight.outputs.non_mac_matrix) }}
+    uses: ./.github/workflows/release-platform.yml
+    with: *release_platform_inputs
+    secrets: inherit
+
   publish_cli:
     name: Publish CLI to npm
     # Prereleases (beta lane) never touch the npm `latest` dist-tag.
     if: ${{ needs.preflight.outputs.publish_release == 'true' && vars.SYNARA_PUBLISH_CLI == '1' && needs.preflight.outputs.is_prerelease == 'false' && needs.quality.result == 'success' && needs.server_tests.result == 'success' }}
-    needs: [preflight, quality, server_tests, build, build_portable]
+    needs: [preflight, quality, server_tests, build_mac, build, build_portable]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -596,8 +605,8 @@ jobs:
 
   release:
     name: Publish GitHub Release
-    if: ${{ !cancelled() && needs.preflight.result == 'success' && needs.preflight.outputs.publish_release == 'true' && needs.quality.result == 'success' && needs.server_tests.result == 'success' && needs.build.result == 'success' && (needs.build_server_tarball.result == 'success' || (needs.preflight.outputs.build_server == 'false' && needs.build_server_tarball.result == 'skipped')) }}
-    needs: [preflight, quality, server_tests, build, build_server_tarball]
+    if: ${{ !cancelled() && needs.preflight.result == 'success' && needs.preflight.outputs.publish_release == 'true' && needs.quality.result == 'success' && needs.server_tests.result == 'success' && needs.build_mac.result == 'success' && needs.build.result == 'success' && (needs.build_server_tarball.result == 'success' || (needs.preflight.outputs.build_server == 'false' && needs.build_server_tarball.result == 'skipped')) }}
+    needs: [preflight, quality, server_tests, build_mac, build, build_server_tarball]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:

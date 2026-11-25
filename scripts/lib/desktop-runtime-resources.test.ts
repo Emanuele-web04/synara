@@ -24,9 +24,14 @@ it.layer(NodeServices.layer)("stageDesktopRuntimeResources", (it) => {
         "entitlements.mac.plist",
         "nested/runtime.dat",
       ];
-      const installerFiles = ["dmgly/assets/dmg-background.png", "dmgly/assets/app-icon.png"];
+      const bundleOnlyFiles = [
+        "dmgly/assets/dmg-background.png",
+        "dmgly/assets/app-icon.png",
+        "cua-driver/cua-driver",
+        "cloudflared/cloudflared",
+      ];
 
-      for (const file of [...runtimeFiles, ...installerFiles]) {
+      for (const file of [...runtimeFiles, ...bundleOnlyFiles]) {
         const target = path.join(buildResources, file);
         yield* fs.makeDirectory(path.dirname(target), { recursive: true });
         yield* fs.writeFileString(target, `contents of ${file}`);
@@ -45,7 +50,9 @@ it.layer(NodeServices.layer)("stageDesktopRuntimeResources", (it) => {
         );
       }
       assert.equal(yield* fs.exists(path.join(runtimeResources, "dmgly")), false);
-      for (const file of installerFiles) {
+      assert.equal(yield* fs.exists(path.join(runtimeResources, "cua-driver")), false);
+      assert.equal(yield* fs.exists(path.join(runtimeResources, "cloudflared")), false);
+      for (const file of bundleOnlyFiles) {
         assert.equal(
           yield* fs.readFileString(path.join(buildResources, file)),
           `contents of ${file}`,

@@ -41,6 +41,7 @@ import {
   resolveDevinModelVariant,
   trimOrNull,
 } from "@synara/shared/model";
+import { unsupportedAutoRuntimeModeMessage } from "@synara/shared/runtimeMode";
 import {
   Cause,
   DateTime,
@@ -802,6 +803,14 @@ export function resolveRequestedModeId(input: {
   return Effect.gen(function* () {
     const { modeState, runtimeMode, interactionMode } = input;
 
+    if (runtimeMode === "auto") {
+      return yield* new ProviderAdapterValidationError({
+        provider: PROVIDER,
+        operation: "resolveRequestedModeId",
+        issue: unsupportedAutoRuntimeModeMessage(PROVIDER),
+      });
+    }
+
     if (!modeState) {
       const requiredBy =
         interactionMode === "plan"
@@ -828,21 +837,17 @@ export function resolveRequestedModeId(input: {
           ? ACP_APPROVAL_MODE_ALIASES
           : ACP_FULL_ACCESS_MODE_ALIASES;
 
-    // For plan mode, only an exact normalized id or name match is considered
-    // safe; whole-token matching is too permissive for a fail-closed gate.
+    // Restricted modes require a complete id or name from the known aliases.
     const targetMode =
-      interactionMode === "plan"
-        ? findModeByExactNormalizedAliases(modeState.availableModes, aliases)
-        : (findModeByExactNormalizedAliases(modeState.availableModes, aliases) ??
-          // Some Devin catalogs expose Ask Everytime instead of Code. Match the
-          // full name: the separate Ask mode must never count as approval mode.
-          (runtimeMode === "approval-required"
-            ? findModeByExactNormalizedAliases(modeState.availableModes, [
-                "ask everytime",
-                "ask every time",
-              ])
-            : undefined) ??
-          findModeByWholeTokenAliases(modeState.availableModes, aliases));
+      findModeByExactNormalizedAliases(modeState.availableModes, aliases) ??
+      (interactionMode === "plan"
+        ? undefined
+        : runtimeMode === "approval-required"
+          ? findModeByExactNormalizedAliases(modeState.availableModes, [
+              "ask everytime",
+              "ask every time",
+            ])
+          : findModeByWholeTokenAliases(modeState.availableModes, aliases));
 
     if (!targetMode) {
       if (runtimeMode === "full-access" && interactionMode !== "plan") {
@@ -2664,12 +2669,18 @@ export function makeDevinAdapter(
               Effect.gen(function* () {
                 yield* logNative(input.threadId, "session/request_permission", params);
 
-                const permissionRequest = parsePermissionRequest(params);
+                const parsedRequest = parsePermissionRequest(params);
                 // Devin's request_permission toolCall arrives sparse (usually
                 // only {toolCallId, kind}); merge the tracked session/update
                 // state so policy matching and the approval card can see the
                 // tool name and its arguments.
                 const trackedToolCall = ctx?.devinToolCallStateById.get(params.toolCall.toolCallId);
+                // A sparse request must keep the tracked shell classification
+                // so the coordinator's MCP auto-approval cannot cover execution.
+                const permissionRequest: AcpPermissionRequest =
+                  trackedToolCall?.kind === "execute"
+                    ? { ...parsedRequest, kind: "execute" }
+                    : parsedRequest;
                 const toolCall =
                   permissionRequest.toolCall === undefined
                     ? trackedToolCall

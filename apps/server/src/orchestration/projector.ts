@@ -169,6 +169,17 @@ function findMessageIndexFromEnd(
   return -1;
 }
 
+const cachedSyncDecoders = new WeakMap<object, (value: unknown) => unknown>();
+
+function getSyncDecoder<A>(schema: Schema.Schema<A>): (value: unknown) => A {
+  let decoder = cachedSyncDecoders.get(schema as object);
+  if (decoder === undefined) {
+    decoder = Schema.decodeUnknownSync(schema as any);
+    cachedSyncDecoders.set(schema as object, decoder);
+  }
+  return decoder as (value: unknown) => A;
+}
+
 function decodeForEvent<A>(
   schema: Schema.Schema<A>,
   value: unknown,
@@ -176,7 +187,7 @@ function decodeForEvent<A>(
   field: string,
 ): Effect.Effect<A, OrchestrationProjectorDecodeError> {
   return Effect.try({
-    try: () => Schema.decodeUnknownSync(schema as any)(value),
+    try: () => getSyncDecoder(schema)(value),
     catch: (error) => toProjectorDecodeError(`${eventType}:${field}`)(error as Schema.SchemaError),
   });
 }
@@ -1063,43 +1074,78 @@ export function projectEvent(
 
     case "thread.message-sent":
       return Effect.gen(function* () {
-        const payload = yield* decodeForEvent(
-          MessageSentPayloadSchema,
-          event.payload,
-          event.type,
-          "payload",
-        );
+        const rawPayload = event.payload;
+        // Fast path for validated streaming assistant deltas without optional
+        // rich metadata (the 99.9% hot path during token streaming): avoids two
+        // Effect Schema decodes and V8 dictionary-mode `delete` per token.
+        const isFastStreamingDelta =
+          rawPayload !== null &&
+          typeof rawPayload === "object" &&
+          rawPayload.streaming === true &&
+          rawPayload.role === "assistant" &&
+          typeof rawPayload.threadId === "string" &&
+          typeof rawPayload.messageId === "string" &&
+          typeof rawPayload.text === "string" &&
+          typeof rawPayload.createdAt === "string" &&
+          typeof rawPayload.updatedAt === "string" &&
+          rawPayload.attachments === undefined &&
+          rawPayload.skills === undefined &&
+          rawPayload.mentions === undefined &&
+          rawPayload.asyncUserInput === undefined &&
+          rawPayload.dispatchMode === undefined &&
+          rawPayload.dispatchOrigin === undefined &&
+          rawPayload.startsNewTurn === undefined;
+
+        const payload = isFastStreamingDelta
+          ? {
+              ...rawPayload,
+              source: rawPayload.source ?? ("native" as const),
+            }
+          : yield* decodeForEvent(MessageSentPayloadSchema, rawPayload, event.type, "payload");
         const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
         if (!thread) {
           return nextBase;
         }
 
-        const message: OrchestrationMessage = yield* decodeForEvent(
-          OrchestrationMessage,
-          {
-            id: payload.messageId,
-            role: payload.role,
-            text: payload.text,
-            ...(payload.asyncUserInput ? { asyncUserInput: payload.asyncUserInput } : {}),
-            ...(payload.attachments !== undefined ? { attachments: payload.attachments } : {}),
-            ...(payload.skills !== undefined ? { skills: payload.skills } : {}),
-            ...(payload.mentions !== undefined ? { mentions: payload.mentions } : {}),
-            ...(payload.dispatchMode !== undefined ? { dispatchMode: payload.dispatchMode } : {}),
-            ...(payload.dispatchOrigin !== undefined
-              ? { dispatchOrigin: payload.dispatchOrigin }
-              : {}),
-            ...(payload.startsNewTurn !== undefined
-              ? { startsNewTurn: payload.startsNewTurn }
-              : {}),
-            turnId: payload.turnId,
-            streaming: payload.streaming,
-            source: payload.source,
-            createdAt: payload.createdAt,
-            updatedAt: payload.updatedAt,
-          },
-          event.type,
-          "message",
-        );
+        const message: OrchestrationMessage = isFastStreamingDelta
+          ? {
+              id: payload.messageId,
+              role: payload.role,
+              text: payload.text,
+              turnId: payload.turnId,
+              streaming: payload.streaming,
+              source: payload.source,
+              createdAt: payload.createdAt,
+              updatedAt: payload.updatedAt,
+            }
+          : yield* decodeForEvent(
+              OrchestrationMessage,
+              {
+                id: payload.messageId,
+                role: payload.role,
+                text: payload.text,
+                ...(payload.asyncUserInput ? { asyncUserInput: payload.asyncUserInput } : {}),
+                ...(payload.attachments !== undefined ? { attachments: payload.attachments } : {}),
+                ...(payload.skills !== undefined ? { skills: payload.skills } : {}),
+                ...(payload.mentions !== undefined ? { mentions: payload.mentions } : {}),
+                ...(payload.dispatchMode !== undefined
+                  ? { dispatchMode: payload.dispatchMode }
+                  : {}),
+                ...(payload.dispatchOrigin !== undefined
+                  ? { dispatchOrigin: payload.dispatchOrigin }
+                  : {}),
+                ...(payload.startsNewTurn !== undefined
+                  ? { startsNewTurn: payload.startsNewTurn }
+                  : {}),
+                turnId: payload.turnId,
+                streaming: payload.streaming,
+                source: payload.source,
+                createdAt: payload.createdAt,
+                updatedAt: payload.updatedAt,
+              },
+              event.type,
+              "message",
+            );
 
         // Hot path: one streamed delta must not cost a full copy-and-rebuild of
         // the transcript. Update the one affected slot in a single shallow copy
@@ -1127,8 +1173,7 @@ export function projectEvent(
                 })
               : undefined;
           const nextMessages = thread.messages.slice();
-          const entryWithoutTextSegments = { ...entry };
-          delete entryWithoutTextSegments.textSegments;
+          const { textSegments: _discardedSegments, ...entryWithoutTextSegments } = entry;
           nextMessages[existingIndex] = {
             ...entryWithoutTextSegments,
             ...(message.asyncUserInput ? { asyncUserInput: message.asyncUserInput } : {}),

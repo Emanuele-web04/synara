@@ -662,7 +662,7 @@ function attachThreadMessageSegments(
   }
   const segmentsByMessage = new Map<string, ProjectionThreadMessageTextSegment[]>();
   for (const segment of segmentRows) {
-    const key = JSON.stringify([segment.threadId, segment.messageId]);
+    const key = `${segment.threadId}\0${segment.messageId}`;
     const entry = {
       sequence: segment.sequence,
       startedAt: segment.startedAt,
@@ -677,7 +677,7 @@ function attachThreadMessageSegments(
     }
   }
   return rows.map((row) => {
-    const rowSegments = segmentsByMessage.get(JSON.stringify([row.threadId, row.messageId]));
+    const rowSegments = segmentsByMessage.get(`${row.threadId}\0${row.messageId}`);
     return rowSegments ? { ...row, textSegments: rowSegments } : row;
   });
 }
@@ -1472,16 +1472,18 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
     messages: ReadonlyArray<ProjectionThreadMessageDbRow>,
     tracePrefix: string,
   ) =>
-    listThreadMessageSegmentRows(
-      messages.map(({ threadId, messageId }) => ({ threadId, messageId })),
-    ).pipe(
-      Effect.mapError(
-        toPersistenceSqlOrDecodeError(
-          `${tracePrefix}:listMessageSegments:query`,
-          `${tracePrefix}:listMessageSegments:decodeRows`,
-        ),
-      ),
-    );
+    messages.length === 0
+      ? Effect.succeed<ReadonlyArray<ProjectionThreadMessageSegmentDbRow>>([])
+      : listThreadMessageSegmentRows(
+          messages.map(({ threadId, messageId }) => ({ threadId, messageId })),
+        ).pipe(
+          Effect.mapError(
+            toPersistenceSqlOrDecodeError(
+              `${tracePrefix}:listMessageSegments:query`,
+              `${tracePrefix}:listMessageSegments:decodeRows`,
+            ),
+          ),
+        );
 
   const listThreadProposedPlanRows = SqlSchema.findAll({
     Request: Schema.Void,
@@ -1810,6 +1812,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           ORDER BY requested_at DESC, turn_id DESC
           LIMIT 1
         )
+        WHERE threads.deleted_at IS NULL
         ORDER BY latest.thread_id ASC
       `,
   });
@@ -2223,7 +2226,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             AND turn_id IS NOT NULL
             AND (${turnFailureActivityPredicate})
         ),
-        ranked AS (
+        ranked AS MATERIALIZED (
           SELECT
             thread_id,
             activity_id,
@@ -3176,14 +3179,17 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             updatedAt: updatedAt ?? new Date(0).toISOString(),
           };
 
-          return yield* decodeReadModel(snapshot).pipe(
-            Effect.mapError(
-              toPersistenceDecodeError("ProjectionSnapshotQuery.getSnapshot:decodeReadModel"),
-            ),
-          );
+          return snapshot;
         }),
       )
       .pipe(
+        Effect.flatMap((snapshot) =>
+          decodeReadModel(snapshot).pipe(
+            Effect.mapError(
+              toPersistenceDecodeError("ProjectionSnapshotQuery.getSnapshot:decodeReadModel"),
+            ),
+          ),
+        ),
         Effect.mapError((error) => {
           if (isPersistenceError(error)) {
             return error;
@@ -3312,22 +3318,25 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             }),
           );
 
-          return yield* decodeReadModel({
+          return {
             snapshotSequence: yield* computeSnapshotSequence(stateRows),
             spaces: spaceRows.map(toProjectedSpace),
             projects,
             threads,
             updatedAt: updatedAt ?? new Date(0).toISOString(),
-          }).pipe(
+          };
+        }),
+      )
+      .pipe(
+        Effect.flatMap((snapshot) =>
+          decodeReadModel(snapshot).pipe(
             Effect.mapError(
               toPersistenceDecodeError(
                 "ProjectionSnapshotQuery.getCommandReadModel:decodeReadModel",
               ),
             ),
-          );
-        }),
-      )
-      .pipe(
+          ),
+        ),
         Effect.mapError((error) => {
           if (isPersistenceError(error)) {
             return error;
@@ -3513,16 +3522,19 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             updatedAt: updatedAt ?? new Date(0).toISOString(),
           };
 
-          return yield* decodeShellSnapshot(snapshot).pipe(
+          return snapshot;
+        }),
+      )
+      .pipe(
+        Effect.flatMap((snapshot) =>
+          decodeShellSnapshot(snapshot).pipe(
             Effect.mapError(
               toPersistenceDecodeError(
                 "ProjectionSnapshotQuery.getShellSnapshot:decodeShellSnapshot",
               ),
             ),
-          );
-        }),
-      )
-      .pipe(
+          ),
+        ),
         Effect.mapError((error) => {
           if (isPersistenceError(error)) {
             return error;
