@@ -14,6 +14,7 @@ import { DESKTOP_IPC_CHANNELS } from "./ipcChannels";
 import {
   parseQuitConfirmationRequest,
   parseQuitConfirmationResponse,
+  parseQuitConfirmationWithdrawal,
 } from "./runningChatsQuitGuard";
 
 const IPC = DESKTOP_IPC_CHANNELS;
@@ -286,6 +287,22 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     if (!parsed) return;
     ipcRenderer.send(IPC.quitConfirmationResponse, parsed);
   },
+  revealQuitConfirmation: () => {
+    ipcRenderer.send(IPC.quitConfirmationReveal);
+  },
+  onQuitConfirmationWithdrawn: (listener) => {
+    const wrappedListener = (_event: Electron.IpcRendererEvent, payload: unknown) => {
+      const withdrawal = parseQuitConfirmationWithdrawal(payload);
+      if (withdrawal) listener(withdrawal);
+    };
+
+    ipcRenderer.on(IPC.quitConfirmationWithdrawn, wrappedListener);
+    return () => {
+      ipcRenderer.removeListener(IPC.quitConfirmationWithdrawn, wrappedListener);
+    };
+  },
+  getQuitAsks: () => ipcRenderer.invoke(IPC.quitPreferenceGet),
+  setQuitAsks: (asks) => ipcRenderer.invoke(IPC.quitPreferenceSet, asks === true),
   getZoomFactor: () => {
     const factor = ipcRenderer.sendSync(IPC.zoomFactor);
     return typeof factor === "number" && Number.isFinite(factor) && factor > 0 ? factor : 1;

@@ -427,6 +427,12 @@ export const GENERATED_SETTINGS_SEARCH_ROWS: readonly GeneratedSettingsSearchRow
     description: "settings:advanced_releaseHistoryDescription",
   },
   {
+    target: "setting-ask-before-quitting",
+    section: "advanced",
+    title: "settings:quit_askBeforeQuitting",
+    description: "settings:quit_askBeforeQuittingDescription",
+  },
+  {
     target: "setting-this-browser",
     section: "advanced",
     title: "settings:thisBrowser",

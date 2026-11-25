@@ -117,14 +117,20 @@ decoration pauses while its chat is hidden.
 You do not need every surface open at once. Bring each one in when it answers a question: what is
 running, what changed, whether the UI works, or whether the task is safe to ship.
 
-Desktop quit requests ask for confirmation even when no chats are running. On macOS,
-⌘Q quits the application after confirmation. Cmd/Ctrl+W closes the focused terminal or
-workspace view, or the active open chat tab when available. If no surface handles the chord,
-macOS ⌘W confirms closing the window while the application and its running chats stay active.
-Quitting with no open window uses a native confirmation. With an open window and running chats, the quit dialog lists the work that
-will stop and offers to resume it automatically on the next launch. On macOS and Linux, a SIGINT
-or SIGTERM from a terminal or a script, such as `bun run canary:stop`, shuts the app down without
-asking.
+Desktop quit asks when a chat is running. With nothing running, the question follows the
+"Quit without asking while nothing is running" choice; Settings → Advanced can turn it back on.
+⌘Q in the question confirms it, ⌘↩ (Ctrl+↩ elsewhere) answers Quit from anywhere in it, and a
+second ⌘Q quits without waiting. A question left unanswered for a minute closes and keeps Synara
+running. On macOS, ⌘Q quits the application after confirmation, or immediately when the idle
+choice is on and nothing is running. Cmd/Ctrl+W closes the focused terminal or workspace view, or
+the active open chat tab when available. On macOS, closing the window hides it; the application
+and its running chats stay active, and the Dock icon brings it back. On Windows and Linux, closing
+the window quits after confirmation. If no page can show the question, Synara skips it and quits;
+it never falls back to a native macOS alert. With an open window and running chats, the quit dialog
+lists the work that will stop and offers to resume it automatically on the next launch. On macOS
+and Linux, a SIGINT or SIGTERM from a terminal or a script, such as `bun run canary:stop`, shuts the
+app down without asking. On macOS and Windows, the app menu has Open at Login, so a packaged
+Synara can start with the computer.
 
 After an unexpected server shutdown, Synara automatically continues ordinary chats that
 were actively running, using their saved conversation and provider selection. The continuation

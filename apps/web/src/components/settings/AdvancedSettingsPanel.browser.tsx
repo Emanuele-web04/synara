@@ -8,6 +8,10 @@ import { page } from "vitest/browser";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
+import type { DesktopBridge } from "@synara/contracts";
+
+import { setDesktopQuitAsks } from "~/hooks/useDesktopQuitPreference";
+
 const harness = vi.hoisted(() => ({
   config: {
     keybindingsConfigPath: "/tmp/keybindings.json",
@@ -62,6 +66,24 @@ import {
 describe("AdvancedSettingsPanel", () => {
   afterEach(() => {
     document.body.innerHTML = "";
+    delete window.desktopBridge;
+    setDesktopQuitAsks(true);
+  });
+
+  it("turns the idle quit question on and off from Advanced", async () => {
+    const setQuitAsks = vi.fn(async () => undefined);
+    window.desktopBridge = {
+      getQuitAsks: async () => true,
+      setQuitAsks,
+    } as Pick<DesktopBridge, "getQuitAsks" | "setQuitAsks"> as DesktopBridge;
+
+    await render(<AdvancedSettingsPanel active resetEpoch={0} />);
+
+    const quitSwitch = page.getByRole("switch", { name: "Ask before quitting" });
+    await expect.element(quitSwitch).toBeVisible();
+    await quitSwitch.click();
+
+    expect(setQuitAsks).toHaveBeenCalledWith(false);
   });
 
   it("owns recovery eligibility and shared disclosure motion", async () => {
