@@ -57,6 +57,24 @@ import { getNavigatorPlatform, isMacPlatform } from "~/lib/utils";
 import { settingRowAnchorId } from "~/settingsNavigation";
 import { useTheme } from "~/hooks/useTheme";
 
+const EMPTY_CHAT_BACKGROUND_OPTIONS = [
+  {
+    value: "temple",
+    label: "settings:emptyChatBackground_temple",
+    description: "settings:emptyChatBackground_templeDescription",
+  },
+  {
+    value: "gradient",
+    label: "settings:emptyChatBackground_gradient",
+    description: "settings:emptyChatBackground_gradientDescription",
+  },
+  {
+    value: "off",
+    label: "settings:emptyChatBackground_off",
+    description: "settings:emptyChatBackground_offDescription",
+  },
+] as const;
+
 const UI_DENSITY_OPTIONS = [
   {
     value: "compact",
@@ -329,14 +347,38 @@ export function AppearanceSettingsView(binding: AppSettingsBinding) {
       ) : null}
 
       <SettingsSection title="settings:appearance_effects">
-        <BooleanSettingRow
-          {...binding}
+        <SettingsRow
           id="setting-ascii-background"
-          settingKey="showAsciiBackground"
           title="settings:asciiBackground"
           description="settings:asciiBackgroundDescription"
-          resetLabel="settings:asciiBackground"
-          ariaLabel="settings:asciiBackground"
+          resetAction={
+            settings.showAsciiBackground !== defaults.showAsciiBackground ||
+            settings.emptyChatBackdropStyle !== defaults.emptyChatBackdropStyle ? (
+              <SettingResetButton
+                label={t("settings:asciiBackground")}
+                onClick={() =>
+                  updateSettings({
+                    showAsciiBackground: defaults.showAsciiBackground,
+                    emptyChatBackdropStyle: defaults.emptyChatBackdropStyle,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <SettingsSegmentedControl
+              value={settings.showAsciiBackground ? settings.emptyChatBackdropStyle : "off"}
+              onValueChange={(value) => {
+                if (value === "off") {
+                  updateSettings({ showAsciiBackground: false });
+                } else if (value === "temple" || value === "gradient") {
+                  updateSettings({ showAsciiBackground: true, emptyChatBackdropStyle: value });
+                }
+              }}
+              ariaLabel={t("settings:asciiBackground")}
+              options={EMPTY_CHAT_BACKGROUND_OPTIONS}
+            />
+          }
         />
 
         {isAudioLevelAvailable() ? (
