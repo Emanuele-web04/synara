@@ -17,6 +17,7 @@ const BUNDLE_ONLY_RESOURCE_ENTRIES = new Set([
   "Synara.icns",
   "cua-driver",
   "cloudflared",
+  "localizations",
 ]);
 
 export const stageDesktopRuntimeResources = Effect.fn("stageDesktopRuntimeResources")(function* (

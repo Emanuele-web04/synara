@@ -59,6 +59,7 @@ export function useSettingsRestoreDefaults({
     );
 
   const changedSettingLabels = [
+    ...(settings.language !== defaults.language ? ["common:general_languageAria"] : []),
     ...(theme !== "system" ? ["onboarding:changed_theme"] : []),
     // resetAllThemes() restores both theme packs and the system-font preference.
     ...(!isDefaultThemePack("dark") ? ["settings:darkThemePack"] : []),

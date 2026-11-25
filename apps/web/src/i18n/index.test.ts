@@ -1,6 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { t } from "./index";
+import { i18n, setLanguagePreference, t } from "./index";
+import { UI_LOCALES } from "./locale";
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  setLanguagePreference("en");
+});
 
 describe("bundled translations", () => {
   it("preserves interpolated data and uses the shipped English plural forms", () => {
@@ -10,6 +16,18 @@ describe("bundled translations", () => {
     expect(t("common:open", { title: "项目名称" })).toBe("Open 项目名称");
     expect(t("chat:backgroundTaskCount", { count: 1 })).toBe("1 background task");
     expect(t("chat:backgroundTaskCount", { count: 2 })).toBe("2 background tasks");
+  });
+
+  it("switches synchronously through every shipped language and updates document direction", () => {
+    const documentElement = { lang: "", dir: "" };
+    vi.stubGlobal("document", { documentElement });
+    for (const locale of UI_LOCALES) {
+      setLanguagePreference(locale);
+      expect(i18n.language).toBe(locale);
+      expect(documentElement.lang).toBe(locale);
+      expect(documentElement.dir).toBe(locale === "ar" || locale === "ur" ? "rtl" : "ltr");
+      expect(t("workspace:toast_settings")).toBeTruthy();
+    }
   });
 
   it("preserves literal URLs, paths, names, and already translated copy passed through metadata", () => {

@@ -1,17 +1,18 @@
 # Interface text
 
-Synara's interface is English-only. There is no language setting: the web app, native menus, startup dialogs and macOS permission explanations always use English. Dates, times and numbers follow the system locale, as an unspecified `Intl` locale does.
+Synara's interface is localized into English, Simplified Chinese, Hindi, Spanish, French, Arabic, Bengali, Portuguese, Russian, and Urdu. The General settings language selector can follow the system language or pin one of those interface languages. Arabic and Urdu set the document direction to RTL; other languages use LTR.
 
-Application copy lives in English message catalogs and is read through `t()`. This keeps wording in one place and lets other languages be added later without touching every component.
+Application copy lives in message catalogs and is read through `t()`. This keeps wording in one place and keeps stable IDs independent of displayed text.
 
 ## Ownership
 
-- `packages/contracts/src/uiLocale.ts` lists the shipped interface locale (`en`).
-- `packages/shared/src/locales/en/<namespace>.json` contains the catalogs. Namespaces cover common controls, settings, chat, workspace, computer use, Git, automation, onboarding, and desktop. `uiLocalizationResources` and `nativeLocalizationResources` export them; the native import includes only the desktop namespace.
-- `apps/web/src/i18n` owns the React translator, the formatting locale, and rich React messages. Bootstrap error screens use text nodes for catalog strings.
-- `apps/desktop/src/i18n.ts` reads the desktop namespace for native menus and startup dialogs.
+- `packages/contracts/src/uiLocale.ts` lists the shipped interface locales, native names, directions, and language aliases.
+- `packages/shared/src/locales/<locale>/<namespace>.json` contains the catalogs. Namespaces cover common controls, settings, chat, workspace, computer use, Git, automation, onboarding, and desktop. `uiLocalizationResources` exports every locale; `nativeLocalizationResources` exports only the desktop namespace.
+- `apps/web/src/i18n` owns language resolution, the React translator, the formatting locale, document language/direction, and rich React messages. Bootstrap error screens use text nodes for catalog strings.
+- `apps/desktop/src/i18n.ts` reads the desktop namespace for native menus and startup dialogs. `desktopPreferences.ts` persists the native language preference in the desktop user-data directory.
+- `apps/desktop/resources/localizations/*.lproj` contains macOS permission explanations. `zh-CN` maps to the macOS `zh-Hans.lproj` bundle folder.
 
-A saved language preference from an earlier build is ignored; it does not reset other settings.
+The `system` preference uses the desktop operating system's preferred languages when the native bridge is available and otherwise uses the browser language list. Unsupported or malformed candidates fall through to the next preference and finally to English. A saved invalid preference normalizes to `system` without resetting other settings.
 
 ## Adding or changing copy
 
@@ -38,4 +39,4 @@ bun run i18n:extract --check
 bun run i18n:coverage
 ```
 
-These commands are deterministic and read-only. The catalog check verifies namespaces, interpolation, protected tokens, message markup, and that every referenced key exists in the English catalogs. Extraction lists UI literals that bypass the catalogs; its narrow exemptions document product names and technical examples. CI blocks on catalog and source-key errors and reports UI literals for follow-up.
+These commands are deterministic and read-only. The catalog check verifies namespaces, interpolation, protected tokens, message markup, and exact catalog key parity with English. Extraction lists UI literals that bypass the catalogs; its narrow exemptions document product names, native language names, and technical examples. CI blocks on catalog and source-key errors and reports UI literals for follow-up.

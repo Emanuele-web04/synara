@@ -183,7 +183,7 @@ function compileGlassAppIcon(appBundlePath, iconComposerPath, scratchDir, runCom
   return true;
 }
 
-function patchMainBundleInfoPlist(appBundlePath, iconPath, runCommand) {
+function patchMainBundleInfoPlist(appBundlePath, iconPath, localizedInfoPlists, runCommand) {
   const infoPlistPath = join(appBundlePath, "Contents", "Info.plist");
   setPlistString(infoPlistPath, "CFBundleDisplayName", APP_DISPLAY_NAME, runCommand);
   setPlistString(infoPlistPath, "CFBundleName", APP_DISPLAY_NAME, runCommand);
@@ -223,6 +223,11 @@ function patchMainBundleInfoPlist(appBundlePath, iconPath, runCommand) {
   const resourcesDir = join(appBundlePath, "Contents", "Resources");
   copyFileSync(iconPath, join(resourcesDir, "icon.icns"));
   copyFileSync(iconPath, join(resourcesDir, "electron.icns"));
+  for (const { locale, contents } of localizedInfoPlists) {
+    const localeDir = join(resourcesDir, locale);
+    mkdirSync(localeDir, { recursive: true });
+    writeFileSync(join(localeDir, "InfoPlist.strings"), contents);
+  }
 }
 
 function patchHelperBundleInfoPlists(appBundlePath, runCommand) {
@@ -353,6 +358,14 @@ export function buildMacLauncher(
   const hasIconComposerSource = existsSync(iconComposerPath);
   const metadataPath = join(runtimeDir, "metadata.json");
   const desktopPackage = JSON.parse(readFileSync(join(desktopDirectory, "package.json"), "utf8"));
+  const localizationsDir = join(desktopDirectory, "resources", "localizations");
+  const localizedInfoPlists = readdirSync(localizationsDir)
+    .filter((entry) => entry.endsWith(".lproj"))
+    .sort()
+    .map((locale) => ({
+      locale,
+      contents: readFileSync(join(localizationsDir, locale, "InfoPlist.strings"), "utf8"),
+    }));
 
   mkdirSync(runtimeDir, { recursive: true });
 
@@ -362,6 +375,9 @@ export function buildMacLauncher(
     sourceAppMtimeMs: statSync(sourceAppBundlePath).mtimeMs,
     iconMtimeMs: statSync(iconPath).mtimeMs,
     bootstrapHash: createHash("sha256").update(readFileSync(bootstrapPath)).digest("hex"),
+    localizedInfoPlistsHash: createHash("sha256")
+      .update(JSON.stringify(localizedInfoPlists))
+      .digest("hex"),
     appVersion: desktopPackage.version,
     // Layered artwork lives in several files, so track the newest of them.
     iconComposerMtimeMs: hasIconComposerSource ? latestMtimeMs(iconComposerPath) : null,
@@ -383,7 +399,7 @@ export function buildMacLauncher(
   rmSync(metadataPath, { force: true });
   rmSync(targetAppBundlePath, { recursive: true, force: true });
   copyMacAppBundle(sourceAppBundlePath, targetAppBundlePath, runCommand);
-  patchMainBundleInfoPlist(targetAppBundlePath, iconPath, runCommand);
+  patchMainBundleInfoPlist(targetAppBundlePath, iconPath, localizedInfoPlists, runCommand);
   if (hasIconComposerSource) {
     compileGlassAppIcon(targetAppBundlePath, iconComposerPath, runtimeDir, runCommand);
   }

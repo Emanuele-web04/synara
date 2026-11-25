@@ -1229,5 +1229,7 @@
   "video_downloadVideo": "Download video",
   "video_couldNotDownload": "Could not download video",
   "video_downloadTooLarge": "This connection supports video downloads up to {{maxMiB}} MiB.",
-  "video_retryPreview": "Retry video preview"
+  "video_retryPreview": "Retry video preview",
+  "general_languageAria": "Language",
+  "language": "language"
 }

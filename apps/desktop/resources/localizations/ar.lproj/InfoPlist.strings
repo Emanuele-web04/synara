@@ -1,0 +1,5 @@
+"NSMicrophoneUsageDescription" = "Synara يحتاج إلى وصول عبر الميكروفون حتى تتمكن من تسجيل الملاحظات الصوتية ونسخها إلى مؤلف الدردشة، وإذا قمت بتفعيله، لتحريك مسار رسالة الدردشة بصوتك.";
+"NSAudioCaptureUsageDescription" = "Synara يقرأ مدى ارتفاع صوت Mac لتحريك مسار رسائل الدردشة. الصوت نفسه لا يسجل أبدا.";
+"NSScreenCaptureUsageDescription" = "Synara يلتقط النوافذ التي تفوضها للاستخدام على الكمبيوتر.";
+"NSAccessibilityUsageDescription" = "Synara يتحكم في النوافذ التي تفوض استخدامها على الكمبيوتر.";
+"NSLocalNetworkUsageDescription" = "يتصل Synara بالمتصفحات التي يشغلها على هذا Mac حتى يتمكن الوكلاء من التصفح في الخلفية.";

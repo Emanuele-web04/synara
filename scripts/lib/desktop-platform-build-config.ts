@@ -79,6 +79,8 @@ export interface DesktopPlatformBuildConfig {
 
 const ELECTRON_LOCALE_CODES: Readonly<Record<string, ReadonlyArray<string>>> = {
   en: ["en-US", "en-GB", "en_GB"],
+  pt: ["pt-BR", "pt-PT"],
+  "zh-CN": ["zh-CN"],
 };
 
 export function electronLanguagesForFlavor(): string[] {
@@ -242,6 +244,14 @@ export function createDesktopPlatformBuildConfig(
           from: MAC_ICON_ASSETS_CAR_STAGE_PATH,
           to: MAC_ICON_ASSETS_CAR_BUNDLE_PATH,
         },
+        // macOS reads permission explanations from the bundle's language folders.
+        ...UI_LOCALES.map((locale) => {
+          const directory = `${locale === "zh-CN" ? "zh-Hans" : locale}.lproj`;
+          return {
+            from: `apps/desktop/resources/localizations/${directory}`,
+            to: `Resources/${directory}`,
+          };
+        }),
       ],
       mac,
     };

@@ -1324,5 +1324,9 @@
   "signInFlow_tryAgain": "Try again",
   "signInFlow_closesItself": "This window closes by itself in a moment.",
   "signInFlow_unableToClose": "Unable to stop sign-in. Retry closing this window.",
-  "signInFlow_unableToSend": "Unable to send that to the sign-in. Try again."
+  "signInFlow_unableToSend": "Unable to send that to the sign-in. Try again.",
+  "chooseTheLanguageUsedByTheInterfaceSystemFollows": "Choose the language used by the interface. System follows your browser or device language.",
+  "editorLanguageReloadNotice": "The interface language changed. Save and reload to apply it to the editor's built-in controls.",
+  "editorLanguageSaveAndReload": "Save and reload",
+  "general_coreDefaults": "Core defaults"
 }

@@ -1,0 +1,5 @@
+"NSMicrophoneUsageDescription" = "Synara necesita acceso al micrófono para que puedas grabar notas de voz y transcribirlas en el cuadro de chat y, si lo activas, mover el rastro de los mensajes del chat con tu voz.";
+"NSAudioCaptureUsageDescription" = "Synara lee el volumen del audio de tu Mac para animar el rastro de los mensajes del chat. El audio en sí nunca se graba.";
+"NSScreenCaptureUsageDescription" = "Synara captura las ventanas que autorizas para el uso del ordenador.";
+"NSAccessibilityUsageDescription" = "Synara controla las ventanas que autorizas para el uso del ordenador.";
+"NSLocalNetworkUsageDescription" = "Synara se conecta a los navegadores que controla en este Mac para que los agentes puedan navegar en segundo plano.";

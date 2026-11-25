@@ -56,15 +56,30 @@ import {
   serverSettingsToAppSettings,
 } from "./appSettings";
 
-describe("retired interface language preference", () => {
-  it("ignores a stored language choice without resetting other settings", () => {
-    for (const language of ["system", "en", "es", "zh-CN", "fr", 42, null, { code: "es" }]) {
+describe("interface language preference", () => {
+  it("preserves supported choices and normalizes invalid values without resetting other settings", () => {
+    for (const language of [
+      "system",
+      "en",
+      "es",
+      "zh-CN",
+      "hi",
+      "fr",
+      "ar",
+      "bn",
+      "pt",
+      "ru",
+      "ur",
+    ]) {
       const settings = Schema.decodeUnknownSync(AppSettingsSchema)({
         language,
         chatFontSizePx: 15,
       });
-      expect(settings).not.toHaveProperty("language");
+      expect(settings.language).toBe(language);
       expect(settings.chatFontSizePx).toBe(15);
+    }
+    for (const language of [42, null, { code: "es" }]) {
+      expect(Schema.decodeUnknownSync(AppSettingsSchema)({ language }).language).toBe("system");
     }
   });
 });

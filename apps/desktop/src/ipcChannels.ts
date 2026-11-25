@@ -7,6 +7,8 @@ export const DESKTOP_IPC_CHANNELS = {
   saveFile: "desktop:save-file",
   confirm: "desktop:confirm",
   setTheme: "desktop:set-theme",
+  setLanguagePreference: "desktop:set-language-preference",
+  getSystemLanguages: "desktop:get-system-languages",
   setWindowMaterial: "desktop:set-window-material",
   windowTranslucency: "desktop:window-translucency",
   getAppIcon: "desktop:get-app-icon",

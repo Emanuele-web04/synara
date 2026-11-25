@@ -1,0 +1,5 @@
+"NSMicrophoneUsageDescription" = "Synara needs microphone access so you can record voice notes and transcribe them into the chat composer, and, if you turn it on, to move the chat message trail with your voice.";
+"NSAudioCaptureUsageDescription" = "Synara reads how loud your Mac's audio is to animate the chat message trail. The audio itself is never recorded.";
+"NSScreenCaptureUsageDescription" = "Synara captures the windows you authorize for Computer use.";
+"NSAccessibilityUsageDescription" = "Synara controls the windows you authorize for Computer use.";
+"NSLocalNetworkUsageDescription" = "Synara connects to the browsers it drives on this Mac so agents can browse in the background.";

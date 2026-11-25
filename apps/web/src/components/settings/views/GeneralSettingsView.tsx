@@ -6,6 +6,7 @@
 import { type AppSettingsBinding } from "~/appSettings";
 import { KeepAwakeSettingsSection, RemoteAccessKeepAwakeRow } from "~/components/KeepAwakeControls";
 import { AppTourSettingsRow } from "~/components/settings/AdvancedSettingsPanel";
+import { EditorLanguageReloadNotice } from "~/components/codeEditor/EditorLanguageReloadNotice";
 import { DefaultNewChatAccountRow } from "~/components/settings/accounts/DefaultNewChatAccountRow";
 import { SettingResetButton, SettingsSelectControl } from "~/components/settings/SettingControls";
 import { SettingsRow, SettingsSection } from "~/components/settings/SettingsPanelPrimitives";
@@ -14,6 +15,13 @@ import { SelectItem } from "~/components/ui/select";
 import { useDesktopKeepAwake } from "~/hooks/useDesktopKeepAwake";
 import { useKeepAwakeState } from "~/hooks/useKeepAwakeState";
 import { useTranslation } from "~/i18n";
+import {
+  AVAILABLE_LANGUAGE_PREFERENCES,
+  UI_LOCALES,
+  UI_LOCALE_REGISTRY,
+  resolveLanguagePreference,
+  type LanguagePreference,
+} from "~/i18n/locale";
 import { useOnboardingDialogStore } from "~/onboarding/onboardingDialogStore";
 
 const TIMESTAMP_FORMAT_LABELS = {
@@ -27,8 +35,52 @@ export function GeneralSettingsView(binding: AppSettingsBinding) {
   const { t } = useTranslation();
   const keepAwake = useKeepAwakeState();
   const desktopKeepAwake = useDesktopKeepAwake();
+  const languagePreference = resolveLanguagePreference(settings.language);
   return (
     <div className="space-y-6">
+      <SettingsSection title="settings:general_coreDefaults">
+        <SettingsRow
+          id="setting-language"
+          status={<EditorLanguageReloadNotice />}
+          title="common:general_languageAria"
+          description="settings:chooseTheLanguageUsedByTheInterfaceSystemFollows"
+          resetAction={
+            settings.language !== defaults.language ? (
+              <SettingResetButton
+                label={t("common:language")}
+                onClick={() => updateSettings({ language: defaults.language })}
+              />
+            ) : null
+          }
+          control={
+            <SettingsSelectControl
+              value={languagePreference}
+              onValueChange={(language) => {
+                if (AVAILABLE_LANGUAGE_PREFERENCES.includes(language as LanguagePreference)) {
+                  updateSettings({ language: language as LanguagePreference });
+                }
+              }}
+              ariaLabel={t("common:general_languageAria")}
+              triggerClassName="w-full sm:w-48"
+              valueContent={
+                languagePreference === "system"
+                  ? t("common:themeOptions_system")
+                  : UI_LOCALE_REGISTRY[languagePreference].nativeName
+              }
+            >
+              <SelectItem hideIndicator value="system">
+                {t("common:themeOptions_system")}
+              </SelectItem>
+              {UI_LOCALES.map((locale) => (
+                <SelectItem hideIndicator key={locale} value={locale}>
+                  {UI_LOCALE_REGISTRY[locale].nativeName}
+                </SelectItem>
+              ))}
+            </SettingsSelectControl>
+          }
+        />
+      </SettingsSection>
+
       <SettingsSection title="settings:general_newChats">
         <DefaultNewChatAccountRow
           settings={settings}
