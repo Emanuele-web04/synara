@@ -197,6 +197,9 @@ export const ROW_APPLIES: Readonly<Record<string, (context: SettingsSearchContex
     return isElectron && (isWindowsPlatform(platform) || isLinuxPlatform(platform));
   },
   "setting-keep-computer-awake": ({ keepAwakeAvailable }) => keepAwakeAvailable === true,
+  // The quit question only exists in the desktop app.
+  "setting-ask-before-quitting": () =>
+    typeof window !== "undefined" && Boolean(window.desktopBridge),
   // Only the desktop app can keep the machine awake for remote access.
   "setting-stay-awake-for-remote-access": () =>
     typeof window !== "undefined" && Boolean(window.desktopBridge?.keepAwake),

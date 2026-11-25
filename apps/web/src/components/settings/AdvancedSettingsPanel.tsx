@@ -17,7 +17,9 @@ import { resolveAndPersistPreferredEditor } from "~/editorPreferences";
 import { DisclosureChevron } from "~/components/ui/DisclosureChevron";
 import { DisclosureRegion } from "~/components/ui/DisclosureRegion";
 import { Button } from "~/components/ui/button";
+import { Switch } from "~/components/ui/switch";
 import { toastManager } from "~/components/ui/toast";
+import { useDesktopQuitPreference } from "~/hooks/useDesktopQuitPreference";
 import { ensureNativeApi, readNativeApi } from "~/nativeApi";
 import { serverAuthSessionQueryOptions, serverConfigQueryOptions } from "~/lib/serverReactQuery";
 import { cn } from "~/lib/utils";
@@ -154,6 +156,31 @@ export function AboutSettingsSection(props: { onOpenReleaseHistory: () => void }
   );
 }
 
+/** Whether an idle desktop quit asks first. Hidden in a browser, which has no quit to ask about. */
+function DesktopQuitSettingsSection() {
+  const { t } = useTranslation();
+  const quit = useDesktopQuitPreference();
+
+  if (!window.desktopBridge) return null;
+
+  return (
+    <SettingsSection title="settings:preferences">
+      <SettingsRow
+        id="setting-ask-before-quitting"
+        title="settings:quit_askBeforeQuitting"
+        description="settings:quit_askBeforeQuittingDescription"
+        control={
+          <Switch
+            aria-label={t("settings:quit_askBeforeQuitting")}
+            checked={quit.asks}
+            onCheckedChange={quit.setAsks}
+          />
+        }
+      />
+    </SettingsSection>
+  );
+}
+
 export function AdvancedSettingsPanel(props: { active: boolean; resetEpoch: number }) {
   const { t } = useTranslation();
 
@@ -237,6 +264,7 @@ export function AdvancedSettingsPanel(props: { active: boolean; resetEpoch: numb
 
   return (
     <div className="space-y-6">
+      <DesktopQuitSettingsSection />
       {authSessionQuery.data?.authenticated ? (
         <SettingsSection title="settings:session">
           <SettingsRow

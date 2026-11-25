@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   makeRunningChatsQuitGuard,
+  parseQuitConfirmationReference,
   parseQuitConfirmationRequest,
   parseQuitConfirmationResponse,
   quitConfirmationPresentationForPlatform,
@@ -59,6 +60,12 @@ describe("running chats quit guard", () => {
       runningCount: 1,
       chats: [{ id: "a", title: "Fix the tray" }],
     });
+  });
+
+  it("parses a reference that names the question", () => {
+    expect(parseQuitConfirmationReference({ requestId: "q1" })).toEqual({ requestId: "q1" });
+    expect(parseQuitConfirmationReference({ requestId: "  " })).toBeNull();
+    expect(parseQuitConfirmationReference(null)).toBeNull();
   });
 
   it("allows quit immediately when the renderer is unavailable", async () => {
@@ -128,32 +135,158 @@ describe("running chats quit guard", () => {
     await expect(second).resolves.toBe(false);
   });
 
-  it("fails open if the renderer never acknowledges the request", async () => {
+  it("quits when the page never acknowledges the question", async () => {
     vi.useFakeTimers();
     const guard = makeRunningChatsQuitGuard(() => "q1");
     const decision = guard.askRenderer({
       send: vi.fn(),
       isRendererAvailable: () => true,
-      readyTimeoutMs: 50,
+      answerTimeoutMs: 50,
     });
 
+    // A page that cannot show the question must not trap the app for a minute.
     await vi.advanceTimersByTimeAsync(50);
     await expect(decision).resolves.toBe(true);
+    expect(guard.hasPendingAsk()).toBe(false);
   });
 
-  it("does not time out after the renderer says chats are running", async () => {
+  it("withdraws the question and stays running after a silent answer", async () => {
     vi.useFakeTimers();
     const guard = makeRunningChatsQuitGuard(() => "q1");
+    const withdraw = vi.fn();
     const decision = guard.askRenderer({
       send: vi.fn(),
       isRendererAvailable: () => true,
-      readyTimeoutMs: 50,
+      answerTimeoutMs: 50,
+      withdraw,
     });
     guard.receiveResponse({ requestId: "q1", phase: "ready", runningCount: 1 });
 
-    await vi.advanceTimersByTimeAsync(200);
-    guard.receiveResponse({ requestId: "q1", phase: "decision", allow: false });
+    await vi.advanceTimersByTimeAsync(50);
     await expect(decision).resolves.toBe(false);
+    expect(withdraw).toHaveBeenCalledWith("q1");
+  });
+
+  it("pauses the answer deadline after main accepts the answer", async () => {
+    vi.useFakeTimers();
+    const guard = makeRunningChatsQuitGuard(() => "q1");
+    const decision = guard.askRenderer({
+      send: vi.fn(),
+      isRendererAvailable: () => true,
+      answerTimeoutMs: 50,
+      preparationTimeoutMs: 200,
+    });
+    guard.receiveResponse({ requestId: "q1", phase: "ready", runningCount: 1 });
+    expect(guard.beginPreparation("q1")).toBe(true);
+    expect(guard.hasPendingAsk()).toBe(true);
+    expect(guard.isPreparingQuit()).toBe(true);
+    // A crash during preparation waits for the bounded prep timer.
+    expect(guard.rendererGone()).toBe(false);
+
+    // The old answer deadline must not cancel a user who just chose Quit.
+    await vi.advanceTimersByTimeAsync(60);
+    expect(guard.hasPendingAsk()).toBe(true);
+
+    // Preparation has its own short bound so a hung server cannot strand quit.
+    await vi.advanceTimersByTimeAsync(200);
+    await expect(decision).resolves.toBe(true);
+    expect(guard.isPendingRequest("q1")).toBe(false);
+  });
+
+  it("does not accept an answer before the question is ready", async () => {
+    const guard = makeRunningChatsQuitGuard(() => "q1");
+    const decision = guard.askRenderer({
+      send: vi.fn(),
+      isRendererAvailable: () => true,
+    });
+
+    expect(guard.beginPreparation("q1")).toBe(false);
+    guard.receiveResponse({ requestId: "q1", phase: "decision", allow: true });
+    await expect(decision).resolves.toBe(true);
+  });
+
+  it("asks the page to answer on a repeated quit, only while ready", async () => {
+    vi.useFakeTimers();
+    const guard = makeRunningChatsQuitGuard(() => "q1");
+    const notify = vi.fn();
+    const withdraw = vi.fn();
+    const decision = guard.askRenderer({
+      send: vi.fn(),
+      isRendererAvailable: () => true,
+      preparationTimeoutMs: 200,
+      withdraw,
+    });
+
+    // Not before the page has shown the question.
+    expect(guard.repeatQuit(notify)).toBe(false);
+    guard.receiveResponse({ requestId: "q1", phase: "ready", runningCount: 1 });
+    expect(guard.repeatQuit(notify)).toBe(true);
+    expect(notify).toHaveBeenCalledWith("q1");
+
+    // A second repeat is ignored while the page answers.
+    expect(guard.repeatQuit(notify)).toBe(false);
+
+    // If the page never answers the repeat, the question is withdrawn and
+    // the app stays running; the next ⌘Q starts a fresh question.
+    await vi.advanceTimersByTimeAsync(200);
+    await expect(decision).resolves.toBe(false);
+    expect(withdraw).toHaveBeenCalledWith("q1");
+  });
+
+  it("does not repeat a question that already expired", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const guard = makeRunningChatsQuitGuard(() => "q1");
+    const notify = vi.fn();
+    const withdraw = vi.fn();
+    const decision = guard.askRenderer({
+      send: vi.fn(),
+      isRendererAvailable: () => true,
+      answerTimeoutMs: 50,
+      withdraw,
+    });
+    guard.receiveResponse({ requestId: "q1", phase: "ready", runningCount: 1 });
+
+    vi.setSystemTime(1_051);
+    expect(guard.repeatQuit(notify)).toBe(false);
+    expect(notify).not.toHaveBeenCalled();
+    expect(withdraw).toHaveBeenCalledWith("q1");
+    await expect(decision).resolves.toBe(false);
+  });
+
+  it("rejects an answer past the deadline before the timer callback runs", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const guard = makeRunningChatsQuitGuard(() => "q1");
+    const decision = guard.askRenderer({
+      send: vi.fn(),
+      isRendererAvailable: () => true,
+      answerTimeoutMs: 50,
+    });
+    guard.receiveResponse({ requestId: "q1", phase: "ready", runningCount: 1 });
+
+    // The IPC message is handled before the timer callback, but its clock is late.
+    vi.setSystemTime(1_051);
+    guard.receiveResponse({ requestId: "q1", phase: "decision", allow: true });
+
+    await expect(decision).resolves.toBe(false);
+  });
+
+  it("quits when the first ready reply arrives past the deadline", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const guard = makeRunningChatsQuitGuard(() => "q1");
+    const decision = guard.askRenderer({
+      send: vi.fn(),
+      isRendererAvailable: () => true,
+      answerTimeoutMs: 50,
+    });
+
+    // No ready before the deadline means the page could not show the question.
+    vi.setSystemTime(1_051);
+    guard.receiveResponse({ requestId: "q1", phase: "ready", runningCount: 1 });
+
+    await expect(decision).resolves.toBe(true);
   });
 
   it("allows a pending ask when the renderer dies mid-confirmation, without latching", async () => {
@@ -167,7 +300,7 @@ describe("running chats quit guard", () => {
 
     // The renderer hosting the ask is gone — the quit it was part of must
     // proceed, but no user said yes, so the allowed latch must not set.
-    guard.allowPending();
+    expect(guard.allowPending()).toBe(true);
 
     await expect(first).resolves.toBe(true);
     expect(guard.hasPendingAsk()).toBe(false);
@@ -180,6 +313,25 @@ describe("running chats quit guard", () => {
     await expect(second).resolves.toBe(true);
   });
 
+  it("does not allow a dead renderer to quit a question that already expired", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const guard = makeRunningChatsQuitGuard(() => "q1");
+    const withdraw = vi.fn();
+    const decision = guard.askRenderer({
+      send: vi.fn(),
+      isRendererAvailable: () => true,
+      answerTimeoutMs: 50,
+      withdraw,
+    });
+    guard.receiveResponse({ requestId: "q1", phase: "ready", runningCount: 1 });
+
+    vi.setSystemTime(1_051);
+    expect(guard.allowPending()).toBe(false);
+    expect(withdraw).toHaveBeenCalledWith("q1");
+    await expect(decision).resolves.toBe(false);
+  });
+
   it("cancels a pending decision when the renderer is replaced and can prompt again", async () => {
     const requestIds = ["q1", "q2"];
     const guard = makeRunningChatsQuitGuard(() => requestIds.shift() ?? "unexpected");
@@ -189,7 +341,7 @@ describe("running chats quit guard", () => {
     });
     guard.receiveResponse({ requestId: "q1", phase: "ready", runningCount: 1 });
 
-    guard.cancelPending();
+    guard.cancelPendingUnlessPreparing();
 
     await expect(first).resolves.toBe(false);
     const send = vi.fn();

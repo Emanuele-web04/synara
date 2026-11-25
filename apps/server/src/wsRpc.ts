@@ -3864,6 +3864,9 @@ export function makeWebsocketRpcRouteLayer<R>(
             return yield* runWithConnectionSession(request, {
               role: "owner",
               attachmentPrincipal: LOCAL_LOOPBACK_ATTACHMENT_PRINCIPAL,
+              // The private-token loopback socket is the desktop's own page. It
+              // needs desktop-update authority so read-only restart safety works.
+              desktopUpdateAuthority: "owner:private-token",
             });
           }
 

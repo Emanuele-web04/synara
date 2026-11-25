@@ -12,6 +12,7 @@ import type {
 import { normalizeDesktopWsUrl, resolveDesktopWsUrlFromEnv } from "./desktopWsBridge";
 import { DESKTOP_IPC_CHANNELS } from "./ipcChannels";
 import {
+  parseQuitConfirmationReference,
   parseQuitConfirmationRequest,
   parseQuitConfirmationResponse,
 } from "./runningChatsQuitGuard";
@@ -285,6 +286,43 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     const parsed = parseQuitConfirmationResponse(response);
     if (!parsed) return;
     ipcRenderer.send(IPC.quitConfirmationResponse, parsed);
+  },
+  revealQuitConfirmation: (requestId) => {
+    const parsed = parseQuitConfirmationReference({ requestId });
+    if (!parsed) return;
+    ipcRenderer.send(IPC.quitConfirmationReveal, parsed);
+  },
+  beginQuitConfirmation: (reference) => {
+    const parsed = parseQuitConfirmationReference(reference);
+    if (!parsed) return Promise.resolve(false);
+    return ipcRenderer.invoke(IPC.quitConfirmationBegin, parsed);
+  },
+  onQuitConfirmationRepeat: (listener) => {
+    const wrappedListener = (_event: Electron.IpcRendererEvent, payload: unknown) => {
+      const reference = parseQuitConfirmationReference(payload);
+      if (reference) listener(reference);
+    };
+
+    ipcRenderer.on(IPC.quitConfirmationRepeat, wrappedListener);
+    return () => {
+      ipcRenderer.removeListener(IPC.quitConfirmationRepeat, wrappedListener);
+    };
+  },
+  onQuitConfirmationWithdrawn: (listener) => {
+    const wrappedListener = (_event: Electron.IpcRendererEvent, payload: unknown) => {
+      const withdrawal = parseQuitConfirmationReference(payload);
+      if (withdrawal) listener(withdrawal);
+    };
+
+    ipcRenderer.on(IPC.quitConfirmationWithdrawn, wrappedListener);
+    return () => {
+      ipcRenderer.removeListener(IPC.quitConfirmationWithdrawn, wrappedListener);
+    };
+  },
+  getQuitAsks: () => ipcRenderer.invoke(IPC.quitPreferenceGet),
+  setQuitAsks: (asks) => {
+    if (typeof asks !== "boolean") return Promise.resolve(false);
+    return ipcRenderer.invoke(IPC.quitPreferenceSet, asks);
   },
   getZoomFactor: () => {
     const factor = ipcRenderer.sendSync(IPC.zoomFactor);

@@ -5,7 +5,7 @@
 // and the persisted "resume chats after quit" app setting.
 
 import { AlertDialog as AlertDialogPrimitive } from "@base-ui/react/alert-dialog";
-import { useId } from "react";
+import { useCallback, useEffect, useId } from "react";
 
 import { useAppSettings } from "~/appSettings";
 import { APP_DISPLAY_NAME } from "~/branding";
@@ -20,12 +20,14 @@ import {
 import { Button } from "~/components/ui/button";
 import { Checkbox } from "~/components/ui/checkbox";
 import { commandDialogPopupClassName } from "~/components/ui/command";
+import { Switch } from "~/components/ui/switch";
+import { useDesktopQuitPreference } from "~/hooks/useDesktopQuitPreference";
 import {
   runningChatsQuitCopy,
   type RunningChatQuitSummary,
   type RunningChatsQuitCopy,
 } from "~/lib/runningChatsQuitConfirmation";
-import { cn } from "~/lib/utils";
+import { cn, isMacPlatform } from "~/lib/utils";
 import { useTranslation } from "~/i18n";
 
 export interface RunningChatsQuitDecision {
@@ -50,6 +52,11 @@ const BODY_CLASS =
   "relative rounded-t-[calc(var(--radius-2xl)-1px)] border-b border-[color:var(--color-border-light)] bg-[var(--color-background-surface-under)] px-4 pt-3 pb-3.5";
 const FOOTER_CLASS = "relative flex items-center gap-2 px-3 py-2";
 const KEY_HINT_CLASS = "text-ui-sm font-normal tabular-nums opacity-55";
+
+/** The quit confirmation as this computer writes it: ⌘↩ on a Mac, Ctrl+↩ elsewhere. */
+function quitConfirmHint(): string {
+  return isMacPlatform(navigator.platform) ? "⌘↩" : "Ctrl+↩";
+}
 
 export function RunningChatsQuitDialog({
   chats,
@@ -110,6 +117,34 @@ function RunningChatsQuitDialogContent({
   const { settings, updateSettings } = useAppSettings();
   const resume = settings.resumeChatsAfterQuit;
   const resumeCheckboxId = useId();
+  const quietQuitSwitchId = useId();
+  const quiet = useDesktopQuitPreference();
+
+  const confirmQuit = useCallback(() => {
+    if (quitting) return;
+    onQuit({ resume: chats.length > 0 && resume });
+  }, [chats.length, onQuit, quitting, resume]);
+
+  // ⌘↩ (Ctrl+↩ elsewhere) confirms from anywhere in the question, including a
+  // focused button or the resume checkbox. A plain Return keeps its normal
+  // meaning for the focused control.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (
+        event.key !== "Enter" ||
+        !(event.metaKey || event.ctrlKey) ||
+        event.altKey ||
+        event.shiftKey
+      ) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      confirmQuit();
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, [confirmQuit]);
 
   return (
     <>
@@ -136,7 +171,20 @@ function RunningChatsQuitDialogContent({
               </li>
             ))}
           </ul>
-        ) : null}
+        ) : (
+          <label
+            htmlFor={quietQuitSwitchId}
+            className="mt-3 flex cursor-pointer select-none items-center justify-between gap-4 text-ui leading-[18px] text-muted-foreground"
+          >
+            <span>{t("workspace:quit_quietSwitch")}</span>
+            <Switch
+              id={quietQuitSwitchId}
+              checked={!quiet.asks}
+              disabled={quitting}
+              onCheckedChange={(checked) => quiet.setAsks(!checked)}
+            />
+          </label>
+        )}
       </div>
       <div className={FOOTER_CLASS}>
         {chats.length > 0 ? (
@@ -173,14 +221,13 @@ function RunningChatsQuitDialogContent({
             size="sm"
             className={cn(uiFont, "gap-1.5")}
             disabled={quitting}
-            onClick={() => onQuit({ resume: chats.length > 0 && resume })}
+            aria-keyshortcuts="Meta+Enter Control+Enter"
+            onClick={confirmQuit}
           >
             {copy.quitLabel}
-            {chats.length > 0 ? (
-              <span aria-hidden className={KEY_HINT_CLASS}>
-                ↵
-              </span>
-            ) : null}
+            <span aria-hidden className={KEY_HINT_CLASS}>
+              {quitConfirmHint()}
+            </span>
           </Button>
         </div>
       </div>

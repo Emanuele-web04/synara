@@ -1029,6 +1029,7 @@
   "quit_runningDescription": "Work in progress will stop when {{appName}} is closed.",
   "quit_resume_one": "Resume chat automatically",
   "quit_resume_other": "Resume chats automatically",
+  "quit_quietSwitch": "Quit without asking while nothing is running",
   "quit_action": "Quit",
   "saveFailed": "Save failed",
   "hideTerminal": "Hide terminal",

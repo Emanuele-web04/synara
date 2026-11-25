@@ -4,6 +4,7 @@
 // Depends on: Sidebar-equivalent "working" signals (running/connecting/live tail).
 
 import { t } from "~/i18n";
+import { readNativeApi } from "~/nativeApi";
 
 export interface RunningChatQuitCandidate {
   readonly id: string;
@@ -27,6 +28,30 @@ export interface RunningChatsQuitCopy {
 
 /** Bounded wait for the server to record the resume intent; quit must stay snappy. */
 export const QUIT_RESUME_PREPARE_TIMEOUT_MS = 1500;
+
+/** Bounded wait for the server's read-only restart-safety check. */
+export const QUIT_IDLE_CHECK_TIMEOUT_MS = 1000;
+
+/**
+ * Whether the server has no live provider work, queued turn, dev server, or
+ * recoverable automation run. False also covers an unavailable check, because
+ * an unproven idle state must still show the quit question.
+ */
+export async function verifyDesktopChatsIdle(): Promise<boolean> {
+  const getStatus = readNativeApi()?.server.getDesktopUpdateStatus;
+  if (typeof getStatus !== "function") return false;
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<null>((resolve) => {
+    timer = setTimeout(() => resolve(null), QUIT_IDLE_CHECK_TIMEOUT_MS);
+  });
+  try {
+    const status = await Promise.race([getStatus().catch(() => null), timeout]);
+    return status?.busy === false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 export interface RunningChatsQuitStoreSlice {
   readonly sidebarThreadSummaryById: Readonly<Record<string, RunningChatQuitCandidate>>;

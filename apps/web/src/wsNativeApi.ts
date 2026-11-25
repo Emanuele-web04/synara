@@ -785,6 +785,7 @@ export function createWsNativeApi(): NativeApi {
     },
     server: {
       getConfig: () => executionRequest(WS_METHODS.serverGetConfig),
+      getDesktopUpdateStatus: () => executionRequest(WS_METHODS.serverDesktopUpdateStatus),
       getEnvironment: () => executionRequest(WS_METHODS.serverGetEnvironment),
       getSettings: () => executionRequest(WS_METHODS.serverGetSettings),
       updateSettings: (input) => executionRequest(WS_METHODS.serverUpdateSettings, input),

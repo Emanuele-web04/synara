@@ -1,10 +1,50 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   isRunningChatForQuit,
   listRunningChatsFromDesktopStore,
   stopRunningChatsForQuit,
+  verifyDesktopChatsIdle,
 } from "./runningChatsQuitConfirmation";
+
+const nativeApi = vi.hoisted(() => ({ readNativeApi: vi.fn() }));
+
+vi.mock("~/nativeApi", () => ({
+  readNativeApi: nativeApi.readNativeApi,
+}));
+
+beforeEach(() => {
+  nativeApi.readNativeApi.mockReset();
+});
+
+describe("verifyDesktopChatsIdle", () => {
+  it("is idle only when the server reports not busy", async () => {
+    nativeApi.readNativeApi.mockReturnValue({
+      server: { getDesktopUpdateStatus: async () => ({ busy: false }) },
+    } as never);
+    await expect(verifyDesktopChatsIdle()).resolves.toBe(true);
+
+    nativeApi.readNativeApi.mockReturnValue({
+      server: { getDesktopUpdateStatus: async () => ({ busy: true }) },
+    } as never);
+    await expect(verifyDesktopChatsIdle()).resolves.toBe(false);
+  });
+
+  it("asks when the server cannot prove idleness", async () => {
+    nativeApi.readNativeApi.mockReturnValue(undefined);
+    await expect(verifyDesktopChatsIdle()).resolves.toBe(false);
+
+    nativeApi.readNativeApi.mockReturnValue({
+      server: {},
+    } as never);
+    await expect(verifyDesktopChatsIdle()).resolves.toBe(false);
+
+    nativeApi.readNativeApi.mockReturnValue({
+      server: { getDesktopUpdateStatus: async () => Promise.reject(new Error("offline")) },
+    } as never);
+    await expect(verifyDesktopChatsIdle()).resolves.toBe(false);
+  });
+});
 
 describe("running chats quit confirmation", () => {
   it("treats running, connecting, and live-tail chats as in progress", () => {

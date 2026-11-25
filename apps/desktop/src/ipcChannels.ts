@@ -37,6 +37,12 @@ export const DESKTOP_IPC_CHANNELS = {
   setMenuShortcuts: "desktop:set-menu-shortcuts",
   quitConfirmationRequest: "desktop:quit-confirmation-request",
   quitConfirmationResponse: "desktop:quit-confirmation-response",
+  quitConfirmationWithdrawn: "desktop:quit-confirmation-withdrawn",
+  quitConfirmationReveal: "desktop:quit-confirmation-reveal",
+  quitConfirmationBegin: "desktop:quit-confirmation-begin",
+  quitConfirmationRepeat: "desktop:quit-confirmation-repeat",
+  quitPreferenceGet: "desktop:quit-preference-get",
+  quitPreferenceSet: "desktop:quit-preference-set",
   beta: {
     getState: "desktop:beta-get-state",
     launch: "desktop:beta-launch",
