@@ -269,6 +269,9 @@ export interface ProductData {
     event: string;
     reason: string;
     surface: string;
+    pairingMode?: string | null;
+    failureStage?: string | null;
+    httpStatus?: number | null;
     events: number;
     installations: number;
   }[];
