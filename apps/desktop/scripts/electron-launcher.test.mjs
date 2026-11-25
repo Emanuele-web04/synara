@@ -5,6 +5,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   readlinkSync,
   rmSync,
   symlinkSync,
@@ -73,7 +74,9 @@ function createLauncherFixture(t, { iconComposer = false } = {}) {
       const applicationDirectory = join(arguments_.at(-1), "Contents", "Resources", "app");
       assert.equal(existsSync(join(applicationDirectory, "package.json")), true);
       assert.equal(existsSync(join(applicationDirectory, "main.cjs")), true);
-      for (const locale of ["en", "zh-Hans", "hi", "es", "fr", "ar", "bn", "pt", "ru", "ur"]) {
+      for (const locale of readdirSync(localizationsDirectory)
+        .filter((entry) => entry.endsWith(".lproj"))
+        .map((entry) => entry.replace(/\.lproj$/, ""))) {
         const relativePath = join(`${locale}.lproj`, "InfoPlist.strings");
         assert.equal(
           readFileSync(join(dirname(applicationDirectory), relativePath), "utf8"),

@@ -8,6 +8,7 @@ import {
   DEFAULT_MODEL_BY_PROVIDER,
   DEFAULT_SERVER_SETTINGS_VIEW,
   ProviderInstanceId,
+  UI_LOCALES,
 } from "@synara/contracts";
 import { codexAccountInstanceId } from "@synara/shared/providerInstances";
 import { describe, expect, it } from "vitest";
@@ -58,19 +59,7 @@ import {
 
 describe("interface language preference", () => {
   it("preserves supported choices and normalizes invalid values without resetting other settings", () => {
-    for (const language of [
-      "system",
-      "en",
-      "es",
-      "zh-CN",
-      "hi",
-      "fr",
-      "ar",
-      "bn",
-      "pt",
-      "ru",
-      "ur",
-    ]) {
+    for (const language of ["system", ...UI_LOCALES]) {
       const settings = Schema.decodeUnknownSync(AppSettingsSchema)({
         language,
         chatFontSizePx: 15,

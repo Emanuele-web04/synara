@@ -1,0 +1,5 @@
+"NSMicrophoneUsageDescription" = "Synara需要麥克風存取權，這樣你才能錄製語音筆記並轉錄到聊天編輯器，開啟後還能用語音移動聊天訊息軌跡。";
+"NSAudioCaptureUsageDescription" = "Synara讀取Mac音訊的音量，來動畫化聊天訊息軌跡。音訊本身從未被錄製。";
+"NSScreenCaptureUsageDescription" = "Synara 擷取您授權用於電腦的視窗。";
+"NSAccessibilityUsageDescription" = "Synara 控制您授權用於電腦的視窗。";
+"NSLocalNetworkUsageDescription" = "Synara 會連接它在此Mac上所驅動的瀏覽器，讓代理程式能在背景瀏覽。";

@@ -5,19 +5,39 @@ import { UI_LOCALES, type UiLocale } from "@synara/contracts";
 
 import { i18n } from "~/i18n";
 
-type MonacoNlsLocale = "en" | "es" | "fr" | "pt-br" | "ru" | "zh-cn";
+type MonacoNlsLocale =
+  | "en"
+  | "de"
+  | "es"
+  | "fr"
+  | "it"
+  | "ja"
+  | "ko"
+  | "pl"
+  | "pt-br"
+  | "ru"
+  | "tr"
+  | "zh-cn"
+  | "zh-tw";
 
 const MONACO_NLS_LOCALES: Readonly<Record<UiLocale, MonacoNlsLocale>> = {
   en: "en",
-  "zh-CN": "zh-cn",
-  hi: "en",
+  it: "it",
+  pl: "pl",
   es: "es",
   fr: "fr",
-  ar: "en",
-  bn: "en",
-  pt: "pt-br",
+  de: "de",
+  "pt-BR": "pt-br",
+  ja: "ja",
   ru: "ru",
-  ur: "en",
+  "zh-CN": "zh-cn",
+  "zh-TW": "zh-tw",
+  ko: "ko",
+  tr: "tr",
+  "es-419": "es",
+  uk: "en",
+  th: "en",
+  ar: "en",
 };
 
 let preparedLanguage: Promise<MonacoNlsLocale> | undefined;
@@ -30,6 +50,13 @@ export function editorNlsLocale(language: UiLocale): MonacoNlsLocale {
 
 async function prepareLanguage(language: MonacoNlsLocale): Promise<MonacoNlsLocale> {
   if (language === "zh-cn") await import("monaco-editor/nls/lang/zh-cn");
+  else if (language === "zh-tw") await import("monaco-editor/nls/lang/zh-tw");
+  else if (language === "de") await import("monaco-editor/nls/lang/de");
+  else if (language === "it") await import("monaco-editor/nls/lang/it");
+  else if (language === "ja") await import("monaco-editor/nls/lang/ja");
+  else if (language === "ko") await import("monaco-editor/nls/lang/ko");
+  else if (language === "pl") await import("monaco-editor/nls/lang/pl");
+  else if (language === "tr") await import("monaco-editor/nls/lang/tr");
   else if (language === "es") await import("monaco-editor/nls/lang/es");
   else if (language === "fr") await import("monaco-editor/nls/lang/fr");
   else if (language === "pt-br") await import("monaco-editor/nls/lang/pt-br");

@@ -1,0 +1,5 @@
+"NSMicrophoneUsageDescription" = "Synara mikrofon erişimine ihtiyaç duyar, böylece sesli notları kaydedip sohbet bestecesine aktarabilir ve açarsanız sohbet mesaj izini sesinizle hareket ettirebilirsiniz.";
+"NSAudioCaptureUsageDescription" = "Synara, Mac'nizin sesinin ne kadar yüksek olduğunu okur ve sohbet mesajı izini canlandırır. Ses kaydı hiç kaydedilmez.";
+"NSScreenCaptureUsageDescription" = "Synara, bilgisayar kullanımı için yetkilendirmeniz gereken pencereleri yakalar.";
+"NSAccessibilityUsageDescription" = "Synara, bilgisayar kullanımı için yetkilendirme verdiğiniz pencereleri kontrol eder.";
+"NSLocalNetworkUsageDescription" = "Synara, bu Mac üzerinde sürdüğü tarayıcılara bağlanır, böylece ajanlar arka planda gezinebilir.";

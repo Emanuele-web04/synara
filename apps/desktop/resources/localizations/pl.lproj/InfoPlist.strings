@@ -1,0 +1,5 @@
+"NSMicrophoneUsageDescription" = "Synara potrzebuje dostępu do mikrofonu, aby móc nagrywać notatki głosowe i przepisywać je do kompozytora czatu, a jeśli go włączysz, przesuwać ślad wiadomości czatu za pomocą głosu.";
+"NSAudioCaptureUsageDescription" = "Synara odczytuje, jak głośny jest dźwięk Twojego Mac, aby animować ścieżkę wiadomości czatu. Sam dźwięk nigdy nie jest nagrywany.";
+"NSScreenCaptureUsageDescription" = "Synara przechwytuje okna, które autoryzujesz do korzystania z komputera.";
+"NSAccessibilityUsageDescription" = "Synara kontroluje okna upoważnione do korzystania z komputera.";
+"NSLocalNetworkUsageDescription" = "Synara łączy się z przeglądarkami, którymi zarządza na tym Mac, dzięki czemu agenci mogą przeglądać w tle.";

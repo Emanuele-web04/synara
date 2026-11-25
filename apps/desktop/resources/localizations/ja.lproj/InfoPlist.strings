@@ -1,0 +1,5 @@
+"NSMicrophoneUsageDescription" = "Synaraマイクアクセスが必要で、音声メモを録音してチャットコンポーザーに書き起こしたり、オンにすればチャットメッセージの軌跡を自分の声で移動したりできます。";
+"NSAudioCaptureUsageDescription" = "SynaraMacの音声の音量を読み取り、チャットメッセージの流れをアニメーション化します。音声自体は録音されません。";
+"NSScreenCaptureUsageDescription" = "Synara コンピューター使用を許可したウィンドウをキャプチャします。";
+"NSAccessibilityUsageDescription" = "Synara コンピュータ使用を許可したウィンドウを制御します。";
+"NSLocalNetworkUsageDescription" = "SynaraはこのMac上でドライブするブラウザに接続し、エージェントがバックグラウンドでブラウジングできるようにします。";

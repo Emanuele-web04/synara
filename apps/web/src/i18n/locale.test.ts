@@ -17,7 +17,7 @@ describe("persisted interface locale", () => {
       '"zh-CN"',
       "[]",
       '{"language":"zh-Hant"}',
-      '{"language":"it"}',
+      '{"language":"hi"}',
     ]) {
       expect(readLanguagePreference({ getItem: () => raw })).toBe("system");
     }

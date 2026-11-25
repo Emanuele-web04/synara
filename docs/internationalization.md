@@ -1,6 +1,6 @@
 # Interface text
 
-Synara's interface is localized into English, Simplified Chinese, Hindi, Spanish, French, Arabic, Bengali, Portuguese, Russian, and Urdu. The General settings language selector can follow the system language or pin one of those interface languages. Arabic and Urdu set the document direction to RTL; other languages use LTR.
+Synara's interface is localized into English, Italian, Polish, Spanish, French, German, Brazilian Portuguese, Japanese, Russian, Simplified Chinese, Traditional Chinese, Korean, Turkish, Latin American Spanish, Ukrainian, Thai, and Arabic. The General settings language selector can follow the system language or pin one of those interface languages. Arabic sets the document direction to RTL; other languages use LTR.
 
 Application copy lives in message catalogs and is read through `t()`. This keeps wording in one place and keeps stable IDs independent of displayed text.
 
@@ -10,7 +10,7 @@ Application copy lives in message catalogs and is read through `t()`. This keeps
 - `packages/shared/src/locales/<locale>/<namespace>.json` contains the catalogs. Namespaces cover common controls, settings, chat, workspace, computer use, Git, automation, onboarding, and desktop. `uiLocalizationResources` exports every locale; `nativeLocalizationResources` exports only the desktop namespace.
 - `apps/web/src/i18n` owns language resolution, the React translator, the formatting locale, document language/direction, and rich React messages. Bootstrap error screens use text nodes for catalog strings.
 - `apps/desktop/src/i18n.ts` reads the desktop namespace for native menus and startup dialogs. `desktopPreferences.ts` persists the native language preference in the desktop user-data directory.
-- `apps/desktop/resources/localizations/*.lproj` contains macOS permission explanations. `zh-CN` maps to the macOS `zh-Hans.lproj` bundle folder.
+- `apps/desktop/resources/localizations/*.lproj` contains macOS permission explanations. `zh-CN` and `zh-TW` map to the macOS `zh-Hans.lproj` and `zh-Hant.lproj` bundle folders.
 
 The `system` preference uses the desktop operating system's preferred languages when the native bridge is available and otherwise uses the browser language list. Unsupported or malformed candidates fall through to the next preference and finally to English. A saved invalid preference normalizes to `system` without resetting other settings.
 

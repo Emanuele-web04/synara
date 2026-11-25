@@ -1,0 +1,5 @@
+"NSMicrophoneUsageDescription" = "Synara 음성 메모를 녹음하고 채팅 작곡기에 옮기고, 이 기능을 켜면 음성 메시지의 흐름을 자신의 목소리로 옮기기 위해 마이크 접근이 필요합니다.";
+"NSAudioCaptureUsageDescription" = "Synara 채팅 메시지 흐름을 애니메이션으로 만들기 위해 Mac 음성 소리를 읽습니다. 오디오 자체는 절대 녹음되지 않습니다.";
+"NSScreenCaptureUsageDescription" = "Synara 컴퓨터 사용을 승인한 창을 캡처합니다.";
+"NSAccessibilityUsageDescription" = "Synara 컴퓨터 사용을 승인한 창을 제어합니다.";
+"NSLocalNetworkUsageDescription" = "Synara 이 Mac에서 구동하는 브라우저에 연결되어 에이전트가 백그라운드에서 탐색할 수 있습니다.";

@@ -79,8 +79,6 @@ export interface DesktopPlatformBuildConfig {
 
 const ELECTRON_LOCALE_CODES: Readonly<Record<string, ReadonlyArray<string>>> = {
   en: ["en-US", "en-GB", "en_GB"],
-  pt: ["pt-BR", "pt-PT"],
-  "zh-CN": ["zh-CN"],
 };
 
 export function electronLanguagesForFlavor(): string[] {
@@ -246,7 +244,7 @@ export function createDesktopPlatformBuildConfig(
         },
         // macOS reads permission explanations from the bundle's language folders.
         ...UI_LOCALES.map((locale) => {
-          const directory = `${locale === "zh-CN" ? "zh-Hans" : locale}.lproj`;
+          const directory = `${locale === "zh-CN" ? "zh-Hans" : locale === "zh-TW" ? "zh-Hant" : locale}.lproj`;
           return {
             from: `apps/desktop/resources/localizations/${directory}`,
             to: `Resources/${directory}`,

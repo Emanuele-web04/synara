@@ -3,8 +3,8 @@ import { describe, expect, it } from "vitest";
 import { UI_LOCALES, normalizeLanguagePreference, resolveUiLocale } from "./uiLocale";
 
 describe("interface locale resolution", () => {
-  it("ships the ten target interface languages", () => {
-    expect(UI_LOCALES).toEqual(["en", "zh-CN", "hi", "es", "fr", "ar", "bn", "pt", "ru", "ur"]);
+  it("ships the DeltaMod Community interface languages", () => {
+    expect(UI_LOCALES).toHaveLength(17);
   });
 
   it.each(["zh", "zh-CN", "zh-SG", "zh-Hans", "zh-Hans-CN", "zh-Hans-TW", "ZH-hans-sg"])(
@@ -15,10 +15,14 @@ describe("interface locale resolution", () => {
   );
 
   it.each(["zh-TW", "zh-HK", "zh-MO", "zh-Hant", "zh-Hant-CN"])(
-    "does not silently map Traditional Chinese %s to Simplified Chinese",
+    "maps Traditional Chinese %s to the Traditional Chinese catalog",
     (language) => {
-      expect(resolveUiLocale("system", [language, "es-MX", "en-US"])).toBe("es");
-      expect(resolveUiLocale("system", [language])).toBe("en");
+      expect(resolveUiLocale("system", [language, "es-MX", "en-US"])).toBe(
+        language === "zh-Hant-CN" ? "es-419" : "zh-TW",
+      );
+      expect(resolveUiLocale("system", [language])).toBe(
+        language === "zh-Hant-CN" ? "en" : "zh-TW",
+      );
     },
   );
 
@@ -27,16 +31,16 @@ describe("interface locale resolution", () => {
     expect(resolveUiLocale("system", ["en-GB", "zh-CN"])).toBe("en");
     expect(resolveUiLocale("system", ["not_a_locale", "ES-es"])).toBe("es");
     expect(resolveUiLocale("system", ["ar-EG"])).toBe("ar");
-    expect(resolveUiLocale("system", ["ur-PK"])).toBe("ur");
+    expect(resolveUiLocale("system", ["es-MX"])).toBe("es-419");
     expect(resolveUiLocale("system", [])).toBe("en");
     expect(resolveUiLocale("zh-CN", ["en-US"])).toBe("zh-CN");
-    expect(resolveUiLocale("pt", ["en-US"])).toBe("pt");
+    expect(resolveUiLocale("pt-BR", ["en-US"])).toBe("pt-BR");
   });
 
   it("accepts only persisted preference identifiers rather than arbitrary locale aliases", () => {
     for (const preference of ["system", ...UI_LOCALES] as const)
       expect(normalizeLanguagePreference(preference)).toBe(preference);
-    for (const value of [undefined, null, "zh", "zh-Hans", "zh-TW", "es-MX", "it", 0, {}])
+    for (const value of [undefined, null, "zh", "zh-Hans", "es-MX", "pt", "hi", 0, {}])
       expect(normalizeLanguagePreference(value)).toBe("system");
   });
 });

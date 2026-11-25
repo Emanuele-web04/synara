@@ -25,7 +25,7 @@ describe("bundled translations", () => {
       setLanguagePreference(locale);
       expect(i18n.language).toBe(locale);
       expect(documentElement.lang).toBe(locale);
-      expect(documentElement.dir).toBe(locale === "ar" || locale === "ur" ? "rtl" : "ltr");
+      expect(documentElement.dir).toBe(locale === "ar" ? "rtl" : "ltr");
       expect(t("workspace:toast_settings")).toBeTruthy();
     }
   });

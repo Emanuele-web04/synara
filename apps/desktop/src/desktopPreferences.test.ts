@@ -2,6 +2,8 @@ import * as FS from "node:fs";
 import * as OS from "node:os";
 import * as Path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { UI_LOCALES } from "@synara/contracts";
+
 import {
   applyDesktopLanguagePreference,
   isDesktopLanguagePreference,
@@ -37,9 +39,9 @@ describe("native language preference", () => {
   });
 
   it("accepts every shipped IPC language and rejects aliases or malformed values", () => {
-    for (const value of ["system", "en", "zh-CN", "hi", "es", "fr", "ar", "bn", "pt", "ru", "ur"])
+    for (const value of ["system", ...UI_LOCALES])
       expect(isDesktopLanguagePreference(value)).toBe(true);
-    for (const value of [null, "es-MX", "it", 42, {}, ["es"]])
+    for (const value of [null, "es-MX", "hi", 42, {}, ["es"]])
       expect(isDesktopLanguagePreference(value)).toBe(false);
   });
 
@@ -51,7 +53,7 @@ describe("native language preference", () => {
     writeDesktopLanguagePreference(path, "zh-CN");
     expect(readDesktopLanguagePreference(path)).toBe("zh-CN");
     expect(FS.readdirSync(Path.dirname(path))).toEqual(["desktop-language.json"]);
-    FS.writeFileSync(path, '{"version":1,"language":"it"}');
+    FS.writeFileSync(path, '{"version":1,"language":"hi"}');
     expect(readDesktopLanguagePreference(path)).toBe("system");
     FS.writeFileSync(path, "broken");
     expect(readDesktopLanguagePreference(path)).toBe("system");
