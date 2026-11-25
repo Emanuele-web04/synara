@@ -1,6 +1,7 @@
 // FILE: Product.tsx
 // Purpose: Aggregate permitted product activity and mature cohorts without event-level drilldowns.
 
+import type { ProductAnalyticsConnectionFailure } from "@synara/contracts/productAnalytics";
 import { useMemo, useState } from "react";
 
 import { api, type ProductFilters } from "../api";
@@ -96,7 +97,7 @@ const pairingModeLabels: Record<string, string> = {
   local: "Local pairing",
   remote: "Remote pairing",
 };
-const pairingFailureStageLabels: Record<string, string> = {
+const pairingFailureStageLabels: Record<ProductAnalyticsConnectionFailure, string> = {
   account_unavailable: "Account request",
   subscription_required: "Remote access paused",
   billing_unavailable: "Billing service unavailable",
@@ -107,6 +108,11 @@ const pairingFailureStageLabels: Record<string, string> = {
   route_upgrade: "Route upgrade",
   tls_handshake: "TLS handshake",
   inner_upgrade: "Host upgrade",
+  session_mint: "Session credential",
+  session_authorize: "Session authorization",
+  incompatible: "Protocol compatibility",
+  timeout: "Attempt deadline",
+  other: "Unspecified stage",
 };
 
 const sectionCopy = {
@@ -979,7 +985,8 @@ export function Product({
                               row.event;
                             const cause = [
                               reasonLabels[row.reason] ?? row.reason,
-                              pairingFailureStageLabels[row.failureStage ?? ""],
+                              row.failureStage &&
+                                (pairingFailureStageLabels[row.failureStage] ?? row.failureStage),
                               row.httpStatus == null ? undefined : `HTTP ${row.httpStatus}`,
                             ]
                               .filter(Boolean)
