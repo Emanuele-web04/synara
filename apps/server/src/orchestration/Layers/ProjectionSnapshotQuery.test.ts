@@ -1490,6 +1490,150 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
     }),
   );
 
+  it.effect("windows thread detail activities by time, not by a mix of sequence counters", () =>
+    Effect.gen(function* () {
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+
+      yield* clearProjection(sql);
+      yield* seedProjectThread(sql, "mixed-counters");
+      // 2_100 provider rows, one per second, on the runtime journal counter:
+      //   turn-early  -> provider-1..1000
+      //   turn-latest -> provider-1001..2100
+      yield* sql`
+        INSERT INTO projection_thread_activities (
+          activity_id, thread_id, turn_id, tone, kind, summary,
+          payload_json, sequence, created_at
+        )
+        WITH RECURSIVE rows(n) AS (
+          SELECT 1 UNION ALL SELECT n + 1 FROM rows WHERE n < 2100
+        )
+        SELECT
+          'provider-' || n,
+          'thread-mixed-counters',
+          CASE WHEN n <= 1000 THEN 'turn-early' ELSE 'turn-latest' END,
+          'tool',
+          'tool.completed',
+          'Tool completed',
+          '{}',
+          100000 + n,
+          strftime('%Y-%m-%dT%H:%M:%fZ', '2026-11-25T10:00:00', '+' || n || ' seconds')
+        FROM rows
+      `;
+      // A server-created recap from the latest turn. It carries its own append
+      // event's orchestration sequence, a counter far behind the runtime one.
+      yield* insertActivity(sql, {
+        id: "threads-created-recap",
+        threadId: "thread-mixed-counters",
+        turnId: "turn-latest",
+        kind: "synara.threads.created",
+        sequence: 7_001,
+        at: "2026-11-25T10:34:10.500Z",
+      });
+      yield* sql`
+        INSERT INTO orchestration_events (
+          sequence, event_id, aggregate_kind, stream_id, stream_version, event_type,
+          occurred_at, command_id, causation_event_id, correlation_id, actor_kind,
+          payload_json, metadata_json
+        ) VALUES (
+          7001, 'event-threads-created-recap', 'thread', 'thread-mixed-counters', 1,
+          'thread.activity-appended', '2026-11-25T10:34:10.500Z', NULL, NULL, NULL, 'server',
+          '{"threadId":"thread-mixed-counters","activity":{"id":"threads-created-recap"}}', '{}'
+        )
+      `;
+
+      const detail = yield* snapshotQuery.getThreadDetailById(asThreadId("thread-mixed-counters"));
+      yield* sql`DELETE FROM orchestration_events WHERE event_id = 'event-threads-created-recap'`;
+      assert.isTrue(Option.isSome(detail));
+      const activities = Option.isSome(detail) ? detail.value.activities : [];
+      const ids = activities.map((activity) => activity.id);
+
+      // The recap is among the 2_000 newest rows by time, so it is returned
+      // with its counter labelled, between the provider rows around it.
+      const recap = activities.find((activity) => activity.id === "threads-created-recap");
+      assert.equal(recap?.sequenceSource, "orchestration");
+      const recapIndex = ids.indexOf(asEventId("threads-created-recap"));
+      assert.equal(ids[recapIndex - 1], asEventId("provider-2050"));
+      assert.equal(ids[recapIndex + 1], asEventId("provider-2051"));
+      // The window cut splits turn-early, so that turn is dropped whole.
+      assert.equal(ids[0], asEventId("provider-1001"));
+      assert.equal(ids.at(-1), asEventId("provider-2100"));
+      assert.equal(activities.length, 1_101);
+    }),
+  );
+
+  it.effect("windows thread detail activities by time, not by a mix of sequence counters", () =>
+    Effect.gen(function* () {
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+
+      yield* clearProjection(sql);
+      yield* seedProjectThread(sql, "mixed-counters");
+      // 2_100 provider rows, one per second, on the runtime journal counter:
+      //   turn-early  -> provider-1..1000
+      //   turn-latest -> provider-1001..2100
+      yield* sql`
+        INSERT INTO projection_thread_activities (
+          activity_id, thread_id, turn_id, tone, kind, summary,
+          payload_json, sequence, created_at
+        )
+        WITH RECURSIVE rows(n) AS (
+          SELECT 1 UNION ALL SELECT n + 1 FROM rows WHERE n < 2100
+        )
+        SELECT
+          'provider-' || n,
+          'thread-mixed-counters',
+          CASE WHEN n <= 1000 THEN 'turn-early' ELSE 'turn-latest' END,
+          'tool',
+          'tool.completed',
+          'Tool completed',
+          '{}',
+          100000 + n,
+          strftime('%Y-%m-%dT%H:%M:%fZ', '2026-11-25T10:00:00', '+' || n || ' seconds')
+        FROM rows
+      `;
+      // A server-created recap from the latest turn. It carries its own append
+      // event's orchestration sequence, a counter far behind the runtime one.
+      yield* insertActivity(sql, {
+        id: "threads-created-recap",
+        threadId: "thread-mixed-counters",
+        turnId: "turn-latest",
+        kind: "synara.threads.created",
+        sequence: 7_001,
+        at: "2026-11-25T10:34:10.500Z",
+      });
+      yield* sql`
+        INSERT INTO orchestration_events (
+          sequence, event_id, aggregate_kind, stream_id, stream_version, event_type,
+          occurred_at, command_id, causation_event_id, correlation_id, actor_kind,
+          payload_json, metadata_json
+        ) VALUES (
+          7001, 'event-threads-created-recap', 'thread', 'thread-mixed-counters', 1,
+          'thread.activity-appended', '2026-11-25T10:34:10.500Z', NULL, NULL, NULL, 'server',
+          '{"threadId":"thread-mixed-counters","activity":{"id":"threads-created-recap"}}', '{}'
+        )
+      `;
+
+      const detail = yield* snapshotQuery.getThreadDetailById(asThreadId("thread-mixed-counters"));
+      yield* sql`DELETE FROM orchestration_events WHERE event_id = 'event-threads-created-recap'`;
+      assert.isTrue(Option.isSome(detail));
+      const activities = Option.isSome(detail) ? detail.value.activities : [];
+      const ids = activities.map((activity) => activity.id);
+
+      // The recap is among the 2_000 newest rows by time, so it is returned
+      // with its counter labelled, between the provider rows around it.
+      const recap = activities.find((activity) => activity.id === "threads-created-recap");
+      assert.equal(recap?.sequenceSource, "orchestration");
+      const recapIndex = ids.indexOf(asEventId("threads-created-recap"));
+      assert.equal(ids[recapIndex - 1], asEventId("provider-2050"));
+      assert.equal(ids[recapIndex + 1], asEventId("provider-2051"));
+      // The window cut splits turn-early, so that turn is dropped whole.
+      assert.equal(ids[0], asEventId("provider-1001"));
+      assert.equal(ids.at(-1), asEventId("provider-2100"));
+      assert.equal(activities.length, 1_101);
+    }),
+  );
+
   it.effect("keeps UI thread detail capped while export detail includes all messages", () =>
     Effect.gen(function* () {
       const snapshotQuery = yield* ProjectionSnapshotQuery;
