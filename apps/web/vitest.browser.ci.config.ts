@@ -27,12 +27,11 @@ export const CHAT_SLICE_COUNTS = {
 } as const;
 
 // Native placement put EventRouter (40 s of tests) on shard 9 beside the
-// lightest shard, 10. These five files move from 9 to 10 so the pair on
+// lightest shard, 10. These four files move from 9 to 10 so the pair on
 // components 5/5 is balanced; every other file keeps its native shard
 // (.github/CI.md).
 const componentSequencer = createPinnedShardSequencer({
   10: {
-    "src/components/chat/AsciiWaveBackground.browser.tsx": 10,
     "src/components/chat/group/GroupSettingsDialog.browser.tsx": 10,
     "src/components/SafariAccessOnboarding.browser.tsx": 10,
     "src/components/settings/SyncKeyPairingPanel.browser.tsx": 10,

@@ -13282,34 +13282,40 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
-  it("disables the ASCII landing decoration from Appearance and releases it on the terminal tab", async () => {
+  it("switches the empty chat backdrop style from Appearance and releases it on the terminal tab", async () => {
     const snapshot = addThreadToSnapshot(createDraftOnlySnapshot(), THREAD_ID);
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
       snapshot: { ...snapshot, threads: [{ ...snapshot.threads[0]!, session: null }] },
     });
-    const background = () => document.querySelector("canvas.font-mono");
+    const background = () => document.querySelector("[data-empty-chat-backdrop]");
+    const styleOf = () => background()?.getAttribute("data-empty-chat-backdrop") ?? null;
+    const storedSettings = () => JSON.parse(localStorage.getItem("synara:app-settings:v1") ?? "{}");
+    const option = (name: string) => page.getByRole("radio", { name, exact: true });
+    const goToSettings = () =>
+      mounted.router.navigate({ to: "/settings", search: { section: "appearance" } });
+    const goToChat = () =>
+      mounted.router.navigate({ to: "/$threadId", params: { threadId: THREAD_ID } });
     try {
-      await expect.poll(background).not.toBeNull();
-      await mounted.router.navigate({ to: "/settings", search: { section: "appearance" } });
-      const toggle = page.getByRole("switch", { name: "ASCII background", exact: true });
-      await expect.element(toggle).toBeChecked();
-      await toggle.click();
-      await expect
-        .poll(
-          () =>
-            JSON.parse(localStorage.getItem("synara:app-settings:v1") ?? "{}").showAsciiBackground,
-        )
-        .toBe(false);
-      await mounted.router.navigate({ to: "/$threadId", params: { threadId: THREAD_ID } });
+      await expect.poll(styleOf).toBe("temple");
+      await goToSettings();
+      await expect.element(option("Temple")).toHaveAttribute("aria-checked", "true");
+      await option("Gradient").click();
+      await expect.poll(() => storedSettings().emptyChatBackdropStyle).toBe("gradient");
+      await goToChat();
+      await expect.poll(styleOf).toBe("gradient");
+      await goToSettings();
+      await option("Off").click();
+      await expect.poll(() => storedSettings().showAsciiBackground).toBe(false);
+      await goToChat();
       await expect.element(page.getByTestId("empty-landing-heading")).toBeVisible();
       expect(background()).toBeNull();
-      await mounted.router.navigate({ to: "/settings", search: { section: "appearance" } });
-      await expect.element(toggle).not.toBeChecked();
-      await page.getByRole("button", { name: "Reset ASCII background to default" }).click();
-      await expect.element(toggle).toBeChecked();
-      await mounted.router.navigate({ to: "/$threadId", params: { threadId: THREAD_ID } });
-      await expect.poll(background).not.toBeNull();
+      await goToSettings();
+      await expect.element(option("Off")).toHaveAttribute("aria-checked", "true");
+      await page.getByRole("button", { name: "Reset Empty chat background to default" }).click();
+      await expect.element(option("Temple")).toHaveAttribute("aria-checked", "true");
+      await goToChat();
+      await expect.poll(styleOf).toBe("temple");
       useTerminalStateStore.getState().openTerminalThreadPage(THREAD_ID, { terminalOnly: false });
       await expect.poll(background).toBeNull();
       useTerminalStateStore.getState().setTerminalWorkspaceTab(THREAD_ID, "chat");

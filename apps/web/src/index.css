@@ -132,6 +132,18 @@
 }
 
 @layer components {
+  /* Empty chat landing over the dithered backdrop (EmptyChatBackdrop.tsx): a soft halo in
+     the page background keeps the heading, banner and chips legible over the dots. */
+  [data-empty-chat-backdrop-host]
+    :is([data-empty-chat-backdrop-quiet], [data-empty-landing-controls]) {
+    text-shadow:
+      0 0 1px var(--background),
+      0 0 2px var(--background),
+      0 0 4px var(--background),
+      0 0 8px var(--background),
+      0 0 14px var(--background);
+  }
+
   /* Inline visual blocks: the same data tokens agent HTML pages get (inlineVisual.ts), so a
      native chart and a page chart read alike. Series 2-6 are set inline per appearance. */
   .inline-visual-blocks {
@@ -4108,4 +4120,17 @@ diffs-container {
 /* Expanded document panes retain a readable line length while using more space. */
 [data-dock-maximized="true"] .editor-markdown-preview__body {
   max-width: 1120px;
+}
+
+/* Light themes with soft grey text (Solarized, Notion) lose the landing heading and chip
+   labels in the dithered backdrop (EmptyChatBackdrop.tsx); push them toward black while it
+   shows. Unlayered so it beats the text color utilities. Dark mode is unchanged. */
+:root:not(.dark)
+  [data-empty-chat-backdrop-host]
+  :is([data-empty-chat-backdrop-quiet], [data-empty-landing-controls]),
+:root:not(.dark)
+  [data-empty-chat-backdrop-host]
+  :is([data-empty-chat-backdrop-quiet], [data-empty-landing-controls])
+  * {
+  color: color-mix(in oklab, var(--foreground) 35%, black);
 }
