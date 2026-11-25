@@ -3326,8 +3326,9 @@ diffs-container {
 }
 
 /* Single-row composer (started threads, one-line draft): a true pill. Squircle smoothing at a
-   full radius pulls the ends toward a box, so this layout keeps round corners. */
-.chat-composer-shell[data-composer-layout="row"],
+   full radius pulls the ends toward a box, so this layout keeps round corners. Inside the
+   composer tray only the input surface is the pill; the tray keeps its squircle corners. */
+.chat-composer-shell[data-composer-layout="row"]:not([data-composer-tray]),
 .chat-composer-shell[data-composer-layout="row"] .chat-composer-surface {
   --composer-radius: 9999px;
   corner-shape: round;
@@ -3367,9 +3368,10 @@ diffs-container {
   backdrop-filter: none;
 }
 
+/* Corners come from the shell's `squircle` utility, the same continuous shape as the composer
+   inside; only the radius is the tray's own. */
 .chat-composer-shell[data-composer-tray] {
   border-radius: var(--composer-tray-radius);
-  corner-shape: round;
   padding: 0.25rem;
   border: 1px solid var(--composer-tray-border);
   background: var(--composer-tray-tone);
