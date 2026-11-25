@@ -54,6 +54,7 @@ import { Effect, Layer, Option } from "effect";
 import { GitCore } from "../../git/Services/GitCore.ts";
 import { GitManager } from "../../git/Services/GitManager.ts";
 import { ServerConfig } from "../../config.ts";
+import { COMMAND_PRODUCED_NO_EVENTS } from "../../orchestration/Errors.ts";
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { AutomationService } from "../../automation/Services/AutomationService.ts";
@@ -974,7 +975,7 @@ export const makeAgentGateway = Effect.gen(function* () {
     definition: {
       name: "synara_set_thread_pull_request",
       description:
-        "Link a pull request to a Synara thread. A thread can have several; linking adds to the list and never replaces other links, and linking an already-linked PR only refreshes it. Link each PR you create, take over, or push to for the thread's work, including every PR of a stack. Do not link PRs you only read, review, or mention. Defaults to your own thread when threadId is omitted.",
+        "Link a pull request to a Synara thread. A thread can have several; linking adds to the list and never replaces other links, and linking an already-linked PR only refreshes it and succeeds with wasLinked=true. Link each PR you create, take over, or push to for the thread's work, including every PR of a stack. Do not link PRs you only read, review, or mention. Defaults to your own thread when threadId is omitted.",
       inputSchema: {
         type: "object",
         properties: {
@@ -1004,8 +1005,12 @@ export const makeAgentGateway = Effect.gen(function* () {
         const { pullRequest } = yield* gitManager
           .resolvePullRequest({ cwd, reference })
           .pipe(Effect.mapError((error) => new ToolInputError(errorText(error))));
+        const linkedBefore = visiblePullRequestLinks(target.pullRequests).some(
+          (link) =>
+            pullRequestLinkKey(link.pullRequest.url) === pullRequestLinkKey(pullRequest.url),
+        );
         yield* context.assertCallerTurnActive();
-        yield* orchestrationEngine
+        const changed = yield* orchestrationEngine
           .dispatch({
             type: "thread.pull-request.link",
             commandId: CommandId.makeUnsafe(`agent:${randomUUID()}:pull-request`),
@@ -1013,8 +1018,23 @@ export const makeAgentGateway = Effect.gen(function* () {
             pullRequest,
             source: "agent",
           })
-          .pipe(Effect.mapError((error) => new ToolInputError(errorText(error))));
-        return mcpToolResultJson({ threadId: target.id, pullRequest });
+          .pipe(
+            Effect.as(true),
+            // The server links a PR on its own when a command creates or pushes to it, so
+            // the agent's own link often finds it already there, unchanged. That is the
+            // idempotent refresh the tool promises, not a failure.
+            Effect.catchTag("OrchestrationCommandInvariantError", (error) =>
+              error.detail === COMMAND_PRODUCED_NO_EVENTS
+                ? Effect.succeed(false)
+                : Effect.fail(error),
+            ),
+            Effect.mapError((error) => new ToolInputError(errorText(error))),
+          );
+        return mcpToolResultJson({
+          threadId: target.id,
+          pullRequest,
+          wasLinked: linkedBefore || !changed,
+        });
       }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
   };
 

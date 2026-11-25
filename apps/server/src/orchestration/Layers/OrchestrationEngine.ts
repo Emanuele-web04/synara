@@ -47,6 +47,7 @@ import {
   type ManagedAttachmentPrincipal,
 } from "../../managedAttachmentPrincipal.ts";
 import {
+  COMMAND_PRODUCED_NO_EVENTS,
   OrchestrationCommandAdmissionError,
   OrchestrationCommandIdentityCollisionError,
   OrchestrationCommandInvariantError,
@@ -1213,7 +1214,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
             if (Option.isSome(cancellation)) {
               return yield* new OrchestrationCommandInvariantError({
                 commandType: command.type,
-                detail: "Command produced no events.",
+                detail: COMMAND_PRODUCED_NO_EVENTS,
               });
             }
           }
@@ -1349,7 +1350,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
             if (lastSavedEvent === null) {
               return yield* new OrchestrationCommandInvariantError({
                 commandType: envelope.command.type,
-                detail: "Command produced no events.",
+                detail: COMMAND_PRODUCED_NO_EVENTS,
               });
             }
 
