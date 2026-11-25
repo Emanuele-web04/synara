@@ -308,9 +308,17 @@ describe("AppRailUsage", () => {
     expect(Number(fills[0]?.getAttribute("r"))).toBeGreaterThan(
       Number(fills[1]?.getAttribute("r")),
     );
-    // Both rings colour by the same remaining-quota scale: 43% is fair, 78% is healthy.
-    expect(fills[0]?.getAttribute("class")).toContain("stroke-yellow-500");
-    expect(fills[1]?.getAttribute("class")).toContain("stroke-emerald-500");
+    const themeStyle = document.documentElement.style;
+    const originalForeground = themeStyle.getPropertyValue("--foreground");
+    try {
+      themeStyle.setProperty("--foreground", "rgb(27, 91, 124)");
+      expect(Array.from(fills, (circle) => getComputedStyle(circle).stroke)).toEqual([
+        "rgb(27, 91, 124)",
+        "rgb(27, 91, 124)",
+      ]);
+    } finally {
+      themeStyle.setProperty("--foreground", originalForeground);
+    }
 
     await userEvent.hover(button);
     await expect.element(page.getByText("Weekly · outer")).toBeVisible();
@@ -322,20 +330,20 @@ describe("AppRailUsage", () => {
   });
 
   it.each([
-    ["fiveHour", "85 100", "stroke-emerald-500"],
-    ["weekly", "8 100", "stroke-red-500"],
+    ["fiveHour", "11 100", "stroke-foreground"],
+    ["weekly", "10 100", "stroke-red-500"],
   ])("draws a single ring for the %s setting", async (window, dasharray, strokeClassName) => {
     settings.railUsageWindow = window;
     await renderUsage([
-      { window: "Weekly", usedPercent: 92 },
-      { window: "5h", usedPercent: 15 },
+      { window: "Weekly", usedPercent: 90 },
+      { window: "5h", usedPercent: 89 },
     ]);
     const button = page.getByRole("button", { name: /^Codex usage:/ });
     await expect.element(button).toBeVisible();
     const fills = button.element().querySelectorAll("circle[stroke-dasharray]");
     expect(fills).toHaveLength(1);
     expect(fills[0]?.getAttribute("stroke-dasharray")).toBe(dasharray);
-    expect(fills[0]?.getAttribute("class")).toContain(strokeClassName);
+    expect(fills[0]).toHaveClass(strokeClassName);
   });
 
   it.each(["Weekly", "5h"])("shows only the reported %s ring", async (window) => {

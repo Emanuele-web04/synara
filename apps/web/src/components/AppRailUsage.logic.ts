@@ -110,13 +110,3 @@ export function selectRailUsageRows(
   }
   return primaryRow ? [primaryRow] : [];
 }
-
-export type RailUsageRingTone = "healthy" | "fair" | "low" | "critical";
-
-/** Remaining quota → ring colour step; the last two match the usage bars' warning/danger. */
-export function railUsageRingTone(remainingPercent: number): RailUsageRingTone {
-  if (remainingPercent <= 10) return "critical";
-  if (remainingPercent <= 25) return "low";
-  if (remainingPercent <= 50) return "fair";
-  return "healthy";
-}

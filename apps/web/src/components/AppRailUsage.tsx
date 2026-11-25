@@ -19,12 +19,10 @@ import { cn } from "~/lib/utils";
 
 import { appRailButtonClassName } from "./AppRail";
 import {
-  railUsageRingTone,
   getRailUsageAccounts,
   resolveRailUsageAccounts,
   selectRailUsageRows,
   type RailUsageAccount,
-  type RailUsageRingTone,
 } from "./AppRailUsage.logic";
 import { resolveEnvironmentProviderUsageSummary } from "./chat/environment/EnvironmentUsageSection.logic";
 import { ProviderAccountDot } from "./ProviderAccountMark";
@@ -40,13 +38,8 @@ import { PreviewCard, PreviewCardPopup, PreviewCardTrigger } from "./ui/preview-
 import { StatusChip } from "./ui/status-chip";
 import { useTranslation } from "~/i18n";
 
-// Every ring uses the same scale, so its colour alone says how much is left.
-const RING_TONE_CLASS_NAME: Record<RailUsageRingTone, { stroke: string; dot: string }> = {
-  healthy: { stroke: "stroke-emerald-500", dot: "bg-emerald-500" },
-  fair: { stroke: "stroke-yellow-500", dot: "bg-yellow-500" },
-  low: { stroke: "stroke-orange-500", dot: "bg-orange-500" },
-  critical: { stroke: "stroke-red-500", dot: "bg-red-500" },
-};
+const NORMAL_RING_TONE = { stroke: "stroke-foreground", dot: "bg-foreground" };
+const CRITICAL_RING_TONE = { stroke: "stroke-red-500", dot: "bg-red-500" };
 
 // Geometry in px inside the rail's 36px button. Two tracks take a larger box, thinner
 // strokes and a smaller glyph, so the tracks keep a 2.25px gap and the glyph clears the
@@ -94,7 +87,7 @@ function AppRailUsageRing({
   );
   const rings = selectRailUsageRows(model.rows, model.primaryRow, window).map((row) => ({
     row,
-    tone: RING_TONE_CLASS_NAME[railUsageRingTone(row.remainingPercent)],
+    tone: row.remainingTone === "danger" ? CRITICAL_RING_TONE : NORMAL_RING_TONE,
   }));
   const ring = rings.length > 1 ? DOUBLE_RING : SINGLE_RING;
   const outerRadius = (ring.size - ring.stroke) / 2;

@@ -8,7 +8,6 @@ import { deriveProviderUsageDisplayRows } from "~/lib/providerUsageDisplay";
 import {
   MAX_RAIL_USAGE_ACCOUNTS,
   getRailUsageAccounts,
-  railUsageRingTone,
   selectRailUsageRows,
   resolveRailUsageAccounts,
   toggleRailUsageAccount,
@@ -136,20 +135,5 @@ describe("selectRailUsageRows", () => {
     const monthly = rowsFor("Monthly");
     expect(labels(monthly, monthly[0] ?? null, "weekly")).toEqual(["Monthly"]);
     expect(labels([], null, "both")).toEqual([]);
-  });
-});
-
-describe("railUsageRingTone", () => {
-  it.each([
-    [100, "healthy"],
-    [51, "healthy"],
-    [50, "fair"],
-    [26, "fair"],
-    [25, "low"],
-    [11, "low"],
-    [10, "critical"],
-    [0, "critical"],
-  ] as const)("%i%% left is %s", (remaining, tone) => {
-    expect(railUsageRingTone(remaining)).toBe(tone);
   });
 });
