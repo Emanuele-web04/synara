@@ -22,6 +22,48 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "1.6.8",
+    date: "Nov 25",
+    features: [
+      {
+        id: "startup-search-and-download-size",
+        title: "Faster startup and search, with smaller downloads",
+        description:
+          "On Apple Silicon, median backend cold start with an existing database went from 505 ms to 379 ms, and content search across 10,321 files went from 489 ms to 367 ms.",
+        details:
+          "The packaging improvements introduced in 1.6.6 carry forward. From 1.6.5 to 1.6.7, the published Apple Silicon DMG fell from 338 MB to 271 MB and the Windows x64 installer from 266 MB to 219 MB. A separate local Apple Silicon build comparison measured 27% fewer bytes in the installed app.",
+      },
+      {
+        id: "remote-reconnect-and-pairing",
+        title: "Faster Remote reconnects and more reliable pairing",
+        description:
+          "In an emulated 80 ms network, median reconnect fell from 583 ms to 341 ms. A separate cellular relay fallback simulation went from 2.00 s to 0.74 s.",
+        details:
+          "Remote pairing now tolerates up to one minute of forward clock skew on the connecting device while still requiring a fresh proof and approval on the host.",
+      },
+      {
+        id: "claude-steering-and-import",
+        title: "Steer Claude while foreground work continues",
+        description:
+          "A live steering message can move a blocking command or subagent into the background so Claude can read your follow-up. Claude imports also preserve dates for messages that were originally queued.",
+        details:
+          "In one live test with a long-running command, Claude answered the steer in 9.4 s, down from about 60 s. A steer sent during an ongoing model request still waits for that request to finish.",
+      },
+      {
+        id: "empty-chat-backdrops-and-composer",
+        title: "New chat backdrops and a clearer composer",
+        description:
+          "Choose Temple, animated Gradient, or Off in Settings → Appearance → Empty chat background. A soft tray groups the composer with its controls. Reduced motion keeps the backdrop still.",
+      },
+      {
+        id: "live-tool-run-and-long-chat-activity",
+        title: "Inspect tools while they run",
+        description:
+          "Expand the current tool summary while the active call stays in the working indicator. In long chats, recent thread-created and delegated-task cards now stay visible in the activity window.",
+      },
+    ],
+  },
+  {
     version: "1.6.7",
     date: "Nov 25",
     features: [
