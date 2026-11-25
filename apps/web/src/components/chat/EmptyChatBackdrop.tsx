@@ -383,7 +383,14 @@ function buildGradientField(
 ): GradientField {
   const width = cols * CELL_PX;
   const height = rows * CELL_PX;
-  const diagonal = Math.hypot(width, height);
+  // The glow uses squared distance, so scale the falloff once per blob.
+  const diagonalSquared = width * width + height * height;
+  const blobs = GRADIENT_BLOBS.map((blob) => ({
+    x: blob.x * width,
+    y: blob.y * height,
+    decay: -1.6 / (blob.radius * blob.radius * diagonalSquared),
+    strength: blob.strength,
+  }));
   const base = new Float32Array(cols * rows);
   let activeRows = 0;
   for (let row = 0; row < rows; row += 1) {
@@ -394,10 +401,10 @@ function buildGradientField(
     for (let col = 0; col < cols; col += 1) {
       const x = col * CELL_PX + CELL_PX / 2;
       let glow = 0;
-      for (const blob of GRADIENT_BLOBS) {
-        const distance =
-          Math.hypot(x - blob.x * width, y - blob.y * height) / (blob.radius * diagonal);
-        glow += blob.strength * Math.exp(-distance * distance * 1.6);
+      for (const blob of blobs) {
+        const dx = x - blob.x;
+        const dy = y - blob.y;
+        glow += blob.strength * Math.exp((dx * dx + dy * dy) * blob.decay);
       }
       const quiet = zones.length > 0 ? quietFactor(x, y, zones, quietFloor) : 1;
       base[row * cols + col] = Math.min(1, glow) * falloff * quiet;
@@ -570,7 +577,8 @@ export function EmptyChatBackdrop(props: { style: EmptyChatBackdropStyle }) {
           const radius = age * RIPPLE_SPEED_PX_PER_MS;
           const dx = x - ripple.x;
           const dy = y - ripple.y;
-          const distance = Math.hypot(dx, dy);
+          // Canvas coordinates are bounded, so the direct norm is sufficient here.
+          const distance = Math.sqrt(dx * dx + dy * dy);
           if (Math.abs(distance - radius) > RIPPLE_REACH_PX) continue;
           const angle = Math.atan2(dy, dx);
           const wobble =
