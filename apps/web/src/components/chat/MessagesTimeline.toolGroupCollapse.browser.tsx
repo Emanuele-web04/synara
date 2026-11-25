@@ -150,14 +150,15 @@ function workingToolCallText(): string | null | undefined {
   return workingIndicator()?.querySelector("[data-working-tool-call='true']")?.textContent;
 }
 
-// With the indicator showing, the live run leaves the transcript: the indicator
-// wears its running call, and the earlier calls wait until the run settles.
+// With the indicator showing, only its own call leaves the transcript. The rest
+// of the run stays reachable: the earlier call renders as its row (or sits behind
+// the run's summary), so work stays inspectable while it runs.
 async function expectIndicatorWearingNewestCall(): Promise<void> {
   const [earlierCommand, newestCommand] = LIVE_COMMANDS as [string, string];
   await expect.poll(workingToolCallText).toContain(newestCommand);
   expect(workingIndicator()?.dataset.workingState).toBe("tool-call");
   expect(document.body.textContent?.split(newestCommand)).toHaveLength(2);
-  expect(document.body.textContent ?? "").not.toContain(earlierCommand);
+  expect(isVisibleOutsideClosedDisclosure(earlierCommand)).toBe(true);
 }
 
 // Without a working row nothing is live: the tail run folds to its summary like
@@ -749,7 +750,8 @@ describe("MessagesTimeline tool group collapse", () => {
         expect(document.body.textContent ?? "").not.toContain(command);
       }
 
-      // The run after the thinking boundary is the live tail the indicator claims.
+      // The run after the thinking boundary stays in the transcript while the
+      // indicator wears only its newest running call.
       await expectIndicatorWearingNewestCall();
     } finally {
       await screen.unmount();
@@ -774,15 +776,18 @@ describe("MessagesTimeline tool group collapse", () => {
       await expectIndicatorWearingNewestCall();
       const toolLineHeight = workingIndicator()!.getBoundingClientRect().height;
 
-      // Finished calls stay claimed: no row pops into history between calls.
+      // Every call finished: the run folds into its closed summary while the
+      // indicator reads a plain "Thinking". The work never pops in and out of
+      // history between calls.
       await screen.rerender(
         <ToolGroupCollapseTimeline timelineEntries={entries("completed")} isWorking />,
       );
       await expect.poll(() => workingIndicator()?.textContent).toBe("Thinking");
-      expect(findSummaryTrigger("Ran 2 commands")).toBeNull();
+      await expect.poll(() => findSummaryTrigger("Ran 2 commands") !== null).toBe(true);
+      expect(findSummaryTrigger("Ran 2 commands")!.getAttribute("aria-expanded")).toBe("false");
 
-      // New text settles the run behind its summary; the indicator keeps reading
-      // a plain "Thinking", without an icon.
+      // New text keeps the run behind the same summary; the indicator keeps
+      // reading a plain "Thinking", without an icon.
       await screen.rerender(
         <ToolGroupCollapseTimeline
           timelineEntries={[
@@ -793,6 +798,7 @@ describe("MessagesTimeline tool group collapse", () => {
         />,
       );
       await expect.poll(() => findSummaryTrigger("Ran 2 commands") !== null).toBe(true);
+      expect(findSummaryTrigger("Ran 2 commands")!.getAttribute("aria-expanded")).toBe("false");
       await expect.poll(() => workingIndicator()?.textContent).toBe("Thinking");
       expect(workingIndicator()!.querySelector("svg")).toBeNull();
       expect(workingIndicator()!.getBoundingClientRect().height).toBe(toolLineHeight);

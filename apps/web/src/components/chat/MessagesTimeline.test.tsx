@@ -1029,7 +1029,7 @@ describe("MessagesTimeline", () => {
     expect(workingIndicatorMarkup(markup)).toContain("shimmer-group");
   });
 
-  it("reads Thinking between calls and keeps the finished run out of history", async () => {
+  it("reads Thinking between calls and keeps the finished run behind its summary", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
       <MessagesTimeline
@@ -1042,9 +1042,11 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).toContain('data-working-state="thinking"');
+    // The run is one click away in the transcript, not unmounted while it runs.
+    expect(markup).toContain("Ran 2 commands");
+    expect(markup).toContain('aria-expanded="false"');
     expect(markup).not.toContain("git status");
     expect(markup).not.toContain("git diff");
-    expect(markup).not.toContain("Ran 2 commands");
   });
 
   it("shows a failed newest call in the failure tone, still", async () => {
