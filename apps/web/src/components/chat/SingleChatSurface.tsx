@@ -205,6 +205,7 @@ export function SingleChatSurface(props: {
   const openPane = useRightDockStore((store) => store.openPane);
   const toggleSingletonPane = useRightDockStore((store) => store.toggleSingletonPane);
   const closePane = useRightDockStore((store) => store.closePane);
+  const removePane = useRightDockStore((store) => store.removePane);
   const movePane = useRightDockStore((store) => store.movePane);
   const setActivePane = useRightDockStore((store) => store.setActivePane);
   const setDockOpen = useRightDockStore((store) => store.setDockOpen);
@@ -771,7 +772,7 @@ export function SingleChatSurface(props: {
     dockState,
     existingThreadIds,
     threadsHydrated,
-    closePane,
+    removePane,
   });
   const editorProjectOptions = projects.flatMap((project) =>
     project.kind === "project" ? [{ id: project.id, name: project.name }] : [],
@@ -964,7 +965,7 @@ export function SingleChatSurface(props: {
               hostThreadId={props.threadId}
               projectId={props.projectId}
               isActive={context.isActive && dockState.open}
-              onClosePanel={() => closePane(props.threadId, pane.id)}
+              onClosePanel={() => removePane(props.threadId, pane.id)}
             />
           </Suspense>
         );

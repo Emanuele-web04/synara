@@ -543,6 +543,7 @@ it("restores host accessibility on resize, thread changes, collapse and final cl
   const host = document.querySelector<HTMLElement>('[data-testid="host"]')!;
   const covered = host.firstElementChild as HTMLElement;
   const dock = host.querySelector<HTMLElement>('[data-slot="sidebar-container"]')!;
+  const gap = host.querySelector<HTMLElement>('[data-slot="sidebar-gap"]')!;
   const draft = document.querySelector<HTMLInputElement>('[aria-label="Document draft"]')!;
   await screen.getByRole("button", { name: "Maximize panel", exact: true }).click();
   expect(covered.inert).toBe(true);
@@ -564,12 +565,7 @@ it("restores host accessibility on resize, thread changes, collapse and final cl
   await screen.getByRole("button", { name: "Close note.md", exact: true }).click();
   expect(covered.inert).toBe(false);
   expect(covered.style.visibility).toBe("");
-  await expect
-    .poll(
-      () =>
-        host.querySelector<HTMLElement>('[data-slot="sidebar-gap"]')!.getBoundingClientRect().width,
-    )
-    .toBe(0);
+  await expect.poll(() => gap.getBoundingClientRect().width).toBe(0);
   expect(document.querySelector('[aria-label="Chat composer"]')).toBe(chat);
   expect(chat.value).toBe("Retained draft");
   chat.focus();
@@ -577,18 +573,11 @@ it("restores host accessibility on resize, thread changes, collapse and final cl
   await screen.getByRole("button", { name: "Reopen", exact: true }).click();
   await screen.getByRole("button", { name: "Maximize panel", exact: true }).click();
   await screen.getByRole("button", { name: "Close from document", exact: true }).click();
-  await expect
-    .poll(
-      () =>
-        host.querySelector<HTMLElement>('[data-slot="sidebar-gap"]')!.getBoundingClientRect().width,
-    )
-    .toBe(0);
+  await expect.poll(() => gap.getBoundingClientRect().width).toBe(0);
   expect(covered.inert).toBe(false);
   await screen.getByRole("button", { name: "Reopen", exact: true }).click();
   await screen.getByRole("button", { name: "Close note.md", exact: true }).click();
-  expect(
-    host.querySelector<HTMLElement>('[data-slot="sidebar-gap"]')!.getBoundingClientRect().width,
-  ).toBeGreaterThan(0);
+  await expect.poll(() => gap.getBoundingClientRect().width).toBe(0);
   await screen.getByRole("button", { name: "Reopen", exact: true }).click();
   await screen.getByRole("button", { name: "Maximize panel", exact: true }).click();
   await page.viewport(600, 800);

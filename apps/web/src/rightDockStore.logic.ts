@@ -290,7 +290,7 @@ function resolveActiveAfterRemoval(
   return resolveTabAfterClose(panes, removedIndex)?.id ?? null;
 }
 
-export function closePaneInState(
+export function removePaneFromState(
   state: RightDockThreadState,
   paneId: string,
 ): RightDockThreadState {
@@ -306,12 +306,18 @@ export function closePaneInState(
     paneId,
   );
   return {
-    // An open dock with no panes is the launcher state. Closing the final tab
-    // returns to that launcher instead of collapsing the entire dock.
     open: state.open,
     panes: nextPanes,
     activePaneId: nextActiveId,
   };
+}
+
+export function closePaneInState(
+  state: RightDockThreadState,
+  paneId: string,
+): RightDockThreadState {
+  const next = removePaneFromState(state, paneId);
+  return next !== state && next.panes.length === 0 ? createDefaultRightDockState() : next;
 }
 
 /** Drops a dragged tab onto another tab's slot; the active pane and the dock stay as they are. */
@@ -397,7 +403,7 @@ export function setSidechatPaneThreadInState(
 ): RightDockThreadState {
   const existing = findSingletonPane(state, "sidechat");
   if (input.threadId === null) {
-    return existing ? closePaneInState(state, existing.id) : state;
+    return existing ? removePaneFromState(state, existing.id) : state;
   }
   if (existing) {
     return updatePaneInState(state, existing.id, { threadId: input.threadId });
