@@ -33,6 +33,8 @@ export class HostMintError extends Error {
   }
 }
 
+export class HostTokenIssuedInFutureError extends Error {}
+
 export function assertBoundedLifetime(
   claims: { iat: number; exp: number },
   maximumSeconds: number,
@@ -43,7 +45,7 @@ export function assertBoundedLifetime(
     throw new Error(`${label} lifetime exceeds ${maximumSeconds}s`);
   }
   if (claims.iat > nowSeconds + JWT_CLOCK_TOLERANCE_SECONDS) {
-    throw new Error(`${label} iat is too far in the future`);
+    throw new HostTokenIssuedInFutureError(`${label} iat is too far in the future`);
   }
   if (claims.exp < nowSeconds) {
     throw new Error(`${label} has expired`);
