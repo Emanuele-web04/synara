@@ -8686,6 +8686,52 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
+  it("creates a branch without sending the draft from the composer tray", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      initialEntry: `/${THREAD_ID}?view=editor`,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-create-branch-with-draft" as MessageId,
+        targetText: "existing message",
+      }),
+    });
+    const git = readNativeApi()!.git;
+    const createBranch = vi.spyOn(git, "createBranch").mockResolvedValue(undefined);
+    const checkout = vi.spyOn(git, "checkout").mockResolvedValue(undefined);
+
+    try {
+      const editor = page.getByTestId("composer-editor");
+      const draft = "keep this draft unsent";
+      await userEvent.fill(editor, draft);
+      await expect.element(page.getByRole("button", { name: "Send message" })).toBeEnabled();
+      const trigger = await waitForElement(
+        () =>
+          document.querySelector<HTMLButtonElement>(
+            '[data-chat-composer-status-row] button[data-slot="combobox-trigger"]',
+          ),
+        "Unable to find the composer branch selector.",
+      );
+      await vi.waitFor(() => expect(trigger.disabled).toBe(false));
+      trigger.click();
+      await page
+        .getByRole("button", { name: "Create and checkout new branch", exact: false })
+        .click();
+      await page.getByLabelText("Branch name").fill("feature/keep-draft");
+      await page.getByRole("button", { name: "Create and switch", exact: true }).click();
+
+      await expect.poll(() => checkout.mock.calls.length).toBe(1);
+      expect(createBranch).toHaveBeenCalledWith(
+        expect.objectContaining({ branch: "feature/keep-draft" }),
+      );
+      expect(hasDispatchedCommandType("thread.turn.start")).toBe(false);
+      expect(editor.element().textContent).toContain(draft);
+    } finally {
+      createBranch.mockRestore();
+      checkout.mockRestore();
+      await mounted.cleanup();
+    }
+  });
+
   it("warns before sending from a settled thread on another branch", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
