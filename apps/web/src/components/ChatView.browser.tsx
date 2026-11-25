@@ -13298,6 +13298,12 @@ describe("ChatView transcript geometry (full app)", () => {
       mounted.router.navigate({ to: "/$threadId", params: { threadId: THREAD_ID } });
     try {
       await expect.poll(styleOf).toBe("temple");
+      const trayControls = () =>
+        document.querySelector(
+          "[data-empty-chat-backdrop-host] [data-composer-tray-host] [data-empty-landing-controls]",
+        );
+      await expect.poll(trayControls, { timeout: 3_000 }).not.toBeNull();
+      expect(getComputedStyle(trayControls()!).textShadow).toBe("none");
       await goToSettings();
       await expect.element(option("Temple")).toHaveAttribute("aria-checked", "true");
       await option("Gradient").click();

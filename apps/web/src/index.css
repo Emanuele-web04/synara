@@ -133,9 +133,8 @@
 
 @layer components {
   /* Empty chat landing over the dithered backdrop (EmptyChatBackdrop.tsx): a soft halo in
-     the page background keeps the heading, banner and chips legible over the dots. */
-  [data-empty-chat-backdrop-host]
-    :is([data-empty-chat-backdrop-quiet], [data-empty-landing-controls]) {
+     the page background keeps the heading and banner legible over the dots. */
+  [data-empty-chat-backdrop-host] [data-empty-chat-backdrop-quiet] {
     text-shadow:
       0 0 1px var(--background),
       0 0 2px var(--background),
@@ -4180,15 +4179,10 @@ diffs-container {
   max-width: 1120px;
 }
 
-/* Light themes with soft grey text (Solarized, Notion) lose the landing heading and chip
+/* Light themes with soft grey text (Solarized, Notion) lose the landing heading and banner
    labels in the dithered backdrop (EmptyChatBackdrop.tsx); push them toward black while it
    shows. Unlayered so it beats the text color utilities. Dark mode is unchanged. */
-:root:not(.dark)
-  [data-empty-chat-backdrop-host]
-  :is([data-empty-chat-backdrop-quiet], [data-empty-landing-controls]),
-:root:not(.dark)
-  [data-empty-chat-backdrop-host]
-  :is([data-empty-chat-backdrop-quiet], [data-empty-landing-controls])
-  * {
+:root:not(.dark) [data-empty-chat-backdrop-host] [data-empty-chat-backdrop-quiet],
+:root:not(.dark) [data-empty-chat-backdrop-host] [data-empty-chat-backdrop-quiet] * {
   color: color-mix(in oklab, var(--foreground) 35%, black);
 }
