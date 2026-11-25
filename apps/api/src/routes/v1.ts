@@ -3538,6 +3538,13 @@ export function createV1Routes(deps: {
         ...(parsed.organizationId ? { organizationId: parsed.organizationId } : {}),
         context: authContext(c),
       });
+      // The provider can still rotate a session while sign-out delivery is pending.
+      // Check the verified session identity before returning either credential.
+      const session = await verifier.verifyAccessToken(refreshed.accessToken);
+      if (session.userId !== refreshed.user.id)
+        throw new IdentityProviderError(502, "Refreshed account identity did not match");
+      if (await accountDeletion.isSessionFenced(session.userId, session.sessionId))
+        throw new RefreshRejectedError();
       const body: RefreshTokenResponse = {
         ...authTokensBody(refreshed),
         ...(refreshed.organizationId ? { organizationId: refreshed.organizationId } : {}),
