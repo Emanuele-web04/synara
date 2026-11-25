@@ -723,6 +723,11 @@ export interface ComputerBackend {
     windowId?: string,
     target?: ComputerResolvedTarget,
   ): Promise<ComputerBackendActionResult | void>;
+  /** Explicit native key-event text entry. Never an automatic semantic fallback. */
+  typeTextWithKeyboard?(
+    text: string,
+    windowId: string,
+  ): Promise<ComputerBackendActionResult | void>;
   pressKey(
     key: string,
     windowId?: string,
