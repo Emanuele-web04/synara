@@ -1324,5 +1324,8 @@
   "signInFlow_tryAgain": "Try again",
   "signInFlow_closesItself": "This window closes by itself in a moment.",
   "signInFlow_unableToClose": "Unable to stop sign-in. Retry closing this window.",
-  "signInFlow_unableToSend": "Unable to send that to the sign-in. Try again."
+  "signInFlow_unableToSend": "Unable to send that to the sign-in. Try again.",
+  "preferences": "Preferences",
+  "quit_askBeforeQuitting": "Ask before quitting",
+  "quit_askBeforeQuittingDescription": "Show the quit question before Synara quits. A running chat always asks, even when this is off."
 }

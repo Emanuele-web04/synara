@@ -843,6 +843,11 @@ export type DesktopQuitConfirmationResponse =
       readonly allow: boolean;
     };
 
+/** Main → renderer: a quit question the app stopped waiting on, so the page takes it down. */
+export interface DesktopQuitConfirmationWithdrawal {
+  readonly requestId: string;
+}
+
 /** Windows/Linux frameless title bar preference vs the live BrowserWindow frame. */
 export interface DesktopCustomTitleBarState {
   supported: boolean;
@@ -1168,6 +1173,16 @@ export interface DesktopBridge {
     listener: (request: DesktopQuitConfirmationRequest) => void,
   ) => () => void;
   replyQuitConfirmation: (response: DesktopQuitConfirmationResponse) => void;
+  /** Brings the window up only when the quit question will actually show. */
+  revealQuitConfirmation: () => void;
+  /** Calls `listener` when the app withdrew a quit question it stopped waiting on. */
+  onQuitConfirmationWithdrawn: (
+    listener: (withdrawal: DesktopQuitConfirmationWithdrawal) => void,
+  ) => () => void;
+  /** Whether an idle quit asks first. A running chat always asks. */
+  getQuitAsks: () => Promise<boolean>;
+  /** Turns the idle quit question on or off. */
+  setQuitAsks: (asks: boolean) => Promise<void>;
   /** Current `webContents` page zoom (1 = 100%). Used to keep macOS traffic-light gutter aligned. */
   getZoomFactor: () => number;
   onZoomFactorChange: (listener: (zoomFactor: number) => void) => () => void;

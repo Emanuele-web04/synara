@@ -4,6 +4,7 @@ import {
   makeRunningChatsQuitGuard,
   parseQuitConfirmationRequest,
   parseQuitConfirmationResponse,
+  parseQuitConfirmationWithdrawal,
   quitConfirmationPresentationForPlatform,
   shouldPromptForRunningChatsBeforeQuit,
 } from "./runningChatsQuitGuard";
@@ -59,6 +60,12 @@ describe("running chats quit guard", () => {
       runningCount: 1,
       chats: [{ id: "a", title: "Fix the tray" }],
     });
+  });
+
+  it("parses a withdrawal that names the question", () => {
+    expect(parseQuitConfirmationWithdrawal({ requestId: "q1" })).toEqual({ requestId: "q1" });
+    expect(parseQuitConfirmationWithdrawal({ requestId: "  " })).toBeNull();
+    expect(parseQuitConfirmationWithdrawal(null)).toBeNull();
   });
 
   it("allows quit immediately when the renderer is unavailable", async () => {
@@ -128,32 +135,35 @@ describe("running chats quit guard", () => {
     await expect(second).resolves.toBe(false);
   });
 
-  it("fails open if the renderer never acknowledges the request", async () => {
+  it("stays running if the renderer never acknowledges the request", async () => {
     vi.useFakeTimers();
     const guard = makeRunningChatsQuitGuard(() => "q1");
     const decision = guard.askRenderer({
       send: vi.fn(),
       isRendererAvailable: () => true,
-      readyTimeoutMs: 50,
+      answerTimeoutMs: 50,
     });
 
     await vi.advanceTimersByTimeAsync(50);
-    await expect(decision).resolves.toBe(true);
+    await expect(decision).resolves.toBe(false);
+    expect(guard.hasPendingAsk()).toBe(false);
   });
 
-  it("does not time out after the renderer says chats are running", async () => {
+  it("withdraws the question and stays running after a silent answer", async () => {
     vi.useFakeTimers();
     const guard = makeRunningChatsQuitGuard(() => "q1");
+    const withdraw = vi.fn();
     const decision = guard.askRenderer({
       send: vi.fn(),
       isRendererAvailable: () => true,
-      readyTimeoutMs: 50,
+      answerTimeoutMs: 50,
+      withdraw,
     });
     guard.receiveResponse({ requestId: "q1", phase: "ready", runningCount: 1 });
 
-    await vi.advanceTimersByTimeAsync(200);
-    guard.receiveResponse({ requestId: "q1", phase: "decision", allow: false });
+    await vi.advanceTimersByTimeAsync(50);
     await expect(decision).resolves.toBe(false);
+    expect(withdraw).toHaveBeenCalledWith("q1");
   });
 
   it("allows a pending ask when the renderer dies mid-confirmation, without latching", async () => {

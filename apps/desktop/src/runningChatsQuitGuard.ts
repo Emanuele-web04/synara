@@ -8,9 +8,11 @@ import type {
   DesktopQuitConfirmationPresentation,
   DesktopQuitConfirmationRequest,
   DesktopQuitConfirmationResponse,
+  DesktopQuitConfirmationWithdrawal,
 } from "@synara/contracts";
 
-const DEFAULT_READY_TIMEOUT_MS = 3000;
+/** How long the app waits on the page before it stops asking and stays running. */
+const DEFAULT_ANSWER_TIMEOUT_MS = 60_000;
 
 export function shouldPromptForRunningChatsBeforeQuit(reason: string): boolean {
   return reason === "window-close" || reason === "before-quit";
@@ -96,6 +98,20 @@ export function parseQuitConfirmationResponse(
   return null;
 }
 
+/** A withdrawal the page can match to the question it is showing. */
+export function parseQuitConfirmationWithdrawal(
+  payload: unknown,
+): DesktopQuitConfirmationWithdrawal | null {
+  if (payload == null || typeof payload !== "object") {
+    return null;
+  }
+  const requestId = (payload as { readonly requestId?: unknown }).requestId;
+  if (typeof requestId !== "string" || requestId.trim().length === 0) {
+    return null;
+  }
+  return { requestId };
+}
+
 export interface RunningChatsQuitGuard {
   readonly hasAllowedQuit: () => boolean;
   readonly hasPendingAsk: () => boolean;
@@ -110,8 +126,9 @@ export interface RunningChatsQuitGuard {
   readonly askRenderer: (input: {
     readonly send: (request: DesktopQuitConfirmationRequest) => void;
     readonly isRendererAvailable: () => boolean;
-    readonly readyTimeoutMs?: number;
+    readonly answerTimeoutMs?: number;
     readonly presentation?: DesktopQuitConfirmationPresentation;
+    readonly withdraw?: (requestId: string) => void;
     readonly presentNativeConfirmation?: (
       chats: ReadonlyArray<DesktopQuitConfirmationChat>,
     ) => boolean | Promise<boolean>;
@@ -124,8 +141,8 @@ interface PendingQuitConfirmation {
   readonly presentNativeConfirmation:
     | ((chats: ReadonlyArray<DesktopQuitConfirmationChat>) => boolean | Promise<boolean>)
     | undefined;
-  waitingForDecision: boolean;
-  readyTimer: ReturnType<typeof setTimeout> | null;
+  readonly withdraw: ((requestId: string) => void) | undefined;
+  answerTimer: ReturnType<typeof setTimeout> | null;
   readonly resolve: (allow: boolean) => void;
 }
 
@@ -136,14 +153,21 @@ export function makeRunningChatsQuitGuard(
   let inFlight: Promise<boolean> | null = null;
   let pending: PendingQuitConfirmation | null = null;
 
-  const finish = (allow: boolean): void => {
+  const clearAnswerTimer = (current: PendingQuitConfirmation | null): void => {
+    if (!current?.answerTimer) return;
+    clearTimeout(current.answerTimer);
+    current.answerTimer = null;
+  };
+
+  const finish = (allow: boolean, options?: { readonly withdraw?: boolean }): void => {
     const current = pending;
     pending = null;
-    if (current?.readyTimer) {
-      clearTimeout(current.readyTimer);
-    }
+    clearAnswerTimer(current);
     if (allow) {
       allowed = true;
+    }
+    if (options?.withdraw && current) {
+      current.withdraw?.(current.requestId);
     }
     current?.resolve(allow);
   };
@@ -178,15 +202,15 @@ export function makeRunningChatsQuitGuard(
     hasAllowedQuit: () => allowed,
     hasPendingAsk: () => pending !== null,
     cancelPending(): void {
-      finish(false);
+      finish(false, { withdraw: true });
     },
     allowPending(): void {
       const current = pending;
+      if (!current) return;
       pending = null;
-      if (current?.readyTimer) {
-        clearTimeout(current.readyTimer);
-      }
-      current?.resolve(true);
+      clearAnswerTimer(current);
+      current.withdraw?.(current.requestId);
+      current.resolve(true);
     },
     receiveResponse(payload: unknown): void {
       const response = parseQuitConfirmationResponse(payload);
@@ -197,16 +221,13 @@ export function makeRunningChatsQuitGuard(
         finish(response.allow);
         return;
       }
-      if (pending.readyTimer) {
-        clearTimeout(pending.readyTimer);
-        pending.readyTimer = null;
-      }
-      if (response.runningCount <= 0 && pending.presentation === "native") {
-        finish(true);
-        return;
-      }
-      pending.waitingForDecision = true;
       if (pending.presentation === "native") {
+        // The native sheet owns the answer; silence is not an open question.
+        clearAnswerTimer(pending);
+        if (response.runningCount <= 0) {
+          finish(true);
+          return;
+        }
         presentNativeSheet(pending, response.chats);
       }
     },
@@ -228,12 +249,12 @@ export function makeRunningChatsQuitGuard(
           requestId,
           presentation,
           presentNativeConfirmation: input.presentNativeConfirmation,
-          waitingForDecision: false,
-          readyTimer: setTimeout(() => {
-            if (pending?.requestId === requestId && !pending.waitingForDecision) {
-              finish(true);
+          withdraw: input.withdraw,
+          answerTimer: setTimeout(() => {
+            if (pending?.requestId === requestId) {
+              finish(false, { withdraw: true });
             }
-          }, input.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS),
+          }, input.answerTimeoutMs ?? DEFAULT_ANSWER_TIMEOUT_MS),
           resolve: (allow) => {
             inFlight = null;
             resolve(allow);

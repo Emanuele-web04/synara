@@ -136,7 +136,8 @@ import { DesktopBetaChannel, readBetaImportResult, resolveBetaHomeDir } from "./
 import type { ExpectedTeamId } from "./betaInstaller";
 import { BetaDiagnostics, type BetaDiagnosticsEventName } from "./betaDiagnostics";
 import { attachBetaRendererDiagnostics } from "./betaRendererDiagnostics";
-import { guardDesktopWindowClose, showDesktopConfirmDialog } from "./confirmDialog";
+import { showDesktopConfirmDialog } from "./confirmDialog";
+import { readAskOnIdleQuit, writeAskOnIdleQuit } from "./desktopQuitPreference";
 import {
   desktopAppIconResourceName,
   isDesktopAppIcon,
@@ -175,6 +176,7 @@ import {
   shouldPromptForRunningChatsBeforeQuit,
 } from "./runningChatsQuitGuard";
 import { installShutdownSignalHandlers } from "./shutdownSignals";
+import { shouldHideMainWindowOnClose } from "./windowClosePolicy";
 import {
   hasVerifiedDesktopMigrationRestore,
   hasPendingDesktopMigrationRecovery,
@@ -440,6 +442,7 @@ const STATE_DIR = Path.join(BASE_DIR, "userdata");
 const DESKTOP_WINDOW_STATE_PATH = Path.join(STATE_DIR, "desktop-window-state.json");
 const DESKTOP_APP_ICON_PATH = Path.join(STATE_DIR, "desktop-app-icon");
 const DESKTOP_CUSTOM_TITLE_BAR_PATH = Path.join(STATE_DIR, "desktop-custom-title-bar.json");
+const DESKTOP_QUIT_PREFERENCE_PATH = Path.join(STATE_DIR, "desktop-quit-preference.json");
 function translateAutoUpdateDisabledReason(reason: string): string {
   const keys: Readonly<Record<string, string>> = {
     "Automatic updates are not available because no update feed is configured.":
@@ -2003,6 +2006,17 @@ async function checkForUpdatesFromMenu(): Promise<void> {
 
 function configureApplicationMenu(): void {
   const template: MenuItemConstructorOptions[] = [];
+  // Login items are a macOS/Windows feature, and the dev binary is not the app
+  // people launch, so the checkbox only appears in a packaged build.
+  const openAtLoginItem: MenuItemConstructorOptions | null =
+    app.isPackaged && (process.platform === "darwin" || process.platform === "win32")
+      ? {
+          label: t("desktop:openAtLogin"),
+          type: "checkbox",
+          checked: app.getLoginItemSettings().openAtLogin,
+          click: (item) => app.setLoginItemSettings({ openAtLogin: item.checked }),
+        }
+      : null;
   const keyboardShortcutsAccelerator = resolveKeyboardShortcutsMenuAccelerator(process.platform);
   const acceleratorProps = (
     accelerator: MenuItemConstructorOptions["accelerator"] | null,
@@ -2045,6 +2059,7 @@ function configureApplicationMenu(): void {
           accelerator: "CmdOrCtrl+,",
           click: () => dispatchMenuAction("open-settings"),
         },
+        ...(openAtLoginItem ? [openAtLoginItem] : []),
         { type: "separator" },
         { role: "services" },
         { type: "separator" },
@@ -2069,9 +2084,12 @@ function configureApplicationMenu(): void {
                 ...acceleratorProps("CmdOrCtrl+,"),
                 click: () => dispatchMenuAction("open-settings"),
               },
+              ...(openAtLoginItem ? [openAtLoginItem] : []),
               { type: "separator" as const },
             ]),
-        { role: process.platform === "darwin" ? "close" : "quit" },
+        process.platform === "darwin"
+          ? { role: "close" }
+          : { role: "quit", ...acceleratorProps("CmdOrCtrl+Q") },
       ],
     },
     { role: "editMenu" },
@@ -5293,22 +5311,24 @@ async function confirmRunningChatsThenQuit(reason: string): Promise<void> {
   }
   const presentation = quitConfirmationPresentationForPlatform();
   const allowed = await runningChatsQuitGuard.askRenderer({
+    // The page brings the window up itself, and only when the question will
+    // show, so an idle quit with the question turned off never flashes it.
     send: (request) => {
       if (!isMainRendererAvailable() || !window) {
         throw new Error("Renderer unavailable.");
       }
-      if (window.isMinimized()) {
-        window.restore();
-      }
-      window.show();
-      window.focus();
       window.webContents.send(IPC.quitConfirmationRequest, request);
     },
     isRendererAvailable: isMainRendererAvailable,
     presentation,
+    withdraw: (requestId) => {
+      if (isMainRendererAvailable() && window) {
+        window.webContents.send(IPC.quitConfirmationWithdrawn, { requestId });
+      }
+    },
   });
   if (!allowed) {
-    writeDesktopLogHeader(`${reason} stayed because chats are still running`);
+    writeDesktopLogHeader(`${reason} stayed because the quit question was not confirmed`);
     return;
   }
   requestGracefulAppQuit(reason);
@@ -5474,6 +5494,29 @@ function registerIpcHandlers(): void {
   ipcMain.removeAllListeners(IPC.quitConfirmationResponse);
   ipcMain.on(IPC.quitConfirmationResponse, (_event, payload: unknown) => {
     runningChatsQuitGuard.receiveResponse(payload);
+  });
+
+  ipcMain.removeAllListeners(IPC.quitConfirmationReveal);
+  ipcMain.on(IPC.quitConfirmationReveal, (event) => {
+    const window = mainWindow;
+    if (!window || window.isDestroyed() || window.webContents.isDestroyed()) return;
+    if (event.sender !== window.webContents) return;
+    if (process.platform === "darwin") {
+      app.show();
+      app.focus({ steal: true });
+    }
+    if (window.isMinimized()) window.restore();
+    window.show();
+    window.focus();
+  });
+
+  ipcMain.removeHandler(IPC.quitPreferenceGet);
+  ipcMain.handle(IPC.quitPreferenceGet, () => readAskOnIdleQuit(DESKTOP_QUIT_PREFERENCE_PATH));
+
+  ipcMain.removeHandler(IPC.quitPreferenceSet);
+  ipcMain.handle(IPC.quitPreferenceSet, (_event, asks: unknown) => {
+    if (typeof asks !== "boolean") return;
+    writeAskOnIdleQuit(DESKTOP_QUIT_PREFERENCE_PATH, asks);
   });
 
   ipcMain.removeHandler(IPC.setMenuShortcuts);
@@ -6214,17 +6257,6 @@ function createWindow(): BrowserWindow {
   window.on("unmaximize", () => emitDesktopWindowState(window));
   window.on("enter-full-screen", () => emitDesktopWindowState(window));
   window.on("leave-full-screen", () => emitDesktopWindowState(window));
-  if (process.platform === "darwin") {
-    guardDesktopWindowClose(
-      window,
-      () => t("desktop:closeTheWindow", { app: APP_DISPLAY_NAME }),
-      () =>
-        !isQuitting &&
-        !desktopShutdownComplete &&
-        !isUpdaterQuitAndInstallInFlight &&
-        !isUpdaterInstallPreparing,
-    );
-  }
   window.on("close", (event) => {
     try {
       writeDesktopWindowState(DESKTOP_WINDOW_STATE_PATH, {
@@ -6234,6 +6266,24 @@ function createWindow(): BrowserWindow {
       });
     } catch (error) {
       console.warn(`[desktop] Failed to persist window state: ${formatErrorMessage(error)}`);
+    }
+
+    // On macOS closing hides: the app and its running chats stay active, and the
+    // Dock icon brings the window back. A quit question still open is cancelled,
+    // because closing the window is not a quit.
+    if (
+      shouldHideMainWindowOnClose({
+        platform: process.platform,
+        quitting: isQuitting,
+        shutdownComplete: desktopShutdownComplete,
+        updaterHandoffActive: isUpdaterQuitAndInstallInFlight,
+        updaterInstallPreparing: isUpdaterInstallPreparing,
+      })
+    ) {
+      event.preventDefault();
+      runningChatsQuitGuard.cancelPending();
+      window.hide();
+      return;
     }
 
     if (
@@ -6702,6 +6752,23 @@ app.on("before-quit", (event) => {
     // Keep user/system quits from preempting the pending updater install with a plain app.quit().
     deferDesktopQuitUntilUpdaterSettles("before-quit");
     event.preventDefault();
+    return;
+  }
+
+  // Quit asked again while its question is open answers it, so ⌘Q twice quits.
+  if (runningChatsQuitGuard.hasPendingAsk()) {
+    event.preventDefault();
+    writeDesktopLogHeader("repeated quit confirmed the pending quit question");
+    runningChatsQuitGuard.allowPending();
+    return;
+  }
+
+  // With no window to ask, the native question is the pending one. A repeated
+  // quit is the same insistence: stop waiting for the sheet and shut down.
+  if (nativeQuitConfirmationPromise) {
+    event.preventDefault();
+    writeDesktopLogHeader("repeated quit confirmed the native quit question");
+    requestGracefulAppQuit("before-quit");
     return;
   }
 

@@ -7,6 +7,7 @@ import { ThreadId } from "@synara/contracts";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { APP_DISPLAY_NAME } from "~/branding";
+import { desktopQuitAsks, useDesktopQuitPreference } from "~/hooks/useDesktopQuitPreference";
 import {
   listRunningChatsFromDesktopStore,
   quitResumeContinuationPrompt,
@@ -25,6 +26,9 @@ export function RunningChatsQuitCoordinator() {
   // user does not see a bare window for the bounded wait before the desktop hides it.
   const [quitting, setQuitting] = useState(false);
   const pendingRequestIdRef = useRef<string | null>(null);
+
+  // Loads the idle-quit choice once and keeps this renderer's copy current.
+  useDesktopQuitPreference();
 
   const settle = useCallback(
     (decision: RunningChatsQuitDecision | null) => {
@@ -110,15 +114,37 @@ export function RunningChatsQuitCoordinator() {
     }
 
     return subscribe((request) => {
-      const running = listRunningChatsFromDesktopStore(useStore.getState());
+      const state = useStore.getState();
+      const running = listRunningChatsFromDesktopStore(state);
       reply({
         requestId: request.requestId,
         phase: "ready",
         runningCount: running.length,
         chats: running,
       });
+      // The question can be turned off for an idle quit. Answer before showing
+      // anything, so the window is not brought up for a quit nobody sees. Wait
+      // for hydration: an unloaded store is not proof that nothing is running.
+      if (running.length === 0 && state.threadsHydrated && !desktopQuitAsks()) {
+        reply({ requestId: request.requestId, phase: "decision", allow: true });
+        return;
+      }
+      window.desktopBridge?.revealQuitConfirmation?.();
       pendingRequestIdRef.current = request.requestId;
       setChats(running);
+    });
+  }, []);
+
+  // The app withdraws a question it stopped waiting on, such as one left
+  // silent past the answer timeout. Take it down without quitting.
+  useEffect(() => {
+    const subscribe = window.desktopBridge?.onQuitConfirmationWithdrawn;
+    if (typeof subscribe !== "function") return;
+    return subscribe((withdrawal) => {
+      if (pendingRequestIdRef.current !== withdrawal.requestId) return;
+      pendingRequestIdRef.current = null;
+      setChats(null);
+      setQuitting(false);
     });
   }, []);
 
