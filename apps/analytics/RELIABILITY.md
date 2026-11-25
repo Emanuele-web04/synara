@@ -68,15 +68,21 @@ containing a new reliability code.
 | Code                                         | Meaning                                                                                                               |
 | -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
 | `remote.admission_refused`                   | A remote stream reached the host but admission was unavailable (no fresh authorization lease or billing gate closed). |
+| `remote.pairing_invitation_failed`           | The pairing request failed before the host issued its signed-proof challenge.                                         |
+| `remote.pairing_proof_rejected`              | The host could not verify the controller's signed proof for this attempt.                                             |
+| `remote.pairing_clock_skew`                  | The verified proof was issued beyond the host's allowed forward clock difference.                                     |
+| `remote.pairing_approval_failed`             | The host could not record the request or read its approval status.                                                    |
+| `remote.pairing_handshake_timeout`           | The initial pairing exchange did not reach the approval stage before the host deadline.                               |
 | `remote.authorization_failed`                | The host's account authorization read failed: outage, transport error, 5xx or an unconfirmed billing policy.          |
 | `remote.authorization_denied`                | The account service denied the host: unlinked, deleted, handed over or remote access not enabled.                     |
 | `remote.authorization_subscription_required` | The owner's remote subscription is required.                                                                          |
 | `remote.tunnel_provision_failed`             | `POST /hosts/:id/tunnel` provisioning failed while starting the managed connector.                                    |
 | `remote.connector_exited`                    | The managed `cloudflared` connector exited without the host stopping it.                                              |
 
-Socket and admission categories are limited to one report per category per backend
+Socket, admission and pairing categories are limited to one report per category per backend
 every thirty seconds; authorization, provisioning and connector categories to one
 every ten minutes. They count reporting windows, not every failed connection or retry.
+Pairing categories also appear in the host's local logs under `Reliability issue`.
 Match them against iPhone `connection.*` failures in `GET /api/product` (`connectionFailures`) by day and version; they share no identifiers.
 
 The worker rejects unknown codes/properties, noncanonical release strings,

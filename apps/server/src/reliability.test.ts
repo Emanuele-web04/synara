@@ -110,6 +110,29 @@ describe("server reliability IPC", () => {
     expect(() => reportReliabilityIssue("provider.event_retry")).not.toThrow();
   });
 
+  it("rate-limits local pairing logs even without a connected desktop", async () => {
+    vi.resetModules();
+    const { reportReliabilityIssue: report } = await import("./reliability");
+    const sendMessage = vi.fn();
+    ipc(false, sendMessage);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const clock = vi.spyOn(performance, "now").mockReturnValue(0);
+    try {
+      report("remote.pairing_clock_skew", { logLocally: true });
+      report("remote.pairing_clock_skew", { logLocally: true });
+      expect(warn).toHaveBeenCalledExactlyOnceWith(
+        "[synara] Reliability issue: remote.pairing_clock_skew",
+      );
+      expect(sendMessage).not.toHaveBeenCalled();
+      clock.mockReturnValue(30_000);
+      report("remote.pairing_clock_skew", { logLocally: true });
+      expect(warn).toHaveBeenCalledTimes(2);
+    } finally {
+      warn.mockRestore();
+      clock.mockRestore();
+    }
+  });
+
   it("contains synchronous and asynchronous IPC shutdown errors", () => {
     ipc(true, () => {
       throw new Error("channel closed");

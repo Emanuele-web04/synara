@@ -70,6 +70,12 @@ phone's signed approval request. The proof must still be unexpired and tied
 to the host's fresh challenge. Keep automatic date and time enabled on both
 devices when diagnosing a pairing refusal.
 
+The host's `server-child.log` records rate-limited pairing failure codes for
+invitations, proof validation, clock skew, approval and handshake timeouts.
+It records the category without pairing codes, proofs or device identifiers.
+Desktop Beta can also report these categories to the Analytics Reliability API
+when product sharing is enabled. See the [reliability runbook](../apps/analytics/RELIABILITY.md).
+
 **Find computer** prepares the controller's device identity before submitting
 the code. Preparation failures appear in the dialog and leave the code unused
 so the user can retry. An account-revoked device key is a separate failure from

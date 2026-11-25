@@ -41,6 +41,10 @@ const scope: RemoteTrustScope = {
   userId: "owner",
   organizationId: "personal-org",
 };
+const pairingClockCases = [
+  [20, false],
+  [90, true],
+] as const;
 
 function layers(database = SqlitePersistenceMemory) {
   return Layer.mergeAll(
@@ -255,7 +259,7 @@ describe("remote pairing through the durable auth control plane", () => {
       await fs.rm(directory, { recursive: true, force: true });
     }
   });
-  it("pairs a clock-ahead client over TLS only after proof of its key and owner approval", async () => {
+  it.each(pairingClockCases)("handles a client clock %d seconds ahead", async (lead, rejected) => {
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), "synara-pair-flow-"));
     try {
       const identity = await initializeRemoteTlsIdentity(
@@ -288,11 +292,19 @@ describe("remote pairing through the durable auth control plane", () => {
             const abort = new AbortController();
             let pairing: Promise<void> | undefined;
             const setIssuedAt = SignJWT.prototype.setIssuedAt;
+            const setExpirationTime = SignJWT.prototype.setExpirationTime;
+            const proofIssuedAt = Math.floor(Date.now() / 1_000) + lead;
             const clientClock = vi
               .spyOn(SignJWT.prototype, "setIssuedAt")
               .mockImplementationOnce(function (this: SignJWT) {
-                return setIssuedAt.call(this, Math.floor(Date.now() / 1000) + 20);
+                return setIssuedAt.call(this, proofIssuedAt);
               });
+            const clientExpiry = vi
+              .spyOn(SignJWT.prototype, "setExpirationTime")
+              .mockImplementationOnce(function (this: SignJWT) {
+                return setExpirationTime.call(this, proofIssuedAt + 60);
+              });
+            const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
             try {
               pairing = pairRemoteHost({
                 host: {
@@ -316,6 +328,17 @@ describe("remote pairing through the durable auth control plane", () => {
                 signal: abort.signal,
                 requestGrant: async () => "routing-only-grant",
               });
+              if (rejected) {
+                await expect(pairing).rejects.toThrow();
+                expect(warn).toHaveBeenCalledWith(
+                  "[synara] Reliability issue: remote.pairing_clock_skew",
+                );
+                const invitations = await Effect.runPromise(
+                  control.remotePairing.list(pairingScope),
+                );
+                expect(invitations[0]?.pendingDevice).toBeNull();
+                return;
+              }
               // A rejected proof can close the channel before the first status poll.
               void pairing.catch(() => {});
               // Observe the proof-driven request at the owner control plane before approving it.
@@ -342,6 +365,8 @@ describe("remote pairing through the durable auth control plane", () => {
               ).toBe(1);
             } finally {
               clientClock.mockRestore();
+              clientExpiry.mockRestore();
+              warn.mockRestore();
               abort.abort();
               await pairing?.catch(() => {});
               tunnel.close();

@@ -158,6 +158,11 @@ describe("analytics ingest and D1 storage", () => {
   it("stores new host reliability codes only for Beta and keeps legacy Stable ingress totals", async () => {
     const codes = [
       "remote.admission_refused",
+      "remote.pairing_invitation_failed",
+      "remote.pairing_proof_rejected",
+      "remote.pairing_clock_skew",
+      "remote.pairing_approval_failed",
+      "remote.pairing_handshake_timeout",
       "remote.authorization_failed",
       "remote.authorization_denied",
       "remote.authorization_subscription_required",
