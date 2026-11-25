@@ -1,6 +1,7 @@
 // FILE: EmptyChatBackdrop.tsx
-// Purpose: Dithered backdrop behind the empty chat landing: the onboarding's temple scene,
-//          ordered-dithered into fine accent dots. Clicks on empty space send a ripple.
+// Purpose: Dithered backdrop behind the empty chat landing, in fine accent dots: the
+//          onboarding's temple scene (still), or soft drifting gradient waves. Clicks on
+//          empty space send a ripple.
 // Layer: Web UI decoration (aria-hidden, pointer-events none, hidden for forced colors and
 //        high contrast, ripples off under reduced motion)
 // Depends on: the active theme's accent color and variant; landing elements marked
@@ -139,15 +140,27 @@ interface CellRect {
   y1: number;
 }
 
+interface GradientField {
+  // Static part per cell: the top glow, its falloff and the quiet zones, 0..1.
+  base: Float32Array;
+  // Rows below this hold no glow, so frames skip them.
+  activeRows: number;
+  // Motion sampled on a coarse lattice each frame and interpolated per cell.
+  lattice: Float32Array;
+  latticeCols: number;
+  latticeRows: number;
+}
+
 interface Field {
   cols: number;
   rows: number;
-  // Base dot density per cell, 0..255.
+  // Dot density per cell, 0..255 (rewritten every frame for the moving gradient).
   density: Uint8Array;
-  // The still picture's dots (1 = on), error-diffused once from the density.
-  dots: Uint8Array;
-  // Per-cell dot opacity (0..255), so dots fade into the background; null means opaque.
-  opacity: Uint8Array | null;
+  // The still picture's dots (1 = on); null draws the ordered dither from `density` live.
+  dots: Uint8Array | null;
+  // Dots fade in opacity with their density (the gradient's soft edge).
+  fadeOpacity: boolean;
+  gradient: GradientField | null;
   image: ImageData;
 }
 
@@ -307,7 +320,8 @@ function buildDensity(
 }
 
 // Gradient style: a soft accent glow along the top that fades into the background, broken
-// into gentle patches by smooth value noise. No shape.
+// into gentle patches by smooth value noise, with soft wave bands rolling through it. No
+// shape. It moves like the old ASCII field: patches drift and the bands travel.
 const GRADIENT_BLOBS = [
   { x: 0.15, y: -0.05, radius: 0.45, strength: 0.9 },
   { x: 0.6, y: 0.0, radius: 0.4, strength: 0.75 },
@@ -329,6 +343,19 @@ const GRADIENT_SEED = 17;
 // The noise lattice is rotated so patches never line up with the dot grid.
 const GRADIENT_COS = Math.cos(0.6);
 const GRADIENT_SIN = Math.sin(0.6);
+// Motion, in noise cells per second for the drifts and radians per second for the bands.
+const GRADIENT_PATCH_DRIFT = { x: 0.035, y: -0.02 } as const;
+const GRADIENT_DETAIL_DRIFT = { x: -0.06, y: 0.03 } as const;
+const GRADIENT_WAVE_LENGTH_PX = 95;
+const GRADIENT_WAVE_SPEED = 0.55;
+// How deep the bands cut into the glow (0 = no bands).
+const GRADIENT_WAVE_DEPTH = 0.38;
+// The motion is sampled every N cells and interpolated between; patches are far larger.
+const GRADIENT_LATTICE_CELLS = 6;
+// Redraw cadence: slower once input stops, like the old ASCII field.
+const GRADIENT_FRAME_INTERVAL_MS = 1000 / 15;
+const GRADIENT_IDLE_FRAME_INTERVAL_MS = 1000 / 6;
+const INPUT_IDLE_AFTER_MS = 5000;
 
 function hash2(x: number, y: number): number {
   let h = (Math.imul(x, 374761393) + Math.imul(y, 668265263) + GRADIENT_SEED) | 0;
@@ -347,20 +374,23 @@ function valueNoise(x: number, y: number): number {
   return top + (bottom - top) * fy;
 }
 
-function buildGradientDensity(
+// The gradient's static part: glow from the blobs, the vertical falloff and the quiet zones.
+function buildGradientField(
   cols: number,
   rows: number,
   zones: readonly DOMRect[],
   quietFloor: number,
-): Uint8Array {
+): GradientField {
   const width = cols * CELL_PX;
   const height = rows * CELL_PX;
   const diagonal = Math.hypot(width, height);
-  const density = new Uint8Array(cols * rows);
+  const base = new Float32Array(cols * rows);
+  let activeRows = 0;
   for (let row = 0; row < rows; row += 1) {
     const y = row * CELL_PX + CELL_PX / 2;
     const falloff = 1 - smoothstep(0, height * GRADIENT_FLOOR_Y, y);
-    if (falloff === 0) continue;
+    if (falloff === 0) break;
+    activeRows = row + 1;
     for (let col = 0; col < cols; col += 1) {
       const x = col * CELL_PX + CELL_PX / 2;
       let glow = 0;
@@ -369,30 +399,74 @@ function buildGradientDensity(
           Math.hypot(x - blob.x * width, y - blob.y * height) / (blob.radius * diagonal);
         glow += blob.strength * Math.exp(-distance * distance * 1.6);
       }
+      const quiet = zones.length > 0 ? quietFactor(x, y, zones, quietFloor) : 1;
+      base[row * cols + col] = Math.min(1, glow) * falloff * quiet;
+    }
+  }
+  const latticeCols = Math.ceil(cols / GRADIENT_LATTICE_CELLS) + 1;
+  const latticeRows = Math.ceil(activeRows / GRADIENT_LATTICE_CELLS) + 1;
+  return {
+    base,
+    activeRows,
+    lattice: new Float32Array(latticeCols * latticeRows),
+    latticeCols,
+    latticeRows,
+  };
+}
+
+// Writes the gradient's density for time `seconds`: drifting patches times rolling bands.
+function writeGradientDensity(field: Field, gradient: GradientField, seconds: number) {
+  const { cols, density } = field;
+  const { base, activeRows, lattice, latticeCols, latticeRows } = gradient;
+  const step = GRADIENT_LATTICE_CELLS;
+  const patchDx = seconds * GRADIENT_PATCH_DRIFT.x;
+  const patchDy = seconds * GRADIENT_PATCH_DRIFT.y;
+  const detailDx = seconds * GRADIENT_DETAIL_DRIFT.x;
+  const detailDy = seconds * GRADIENT_DETAIL_DRIFT.y;
+  const wavePhase = seconds * GRADIENT_WAVE_SPEED;
+  for (let ly = 0; ly < latticeRows; ly += 1) {
+    const y = ly * step * CELL_PX;
+    for (let lx = 0; lx < latticeCols; lx += 1) {
+      const x = lx * step * CELL_PX;
       const u = x * GRADIENT_COS - y * GRADIENT_SIN;
       const v = x * GRADIENT_SIN + y * GRADIENT_COS;
       const noise =
-        0.65 * valueNoise(u / GRADIENT_PATCH_PX, v / GRADIENT_PATCH_PX) +
-        0.35 * valueNoise(u / GRADIENT_DETAIL_PX + 31, v / GRADIENT_DETAIL_PX + 7);
+        0.65 * valueNoise(u / GRADIENT_PATCH_PX + patchDx, v / GRADIENT_PATCH_PX + patchDy) +
+        0.35 *
+          valueNoise(u / GRADIENT_DETAIL_PX + 31 + detailDx, v / GRADIENT_DETAIL_PX + 7 + detailDy);
       const patch = 1 - GRADIENT_PATCHINESS + GRADIENT_PATCHINESS * smoothstep(0.3, 0.72, noise);
-      const quiet = zones.length > 0 ? quietFactor(x, y, zones, quietFloor) : 1;
-      // Glow saturates near the top; patch after clamping so the patches stay visible there.
-      const value = Math.min(1, glow) * patch * falloff * GRADIENT_MAX_DENSITY * quiet;
-      density[row * cols + col] = Math.round(255 * value);
+      const band = 0.5 + 0.5 * Math.sin(u / GRADIENT_WAVE_LENGTH_PX - wavePhase + noise * 4);
+      lattice[ly * latticeCols + lx] =
+        patch * (1 - GRADIENT_WAVE_DEPTH + GRADIENT_WAVE_DEPTH * band);
     }
   }
-  return density;
+  for (let row = 0; row < activeRows; row += 1) {
+    const ly = Math.floor(row / step);
+    const fy = (row - ly * step) / step;
+    const top = ly * latticeCols;
+    const bottom = Math.min(ly + 1, latticeRows - 1) * latticeCols;
+    for (let col = 0; col < cols; col += 1) {
+      const index = row * cols + col;
+      const level = base[index]!;
+      if (level === 0) {
+        density[index] = 0;
+        continue;
+      }
+      const lx = Math.floor(col / step);
+      const fx = (col - lx * step) / step;
+      const lx1 = Math.min(lx + 1, latticeCols - 1);
+      const upper = lattice[top + lx]! + (lattice[top + lx1]! - lattice[top + lx]!) * fx;
+      const lower = lattice[bottom + lx]! + (lattice[bottom + lx1]! - lattice[bottom + lx]!) * fx;
+      const motion = upper + (lower - upper) * fy;
+      density[index] = Math.round(255 * GRADIENT_MAX_DENSITY * level * motion);
+    }
+  }
 }
 
-// Dots fade with the glow: faint where few dots remain, full where the glow is strongest.
-function gradientOpacity(density: Uint8Array): Uint8Array {
-  const peak = 255 * GRADIENT_MAX_DENSITY;
-  const opacity = new Uint8Array(density.length);
-  for (let index = 0; index < density.length; index += 1) {
-    const level = Math.min(1, density[index]! / peak);
-    opacity[index] = Math.round(255 * (GRADIENT_MIN_OPACITY + (1 - GRADIENT_MIN_OPACITY) * level));
-  }
-  return opacity;
+// Dot opacity for a density: faint where few dots remain, full where the glow is strongest.
+function fadeOpacityFor(density: number): number {
+  const level = Math.min(1, density / (255 * GRADIENT_MAX_DENSITY));
+  return Math.round(255 * (GRADIENT_MIN_OPACITY + (1 - GRADIENT_MIN_OPACITY) * level));
 }
 
 // The soft accent haze behind the gradient dots, from the same blobs as the glow.
@@ -405,12 +479,7 @@ function gradientHaze(accent: string): string {
 
 // The still picture's dots: the ordered dither, minus stray dots with no other dot within
 // two cells, so faint haze no longer peppers the scene and shapes keep clean edges.
-function ditherDots(
-  density: Uint8Array,
-  cols: number,
-  rows: number,
-  dropStrays = true,
-): Uint8Array {
+function ditherDots(density: Uint8Array, cols: number, rows: number): Uint8Array {
   const dots = new Uint8Array(cols * rows);
   for (let row = 0; row < rows; row += 1) {
     for (let col = 0; col < cols; col += 1) {
@@ -418,7 +487,6 @@ function ditherDots(
       dots[index] = density[index]! > BAYER_8[(row & 7) * 8 + (col & 7)]! ? 1 : 0;
     }
   }
-  if (!dropStrays) return dots;
   const clean = dots.slice();
   for (let row = 0; row < rows; row += 1) {
     for (let col = 0; col < cols; col += 1) {
@@ -479,7 +547,12 @@ export function EmptyChatBackdrop(props: { style: EmptyChatBackdropStyle }) {
     // Cells the last ripple frame touched; the next frame redraws them back to the base.
     let dirty: CellRect | null = null;
     let frameId = 0;
+    let timerId = 0;
     let lastFrameMs = 0;
+    const startMs = performance.now();
+    let lastInputMs = startMs;
+    // The gradient moves unless reduced motion asks for a still frame.
+    const animate = style === "gradient" && !reduceMotion;
     // The scene is only fetched once the field is first built in an idle slot.
     let scenePromise: Promise<HTMLImageElement | null> | null = null;
 
@@ -523,11 +596,12 @@ export function EmptyChatBackdrop(props: { style: EmptyChatBackdropStyle }) {
       bytes[base + 1] = accentRgb[1] + (highlightRgb[1] - accentRgb[1]) * lit;
       bytes[base + 2] = accentRgb[2] + (highlightRgb[2] - accentRgb[2]) * lit;
       // Outside a ring, the still picture; inside, an ordered dither the ring can move.
+      const settled = disturbance < RIPPLE_SETTLED;
       const on =
-        disturbance < RIPPLE_SETTLED
+        settled && target.dots
           ? target.dots[index] === 1
           : value * 255 > BAYER_8[(row & 7) * 8 + (col & 7)]!;
-      const opacity = target.opacity && disturbance < RIPPLE_SETTLED ? target.opacity[index]! : 255;
+      const opacity = target.fadeOpacity && settled ? fadeOpacityFor(target.density[index]!) : 255;
       bytes[base + 3] = on ? opacity : 0;
     };
 
@@ -554,28 +628,66 @@ export function EmptyChatBackdrop(props: { style: EmptyChatBackdropStyle }) {
       return rect;
     };
 
-    const drawRipples = (nowMs: number) => {
+    const draw = (nowMs: number) => {
       if (!field) return;
       ripples = ripples.filter((ripple) => nowMs - ripple.startMs < RIPPLE_LIFETIME_MS);
       const live = rippleRect(field, nowMs);
       // Repaint where rings are now and where they were, which restores the base there.
-      const rect = live && dirty ? unionRect(live, dirty) : (live ?? dirty);
+      let rect = live && dirty ? unionRect(live, dirty) : (live ?? dirty);
+      if (animate && field.gradient) {
+        writeGradientDensity(field, field.gradient, (nowMs - startMs) / 1000);
+        const glow = { x0: 0, y0: 0, x1: field.cols, y1: field.gradient.activeRows };
+        rect = rect ? unionRect(rect, glow) : glow;
+      }
       if (rect && rect.x1 > rect.x0 && rect.y1 > rect.y0) paintRect(field, rect, nowMs);
       dirty = live;
     };
 
-    const tick = (nowMs: number) => {
+    const frameInterval = (nowMs: number) => {
+      if (ripples.length > 0 || dirty) return RIPPLE_FRAME_INTERVAL_MS;
+      return nowMs - lastInputMs >= INPUT_IDLE_AFTER_MS
+        ? GRADIENT_IDLE_FRAME_INTERVAL_MS
+        : GRADIENT_FRAME_INTERVAL_MS;
+    };
+
+    const scheduleNext = (delayMs: number) => {
+      if (delayMs <= 0) {
+        frameId = requestAnimationFrame(tick);
+        return;
+      }
+      timerId = window.setTimeout(() => {
+        timerId = 0;
+        frameId = requestAnimationFrame(tick);
+      }, delayMs);
+    };
+
+    function tick(nowMs: number) {
       frameId = 0;
       if (disposed || document.hidden || !field) return;
-      if (nowMs - lastFrameMs >= RIPPLE_FRAME_INTERVAL_MS) {
-        lastFrameMs = nowMs;
-        drawRipples(nowMs);
+      // Parked under an invisible ancestor (a retained chat owner): do no canvas work, and
+      // check again slowly so motion resumes after the pane is shown again.
+      if (!container!.checkVisibility({ visibilityProperty: true, opacityProperty: true })) {
+        if (animate) scheduleNext(1000);
+        return;
       }
-      // Idle once the last ring has faded and been cleaned up: no frames, no timers.
-      if (ripples.length > 0 || dirty) frameId = requestAnimationFrame(tick);
-    };
+      if (nowMs - lastFrameMs >= frameInterval(nowMs)) {
+        lastFrameMs = nowMs;
+        draw(nowMs);
+      }
+      if (ripples.length > 0 || dirty) {
+        scheduleNext(0);
+      } else if (animate) {
+        scheduleNext(Math.max(0, lastFrameMs + frameInterval(nowMs) - nowMs));
+      }
+      // Otherwise idle: no frames, no timers.
+    }
     const wake = () => {
-      if (frameId === 0) frameId = requestAnimationFrame(tick);
+      if (frameId !== 0) return;
+      if (timerId !== 0) {
+        window.clearTimeout(timerId);
+        timerId = 0;
+      }
+      frameId = requestAnimationFrame(tick);
     };
 
     const rebuild = async () => {
@@ -586,10 +698,12 @@ export function EmptyChatBackdrop(props: { style: EmptyChatBackdropStyle }) {
       if (cols === 0 || rows === 0) return;
       const host = container.parentElement ?? container;
       let density: Uint8Array | null;
+      let gradient: GradientField | null = null;
       if (style === "gradient") {
         const zones = measureQuietZones(host, container.getBoundingClientRect());
         const levels = isDark ? SCENE_LEVELS.dark : SCENE_LEVELS.light;
-        density = buildGradientDensity(cols, rows, zones, levels.quietFloor);
+        gradient = buildGradientField(cols, rows, zones, levels.quietFloor);
+        density = new Uint8Array(cols * rows);
       } else {
         scenePromise ??= loadImage(SCENE_SRC);
         const scene = await scenePromise;
@@ -606,20 +720,21 @@ export function EmptyChatBackdrop(props: { style: EmptyChatBackdropStyle }) {
         cols,
         rows,
         density,
-        // The gradient's sparse fringe is the fade itself, so it keeps every dot.
-        dots:
-          style === "gradient"
-            ? ditherDots(density, cols, rows, false)
-            : ditherDots(density, cols, rows),
-        opacity: style === "gradient" ? gradientOpacity(density) : null,
+        // The gradient dithers live from its density (its sparse fringe is the fade itself).
+        dots: gradient ? null : ditherDots(density, cols, rows),
+        fadeOpacity: gradient !== null,
+        gradient,
         image: ctx.createImageData(cols, rows),
       };
+      const nowMs = performance.now();
+      if (gradient) writeGradientDensity(field, gradient, animate ? (nowMs - startMs) / 1000 : 0);
       dirty = null;
-      paintRect(field, { x0: 0, y0: 0, x1: cols, y1: rows }, performance.now());
+      paintRect(field, { x0: 0, y0: 0, x1: cols, y1: rows }, nowMs);
+      lastFrameMs = nowMs;
       container.dataset.ready = "true";
       // Lets the landing text add a legibility halo while the backdrop is showing.
       host.dataset.emptyChatBackdropHost = "";
-      if (ripples.length > 0) wake();
+      if (animate || ripples.length > 0) wake();
     };
 
     // Listen on the landing itself: its heading and composer sit above the canvas.
@@ -651,7 +766,7 @@ export function EmptyChatBackdrop(props: { style: EmptyChatBackdropStyle }) {
       if (ripples.length > MAX_RIPPLES) ripples.shift();
       wake();
     };
-    // Reduced motion keeps the still picture and never animates.
+    // Reduced motion keeps the still picture: no ripples and no drifting gradient.
     if (!reduceMotion) {
       host.addEventListener("pointerdown", onPointerDown, { passive: true });
       host.addEventListener("pointerup", onPointerUp, { passive: true });
@@ -677,9 +792,18 @@ export function EmptyChatBackdrop(props: { style: EmptyChatBackdropStyle }) {
     });
     resizeObserver.observe(container);
     const onVisibilityChange = () => {
-      if (ripples.length > 0 || dirty) wake();
+      if (animate || ripples.length > 0 || dirty) wake();
     };
     document.addEventListener("visibilitychange", onVisibilityChange);
+    const onInput = () => {
+      lastInputMs = performance.now();
+    };
+    const inputEvents = ["pointermove", "pointerdown", "keydown", "wheel"] as const;
+    if (animate) {
+      for (const type of inputEvents) {
+        window.addEventListener(type, onInput, { passive: true, capture: true });
+      }
+    }
 
     return () => {
       disposed = true;
@@ -690,7 +814,11 @@ export function EmptyChatBackdrop(props: { style: EmptyChatBackdropStyle }) {
       cancelIdle?.();
       resizeObserver.disconnect();
       document.removeEventListener("visibilitychange", onVisibilityChange);
+      for (const type of inputEvents) {
+        window.removeEventListener(type, onInput, { capture: true });
+      }
       if (frameId !== 0) cancelAnimationFrame(frameId);
+      window.clearTimeout(timerId);
     };
   }, [accent, isDark, reduceMotion, style]);
 
