@@ -579,6 +579,12 @@ interface ClaudeSessionContext {
   // failed turn may never get a terminal task message for it; turn end
   // publishes that evidence so the task cannot stay live forever.
   readonly foregroundTasks: Map<string, string | undefined>;
+  // Root only. Steers queued into a live turn that the CLI has not started
+  // reading yet (command uuid -> steered turn id). The CLI reads a queued
+  // message only when it builds its next model request, so a foreground Bash
+  // call or subagent would hold the steer until it returns, often minutes.
+  // While one is pending, that foreground work moves to the background.
+  readonly pendingSteers: Map<string, TurnId>;
   // Root only. Foreground tasks settled at turn end. Late progress from the
   // aborted task is dropped so it cannot mark the task live again.
   readonly turnEndSettledTaskIds: Set<string>;
@@ -1675,6 +1681,9 @@ const CLAUDE_CONTEXT_USAGE_TIMEOUT_MS = 1_000;
 // The SDK's interrupt resolves only once the CLI acknowledges it; a wedged CLI
 // would otherwise stall the caller (and the provider command reactor) forever.
 const CLAUDE_INTERRUPT_TIMEOUT = Duration.seconds(10);
+// Moving foreground work aside for a steer is best effort: the steer is already
+// queued, so a wedged CLI must not hold the stream handler that requested it.
+const CLAUDE_STEER_BACKGROUND_TIMEOUT = Duration.seconds(10);
 export const buildEmbeddedClaudeSystemPromptAppend = (
   gatewayControlAvailable: boolean,
   enableComputerControl = false,
@@ -1924,6 +1933,26 @@ function nativeProviderRefs(
       ? { providerItemId: ProviderItemId.makeUnsafe(options.providerItemId) }
       : {}),
   };
+}
+
+// True while a steer queued into the live turn has not reached the model.
+function hasPendingSteer(context: ClaudeSessionContext): boolean {
+  const liveTurnId = context.turnState?.turnId;
+  if (liveTurnId === undefined) return false;
+  for (const steeredTurnId of context.pendingSteers.values()) {
+    if (steeredTurnId === liveTurnId) return true;
+  }
+  return false;
+}
+
+// The CLI reports a queued command's progress by the uuid it was sent with.
+// Once it leaves "queued" the model has the steer (or the CLI dropped it).
+function handleCommandLifecycleMessage(
+  context: ClaudeSessionContext,
+  message: { readonly command_uuid?: unknown; readonly state?: unknown },
+): void {
+  if (typeof message.command_uuid !== "string" || message.state === "queued") return;
+  context.pendingSteers.delete(message.command_uuid);
 }
 
 function extractAssistantTextBlocks(message: SDKMessage): Array<string> {
@@ -3696,6 +3725,9 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
       result?: SDKResultMessage,
     ): Effect.Effect<void> =>
       Effect.gen(function* () {
+        // Only the live turn owns steers. One the CLI still holds runs as its
+        // own next turn, where foreground work no longer delays it.
+        context.pendingSteers.clear();
         // A terminal foreground turn cannot retain its root callbacks once the
         // UI can no longer answer them. Agent callbacks remain actionable until
         // their own task has provider-terminal evidence or the session stops;
@@ -4239,6 +4271,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           taskTurnIds: new Map(),
           terminalTaskIds: new Set(),
           foregroundTasks: new Map(),
+          pendingSteers: new Map(),
           turnEndSettledTaskIds: new Set(),
           settledSubagentToolUseIds: new Map(),
           subagentToolOwners: new Map(),
@@ -5490,6 +5523,29 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         return true;
       });
 
+    // Moves foreground work (a Bash call or a subagent) to the background so the
+    // CLI reaches its next model request, where it reads the queued steer. The
+    // work keeps running and reports through task_notification. Without a tool
+    // use id every foreground task moves (the CLI's Ctrl+B). Forked: the steer
+    // is already queued, and a failure only means it waits for the work instead.
+    const releaseForegroundWorkForSteer = (
+      context: ClaudeSessionContext,
+      toolUseId?: string,
+    ): Effect.Effect<void> =>
+      Effect.tryPromise(() => context.query.backgroundTasks(toolUseId)).pipe(
+        Effect.timeoutOption(CLAUDE_STEER_BACKGROUND_TIMEOUT),
+        Effect.catch((error) =>
+          Effect.logWarning("claude.steer.background_failed", {
+            threadId: context.session.threadId,
+            ...(toolUseId !== undefined ? { toolUseId } : {}),
+            detail: toMessage(error, "Claude could not move foreground work to the background."),
+          }),
+        ),
+        Effect.asVoid,
+        Effect.forkIn(adapterScope),
+        Effect.asVoid,
+      );
+
     // Cancels a waiting edge-block retry, optionally only for one turn. True
     // when a retry was waiting: the idle CLI then owes that turn no result.
     const cancelPendingEdgeBlockRetry = (
@@ -6259,6 +6315,10 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               context.turnState !== undefined
             ) {
               context.foregroundTasks.set(message.task_id, startedOwner.run?.toolUseId);
+              // Work that started after a steer would otherwise hold it until it returns.
+              if (hasPendingSteer(context) && typeof message.tool_use_id === "string") {
+                yield* releaseForegroundWorkForSteer(context, message.tool_use_id);
+              }
             }
             if (message.task_type === "local_workflow") {
               context.liveWorkflowTaskIds.add(message.task_id);
@@ -6727,6 +6787,17 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         }
 
         yield* ensureThreadId(context, message);
+
+        // Not in the SDK's declared message union yet; it carries no transcript content.
+        const untypedMessage = message as {
+          readonly type: string;
+          readonly command_uuid?: unknown;
+          readonly state?: unknown;
+        };
+        if (untypedMessage.type === "command_lifecycle") {
+          handleCommandLifecycleMessage(context, untypedMessage);
+          return;
+        }
 
         switch (message.type) {
           case "stream_event":
@@ -8016,6 +8087,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             taskTurnIds: new Map(),
             terminalTaskIds: new Set(),
             foregroundTasks: new Map(),
+            pendingSteers: new Map(),
             turnEndSettledTaskIds: new Set(),
             settledSubagentToolUseIds: new Map(),
             subagentToolOwners: new Map(),
@@ -8797,13 +8869,20 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
                 : requireOriginalTurn.pipe(Effect.andThen(Effect.failCause(cause))),
             ),
           );
+          // The uuid makes the CLI report when the model reads the steer.
+          const commandUuid = yield* Random.nextUUIDv4;
+          const steerMessage = { ...message, uuid: commandUuid } as SDKUserMessage;
           // The queue is unbounded. Keep ownership validation and admission in
           // one callback so cooperative yielding cannot admit this steer to T2.
-          const enqueued = yield* Effect.sync(() =>
-            originalTurn()
-              ? Queue.offerUnsafe(context.promptQueue, { type: "message", message })
-              : undefined,
-          );
+          const enqueued = yield* Effect.sync(() => {
+            if (!originalTurn()) return undefined;
+            const offered = Queue.offerUnsafe(context.promptQueue, {
+              type: "message",
+              message: steerMessage,
+            });
+            if (offered) context.pendingSteers.set(commandUuid, liveTurnState.turnId);
+            return offered;
+          });
           if (enqueued === undefined) return yield* staleTurnError();
           if (!enqueued)
             return yield* toRequestError(
@@ -8813,6 +8892,10 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             );
           // The steer itself resumes a CLI idle between edge-block retries.
           yield* cancelPendingEdgeBlockRetry(context, liveTurnState.turnId);
+          // Foreground work already running would hold the steer until it returns.
+          if (context.foregroundTasks.size > 0) {
+            yield* releaseForegroundWorkForSteer(context);
+          }
 
           const steerText = input.input?.trim();
           if (steerText) {
