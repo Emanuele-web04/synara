@@ -1264,6 +1264,9 @@ describe("analytics ingest and D1 storage", () => {
           event: "connection.connect",
           reason: "not_accepting",
           surface: "ios",
+          pairingMode: null,
+          failureStage: null,
+          httpStatus: null,
           events: 1,
           installations: 1,
         },
@@ -1271,6 +1274,9 @@ describe("analytics ingest and D1 storage", () => {
           event: "chat.request",
           reason: "timeout",
           surface: "desktop",
+          pairingMode: null,
+          failureStage: null,
+          httpStatus: null,
           events: 1,
           installations: 1,
         },
@@ -1494,6 +1500,59 @@ describe("analytics ingest and D1 storage", () => {
       row({ failure: null, attempts: 1, installations: 1 }),
       row({ failure: "no_route", network: "cellular", attempts: 1, installations: 1 }),
     ]);
+  });
+
+  it("reports remote pairing failures separately by stage and status", async () => {
+    const pair = (details) =>
+      envelope({
+        id: crypto.randomUUID(),
+        channel: "remote",
+        surface: "ios",
+        platform: "ios",
+        event: "connection.pair",
+        outcome: "failed",
+        reason: "rejected",
+        feature: undefined,
+        durationMs: undefined,
+        ...details,
+      });
+    await postEvents([
+      pair({ mode: "remote", failure: "route_upgrade", httpStatus: 403 }),
+      pair({ mode: "remote", failure: "route_upgrade", httpStatus: 403 }),
+      pair({ mode: "remote", failure: "other", httpStatus: 400 }),
+      pair({ mode: "remote", failure: "other" }),
+      pair({ mode: "local" }),
+      pair({}),
+      pair({ mode: "remote", outcome: "cancelled", reason: undefined }),
+    ]);
+    const token = await signSession("test-session-key", Math.floor(Date.now() / 1000) + 3600);
+    const response = await worker.fetch(
+      new Request(`https://worker.invalid/api/product?from=${day}&to=${day}&surface=ios`, {
+        headers: { cookie: `synara_beta_dash=${token}` },
+      }),
+      env,
+    );
+    const { failureReasons } = await response.json();
+    const row = (pairingMode, failureStage, httpStatus, events = 1) => ({
+      event: "connection.pair",
+      reason: "rejected",
+      surface: "ios",
+      pairingMode,
+      failureStage,
+      httpStatus,
+      events,
+      installations: 1,
+    });
+    expect(failureReasons).toHaveLength(5);
+    expect(failureReasons).toEqual(
+      expect.arrayContaining([
+        row("remote", "route_upgrade", 403, 2),
+        row("remote", "other", 400),
+        row("remote", "other", null),
+        row("local", null, null),
+        row(null, null, null),
+      ]),
+    );
   });
 
   it("discards valid and malformed legacy account identifiers without linking installations", async () => {

@@ -2313,16 +2313,24 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
           failedConnections: number;
         }>(),
       env.DB.prepare(
-        `SELECT event, reason, surface, COUNT(*) AS events,
+        `SELECT event, reason, surface,
+                  CASE WHEN event = 'connection.pair' THEN mode END AS pairingMode,
+                  CASE WHEN event = 'connection.pair' AND mode = 'remote' THEN failure END AS failureStage,
+                  CASE WHEN event = 'connection.pair' AND mode = 'remote' THEN http_status END AS httpStatus,
+                  COUNT(*) AS events,
                   COUNT(DISTINCT install_id) AS installations
            FROM product_events WHERE ${where} AND outcome = 'failed' AND reason IS NOT NULL
-           GROUP BY event, reason, surface ORDER BY events DESC, event, reason`,
+           GROUP BY event, reason, surface, pairingMode, failureStage, httpStatus
+           ORDER BY events DESC, event, reason, surface, pairingMode, failureStage, httpStatus`,
       )
         .bind(...binds)
         .all<{
           event: string;
           reason: string;
           surface: string;
+          pairingMode: string | null;
+          failureStage: string | null;
+          httpStatus: number | null;
           events: number;
           installations: number;
         }>(),
