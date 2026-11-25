@@ -26,6 +26,12 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
     date: "Nov 25",
     features: [
       {
+        id: "windows-browser-cookie-import",
+        title: "Sign in directly in the Synara browser on Windows",
+        description:
+          "Windows builds remove the native browser cookie reader. Sign in directly to your sites in the Synara browser. Saved logins and existing browser sessions remain available.",
+      },
+      {
         id: "antigravity-question-answers",
         title: "More reliable Antigravity questions",
         description:

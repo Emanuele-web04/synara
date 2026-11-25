@@ -134,6 +134,20 @@ describe("desktop bundle file selection", () => {
     }
   });
 
+  it("keeps the cookie reader out of Windows bundles, including nested copies", () => {
+    const windows = createDesktopBundleFilePatterns("win");
+    const reader = "node_modules/rookie-cookies-win32-x64-msvc/rookie_cookies.win32-x64-msvc.node";
+    expect(excluded(reader, windows)).toBe(true);
+    expect(excluded(`node_modules/betterwright/${reader}`, windows)).toBe(true);
+    expect(excluded("node_modules/rookie-cookies/index.js", windows)).toBe(true);
+    expect(
+      excluded("node_modules/rookie-cookies/index.js", createDesktopBundleFilePatterns("mac")),
+    ).toBe(false);
+    expect(
+      excluded("node_modules/rookie-cookies/index.js", createDesktopBundleFilePatterns("linux")),
+    ).toBe(false);
+  });
+
   it("keeps native PTY prebuilds for the target platform, including both Mac architectures", () => {
     const mac = createDesktopBundleFilePatterns("mac");
     expect(excluded("node_modules/node-pty/prebuilds/darwin-arm64/pty.node", mac)).toBe(false);

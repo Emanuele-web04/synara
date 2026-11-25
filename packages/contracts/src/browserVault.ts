@@ -38,6 +38,7 @@ export const BrowserVaultSnapshot = Schema.Struct({
   settings: BrowserVaultSettings,
   pending: Schema.Array(BrowserVaultSavePrompt),
   error: Schema.NullOr(Schema.String),
+  cookieImportAvailable: Schema.optionalKey(Schema.Boolean),
 });
 export type BrowserVaultSnapshot = typeof BrowserVaultSnapshot.Type;
 

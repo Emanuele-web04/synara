@@ -83,6 +83,9 @@ export function createDesktopBundleFilePatterns(
     ...UNUSED_DEPENDENCY_RUNTIME_FILES,
   ];
   if (!options.diagnostics) files.push(...DIAGNOSTIC_FILES);
+  if (platform === "win") {
+    files.push("!**/node_modules/rookie-cookies/**", "!**/node_modules/rookie-cookies-*/**");
+  }
 
   // node-pty is rebuilt before packaging. Its platform prebuilds are not
   // interchangeable; retain both same-platform architectures for universal Mac.
