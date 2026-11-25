@@ -1,6 +1,7 @@
 // FILE: Product.tsx
 // Purpose: Aggregate permitted product activity and mature cohorts without event-level drilldowns.
 
+import type { ProductAnalyticsConnectionFailure } from "@synara/contracts/productAnalytics";
 import { useMemo, useState } from "react";
 
 import { api, type ProductFilters } from "../api";
@@ -91,6 +92,27 @@ const eventLabels: Record<string, string> = {
   "connection.connect": "Connect",
   "connection.reconnect": "Reconnect",
   "connection.pair": "Pairing",
+};
+const pairingModeLabels: Record<string, string> = {
+  local: "Local pairing",
+  remote: "Remote pairing",
+};
+const pairingFailureStageLabels: Record<ProductAnalyticsConnectionFailure, string> = {
+  account_unavailable: "Account request",
+  subscription_required: "Remote access paused",
+  billing_unavailable: "Billing service unavailable",
+  host_unlinked: "Computer lookup",
+  identity_mismatch: "Identity verification",
+  no_route: "Route lookup",
+  route_connect: "Route connection",
+  route_upgrade: "Route upgrade",
+  tls_handshake: "TLS handshake",
+  inner_upgrade: "Host upgrade",
+  session_mint: "Session credential",
+  session_authorize: "Session authorization",
+  incompatible: "Protocol compatibility",
+  timeout: "Attempt deadline",
+  other: "Unspecified stage",
 };
 
 const sectionCopy = {
@@ -518,7 +540,7 @@ export function Product({
                 ) : (
                   <EChart
                     height={250}
-                    ariaLabel="Daily opt-in product events"
+                    ariaLabel="Daily product events"
                     option={{
                       ...chartChrome(theme),
                       xAxis: {
@@ -956,15 +978,37 @@ export function Product({
                           </tr>
                         </thead>
                         <tbody>
-                          {data.failureReasons.map((row) => (
-                            <tr key={`${row.event}:${row.reason}:${row.surface}`}>
-                              <td>{eventLabels[row.event] ?? row.event}</td>
-                              <td>{reasonLabels[row.reason] ?? row.reason}</td>
-                              <td>{surfaceLabel(row.surface)}</td>
-                              <td className="num">{row.events.toLocaleString()}</td>
-                              <td className="num">{row.installations.toLocaleString()}</td>
-                            </tr>
-                          ))}
+                          {data.failureReasons.map((row) => {
+                            const action =
+                              pairingModeLabels[row.pairingMode ?? ""] ??
+                              eventLabels[row.event] ??
+                              row.event;
+                            const cause = [
+                              reasonLabels[row.reason] ?? row.reason,
+                              row.failureStage &&
+                                (pairingFailureStageLabels[row.failureStage] ?? row.failureStage),
+                              row.httpStatus == null ? undefined : `HTTP ${row.httpStatus}`,
+                            ]
+                              .filter(Boolean)
+                              .join(" · ");
+                            const key = [
+                              row.event,
+                              row.reason,
+                              row.surface,
+                              row.pairingMode,
+                              row.failureStage,
+                              row.httpStatus,
+                            ].join(":");
+                            return (
+                              <tr key={key}>
+                                <td>{action}</td>
+                                <td>{cause}</td>
+                                <td>{surfaceLabel(row.surface)}</td>
+                                <td className="num">{row.events.toLocaleString()}</td>
+                                <td className="num">{row.installations.toLocaleString()}</td>
+                              </tr>
+                            );
+                          })}
                         </tbody>
                       </table>
                     </TableWrap>

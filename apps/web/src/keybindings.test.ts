@@ -138,9 +138,7 @@ describe("splitShortcutLabel", () => {
     assert.deepEqual(splitShortcutLabel("Ctrl+Shift++"), ["Ctrl", "Shift", "+"]);
     assert.deepEqual(splitShortcutLabel("⌘+"), ["⌘", "+"]);
     assert.deepEqual(splitShortcutLabel("+"), ["+"]);
-  });
-
-  it("splits ordinary labels as before", () => {
+    // Ordinary labels still split on every separator.
     assert.deepEqual(splitShortcutLabel("Ctrl+Shift+K"), ["Ctrl", "Shift", "K"]);
     assert.deepEqual(splitShortcutLabel("⇧⌘Right"), ["⇧", "⌘", "Right"]);
   });
@@ -1256,15 +1254,9 @@ describe("formatShortcutLabel", () => {
 });
 
 describe("isTerminalClearShortcut", () => {
-  it("matches Ctrl+L", () => {
+  it("matches only Ctrl+L keydown, not Cmd+K (reserved for sidebar search)", () => {
     assert.isTrue(isTerminalClearShortcut(event({ key: "l", ctrlKey: true })));
-  });
-
-  it("does not match Cmd+K (reserved for sidebar search)", () => {
     assert.isFalse(isTerminalClearShortcut(event({ key: "k", metaKey: true })));
-  });
-
-  it("ignores non-keydown events", () => {
     assert.isFalse(isTerminalClearShortcut(event({ type: "keyup", key: "l", ctrlKey: true })));
   });
 });

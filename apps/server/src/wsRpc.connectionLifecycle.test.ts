@@ -14,6 +14,7 @@ import {
   WsServerDesktopUpdateStatusRpc,
   WS_BOOTSTRAP_PATH,
   WS_COMPATIBILITY_QUERY,
+  WS_FEATURE_UNCOMPRESSED_QUERY,
   WS_NEGOTIATE_HTTP_PATH,
   WS_NEGOTIATE_QUERY,
   WS_PROTOCOL_EPOCH,
@@ -569,7 +570,7 @@ async function startTestServer(
 async function connectSession(
   server: RunningTestServer,
   ttl?: Duration.Duration,
-  options?: { readonly perMessageDeflate?: boolean },
+  options?: { readonly perMessageDeflate?: boolean; readonly declineCompression?: boolean },
 ): Promise<{
   readonly sessionId: AuthSessionId;
   readonly token: string;
@@ -577,7 +578,16 @@ async function connectSession(
 }> {
   const issued = await Effect.runPromise(server.sessions.issue(ttl ? { ttl } : undefined));
   const websocket = await Effect.runPromise(server.sessions.issueWebSocketToken(issued.sessionId));
-  const socket = await connect(featureSocketUrl(server, websocket.token), options);
+  const url = new URL(featureSocketUrl(server, websocket.token));
+  if (options?.declineCompression) {
+    url.searchParams.set(WS_FEATURE_UNCOMPRESSED_QUERY.name, WS_FEATURE_UNCOMPRESSED_QUERY.value);
+  }
+  const socket = await connect(
+    url.toString(),
+    options?.perMessageDeflate === undefined
+      ? undefined
+      : { perMessageDeflate: options.perMessageDeflate },
+  );
   return { sessionId: issued.sessionId, token: websocket.token, socket };
 }
 
@@ -1102,6 +1112,75 @@ describe("websocket permessage-deflate negotiation", () => {
       connected.socket.send(makeRpcFrame(256, "201"));
       await exit;
       expect(server.observedRpc).toEqual({ decoderCalls: 1, handlerCalls: 1 });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("serves a client that declines compression uncompressed even when it offers it", async () => {
+    const server = await startTestServer();
+    try {
+      const connected = await connectSession(server, undefined, {
+        perMessageDeflate: true,
+        declineCompression: true,
+      });
+      expect(connected.socket.extensions).not.toContain("permessage-deflate");
+
+      const exit = waitForRpcExit(connected.socket, "205");
+      connected.socket.send(makeRpcFrame(256, "205"), { binary: false, compress: false });
+      await exit;
+      expect(server.observedRpc).toEqual({ decoderCalls: 1, handlerCalls: 1 });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("keeps authentication and the payload ceiling on the uncompressed feature socket", async () => {
+    const server = await startTestServer();
+    try {
+      // Compatible, flagged, but no token: refused exactly like any feature socket.
+      const unauthenticated = new URL(featureSocketUrl(server, "invalid-token"));
+      unauthenticated.searchParams.delete("wsToken");
+      unauthenticated.searchParams.set(
+        WS_FEATURE_UNCOMPRESSED_QUERY.name,
+        WS_FEATURE_UNCOMPRESSED_QUERY.value,
+      );
+      await expect(connect(unauthenticated.toString())).rejects.toMatchObject({
+        statusCode: 401,
+      });
+
+      const connected = await connectSession(server, undefined, { declineCompression: true });
+      const close = waitForCloseInfo(connected.socket);
+      connected.socket.send(makeRpcFrame(MAX_WEBSOCKET_MESSAGE_BYTES + 1, "206"), {
+        binary: false,
+        compress: false,
+      });
+      await expect(close).resolves.toMatchObject({ code: 1009 });
+      expect(server.observedRpc).toEqual({ decoderCalls: 0, handlerCalls: 0 });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("ignores the flag on the bootstrap route and anything but its exact value", async () => {
+    const server = await startTestServer();
+    try {
+      const bootstrap = await connect(
+        `${server.origin}${WS_BOOTSTRAP_PATH}?${WS_FEATURE_UNCOMPRESSED_QUERY.name}=0`,
+        { perMessageDeflate: true },
+      );
+      expect(bootstrap.extensions).not.toContain("permessage-deflate");
+      bootstrap.terminate();
+
+      // Any other value keeps the default: compression, as for every client without it.
+      const issued = await Effect.runPromise(server.sessions.issue());
+      const websocket = await Effect.runPromise(
+        server.sessions.issueWebSocketToken(issued.sessionId),
+      );
+      const url = new URL(featureSocketUrl(server, websocket.token));
+      url.searchParams.set(WS_FEATURE_UNCOMPRESSED_QUERY.name, "true");
+      const socket = await connect(url.toString(), { perMessageDeflate: true });
+      expect(socket.extensions).toContain("permessage-deflate");
     } finally {
       await server.close();
     }

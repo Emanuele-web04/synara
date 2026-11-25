@@ -41,6 +41,7 @@ import {
   resolveDevinModelVariant,
   trimOrNull,
 } from "@synara/shared/model";
+import { unsupportedAutoRuntimeModeMessage } from "@synara/shared/runtimeMode";
 import {
   Cause,
   DateTime,
@@ -65,6 +66,7 @@ import {
   type SynaraHarnessPolicyDeliveryState,
   takeSynaraHarnessPolicyTextPartForProviderSession,
 } from "../../agentGateway/harnessPolicy.ts";
+import { buildAcpSynaraMcpServers } from "../../agentGateway/mcpInjection.ts";
 import { AgentGatewayCredentials } from "../../agentGateway/Services/AgentGatewayCredentials.ts";
 import {
   acquireAgentGatewaySessionLease,
@@ -153,7 +155,6 @@ import {
   runDevinAcpCompactionCommand,
   type DevinAcpRuntimeSettings,
 } from "../acp/DevinAcpSupport.ts";
-import { createDevinSessionConfig, type DevinSessionConfig } from "../acp/DevinSessionConfig.ts";
 import { isAcpStartupTimeoutError, type AcpSessionRuntimeShape } from "../acp/AcpSessionRuntime.ts";
 import { makeEventNdjsonLogger, type EventNdjsonLogger } from "./EventNdjsonLogger.ts";
 import {
@@ -548,7 +549,6 @@ interface DevinSessionContext extends SynaraHarnessPolicyDeliveryState {
   latestSessionCostUsd: number | undefined;
   stopped: boolean;
   gatewaySessionLease: AgentGatewaySessionLease | undefined;
-  readonly devinSessionConfig: DevinSessionConfig | undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -803,6 +803,14 @@ export function resolveRequestedModeId(input: {
   return Effect.gen(function* () {
     const { modeState, runtimeMode, interactionMode } = input;
 
+    if (runtimeMode === "auto") {
+      return yield* new ProviderAdapterValidationError({
+        provider: PROVIDER,
+        operation: "resolveRequestedModeId",
+        issue: unsupportedAutoRuntimeModeMessage(PROVIDER),
+      });
+    }
+
     if (!modeState) {
       const requiredBy =
         interactionMode === "plan"
@@ -829,21 +837,17 @@ export function resolveRequestedModeId(input: {
           ? ACP_APPROVAL_MODE_ALIASES
           : ACP_FULL_ACCESS_MODE_ALIASES;
 
-    // For plan mode, only an exact normalized id or name match is considered
-    // safe; whole-token matching is too permissive for a fail-closed gate.
+    // Restricted modes require a complete id or name from the known aliases.
     const targetMode =
-      interactionMode === "plan"
-        ? findModeByExactNormalizedAliases(modeState.availableModes, aliases)
-        : (findModeByExactNormalizedAliases(modeState.availableModes, aliases) ??
-          // Some Devin catalogs expose Ask Everytime instead of Code. Match the
-          // full name: the separate Ask mode must never count as approval mode.
-          (runtimeMode === "approval-required"
-            ? findModeByExactNormalizedAliases(modeState.availableModes, [
-                "ask everytime",
-                "ask every time",
-              ])
-            : undefined) ??
-          findModeByWholeTokenAliases(modeState.availableModes, aliases));
+      findModeByExactNormalizedAliases(modeState.availableModes, aliases) ??
+      (interactionMode === "plan"
+        ? undefined
+        : runtimeMode === "approval-required"
+          ? findModeByExactNormalizedAliases(modeState.availableModes, [
+              "ask everytime",
+              "ask every time",
+            ])
+          : findModeByWholeTokenAliases(modeState.availableModes, aliases));
 
     if (!targetMode) {
       if (runtimeMode === "full-access" && interactionMode !== "plan") {
@@ -1708,20 +1712,6 @@ function clearDevinActiveToolCallIdleState(ctx: DevinSessionContext): void {
   ctx.devinToolCallLifecycleById.clear();
 }
 
-export function closeDevinSessionResources(input: {
-  readonly scope: Scope.Closeable;
-  readonly config: Pick<DevinSessionConfig, "cleanup"> | undefined;
-}) {
-  return Effect.gen(function* () {
-    yield* Effect.ignore(Scope.close(input.scope, Exit.void));
-    if (input.config) {
-      yield* Effect.tryPromise(input.config.cleanup).pipe(
-        Effect.catch(() => Effect.logWarning("devin.acp.session_config_cleanup_failed")),
-      );
-    }
-  });
-}
-
 export function makeDevinAdapter(
   devinSettings: DevinAcpRuntimeSettings = {},
   options?: DevinAdapterLiveOptions,
@@ -2235,10 +2225,7 @@ export function makeDevinAdapter(
         if (ctx.notificationFiber) {
           yield* Fiber.interrupt(ctx.notificationFiber);
         }
-        yield* closeDevinSessionResources({
-          scope: ctx.scope,
-          config: ctx.devinSessionConfig,
-        });
+        yield* Effect.ignore(Scope.close(ctx.scope, Exit.void));
         sessions.delete(ctx.threadId);
         yield* offerRuntimeEvent(ctx.lifecycleGeneration, {
           type: "session.exited",
@@ -2536,33 +2523,6 @@ export function makeDevinAdapter(
               : Effect.sync(gatewaySessionLease.release),
           );
 
-          const devinSessionConfig = yield* Effect.tryPromise({
-            try: async () => {
-              if (!gatewaySessionLease || !agentGatewayCredentials) return undefined;
-              const bootstrapToken = gatewaySessionLease.issueStdioBootstrapToken?.();
-              if (!bootstrapToken)
-                throw new Error("Synara gateway bootstrap token was unavailable.");
-              return createDevinSessionConfig({
-                connection: gatewaySessionLease.connection,
-                stdioProxy: agentGatewayCredentials.stdioProxy,
-                bootstrapToken,
-                env: providerEnvironment,
-              });
-            },
-            catch: (error) =>
-              new ProviderAdapterRequestError({
-                provider: PROVIDER,
-                method: "session/start",
-                detail:
-                  error instanceof Error ? error.message : "Failed to install Devin MCP config.",
-              }),
-          });
-          yield* Effect.addFinalizer(() =>
-            sessionScopeTransferred || !devinSessionConfig
-              ? Effect.void
-              : Effect.promise(devinSessionConfig.cleanup),
-          );
-
           let ctx!: DevinSessionContext;
           const resume = parseDevinResume(input.resumeCursor);
           const resumeSessionId = resume?.sessionId;
@@ -2684,7 +2644,17 @@ export function makeDevinAdapter(
               },
             },
             ...(resumeSessionId ? { resumeSessionId } : {}),
-            ...(devinSessionConfig ? { sessionConfig: devinSessionConfig } : {}),
+            // Keep Devin's native config and login paths intact, including APPDATA on Windows.
+            ...(gatewaySessionLease && agentGatewayCredentials
+              ? {
+                  buildMcpServers: (initializeResult: Acp.InitializeResponse) =>
+                    buildAcpSynaraMcpServers({
+                      connection: gatewaySessionLease.connection,
+                      initializeResult,
+                      stdioProxy: agentGatewayCredentials.stdioProxy,
+                    }),
+                }
+              : {}),
             onChildStderrLine,
             ...acpRuntimeLoggers,
           }).pipe(
@@ -2699,12 +2669,18 @@ export function makeDevinAdapter(
               Effect.gen(function* () {
                 yield* logNative(input.threadId, "session/request_permission", params);
 
-                const permissionRequest = parsePermissionRequest(params);
+                const parsedRequest = parsePermissionRequest(params);
                 // Devin's request_permission toolCall arrives sparse (usually
                 // only {toolCallId, kind}); merge the tracked session/update
                 // state so policy matching and the approval card can see the
                 // tool name and its arguments.
                 const trackedToolCall = ctx?.devinToolCallStateById.get(params.toolCall.toolCallId);
+                // A sparse request must keep the tracked shell classification
+                // so the coordinator's MCP auto-approval cannot cover execution.
+                const permissionRequest: AcpPermissionRequest =
+                  trackedToolCall?.kind === "execute"
+                    ? { ...parsedRequest, kind: "execute" }
+                    : parsedRequest;
                 const toolCall =
                   permissionRequest.toolCall === undefined
                     ? trackedToolCall
@@ -3067,7 +3043,6 @@ export function makeDevinAdapter(
             latestSessionCostUsd: undefined,
             stopped: false,
             gatewaySessionLease,
-            devinSessionConfig,
           };
 
           yield* forkDevinWedgeSupervisor(ctx);
@@ -4077,7 +4052,7 @@ export function makeDevinAdapter(
 
         const harnessPolicy = takeDevinSynaraHarnessPolicyTextPart(
           ctx,
-          ctx.devinSessionConfig?.installed === true,
+          ctx.gatewaySessionLease !== undefined,
         );
         if (harnessPolicy) {
           promptParts.unshift(harnessPolicy);

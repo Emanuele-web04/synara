@@ -1,4 +1,5 @@
 import { MessageId, TurnId, type OrchestrationThreadActivity } from "@synara/contracts";
+import type { Schema } from "effect";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -20,6 +21,8 @@ const diagnostic = (
   fields: Record<string, unknown>,
   target = "codex_skills::interface",
 ) => JSON.stringify({ timestamp: "2026-10-15T20:05:38.509122Z", level, fields, target });
+const mcpOAuthStartupError = (name: string) =>
+  `The ${name} MCP server requires OAuth reauthentication. Run \`codex mcp login ${name}\`.`;
 
 describe("deriveSubagentTaskEnds", () => {
   it("preserves settled invocations while a resumed task waits for its own completion", () => {
@@ -689,8 +692,8 @@ describe("deriveWorkLogEntries", () => {
     },
   );
 
-  it("strips terminal formatting from persisted provider activity details", () => {
-    const [entry] = deriveWorkLogEntries(
+  it("strips terminal formatting from persisted details and notices without losing bracketed content", () => {
+    const entries = deriveWorkLogEntries(
       [
         makeActivity({
           id: "pi-plugin-status",
@@ -702,16 +705,6 @@ describe("deriveWorkLogEntries", () => {
             detail: "\u001b[38;2;215;119;87mTransmuting...\u001b[0m",
           },
         }),
-      ],
-      undefined,
-    );
-
-    expect(entry?.detail).toBe("Transmuting...");
-  });
-
-  it("cleans persisted notice messages without losing bracketed content", () => {
-    const [entry] = deriveWorkLogEntries(
-      [
         makeActivity({
           id: "pi-notice",
           kind: "runtime.warning",
@@ -722,8 +715,11 @@ describe("deriveWorkLogEntries", () => {
       undefined,
     );
 
-    expect(entry?.detail).toBe("Enabled [full] mode");
-    expect(entry?.label).toBe("Pi extension");
+    const detail = entries.find((entry) => entry.id === "pi-plugin-status");
+    const notice = entries.find((entry) => entry.id === "pi-notice");
+    expect(detail?.detail).toBe("Transmuting...");
+    expect(notice?.detail).toBe("Enabled [full] mode");
+    expect(notice?.label).toBe("Pi extension");
   });
 
   it("hides persisted Pi unsupported-UI warnings but keeps extension notifications", () => {
@@ -753,7 +749,7 @@ describe("deriveWorkLogEntries", () => {
     expect(entries.map((entry) => entry.id).toSorted()).toEqual(["pi-info", "pi-warning"]);
   });
 
-  it("trusts ingestion for Codex stderr rows and keeps other providers' warnings", () => {
+  it("keeps Codex stderr out of the transcript and preserves other providers' warnings", () => {
     const stderr = (id: string, message: string, nativeEventType?: string) =>
       makeActivity({
         id,
@@ -763,8 +759,6 @@ describe("deriveWorkLogEntries", () => {
       });
     const entries = deriveWorkLogEntries(
       [
-        // Stored only because ingestion kept it: a structured ERROR whose level
-        // the message normalization removed must not be judged again.
         stderr("codex-structured-error", "Quota exceeded", "codex.process/stderr"),
         stderr("codex-error", "fatal: permission denied", "codex.process/stderr"),
         stderr("other-provider", "Bash was denied: outside workspace"),
@@ -772,12 +766,43 @@ describe("deriveWorkLogEntries", () => {
       ],
       undefined,
     );
-    expect(entries.map((entry) => entry.id).toSorted()).toEqual([
-      "codex-error",
-      "codex-structured-error",
-      "other-plain",
-      "other-provider",
-    ]);
+    expect(entries.map((entry) => entry.id).toSorted()).toEqual(["other-plain", "other-provider"]);
+  });
+
+  it("hides saved Codex MCP startup warnings while keeping failed tool calls", () => {
+    const startupWarning = (name: string, error: string) =>
+      makeActivity({
+        id: name,
+        kind: "runtime.warning",
+        summary: "Runtime warning",
+        payload: {
+          message: `MCP server "${name}" failed to start: ${error}`,
+          data: { name, status: "failed", error },
+        },
+      });
+    const entries = deriveWorkLogEntries(
+      [
+        startupWarning("stripe", mcpOAuthStartupError("stripe")),
+        startupWarning("polar", mcpOAuthStartupError("polar")),
+        startupWarning("stripe_connector", mcpOAuthStartupError("stripe_connector")),
+        startupWarning(
+          "superx",
+          'HTTP 403: {"error":"subscription_required: An active subscription is required"}',
+        ),
+        makeActivity({
+          id: "stripe-tool",
+          kind: "tool.completed",
+          summary: "MCP tool call failed",
+          payload: {
+            itemType: "mcp_tool_call",
+            status: "failed",
+            detail: mcpOAuthStartupError("stripe"),
+          },
+        }),
+      ],
+      undefined,
+    );
+    expect(entries.map((entry) => entry.id)).toEqual(["stripe-tool"]);
   });
 
   it("hides stored Claude warnings the adapter now only logs", () => {
@@ -837,47 +862,31 @@ describe("deriveWorkLogEntries", () => {
     ]);
   });
 
-  it("does not expose unmapped diagnostic data as a transcript preview", () => {
-    const [entry] = deriveWorkLogEntries(
+  it("does not expose unmapped diagnostic data or generic raw tool output as a transcript preview", () => {
+    const unmapped = (id: string, payload: Record<string, unknown>) =>
+      makeActivity({
+        id,
+        kind: "provider.event.unmapped",
+        summary: "item/future/completed",
+        payload: { nativeEventType: "item/future/completed", ...payload },
+      });
+    const entries = deriveWorkLogEntries(
       [
-        makeActivity({
-          id: "unmapped-provider-event",
-          kind: "provider.event.unmapped",
-          summary: "item/future/completed",
-          payload: {
-            nativeEventType: "item/future/completed",
-            detail: "Safe provider summary",
-            data: { arbitrary: "must-not-render" },
-          },
+        unmapped("unmapped-provider-event", {
+          detail: "Safe provider summary",
+          data: { arbitrary: "must-not-render" },
+        }),
+        unmapped("unmapped-provider-output", {
+          data: { rawOutput: { stdout: "must-not-render", error: "must-not-render-error" } },
         }),
       ],
       undefined,
     );
 
-    expect(entry?.detail).toBe("Safe provider summary");
-    expect(entry?.preview).toBeUndefined();
-  });
-
-  it("does not derive unmapped details from generic raw tool output", () => {
-    const [entry] = deriveWorkLogEntries(
-      [
-        makeActivity({
-          id: "unmapped-provider-output",
-          kind: "provider.event.unmapped",
-          summary: "item/future/completed",
-          payload: {
-            nativeEventType: "item/future/completed",
-            data: {
-              rawOutput: { stdout: "must-not-render", error: "must-not-render-error" },
-            },
-          },
-        }),
-      ],
-      undefined,
-    );
-
-    expect(entry?.detail).toBeUndefined();
-    expect(entry?.preview).toBeUndefined();
+    expect(entries.map((entry) => [entry.id, entry.detail, entry.preview])).toEqual([
+      ["unmapped-provider-event", "Safe provider summary", undefined],
+      ["unmapped-provider-output", undefined, undefined],
+    ]);
   });
 
   it("omits task start and completion lifecycle entries", () => {
@@ -2156,63 +2165,48 @@ describe("deriveWorkLogEntries", () => {
   });
 
   it("exposes a provider-independent Synara thread creation recap", () => {
-    const activities: OrchestrationThreadActivity[] = [
-      makeActivity({
-        id: "synara-created-threads",
-        createdAt: "2026-02-23T00:00:05.000Z",
-        turnId: "turn-1",
-        kind: "synara.threads.created",
-        summary: "Created 2 Synara threads",
-        tone: "info",
-        payload: {
-          operationId: "gateway:create:two-workers",
-          requestedCount: 2,
-          createdCount: 2,
-          threads: [
-            {
-              threadId: "thread-terra",
-              title: "Explain the repository with Terra",
-              provider: "codex",
-              model: "gpt-5.6-terra",
-              environment: "local",
-              status: "task_dispatched",
-            },
-            {
-              threadId: "thread-claude",
-              title: "Explain the repository with Claude",
-              provider: "claudeAgent",
-              model: "claude-sonnet-5",
-              environment: "worktree",
-              status: "task_dispatched",
-            },
-          ],
-        },
-      }),
+    const threads = [
+      {
+        threadId: "thread-terra",
+        title: "Explain the repository with Terra",
+        provider: "codex",
+        model: "gpt-5.6-terra",
+        environment: "local",
+        status: "task_dispatched",
+      },
+      {
+        threadId: "thread-claude",
+        title: "Explain the repository with Claude",
+        provider: "claudeAgent",
+        model: "claude-sonnet-5",
+        environment: "worktree",
+        status: "task_dispatched",
+      },
     ];
-
-    const [entry] = deriveWorkLogEntries(activities, TurnId.makeUnsafe("turn-1"));
+    const [entry] = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "synara-created-threads",
+          createdAt: "2026-02-23T00:00:05.000Z",
+          turnId: "turn-1",
+          kind: "synara.threads.created",
+          summary: "Created 2 Synara threads",
+          tone: "info",
+          payload: {
+            operationId: "gateway:create:two-workers",
+            requestedCount: 2,
+            createdCount: 2,
+            threads,
+          },
+        }),
+      ],
+      TurnId.makeUnsafe("turn-1"),
+    );
     expect(entry?.synaraThreadCreation).toEqual({
       operationId: "gateway:create:two-workers",
       requestedCount: 2,
       createdCount: 2,
-      threads: [
-        {
-          threadId: "thread-terra",
-          title: "Explain the repository with Terra",
-          provider: "codex",
-          model: "gpt-5.6-terra",
-          environment: "local",
-          status: "task_dispatched",
-        },
-        {
-          threadId: "thread-claude",
-          title: "Explain the repository with Claude",
-          provider: "claudeAgent",
-          model: "claude-sonnet-5",
-          environment: "worktree",
-          status: "task_dispatched",
-        },
-      ],
+      threads,
     });
   });
 
@@ -2334,74 +2328,39 @@ describe("deriveWorkLogEntries", () => {
       marker: null,
       phrase: null,
       threads: [
-        {
-          threadId: "thread-a",
-          title: "A",
-          outcome: "completed",
-          result: null,
-          pr: null,
-          projectId: null,
-        },
-        {
-          threadId: "thread-b",
-          title: "B",
-          outcome: "completed",
-          result: null,
-          pr: null,
-          projectId: null,
-        },
-        {
-          threadId: "thread-c",
-          title: "C",
-          outcome: "waiting-approval",
-          result: null,
-          pr: null,
-          projectId: null,
-        },
-      ],
+        ["thread-a", "A", "completed"],
+        ["thread-b", "B", "completed"],
+        ["thread-c", "C", "waiting-approval"],
+      ].map(([threadId, title, outcome]) => ({
+        threadId,
+        title,
+        outcome,
+        result: null,
+        pr: null,
+        projectId: null,
+      })),
     });
   });
 
-  it("omits checkpoint captured info entries", () => {
-    const activities: OrchestrationThreadActivity[] = [
-      makeActivity({
-        id: "checkpoint",
-        createdAt: "2026-02-23T00:00:01.000Z",
-        summary: "Checkpoint captured",
-        tone: "info",
-      }),
-      makeActivity({
-        id: "tool-complete",
-        createdAt: "2026-02-23T00:00:02.000Z",
-        summary: "Ran command",
-        tone: "tool",
-        kind: "tool.completed",
-      }),
-    ];
-
-    const entries = deriveWorkLogEntries(activities, undefined);
-    expect(entries.map((entry) => entry.id)).toEqual(["tool-complete"]);
-  });
-
-  it("omits passive rate-limit refresh entries from the chat work log", () => {
-    const activities: OrchestrationThreadActivity[] = [
-      makeActivity({
-        id: "rate-limits-updated",
-        createdAt: "2026-02-23T00:00:01.000Z",
-        kind: "account.rate-limits.updated",
-        summary: "Rate limits updated",
-        tone: "info",
-      }),
-      makeActivity({
-        id: "tool-complete",
-        createdAt: "2026-02-23T00:00:02.000Z",
-        summary: "Ran command",
-        tone: "tool",
-        kind: "tool.completed",
-      }),
-    ];
-
-    const entries = deriveWorkLogEntries(activities, undefined);
+  it("omits checkpoint captured and passive rate-limit refresh entries", () => {
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({ id: "checkpoint", summary: "Checkpoint captured", tone: "info" }),
+        makeActivity({
+          id: "rate-limits-updated",
+          kind: "account.rate-limits.updated",
+          summary: "Rate limits updated",
+          tone: "info",
+        }),
+        makeActivity({
+          id: "tool-complete",
+          summary: "Ran command",
+          tone: "tool",
+          kind: "tool.completed",
+        }),
+      ],
+      undefined,
+    );
     expect(entries.map((entry) => entry.id)).toEqual(["tool-complete"]);
   });
 
@@ -3607,49 +3566,49 @@ describe("deriveWorkLogEntries", () => {
     ]);
   });
 
-  it("distinguishes Computer consent from an executed click", () => {
-    const activities = [
+  it("labels Computer consent apart from an executed click, and visible-use consent apart from routine consent", () => {
+    let seq = 1;
+    const consent = (
+      id: string,
+      kind: "approval.requested" | "approval.resolved",
+      payload: Record<string, string>,
+    ) =>
       makeActivity({
-        id: "computer-consent-request",
-        kind: "approval.requested",
-        summary: "Allow Computer for this task",
-        payload: { approvalScope: "computer-task", toolName: "computer_click" },
-      }),
-      makeActivity({
-        id: "computer-consent-accepted",
-        kind: "approval.resolved",
-        summary: "Computer approval resolved",
-        payload: { approvalScope: "computer-task", toolName: "computer_click", decision: "accept" },
-      }),
-    ];
-    expect(deriveWorkLogEntries(activities, undefined)).toMatchObject([
-      { toolTitle: "Computer task approval requested" },
-      { toolTitle: "Computer task approved" },
-    ]);
-  });
-
-  it("labels visible-use consent apart from routine Computer consent", () => {
-    const activities = [
-      makeActivity({
-        id: "computer-foreground-request",
-        kind: "approval.requested",
-        summary: "Show Computer on screen for this task",
-        payload: { approvalScope: "computer-foreground", toolName: "computer_activate_window" },
-      }),
-      makeActivity({
-        id: "computer-foreground-declined",
-        kind: "approval.resolved",
-        summary: "Computer approval resolved",
-        payload: {
-          approvalScope: "computer-foreground",
-          toolName: "computer_activate_window",
-          decision: "decline",
-        },
-      }),
-    ];
-    expect(deriveWorkLogEntries(activities, undefined)).toMatchObject([
-      { toolTitle: "Asked to show Computer on screen" },
-      { toolTitle: "Computer kept in the background" },
+        id,
+        createdAt: `2026-02-23T00:00:0${seq++}.000Z`,
+        kind,
+        summary: "Computer approval",
+        payload,
+      });
+    expect(
+      deriveWorkLogEntries(
+        [
+          consent("task-request", "approval.requested", {
+            approvalScope: "computer-task",
+            toolName: "computer_click",
+          }),
+          consent("task-accepted", "approval.resolved", {
+            approvalScope: "computer-task",
+            toolName: "computer_click",
+            decision: "accept",
+          }),
+          consent("foreground-request", "approval.requested", {
+            approvalScope: "computer-foreground",
+            toolName: "computer_activate_window",
+          }),
+          consent("foreground-declined", "approval.resolved", {
+            approvalScope: "computer-foreground",
+            toolName: "computer_activate_window",
+            decision: "decline",
+          }),
+        ],
+        undefined,
+      ).map((entry) => entry.toolTitle),
+    ).toEqual([
+      "Computer task approval requested",
+      "Computer task approved",
+      "Asked to show Computer on screen",
+      "Computer kept in the background",
     ]);
   });
 
@@ -4286,93 +4245,44 @@ describe("deriveWorkLogEntries", () => {
     expect(isProviderFileEditWorkLogEntry({ requestKind: "file-change" })).toBe(false);
   });
 
-  it("extracts Cursor read targets from rawInput and ACP locations", () => {
-    const activities: OrchestrationThreadActivity[] = [
+  it("extracts read targets from rawInput, ACP locations and root-level names, but not arbitrary rawOutput strings", () => {
+    const read = (id: string, data: Record<string, Schema.Json>, itemTitle = "Read") =>
       makeActivity({
-        id: "cursor-read-raw-input",
+        id,
         kind: "tool.completed",
-        summary: "Read",
-        payload: {
-          itemType: "dynamic_tool_call",
-          title: "Read",
-          data: {
+        summary: itemTitle,
+        payload: { itemType: "dynamic_tool_call", title: itemTitle, data },
+      });
+    const entriesById = new Map(
+      deriveWorkLogEntries(
+        [
+          read("raw-input", {
             kind: "read",
-            rawInput: {
-              file_path: "apps/web/src/session-logic.ts",
-            },
-          },
-        },
-      }),
-      makeActivity({
-        id: "cursor-read-location",
-        kind: "tool.completed",
-        summary: "Read",
-        payload: {
-          itemType: "dynamic_tool_call",
-          title: "Read",
-          data: {
+            rawInput: { file_path: "apps/web/src/session-logic.ts" },
+          }),
+          read("location", {
             kind: "read",
             locations: [{ path: "apps/server/src/provider/acp/AcpRuntimeModel.ts", line: 12 }],
-          },
-        },
-      }),
-    ];
-
-    const entriesById = new Map(
-      deriveWorkLogEntries(activities, undefined).map((entry) => [entry.id, entry]),
+          }),
+          read("root", { rawInput: { file_path: "package.json" } }),
+          read(
+            "search-output",
+            {
+              kind: "search",
+              rawOutput: { file: "no results", path: "not a path", totalFiles: 0 },
+            },
+            "Searched",
+          ),
+        ],
+        undefined,
+      ).map((entry) => [entry.id, entry]),
     );
-    expect(entriesById.get("cursor-read-raw-input")?.changedFiles).toEqual([
-      "apps/web/src/session-logic.ts",
-    ]);
-    expect(entriesById.get("cursor-read-location")?.changedFiles).toEqual([
+    expect(entriesById.get("raw-input")?.changedFiles).toEqual(["apps/web/src/session-logic.ts"]);
+    expect(entriesById.get("location")?.changedFiles).toEqual([
       "apps/server/src/provider/acp/AcpRuntimeModel.ts",
     ]);
-  });
-
-  it("does not treat arbitrary rawOutput file strings as changed files", () => {
-    const activities: OrchestrationThreadActivity[] = [
-      makeActivity({
-        id: "cursor-search-output",
-        kind: "tool.completed",
-        summary: "Searched",
-        payload: {
-          itemType: "dynamic_tool_call",
-          title: "Searched",
-          data: {
-            kind: "search",
-            rawOutput: {
-              file: "no results",
-              path: "not a path",
-              totalFiles: 0,
-            },
-          },
-        },
-      }),
-    ];
-
-    const [entry] = deriveWorkLogEntries(activities, undefined);
-    expect(entry?.changedFiles).toBeUndefined();
-  });
-
-  it("keeps root-level file names as changed file paths", () => {
-    const activities: OrchestrationThreadActivity[] = [
-      makeActivity({
-        id: "root-file-tool",
-        kind: "tool.completed",
-        summary: "Read",
-        payload: {
-          itemType: "dynamic_tool_call",
-          data: {
-            rawInput: {
-              file_path: "package.json",
-            },
-          },
-        },
-      }),
-    ];
-
-    const [entry] = deriveWorkLogEntries(activities, undefined);
-    expect(entry?.changedFiles).toEqual(["package.json"]);
+    expect(entriesById.get("root")?.changedFiles).toEqual(["package.json"]);
+    expect(entriesById.get("search-output")?.changedFiles).toBeUndefined();
   });
 
   it("does not collapse fallback lifecycle rows for different files without toolCallId", () => {
@@ -4716,51 +4626,6 @@ describe("deriveWorkLogEntries", () => {
         toolTitle: withoutHeartbeat?.toolTitle,
         liveActivity: { elapsedSeconds: 30 },
       });
-    });
-  });
-
-  it("preserves command semantics while a Claude progress placeholder is live", () => {
-    const entries = deriveWorkLogEntries(
-      [
-        makeActivity({
-          id: "claude-command-start",
-          createdAt: "2026-02-23T00:00:01.000Z",
-          kind: "tool.started",
-          summary: "Bash started",
-          payload: {
-            itemType: "command_execution",
-            title: "Bash",
-            data: {
-              toolCallId: "claude-live-command",
-              command: "sleep 5",
-            },
-          },
-        }),
-        makeActivity({
-          id: "claude-command-progress",
-          createdAt: "2026-02-23T00:00:02.000Z",
-          kind: "tool.updated",
-          summary: "Bash",
-          payload: {
-            itemType: "mcp_tool_call",
-            title: "Bash",
-            data: {
-              toolUseId: "claude-live-command",
-              toolName: "Bash",
-            },
-          },
-        }),
-      ],
-      undefined,
-    );
-
-    expect(entries).toHaveLength(1);
-    expect(entries[0]).toMatchObject({
-      itemType: "command_execution",
-      command: "sleep 5",
-      liveActivity: {
-        state: "running_tool",
-      },
     });
   });
 
@@ -5298,6 +5163,103 @@ describe("deriveWorkLogEntries", () => {
     });
   });
 
+  it.each(["_toolName", "toolName", "tool_name"] as const)(
+    "surfaces the ACP native tool name from rawInput.%s",
+    (nameKey) => {
+      // Grok/ACP read calls arrive with the native name only in rawInput —
+      // data.toolName is reserved for Computer tools — so reads stayed
+      // indistinguishable from generic tool calls.
+      const activities: OrchestrationThreadActivity[] = [
+        makeActivity({
+          id: "acp-read",
+          createdAt: "2026-02-23T00:00:01.000Z",
+          kind: "tool.completed",
+          summary: "Read src/app.ts",
+          payload: {
+            itemType: "dynamic_tool_call",
+            title: "Read src/app.ts",
+            data: {
+              toolCallId: "acp-read-call",
+              kind: "read",
+              rawInput: { [nameKey]: "read_file", path: "src/app.ts" },
+            },
+          },
+        }),
+      ];
+
+      expect(deriveWorkLogEntries(activities, undefined)).toMatchObject([
+        { itemType: "dynamic_tool_call", toolName: "read_file" },
+      ]);
+    },
+  );
+
+  it("keeps a persisted ACP read distinct from a real shell command", () => {
+    const activities = [
+      makeActivity({
+        id: "persisted-acp-read",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "tool.started",
+        summary: "Read `src/app.ts`",
+        payload: {
+          itemType: "dynamic_tool_call",
+          title: "Read `src/app.ts`",
+          data: {
+            toolCallId: "read-call",
+            providerToolCallId: "read-call",
+            command: "src/app.ts",
+          },
+        },
+      }),
+      makeActivity({
+        id: "persisted-acp-read-complete",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "tool.completed",
+        summary: "Read `src/app.ts`",
+        payload: {
+          itemType: "dynamic_tool_call",
+          title: "Read `src/app.ts`",
+          data: {
+            toolCallId: "read-call",
+            providerToolCallId: "read-call",
+            kind: "read",
+            command: "src/app.ts",
+            rawInput: { _toolName: "read_file", path: "src/app.ts" },
+          },
+        },
+      }),
+      makeActivity({
+        id: "acp-execute",
+        createdAt: "2026-02-23T00:00:03.000Z",
+        kind: "tool.completed",
+        summary: "Read `src/app.ts`",
+        payload: {
+          itemType: "command_execution",
+          title: "Read `src/app.ts`",
+          data: {
+            toolCallId: "run-call",
+            providerToolCallId: "run-call",
+            kind: "execute",
+            command: "cat src/app.ts | head -n 5",
+          },
+        },
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, undefined);
+    expect(entries).toHaveLength(2);
+    expect(entries[0]).toMatchObject({
+      id: "persisted-acp-read",
+      itemType: "dynamic_tool_call",
+      toolName: "read_file",
+      toolTitle: "Read `src/app.ts`",
+    });
+    expect(entries[0]).not.toHaveProperty("command");
+    expect(entries[1]).toMatchObject({
+      id: "acp-execute",
+      command: "cat src/app.ts | head -n 5",
+    });
+  });
+
   it("keeps separate tool entries when an identical call starts after the prior one completed", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
@@ -5570,31 +5532,6 @@ describe("deriveWorkLogEntries", () => {
     expect(entries[0]?.subagents?.[0]?.rawStatus).toBe("failed");
   });
 
-  it("attributes subagent task progress to its subagent", () => {
-    const entries = deriveWorkLogEntries(
-      [
-        makeActivity({
-          id: "subagent-progress-1",
-          createdAt: "2026-02-23T00:00:01.000Z",
-          kind: "task.progress",
-          summary: "Subagent progress",
-          tone: "info",
-          payload: {
-            taskId: "task-outer",
-            detail: "Running Sleep briefly then echo bg",
-            toolUseId: "toolu_outer",
-            subagentTitle: "Outer worker",
-          },
-        }),
-      ],
-      undefined,
-    );
-    expect(entries[0]?.subagentProgress).toMatchObject({
-      toolUseId: "toolu_outer",
-      title: "Outer worker",
-    });
-  });
-
   it("records a subagent's final outcome on its progress rows", () => {
     const progress = (id: string, toolUseId: string, title: string) =>
       makeActivity({
@@ -5641,6 +5578,12 @@ describe("deriveWorkLogEntries", () => {
     const entries = deriveWorkLogEntries(activities, undefined);
     const outcomeOf = (id: string) =>
       entries.find((entry) => entry.id === id)?.subagentProgress?.outcome;
+    expect(entries.find((entry) => entry.id === "progress-failed")?.subagentProgress).toMatchObject(
+      {
+        toolUseId: "toolu_failed",
+        title: "Waiter B",
+      },
+    );
     expect(outcomeOf("progress-stopped")).toBe("stopped");
     expect(outcomeOf("progress-failed")).toBe("failed");
     expect(outcomeOf("progress-running")).toBeUndefined();
@@ -6984,33 +6927,30 @@ describe("deriveWorkLogEntries context window handling", () => {
     },
   );
 
-  it.each(["Compacting context"])(
-    "collapses same-timestamp %s rows regardless of event id order",
-    (summary) => {
-      const entries = deriveWorkLogEntries(
-        [
-          makeActivity({
-            id: "a-compaction-completed",
-            createdAt: "2026-02-23T00:00:00.000Z",
-            kind: "context-compaction",
-            summary: "Context compacted",
-            tone: "info",
-          }),
-          makeActivity({
-            id: "b-compaction-progress",
-            createdAt: "2026-02-23T00:00:00.000Z",
-            kind: "context-compaction",
-            summary,
-            tone: "info",
-          }),
-        ],
-        TurnId.makeUnsafe("turn-1"),
-      );
+  it("collapses same-timestamp compaction rows regardless of event id order", () => {
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "a-compaction-completed",
+          createdAt: "2026-02-23T00:00:00.000Z",
+          kind: "context-compaction",
+          summary: "Context compacted",
+          tone: "info",
+        }),
+        makeActivity({
+          id: "b-compaction-progress",
+          createdAt: "2026-02-23T00:00:00.000Z",
+          kind: "context-compaction",
+          summary: "Compacting context",
+          tone: "info",
+        }),
+      ],
+      TurnId.makeUnsafe("turn-1"),
+    );
 
-      expect(entries).toHaveLength(1);
-      expect(entries[0]?.label).toBe("Context compacted");
-    },
-  );
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.label).toBe("Context compacted");
+  });
 
   it("does not merge a new compaction progress row into an earlier terminal row", () => {
     const entries = deriveWorkLogEntries(
@@ -7041,92 +6981,41 @@ describe("deriveWorkLogEntries context window handling", () => {
 
 describe("deriveWorkLogEntries Codex find regression", () => {
   it("humanizes Codex find commands from real DB payload (regression)", () => {
-    const activities: OrchestrationThreadActivity[] = [
-      makeActivity({
-        id: "5ae75cbe-5cb5-471a-a6ba-d9712170f1c0",
-        kind: "tool.started",
-        summary: "Ran command started",
-        payload: {
-          itemType: "command_execution",
-          status: "inProgress",
-          title: "Ran command",
-          detail:
-            "/bin/zsh -lc \"find apps packages -maxdepth 2 -name package.json -print -exec sed -n '1,120p' {} \\\\;\"",
-          data: {
-            item: {
-              type: "commandExecution",
-              id: "call_UmQKQmLCCrj9PF82rupLIFDO",
-              command:
-                "/bin/zsh -lc \"find apps packages -maxdepth 2 -name package.json -print -exec sed -n '1,120p' {} \\\\;\"",
-              cwd: "/Users/emanueledipietro/Developer/Testing/synara",
-              processId: "38005",
-              source: "unifiedExecStartup",
-              status: "inProgress",
-              commandActions: [
-                {
-                  type: "search",
-                  command:
-                    "find apps packages -maxdepth 2 -name package.json -print -exec sed -n '1,120p' '{}' \";\"",
-                  query: "package.json",
-                  path: "apps",
-                },
-              ],
-              aggregatedOutput: null,
-              exitCode: null,
-              durationMs: null,
+    const command =
+      "/bin/zsh -lc \"find apps packages -maxdepth 2 -name package.json -print -exec sed -n '1,120p' {} \\\\;\"";
+    const action =
+      "find apps packages -maxdepth 2 -name package.json -print -exec sed -n '1,120p' '{}' \";\"";
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "6631825b-af15-4f7e-bb9a-891dcb98fd2a",
+          kind: "tool.completed",
+          summary: "Ran command",
+          payload: {
+            itemType: "command_execution",
+            status: "completed",
+            title: "Ran command",
+            detail: command,
+            data: {
+              item: {
+                type: "commandExecution",
+                id: "call_UmQKQmLCCrj9PF82rupLIFDO",
+                command,
+                status: "completed",
+                commandActions: [
+                  { type: "search", command: action, query: "package.json", path: "apps" },
+                ],
+              },
             },
-            threadId: "019e098c-100f-7c92-b2b2-8fdd7b88d19d",
-            turnId: "019e098c-13fc-7442-873f-fc99ce2caa8b",
           },
-        },
-      }),
-      makeActivity({
-        id: "6631825b-af15-4f7e-bb9a-891dcb98fd2a",
-        kind: "tool.completed",
-        summary: "Ran command",
-        payload: {
-          itemType: "command_execution",
-          status: "completed",
-          title: "Ran command",
-          detail:
-            "/bin/zsh -lc \"find apps packages -maxdepth 2 -name package.json -print -exec sed -n '1,120p' {} \\\\;\"",
-          data: {
-            item: {
-              type: "commandExecution",
-              id: "call_UmQKQmLCCrj9PF82rupLIFDO",
-              command:
-                "/bin/zsh -lc \"find apps packages -maxdepth 2 -name package.json -print -exec sed -n '1,120p' {} \\\\;\"",
-              cwd: "/Users/emanueledipietro/Developer/Testing/synara",
-              processId: "38005",
-              source: "unifiedExecStartup",
-              status: "completed",
-              commandActions: [
-                {
-                  type: "search",
-                  command:
-                    "find apps packages -maxdepth 2 -name package.json -print -exec sed -n '1,120p' '{}' \";\"",
-                  query: "package.json",
-                  path: "apps",
-                },
-              ],
-              aggregatedOutput: "...",
-              exitCode: 0,
-              durationMs: 0,
-            },
-            threadId: "019e098c-100f-7c92-b2b2-8fdd7b88d19d",
-            turnId: "019e098c-13fc-7442-873f-fc99ce2caa8b",
-          },
-        },
-      }),
-    ];
-
-    const entries = deriveWorkLogEntries(activities, undefined);
+        }),
+      ],
+      undefined,
+    );
     expect(entries).toHaveLength(1);
-    const [entry] = entries;
-    expect(entry).toMatchObject({
+    expect(entries[0]).toMatchObject({
       toolTitle: "Searched",
-      command:
-        "find apps packages -maxdepth 2 -name package.json -print -exec sed -n '1,120p' '{}' \";\"",
+      command: action,
       preview: "for package.json in apps",
       itemType: "command_execution",
       toolCallId: "call_UmQKQmLCCrj9PF82rupLIFDO",

@@ -62,6 +62,7 @@ import {
   SIDEBAR_NESTED_LIST_OFFSET_CLASS_NAME,
   SIDEBAR_PROJECT_NAME_CLASS_NAME,
   SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME,
+  SIDEBAR_EMPTY_STATE_CLASS_NAME,
 } from "../sidebarRowStyles";
 import { useTranslation } from "~/i18n";
 
@@ -489,7 +490,7 @@ export function SidebarGroupsSurface({
               );
             })
           ) : !remoteProjects?.length ? (
-            <div className="px-2 pt-4 text-center text-ui text-muted-foreground/58">
+            <div className={SIDEBAR_EMPTY_STATE_CLASS_NAME}>
               {emptyState === "loading" ? t("workspace:loadingHubs") : t("common:noHubsYet")}
             </div>
           ) : null}

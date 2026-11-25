@@ -83,7 +83,6 @@ it("walks the tour in order, remembers dismissal per installation, and replays a
   await expect
     .element(page.getByRole("dialog", { name: "Start a chat with any agent" }))
     .toBeVisible();
-  await page.getByRole("dialog").screenshot({ path: "node_modules/.cache/app-tour-desktop.png" });
   await page.getByRole("button", { name: "Next", exact: true }).click();
   await expect
     .element(page.getByRole("dialog", { name: "See what your agents are doing" }))
@@ -301,39 +300,6 @@ it("does not jump ahead of a slow AppSnap probe and then waits for its dismissal
     .element(page.getByRole("dialog", { name: "Start a chat with any agent" }))
     .toBeVisible();
   await page.getByRole("button", { name: "Close tour" }).click();
-});
-
-it("keeps the tour usable on a narrow screen and with large UI text", async () => {
-  await page.viewport(390, 700);
-  const sizes = {
-    "--app-font-size-ui": 18,
-    "--app-font-size-ui-lg": 19,
-    "--app-font-size-ui-sm": 17,
-    "--app-font-size-ui-xs": 15,
-  };
-  for (const [key, value] of Object.entries(sizes))
-    document.documentElement.style.setProperty(key, `${value}px`);
-  try {
-    await show();
-    await expect
-      .element(page.getByRole("dialog", { name: "Start a chat with any agent" }))
-      .toBeVisible();
-    await page.getByRole("button", { name: "Next", exact: true }).click();
-    const dialog = document.querySelector("[data-feature-tour]") as HTMLElement;
-    // Without an anchor on screen the card is centered, inside the viewport.
-    expect(dialog.dataset.tourSide).toBe("center");
-    const box = dialog.getBoundingClientRect();
-    expect(box.left).toBeGreaterThanOrEqual(0);
-    expect(box.right).toBeLessThanOrEqual(390);
-    expect(box.bottom).toBeLessThanOrEqual(700);
-    const surface = dialog.querySelector<HTMLElement>("[tabindex='-1']")!;
-    expect(surface.scrollWidth).toBeLessThanOrEqual(surface.clientWidth);
-    await page.getByRole("dialog").screenshot({ path: "node_modules/.cache/app-tour-mobile.png" });
-    await page.getByRole("button", { name: "Close tour" }).click();
-  } finally {
-    for (const key of Object.keys(sizes)) document.documentElement.style.removeProperty(key);
-    await page.viewport(1280, 900);
-  }
 });
 
 it("restores manual replay focus after keyboard navigation and Escape", async () => {

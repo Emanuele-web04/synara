@@ -20,6 +20,10 @@
       "types": "./src/turnStopActivity.ts",
       "import": "./src/turnStopActivity.ts"
     },
+    "./turnResume": {
+      "types": "./src/turnResume.ts",
+      "import": "./src/turnResume.ts"
+    },
     "./inboxDay": {
       "types": "./src/inboxDay.ts",
       "import": "./src/inboxDay.ts"
@@ -316,6 +320,10 @@
       "types": "./src/automationMode.ts",
       "import": "./src/automationMode.ts"
     },
+    "./automationRunLifecycle": {
+      "types": "./src/automationRunLifecycle.ts",
+      "import": "./src/automationRunLifecycle.ts"
+    },
     "./worktreeHandoff": {
       "types": "./src/worktreeHandoff.ts",
       "import": "./src/worktreeHandoff.ts"
@@ -331,6 +339,10 @@
     "./text": {
       "types": "./src/text.ts",
       "import": "./src/text.ts"
+    },
+    "./markdownPlainText": {
+      "types": "./src/markdownPlainText.ts",
+      "import": "./src/markdownPlainText.ts"
     },
     "./toolOutputSummary": {
       "types": "./src/toolOutputSummary.ts",

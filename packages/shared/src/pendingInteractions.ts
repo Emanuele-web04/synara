@@ -2,6 +2,22 @@
 // Purpose: Shared policy for claiming responses and recognizing invalidated approval/user-input callbacks.
 // Layer: Cross-package orchestration utility
 // Exports: stale-callback matcher, reclaim timing, and response-status predicates.
+//
+// A projected interaction row moves through these statuses. ProjectionPipeline decides
+// every move and also checks lifecycle generation and stale-callback evidence, which a
+// status table cannot express:
+//
+//   requested ─> pending ─claim─> responding ─resolved─> confirmed
+//                                    └─respond.failed─> retryable | uncertain | confirmed (stale)
+//   retryable | uncertain | stale responding ─claim─> responding
+//   retryable ─requested again (same generation)─> pending
+//   any status ─requested by a new lifecycle generation─> pending
+//   any status ─resolved, or proven-stale callback with no response in flight─> confirmed
+//
+// Three status sets are read across the app, each with a distinct meaning:
+//   awaiting response  pending | retryable              an open question; counted and shown
+//   claimable          + uncertain, + stale responding  a response may (re)claim the row
+//   unsettled          everything except confirmed      must be settled when its runtime dies
 
 import type {
   OrchestrationPendingInteraction,
@@ -84,6 +100,16 @@ export function respondingInteractionReclaimAt(responseRequestedAt: string): str
   return Number.isNaN(responseRequestedAtMs)
     ? responseRequestedAt
     : new Date(responseRequestedAtMs + RESPONDING_INTERACTION_RECLAIM_GRACE_MS).toISOString();
+}
+
+/**
+ * The row is an open question for the user: it counts toward pending approvals/inputs.
+ * `responding` and `uncertain` rows have an answer in flight or possibly delivered.
+ */
+export function isPendingInteractionAwaitingResponse(
+  status: OrchestrationPendingInteraction["status"] | null,
+): boolean {
+  return status === "pending" || status === "retryable";
 }
 
 export function isPendingInteractionResponseClaimable(input: {

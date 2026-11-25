@@ -8,14 +8,20 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { QueuedComposerTurn } from "../composerDraftStore";
+import {
+  createLocalDispatchSnapshot,
+  LOCAL_DISPATCH_TURN_TAKEOVER_TIMEOUT_MS,
+} from "../components/ChatView.logic";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { resetComposerDraftStore } from "../composerDraftStoreTestFixtures";
 import { useStore } from "../store";
 import { initialState } from "../storeState";
 import { makeActivity, makeState, makeThread } from "../storeTestFixtures";
 import type { Thread, ThreadSession } from "../types";
+import { updateThreadDispatch, useThreadDispatchStore } from "./chatDispatchStore";
 import {
   armQueuedComposerSteerGate,
+  cancelQueuedComposerWorktreeHandoff,
   claimQueuedComposerAutoDispatch,
   clearQueuedComposerAutoDispatchRetry,
   endQueuedComposerAutoDispatch,
@@ -357,6 +363,7 @@ describe("queued composer drain watcher", () => {
     vi.useRealTimers();
     resetQueuedComposerDrainForTests();
     resetComposerDraftStore();
+    useThreadDispatchStore.setState({ threads: {} });
     useStore.setState(initialState);
   });
 
@@ -941,6 +948,94 @@ describe("queued composer drain watcher", () => {
     await vi.waitFor(() => {
       expect(dispatch).toHaveBeenCalledTimes(1);
     });
+  });
+
+  it("keeps holding the queue for a send ChatView made just before it unmounted", async () => {
+    vi.useFakeTimers();
+    const idleThread = makeThread({ id: THREAD_ID, session: makeSession("ready") });
+    seedThread(idleThread);
+    claimQueuedComposerAutoDispatch(THREAD_ID);
+    useComposerDraftStore
+      .getState()
+      .enqueueQueuedTurn(THREAD_ID, makeQueuedChatTurn("queued-after-chat-send"));
+    // The open chat sent a message and the server accepted it, but its turn has not
+    // started yet. The user switches chats in that gap.
+    updateThreadDispatch(THREAD_ID, (current) => ({
+      ...current,
+      localDispatch: createLocalDispatchSnapshot(idleThread),
+    }));
+    releaseQueuedComposerAutoDispatch(THREAD_ID);
+    await flushDrain();
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(isQueuedComposerAwaitingTurnStart(THREAD_ID)).toBe(true);
+
+    // The chat's turn starts: still nothing to send behind it.
+    seedThread(makeThread({ id: THREAD_ID, session: makeSession("running", LIVE_TURN_ID) }));
+    await flushDrain();
+    expect(dispatch).not.toHaveBeenCalled();
+
+    // It settles: the queue drains as usual.
+    seedThread(idleThread);
+    await vi.waitFor(() => {
+      expect(dispatch).toHaveBeenCalledTimes(1);
+    });
+    expect(dispatch.mock.calls[0]?.[0].queuedTurn.id).toBe("queued-after-chat-send");
+  });
+
+  it("keeps waiting after the composer marker clears until the lost-turn deadline", async () => {
+    vi.useFakeTimers();
+    const idleThread = makeThread({ id: THREAD_ID, session: makeSession("ready") });
+    seedThread(idleThread);
+    claimQueuedComposerAutoDispatch(THREAD_ID);
+    useComposerDraftStore
+      .getState()
+      .enqueueQueuedTurn(THREAD_ID, makeQueuedChatTurn("queued-after-lost-send"));
+    updateThreadDispatch(THREAD_ID, (current) => ({
+      ...current,
+      localDispatch: createLocalDispatchSnapshot(idleThread),
+    }));
+    releaseQueuedComposerAutoDispatch(THREAD_ID);
+    await flushDrain();
+    expect(dispatch).not.toHaveBeenCalled();
+
+    updateThreadDispatch(THREAD_ID, (current) => ({ ...current, localDispatch: null }));
+    await flushDrain();
+    expect(dispatch).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(LOCAL_DISPATCH_TURN_TAKEOVER_TIMEOUT_MS + 1);
+    expect(dispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it("waits through long worktree setup without polling and drains after cancellation", async () => {
+    vi.useFakeTimers();
+    const idleThread = makeThread({ id: THREAD_ID, session: makeSession("ready") });
+    seedThread(idleThread);
+    claimQueuedComposerAutoDispatch(THREAD_ID);
+    const messageId = MessageId.makeUnsafe("worktree-send");
+    updateThreadDispatch(THREAD_ID, (current) => ({
+      ...current,
+      localDispatch: createLocalDispatchSnapshot(idleThread, {
+        worktreeSetupStepId: "create-branch",
+        expectedUserMessageId: messageId,
+      }),
+    }));
+    useComposerDraftStore
+      .getState()
+      .enqueueQueuedTurn(THREAD_ID, makeQueuedChatTurn("after-setup"));
+    releaseQueuedComposerAutoDispatch(THREAD_ID);
+    await flushDrain();
+
+    await vi.advanceTimersByTimeAsync(LOCAL_DISPATCH_TURN_TAKEOVER_TIMEOUT_MS + 1);
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+
+    updateThreadDispatch(THREAD_ID, (current) => ({ ...current, localDispatch: null }));
+    await flushDrain();
+    expect(dispatch).not.toHaveBeenCalled();
+
+    cancelQueuedComposerWorktreeHandoff(THREAD_ID, messageId);
+    await vi.waitFor(() => expect(dispatch).toHaveBeenCalledTimes(1));
+    expect(dispatch.mock.calls[0]?.[0].queuedTurn.id).toBe("after-setup");
   });
 
   it("restores the shared steer gate after ChatView unmounts and remounts during the interrupt gap", async () => {

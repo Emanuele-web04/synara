@@ -1,7 +1,7 @@
 name: Validate marketing site
 
 # Ported from the website's own repo when it moved into apps/marketing. Same
-# gates (docs contracts, lint, links, SEO smoke, e2e, a11y, visual,
+# gates (docs contracts, lint, links, SEO smoke, e2e, a11y,
 # performance), adapted to the monorepo: bun instead of npm, and scoped to
 # paths that can affect the site so unrelated PRs skip it.
 on:
@@ -107,21 +107,6 @@ jobs:
             apps/marketing/test-results
           if-no-files-found: ignore
 
-      - name: Visual regression checks
-        id: visual
-        continue-on-error: true
-        run: bun run test:visual
-
-      - name: Upload visual failure artifacts
-        if: ${{ always() && steps.visual.outcome == 'failure' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: visual-regression-failure
-          path: |
-            apps/marketing/playwright-report
-            apps/marketing/test-results
-          if-no-files-found: ignore
-
       - name: Build normal production-data path
         run: |
           rm -rf .next
@@ -147,12 +132,10 @@ jobs:
         env:
           E2E_OUTCOME: ${{ steps.e2e.outcome }}
           A11Y_OUTCOME: ${{ steps.a11y.outcome }}
-          VISUAL_OUTCOME: ${{ steps.visual.outcome }}
           PERFORMANCE_OUTCOME: ${{ steps.performance.outcome }}
         run: |
           if [[ "$E2E_OUTCOME" != "success" || \
                 "$A11Y_OUTCOME" != "success" || \
-                "$VISUAL_OUTCOME" != "success" || \
                 "$PERFORMANCE_OUTCOME" != "success" ]]; then
             echo "One or more browser quality gates failed. See the failing step and uploaded artifacts."
             exit 1

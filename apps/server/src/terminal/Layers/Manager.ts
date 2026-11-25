@@ -1025,8 +1025,6 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
           existing.terminalId,
           existing.history.toString(),
         );
-      } else if (runtimeEnvChanged) {
-        existing.runtimeEnv = nextRuntimeEnv;
       }
 
       if (!existing.process) {

@@ -6,7 +6,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import * as echarts from "echarts";
 import { api, AuthError, EMPTY_FILTERS, type Filters, type Issue, type IssueStatus } from "./api";
-import { navigate, routeHash } from "./filters";
+import { routeHash } from "./filters";
 import { createDebounced } from "./debounce";
 import { useResolvedMode, type ResolvedMode } from "./theme";
 

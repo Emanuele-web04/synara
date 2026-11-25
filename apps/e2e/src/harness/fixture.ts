@@ -31,7 +31,7 @@ import {
   type HostSecretsCoordinatorApi,
 } from "../../../server/src/hostSecrets/coordinator";
 import { hostSecretsSyncKeyPath } from "../../../server/src/hostSecrets/syncKeyStore";
-import { bindEphemeralHttpServer, type EphemeralHttpServer } from "./network";
+import { bindEphemeralHttpServer } from "./network";
 import { startRealHost, type RunningHost } from "./host";
 
 export type TestSession = {

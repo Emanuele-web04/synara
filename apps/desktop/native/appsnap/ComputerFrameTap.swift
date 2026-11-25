@@ -50,13 +50,17 @@ final class ComputerFrameTap {
         }
     }
 
+    func stop() {
+        finish(failure: nil)
+    }
+
     private func connectToHost() -> Int32? {
         var address = sockaddr_un()
         address.sun_family = sa_family_t(AF_UNIX)
         address.sun_len = UInt8(MemoryLayout<sockaddr_un>.size)
         let path = socketPath.utf8CString
         guard path.count <= MemoryLayout.size(ofValue: address.sun_path) else {
-            emitConnectFailure(code: "socket_path_too_long", message: "The frame socket path is too long.")
+            emitFailure(code: "socket_path_too_long", message: "The frame socket path is too long.")
             return nil
         }
         withUnsafeMutableBytes(of: &address.sun_path) { destination in
@@ -66,7 +70,7 @@ final class ComputerFrameTap {
         }
         let descriptor = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
         guard descriptor >= 0 else {
-            emitConnectFailure(code: "socket_unavailable", message: "Could not create the frame socket.")
+            emitFailure(code: "socket_unavailable", message: "Could not create the frame socket.")
             return nil
         }
         // The peer closing mid-write must end the tap, not raise SIGPIPE.
@@ -80,13 +84,13 @@ final class ComputerFrameTap {
         guard connected else {
             let reason = String(cString: strerror(errno))
             Darwin.close(descriptor)
-            emitConnectFailure(code: "socket_connect_failed", message: "Could not reach the host frame socket: \(reason)")
+            emitFailure(code: "socket_connect_failed", message: "Could not reach the host frame socket: \(reason)")
             return nil
         }
         return descriptor
     }
 
-    private func emitConnectFailure(code: String, message: String) {
+    private func emitFailure(code: String, message: String) {
         emitter.emitError(
             AppSnapFailure(code: code, message: message),
             capturedAt: appSnapTimestamp()
@@ -161,6 +165,10 @@ final class ComputerFrameTap {
     /// A tap has no degraded mode: any failure reports one protocol line and
     /// exits so the host records the task dead instead of retrying it.
     private func fail(_ failure: AppSnapFailure) {
+        finish(failure: failure)
+    }
+
+    private func finish(failure: AppSnapFailure?) {
         queue.async { [self] in
             stateLock.lock()
             guard !stopped else {
@@ -169,10 +177,19 @@ final class ComputerFrameTap {
             }
             stopped = true
             stateLock.unlock()
-            stream?.stop()
+            if let failure { emitFailure(code: failure.code, message: failure.message) }
+
+            guard let active = stream else { exit(failure == nil ? EXIT_SUCCESS : EXIT_FAILURE) }
             stream = nil
-            emitter.emitError(failure, capturedAt: appSnapTimestamp())
-            exit(EXIT_FAILURE)
+            active.stop { [self] result in
+                if case let .failure(error) = result {
+                    if failure == nil {
+                        emitFailure(code: "capture_stop_failed", message: error.localizedDescription)
+                    }
+                    exit(EXIT_FAILURE)
+                }
+                exit(failure == nil ? EXIT_SUCCESS : EXIT_FAILURE)
+            }
         }
     }
 }

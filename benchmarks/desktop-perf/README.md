@@ -91,6 +91,8 @@ migration, create a second set with a build of that schema
 | `A7/*`, `L1/*`                            | Three new threads streaming a 900-word answer from real Claude Sonnet sessions at once: memory and CPU of the whole process tree.       |
 | `A8/*`                                    | 60 keys typed 100 ms apart in the composer while those sessions stream: keydown until the frame after the input event.                  |
 | `A10/mb-per-thread`                       | Memory change of the whole tree per thread once the three turns have finished and their sessions are still alive.                       |
+| `LC1/*`, `LC2/*`                          | Opt-in `longchat` suite: first open and switch back of each realistic long thread (pointerdown until the transcript is at the end).     |
+| `LC3/*`, `LC4/*`                          | Same suite: 90 wheel ticks and a 40×1200 px fling per long thread; frames over 33 ms and the 95th percentile frame time on the GPU.     |
 
 The `A*` keys follow the numbering of the third-party benchmark this work started from;
 its test definitions are not documented, so the match is by name and unit only.
@@ -125,6 +127,79 @@ cause and is counted in `failed`; it is never dropped or replaced.
 - The app under test reads the real provider homes (`~/.claude`, `~/.codex`), as any
   install does. Backend memory after launch therefore depends on how many provider
   transcripts this Mac holds.
+
+## Long chats
+
+The generic seeded threads have no turn ids and tiny payloads, so they do not look like
+real long agent threads. [`seed-realistic-threads.ts`](seed-realistic-threads.ts) adds
+three threads whose shape follows aggregate statistics of real data homes (all content
+is synthetic): `real-thread-agent-heavy` (275 messages, 5,751 activities, 9.7 MB of
+payloads; 1,976 activities fit the detail window), `real-thread-agent-mid` (70 messages,
+1,241 activities) and `real-thread-prose` (300 long markdown messages with code and
+tables, no tools). Assistant messages carry turn ids, tool payloads range 0.2–16 KB and
+about one `context-window.updated` follows each tool call.
+
+**Headless suite** ([`longchat.mjs`](longchat.mjs)): real backend in web mode plus the
+build's production web bundle in headless Chromium. It runs with the screen locked.
+
+```bash
+# Once per build schema: seeded template + realistic threads, migrated.
+node benchmarks/desktop-perf/longchat.mjs --prepare-base --build main
+# Two builds alternate A B B A; --profile adds CPU profiles (build with
+# SYNARA_WEB_SOURCEMAP=hidden to resolve them), --capture writes snapshot frames.
+node benchmarks/desktop-perf/longchat.mjs --build main --build branch --label x
+node benchmarks/desktop-perf/longchat-report.mjs benchmarks/desktop-perf/results/longchat-*-x.json
+```
+
+It opens `small-38`, `prose-300`, `agent-mid`, `agent-heavy` and `synthetic-1400` cold
+(detail never loaded in the page) and warm (after a switch away), then scrolls each long
+one: 90 wheel ticks of 240 px, a 40×1200 px fling, the same fling again over measured
+rows, and a fling that samples how much of the viewport no row covers.
+
+| Reading                    | Meaning                                                                                      |
+| -------------------------- | -------------------------------------------------------------------------------------------- |
+| `cold/warm: first row ms`  | pointerdown on the sidebar row until the first new message row is on screen                  |
+| `cold/warm: at bottom ms`  | pointerdown on the sidebar row until new rows are on screen and the transcript is at the end |
+| `script`, `style+layout`   | main-thread time from `Performance.getMetrics` over the measurement                          |
+| `long tasks`               | tasks over 50 ms (PerformanceObserver)                                                       |
+| `snapshot KB / arrival ms` | largest WebSocket frame after the press, and when it arrived                                 |
+| `retained heap MB`         | JS heap after GC, after the cold open, minus before it                                       |
+| `blank >25% frames`        | fling frames where mounted rows cover less than 75% of the viewport                          |
+
+Each build gets 6 samples by default (`--runs`), alternating A B B A. Open timings are
+bimodal on the same build (a switch back to agent-heavy read 90, 109 and 109 ms), so 3
+samples only separate large differences: an apparent +23% on 3 samples was noise.
+`longchat-report.mjs` prints `median (min–max) [samples]` and marks a change
+`≈ spread` when the new median falls inside the first build's range. Treat such a
+change as no difference.
+
+The desktop app connects to the backend it spawned without permessage-deflate (the
+renderer declares it on the feature socket). The suite runs the client in a browser,
+where that condition cannot hold, so by default it sets the declared local-backend
+switch in `localStorage` before the page loads (`--no-desktop-local` turns it off). The
+switch only removes compression, only for a page on a loopback backend, and builds
+without it ignore it.
+
+Open timings start at **pointerdown**, so they include the press itself: by default
+the button is released after 80 ms (`--press-ms`, a typical mouse click), and work the
+app starts on pointerdown (subscribing a thread) overlaps it. `--press-ms 0` releases at
+once, which hides that overlap and reads the same as an instant synthetic click.
+
+Valid: main-thread times, long tasks, open latency, payload sizes, heap. **Not valid:
+frame times** — headless Chromium rasterizes in software. For frames on the real GPU,
+create a template set with the realistic threads and run the opt-in Electron suite (the
+window must stay in front):
+
+```bash
+node benchmarks/desktop-perf/prepare.mjs --ref main --name main --templates --template-set longchat --realistic
+node benchmarks/desktop-perf/run.mjs --build main --suites longchat --template-set longchat
+```
+
+Its keys use the `LC` prefix (`LC1/open-first-*` … `LC4/fling-gaps-*`); `L1/*` belongs to
+the load suite.
+
+`apps/web/perf/longChatDerivations.perf.test.ts` times the per-event derivation chain on
+the captured snapshot frames (`SYNARA_PERF=1`) and fails on a tenfold regression.
 
 ## Diagnostics
 

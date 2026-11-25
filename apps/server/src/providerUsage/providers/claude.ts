@@ -11,7 +11,7 @@
 // invalidate the on-disk/keychain login and force the user to re-authenticate.
 
 import { createHash } from "node:crypto";
-import { stat } from "node:fs/promises";
+import { readdir, stat } from "node:fs/promises";
 import nodePath from "node:path";
 import { promisify } from "node:util";
 
@@ -220,6 +220,19 @@ async function recoveryFileExists(path: string): Promise<boolean> {
   );
 }
 
+// A profile home can only select credentials through something inside it. Claude Code
+// and other Anthropic tools create the directory ahead of use, so an empty one is common
+// and must not turn every turn on this computer into a manual-only recovery.
+async function recoveryProfileHomeInUse(path: string): Promise<boolean> {
+  const info = await stat(path).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT" || error.code === "ENOTDIR") return null;
+    throw error;
+  });
+  if (info === null) return false;
+  if (!info.isDirectory()) return true;
+  return (await readdir(path)).length > 0;
+}
+
 function hasRecoveryAuthOverride(record: Record<string, unknown>): boolean {
   if (record.apiKeyHelper != null && record.apiKeyHelper !== "") return true;
   const environment = asRecord(record.env);
@@ -256,7 +269,7 @@ async function claudeRecoveryIdentity(ctx: ProviderUsageContext): Promise<string
     nodePath.join(ctx.homeDir, ".config", "anthropic"),
     ...(ctx.env.XDG_CONFIG_HOME ? [nodePath.join(ctx.env.XDG_CONFIG_HOME, "anthropic")] : []),
   ]);
-  for (const path of profileHomes) if (await recoveryFileExists(path)) return null;
+  for (const path of profileHomes) if (await recoveryProfileHomeInUse(path)) return null;
   const settingsPaths = new Set([
     nodePath.join(configHome, "settings.json"),
     nodePath.join(configHome, "settings.local.json"),

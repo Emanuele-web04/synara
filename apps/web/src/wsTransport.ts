@@ -22,6 +22,7 @@ import {
   WS_CLIENT_REQUIRED_CAPABILITIES,
   WS_COMPATIBILITY_QUERY,
   WS_FEATURE_PATH,
+  WS_FEATURE_UNCOMPRESSED_QUERY,
   WS_NEGOTIATE_HTTP_PATH,
   WS_NEGOTIATE_QUERY,
   WS_PROTOCOL_EPOCH,
@@ -60,6 +61,7 @@ import {
   type ProjectDevServerEvent,
   type ProjectFileChangeEvent,
   type ProjectWatchFileInput,
+  type ServerConfig,
   type ServerConfigStreamEvent,
   type ServerLifecycleStreamEvent,
   type ServerProviderStatusesUpdatedPayload,
@@ -374,6 +376,54 @@ export function rawSocketUrl(explicitUrl: string | null): string {
       : `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.hostname}:${window.location.port}`;
 }
 
+const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "localhost", "[::1]"]);
+
+/**
+ * Declared switch for measuring the desktop condition from a browser (the long-chat
+ * benchmark runs the client in web mode): with it, a web page served by a backend on
+ * this machine's loopback skips compression like the desktop does. It can only remove
+ * compression from this browser's own socket.
+ */
+export const LOCAL_BACKEND_UNCOMPRESSED_STORAGE_KEY = "synara:local-backend-uncompressed";
+
+function readLocalBackendUncompressedOverride(): boolean {
+  try {
+    return window.localStorage?.getItem(LOCAL_BACKEND_UNCOMPRESSED_STORAGE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether the app's own transport (`new WsTransport()` without an explicit URL) talks
+ * to a backend next to it, so permessage-deflate only adds latency. True for the
+ * desktop renderer on the backend its main process spawned (`desktopBridge.getWsUrl`,
+ * a loopback URL). False for every other route: remote hosts and execution
+ * transports (explicit URL), workspace frames (their controller URL comes from the
+ * embedding page), remote paths and non-loopback hosts. Loopback alone is not enough —
+ * an SSH tunnel or a local proxy also looks like 127.0.0.1 — so a browser needs the
+ * declared override above. When unsure, keep compression.
+ */
+export function shouldDeclineCompressionForLocalBackend(input: {
+  readonly constructedWithUrl: boolean;
+  readonly socketUrl: string;
+  readonly inWorkspaceFrame: boolean;
+  readonly desktopWsUrl: string | null | undefined;
+  readonly browserOverride: boolean;
+}): boolean {
+  if (input.constructedWithUrl || input.inWorkspaceFrame) return false;
+  let url: URL;
+  try {
+    url = new URL(input.socketUrl);
+  } catch {
+    return false;
+  }
+  if (url.protocol !== "ws:" || !LOOPBACK_HOSTNAMES.has(url.hostname)) return false;
+  if (url.pathname.startsWith("/ws/remote/")) return false;
+  if (input.desktopWsUrl) return input.desktopWsUrl === input.socketUrl;
+  return input.browserOverride;
+}
+
 export function makeSocketUrl(explicitUrl: string | null, path: string): string {
   return resolveRpcUrl(rawSocketUrl(explicitUrl), path);
 }
@@ -381,6 +431,7 @@ export function makeSocketUrl(explicitUrl: string | null, path: string): string 
 export function makeFeatureSocketUrl(
   explicitUrl: string | null,
   compatibility: WsBootstrapNegotiateResult,
+  options: { readonly declineCompression?: boolean } = {},
 ): string {
   const url = new URL(makeSocketUrl(explicitUrl, WS_FEATURE_PATH));
   url.searchParams.set(WS_COMPATIBILITY_QUERY.clientBuild, APP_VERSION);
@@ -392,6 +443,8 @@ export function makeFeatureSocketUrl(
   url.searchParams.set(WS_COMPATIBILITY_QUERY.serverInstanceId, compatibility.serverInstanceId);
   if (compatibility.remoteAttachmentId)
     url.searchParams.set("remoteAttachment", compatibility.remoteAttachmentId);
+  else if (options.declineCompression)
+    url.searchParams.set(WS_FEATURE_UNCOMPRESSED_QUERY.name, WS_FEATURE_UNCOMPRESSED_QUERY.value);
   return url.toString();
 }
 
@@ -477,6 +530,9 @@ const SOCKET_OPEN_TIMEOUT_MS = 90_000;
 const SOCKET_SILENCE_TIMEOUT_MS = 180_000;
 const FEATURE_CONNECTION_PROBE_TIMEOUT_MS = 180_000;
 const MAX_STREAM_OVERFLOW_RETRIES = 8;
+// How long a config subscription's opening snapshot may answer in place of a
+// `server.getConfig` round trip. It only needs to cover boot.
+const SERVER_CONFIG_BOOT_SNAPSHOT_MAX_AGE_MS = 10_000;
 
 interface ProtocolLayerHooks {
   readonly onProtocolFailure?: (error: unknown) => void;
@@ -1036,6 +1092,93 @@ export class WsTransport {
     (failure: WsThreadStreamFailure) => void
   >();
   private readonly latestPushByChannel = new Map<string, WsPush>();
+  // The config subscription's opening snapshot. It stands in for the boot
+  // `server.getConfig` only: it is the server's state at subscribe time, so it
+  // stops being offered once a later stream event or its age makes it stale.
+  private latestServerConfigSnapshot: ServerConfig | null = null;
+  private latestServerConfigSnapshotAtMs = 0;
+  // True once this session's config stream delivered its first event. After
+  // that no opening snapshot is still on its way, so nothing may wait for one.
+  private serverConfigStreamSettled = false;
+  private latestServerSettingsSnapshot: ServerSettingsUpdatedPayload["settings"] | null = null;
+  private readonly initialServerConfigWaiters = new Set<(config: ServerConfig | null) => void>();
+  private readonly initialServerSettingsWaiters = new Set<
+    (settings: ServerSettingsUpdatedPayload["settings"] | null) => void
+  >();
+
+  private resolveInitialServerConfigWaiters(config: ServerConfig | null): void {
+    if (!this.initialServerConfigWaiters || this.initialServerConfigWaiters.size === 0) return;
+    for (const resolve of this.initialServerConfigWaiters) {
+      resolve(config);
+    }
+    this.initialServerConfigWaiters.clear();
+  }
+
+  private resolveInitialServerSettingsWaiters(
+    settings: ServerSettingsUpdatedPayload["settings"] | null,
+  ): void {
+    if (!this.initialServerSettingsWaiters || this.initialServerSettingsWaiters.size === 0) return;
+    for (const resolve of this.initialServerSettingsWaiters) {
+      resolve(settings);
+    }
+    this.initialServerSettingsWaiters.clear();
+  }
+
+  getLatestServerConfigSnapshot(): ServerConfig | null {
+    if (this.latestServerConfigSnapshot === null) return null;
+    if (Date.now() - this.latestServerConfigSnapshotAtMs > SERVER_CONFIG_BOOT_SNAPSHOT_MAX_AGE_MS) {
+      this.latestServerConfigSnapshot = null;
+      return null;
+    }
+    return this.latestServerConfigSnapshot;
+  }
+
+  getLatestServerSettingsSnapshot(): ServerSettingsUpdatedPayload["settings"] | null {
+    return this.latestServerSettingsSnapshot;
+  }
+
+  waitForInitialServerConfigSnapshot(timeoutMs = 1500): Promise<ServerConfig | null> | null {
+    const snapshot = this.getLatestServerConfigSnapshot();
+    if (snapshot !== null) {
+      return Promise.resolve(snapshot);
+    }
+    if (
+      this.disposed ||
+      this.serverConfigStreamSettled ||
+      !this.listeners.has(WS_CHANNELS.serverConfigUpdated)
+    ) {
+      return null;
+    }
+    return new Promise((resolve) => {
+      const finish = (config: ServerConfig | null) => {
+        window.clearTimeout(timer);
+        this.initialServerConfigWaiters.delete(finish);
+        resolve(config);
+      };
+      const timer = window.setTimeout(() => finish(null), timeoutMs);
+      this.initialServerConfigWaiters.add(finish);
+    });
+  }
+
+  waitForInitialServerSettingsSnapshot(
+    timeoutMs = 1500,
+  ): Promise<ServerSettingsUpdatedPayload["settings"] | null> | null {
+    if (this.latestServerSettingsSnapshot !== null) {
+      return Promise.resolve(this.latestServerSettingsSnapshot);
+    }
+    if (this.disposed || !this.listeners.has(WS_CHANNELS.serverSettingsUpdated)) {
+      return null;
+    }
+    return new Promise((resolve) => {
+      const finish = (settings: ServerSettingsUpdatedPayload["settings"] | null) => {
+        window.clearTimeout(timer);
+        this.initialServerSettingsWaiters.delete(finish);
+        resolve(settings);
+      };
+      const timer = window.setTimeout(() => finish(null), timeoutMs);
+      this.initialServerSettingsWaiters.add(finish);
+    });
+  }
   private sequence = 0;
   private sessionVersion = 0;
   private state: WsTransportState = "connecting";
@@ -1091,6 +1234,8 @@ export class WsTransport {
   private featureSessionCounter = 0;
   private currentFeatureSession: FeatureSession | null = null;
   private readonly protocolOpenTimeoutMs: number | undefined;
+  /** See shouldDeclineCompressionForLocalBackend; fixed for the transport's lifetime. */
+  private readonly declineCompression: boolean;
   private readonly recovery: RecoveryState = createInitialRecoveryState();
   private recoveryEscalationTimer: number | null = null;
 
@@ -1102,6 +1247,14 @@ export class WsTransport {
     } = {},
   ) {
     this.explicitUrl = rawSocketUrl(url ?? null);
+    this.declineCompression = shouldDeclineCompressionForLocalBackend({
+      constructedWithUrl: url !== undefined,
+      socketUrl: this.explicitUrl,
+      // readWorkspaceFrame() is undefined outside a frame (never null).
+      inWorkspaceFrame: readWorkspaceFrame() !== undefined,
+      desktopWsUrl: window.desktopBridge?.getWsUrl?.(),
+      browserOverride: readLocalBackendUncompressedOverride(),
+    });
     this.analyticsMode = new URL(this.explicitUrl).pathname.startsWith("/ws/remote/")
       ? "remote"
       : "local";
@@ -1654,6 +1807,11 @@ export class WsTransport {
     this.projectAgentSubscriptions.clear();
     this.threadStreamFailureListeners.clear();
     this.shellStreamFailureListeners.clear();
+    this.latestServerConfigSnapshot = null;
+    this.serverConfigStreamSettled = false;
+    this.latestServerSettingsSnapshot = null;
+    this.resolveInitialServerConfigWaiters(null);
+    this.resolveInitialServerSettingsWaiters(null);
     this.currentFeatureSession = null;
     // Dispose can race with initial connection or reconnect promises. Mark them
     // handled before closing the runtime so test/browser teardown stays quiet.
@@ -1740,6 +1898,11 @@ export class WsTransport {
   }
 
   private createSession() {
+    this.latestServerConfigSnapshot = null;
+    this.serverConfigStreamSettled = false;
+    this.latestServerSettingsSnapshot = null;
+    this.resolveInitialServerConfigWaiters(null);
+    this.resolveInitialServerSettingsWaiters(null);
     const sessionVersion = ++this.sessionVersion;
     const remoteRecoveryVersion = this.remoteRecoveryVersion;
     const analyticsEvent = sessionVersion === 1 ? "connection.connect" : "connection.reconnect";
@@ -1761,16 +1924,21 @@ export class WsTransport {
 
       this.currentFeatureSession = featureSession;
       const featureRuntime = ManagedRuntime.make(
-        makeProtocolLayer(makeFeatureSocketUrl(this.explicitUrl, compatibility), {
-          ...(this.protocolOpenTimeoutMs !== undefined
-            ? { openTimeoutMs: this.protocolOpenTimeoutMs }
-            : {}),
-          onProtocolFailure: (error) => {
-            if (this.sessionVersion === sessionVersion) {
-              this.noteProtocolFailure(featureSession, error);
-            }
+        makeProtocolLayer(
+          makeFeatureSocketUrl(this.explicitUrl, compatibility, {
+            declineCompression: this.declineCompression,
+          }),
+          {
+            ...(this.protocolOpenTimeoutMs !== undefined
+              ? { openTimeoutMs: this.protocolOpenTimeoutMs }
+              : {}),
+            onProtocolFailure: (error) => {
+              if (this.sessionVersion === sessionVersion) {
+                this.noteProtocolFailure(featureSession, error);
+              }
+            },
           },
-        }),
+        ),
       );
       this.runtime = featureRuntime;
       const featureScope = featureRuntime.runSync(Scope.make());
@@ -2059,6 +2227,9 @@ export class WsTransport {
 
   private noteFeatureSessionAdopted(): void {
     this.clearRecoveryEscalationTimer();
+    // "tripped" is the recovery breaker's terminal phase: only a new transport leaves it.
+    // Enforced here, not only by callers, so no adoption path can revive a tripped one.
+    if (this.recovery.phase === "tripped") return;
     if (this.recovery.phase !== "ready") {
       this.recovery.phase = "ready";
       this.recovery.episodeRef = null;
@@ -2367,7 +2538,15 @@ export class WsTransport {
       channel,
       data,
     } as WsPush;
-    this.latestPushByChannel.set(channel, message);
+    // Never pin multi-MB orchestration shell/thread snapshot payloads in the
+    // replay map; orchestration streams manage their own cursor/snapshot flow.
+    if (
+      channel !== ORCHESTRATION_WS_CHANNELS.shellEvent &&
+      channel !== ORCHESTRATION_WS_CHANNELS.threadEvent &&
+      channel !== ORCHESTRATION_WS_CHANNELS.domainEvent
+    ) {
+      this.latestPushByChannel.set(channel, message);
+    }
     const listeners = this.listeners.get(channel);
     if (!listeners) return;
     for (const listener of listeners) {
@@ -2407,11 +2586,18 @@ export class WsTransport {
             client[WS_METHODS.subscribeServerConfig]({}),
             (event: ServerConfigStreamEvent) => {
               if (event.type === "snapshot") {
+                this.serverConfigStreamSettled = true;
+                this.latestServerConfigSnapshot = event.config;
+                this.latestServerConfigSnapshotAtMs = Date.now();
+                this.resolveInitialServerConfigWaiters(event.config);
                 this.emit(WS_CHANNELS.serverConfigUpdated, {
                   issues: event.config.issues,
                   providers: event.config.providers,
                 });
               } else if (event.type === "configUpdated") {
+                this.serverConfigStreamSettled = true;
+                this.latestServerConfigSnapshot = null;
+                this.resolveInitialServerConfigWaiters(null);
                 this.emit(WS_CHANNELS.serverConfigUpdated, event.payload);
               }
             },
@@ -2431,8 +2617,11 @@ export class WsTransport {
             client,
             "server.settings",
             client[WS_METHODS.subscribeServerSettings]({}),
-            (payload: ServerSettingsUpdatedPayload) =>
-              this.emit(WS_CHANNELS.serverSettingsUpdated, payload),
+            (payload: ServerSettingsUpdatedPayload) => {
+              this.latestServerSettingsSnapshot = payload.settings;
+              this.resolveInitialServerSettingsWaiters(payload.settings);
+              this.emit(WS_CHANNELS.serverSettingsUpdated, payload);
+            },
             restartChannel,
           );
         } else if (channel === WS_CHANNELS.serverKeepAwakeUpdated) {

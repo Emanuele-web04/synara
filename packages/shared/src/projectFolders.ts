@@ -9,8 +9,12 @@ import type { ProviderKind } from "@synara/contracts";
 import { PROVIDER_DESCRIPTOR_BY_KIND } from "./providerMetadata";
 import { isWorkspaceRootWithin, normalizeWorkspaceRootForComparison } from "./threadWorkspace";
 
-/** Providers that can grant extra folders natively: Codex writable roots, Claude additional directories. */
-const MULTI_FOLDER_PROVIDERS: ReadonlySet<string> = new Set(["codex", "claudeAgent"]);
+/** Native folder grants: Codex writable roots, Claude additional directories, Antigravity --add-dir. */
+const MULTI_FOLDER_PROVIDERS: ReadonlySet<string> = new Set([
+  "codex",
+  "claudeAgent",
+  "antigravity",
+]);
 
 /**
  * Why a chat in a multi-folder project cannot run, or null when it can. Providers that
@@ -21,7 +25,7 @@ const MULTI_FOLDER_PROVIDERS: ReadonlySet<string> = new Set(["codex", "claudeAge
 export function projectFoldersSessionIssue(input: { readonly provider: string }): string | null {
   if (!MULTI_FOLDER_PROVIDERS.has(input.provider)) {
     const name = PROVIDER_DESCRIPTOR_BY_KIND[input.provider as ProviderKind]?.displayName;
-    return `${name ?? input.provider} cannot access a project's additional folders. Use Codex or Claude for this multi-folder project.`;
+    return `${name ?? input.provider} cannot access a project's additional folders. Use Codex, Claude or Antigravity for this multi-folder project.`;
   }
   return null;
 }

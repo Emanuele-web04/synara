@@ -23,6 +23,7 @@ import {
   isLegacyHomeChatContainerRow as isSharedLegacyHomeChatContainerRow,
   isOrdinaryProjectRow as isSharedOrdinaryProjectRow,
 } from "@synara/shared/projectContainers";
+import { isPendingInteractionAwaitingResponse } from "@synara/shared/pendingInteractions";
 import { findProjectFolderProblem } from "@synara/shared/projectFolders";
 import { normalizeWorkspaceRootForComparison } from "@synara/shared/threadWorkspace";
 import { Effect } from "effect";
@@ -422,11 +423,7 @@ export function requireApprovalNotResponded(input: {
       (input.lifecycleGeneration === undefined ||
         entry.lifecycleGeneration === input.lifecycleGeneration),
   );
-  if (
-    interaction === undefined ||
-    interaction.status === "pending" ||
-    interaction.status === "retryable"
-  ) {
+  if (interaction === undefined || isPendingInteractionAwaitingResponse(interaction.status)) {
     return Effect.void;
   }
   return Effect.fail(

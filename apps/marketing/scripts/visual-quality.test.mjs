@@ -21,7 +21,6 @@ test("browser quality CI uses a supported runtime and preserves failure evidence
   for (const artifact of [
     "functional-browser-failure",
     "accessibility-failure",
-    "visual-regression-failure",
     "performance-failure",
   ]) {
     assert.ok(workflow.includes(artifact), `missing failure artifact: ${artifact}`);

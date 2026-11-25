@@ -20,6 +20,8 @@ const UNMEASURED_ROW_CHROME_SHARE = 0.5;
  *  slot, so a line within it of the edge never flips row ↔ block on every render. */
 const SLOT_FIT_MARGIN_PX = 2;
 
+const cachedLineHeightByElement = new WeakMap<HTMLElement, number>();
+
 /** Natural width of a line's inline content, or Infinity once it wraps. */
 function measureLineWidth(line: Element, lineHeightSource: HTMLElement): number {
   // Selecting the contents (not the block) measures the inline text and chips, not the
@@ -27,7 +29,12 @@ function measureLineWidth(line: Element, lineHeightSource: HTMLElement): number 
   const range = document.createRange();
   range.selectNodeContents(line);
   const rect = range.getBoundingClientRect();
-  const lineHeight = Number.parseFloat(getComputedStyle(lineHeightSource).lineHeight);
+  let lineHeight = cachedLineHeightByElement.get(lineHeightSource);
+  if (lineHeight === undefined) {
+    const parsed = Number.parseFloat(getComputedStyle(lineHeightSource).lineHeight);
+    lineHeight = Number.isFinite(parsed) ? parsed : Number.NaN;
+    cachedLineHeightByElement.set(lineHeightSource, lineHeight);
+  }
   if (Number.isFinite(lineHeight) && rect.height > lineHeight * 1.5) {
     return Number.POSITIVE_INFINITY;
   }
@@ -36,8 +43,8 @@ function measureLineWidth(line: Element, lineHeightSource: HTMLElement): number 
 
 /** Natural width of the draft's only line, or Infinity once it spans more than one. */
 function measureDraftLineWidth(editor: HTMLElement): number {
-  const [line, ...rest] = Array.from(editor.children);
-  if (rest.length > 0) return Number.POSITIVE_INFINITY;
+  if (editor.children.length > 1) return Number.POSITIVE_INFINITY;
+  const line = editor.children[0];
   if (!line) return 0;
   return measureLineWidth(line, editor);
 }
@@ -54,13 +61,48 @@ export function useComposerSingleRow(input: {
   const singleRow = eligible && fits;
   // Surface width minus editor width while the row shows: the controls beside the slot.
   const rowChromeWidthRef = useRef<number | null>(null);
+  const promptRef = useRef(prompt);
+  promptRef.current = prompt;
+  const predictionRef = useRef(prediction);
+  predictionRef.current = prediction;
+  const singleRowRef = useRef(singleRow);
+  singleRowRef.current = singleRow;
+  // The editor and surface currently measured, with the observer watching them.
+  const attachmentRef = useRef<{
+    readonly form: HTMLFormElement;
+    readonly editor: HTMLElement;
+    readonly surface: HTMLElement;
+    readonly observer: ResizeObserver | null;
+    readonly sync: () => void;
+  } | null>(null);
 
+  // Runs after every commit, because the composer form can mount after this hook's
+  // host (the pane content renders late) or be replaced without any measured input
+  // changing. The steady state is an identity check; the DOM is only queried, and the
+  // observer only rebuilt, when the form or its editor actually changed.
   useLayoutEffect(() => {
-    if (!eligible) return;
-    const editor = formRef.current?.querySelector<HTMLElement>(EDITOR_SELECTOR);
+    const attached = attachmentRef.current;
+    const form = eligible ? formRef.current : null;
+    if (
+      attached !== null &&
+      attached.form === form &&
+      attached.editor.isConnected &&
+      attached.surface.isConnected
+    ) {
+      return;
+    }
+    attached?.observer?.disconnect();
+    attachmentRef.current = null;
+    const editor = form?.querySelector<HTMLElement>(EDITOR_SELECTOR);
     const surface = editor?.closest<HTMLElement>(SURFACE_SELECTOR);
-    if (!editor || !surface) return;
+    if (!form || !editor || !surface) return;
     const sync = () => {
+      const currentPrompt = promptRef.current;
+      const currentPrediction = predictionRef.current;
+      if (currentPrompt.includes("\n")) {
+        setFits(false);
+        return;
+      }
       // Fractional widths: rounded clientWidth would leave a sub-pixel band where the row
       // wraps while the block measures the same line as fitting.
       const surfaceWidth = surface.getBoundingClientRect().width;
@@ -68,8 +110,12 @@ export function useComposerSingleRow(input: {
       // Dictation and hidden panes have no measurable editor slot. Preserve the last
       // visible layout until ResizeObserver sees the editor again.
       if (surfaceWidth <= 0 || editorWidth <= 0) return;
-      if (singleRow) {
+      if (singleRowRef.current) {
         rowChromeWidthRef.current = surfaceWidth - editorWidth;
+      }
+      if (currentPrompt.length === 0 && !currentPrediction) {
+        setFits(true);
+        return;
       }
       const rowChromeWidth =
         rowChromeWidthRef.current ?? surfaceWidth * UNMEASURED_ROW_CHROME_SHARE;
@@ -77,19 +123,43 @@ export function useComposerSingleRow(input: {
       // The ghost is drawn only while the editor is empty. That includes the moment an
       // accepted suggestion's draft is committed but not yet in the editor, so measure it
       // whenever it is there rather than only while the prompt is empty.
-      const ghost = prediction
+      const ghost = currentPrediction
         ? surface.querySelector<HTMLElement>(PREDICTION_LINE_SELECTOR)
         : null;
       const lineWidth = ghost ? measureLineWidth(ghost, ghost) : measureDraftLineWidth(editor);
-      setFits(!prompt.includes("\n") && lineWidth <= slotWidth - SLOT_FIT_MARGIN_PX);
+      setFits(lineWidth <= slotWidth - SLOT_FIT_MARGIN_PX);
     };
+    const observer =
+      typeof ResizeObserver === "undefined"
+        ? null
+        : new ResizeObserver(() => {
+            cachedLineHeightByElement.delete(editor);
+            const ghost = predictionRef.current
+              ? surface.querySelector<HTMLElement>(PREDICTION_LINE_SELECTOR)
+              : null;
+            if (ghost) cachedLineHeightByElement.delete(ghost);
+            sync();
+          });
+    observer?.observe(editor);
+    observer?.observe(surface);
+    attachmentRef.current = { form, editor, surface, observer, sync };
     sync();
-    if (typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(sync);
-    observer.observe(editor);
-    observer.observe(surface);
-    return () => observer.disconnect();
-  }, [eligible, formRef, prediction, prompt, singleRow]);
+  });
+
+  // Re-measure when the draft, the suggestion or the layout changes; the observer
+  // above covers size changes that happen without any of them changing.
+  useLayoutEffect(() => {
+    if (!eligible) return;
+    attachmentRef.current?.sync();
+  }, [eligible, prediction, prompt, singleRow]);
+
+  useLayoutEffect(
+    () => () => {
+      attachmentRef.current?.observer?.disconnect();
+      attachmentRef.current = null;
+    },
+    [],
+  );
 
   return singleRow;
 }

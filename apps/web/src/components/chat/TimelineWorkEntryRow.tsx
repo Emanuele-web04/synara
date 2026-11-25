@@ -79,7 +79,7 @@ import { ToolCallDetailsContent } from "./ToolCallDetailsDialog";
 import { DisclosureChevron } from "../ui/DisclosureChevron";
 import { DisclosureRegion } from "../ui/DisclosureRegion";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-import { fileDiffStatsByPath, resolveFileDiffStatByChangedPath } from "~/lib/diffRendering";
+import { fileDiffStatsByPath, resolveFileDiffStatByChangedPath } from "~/lib/diffTheme";
 import {
   extractToolArgumentField,
   isPrefixedToolArgumentSummary,
@@ -235,27 +235,73 @@ function workEntryPreview(workEntry: TimelineWorkEntry): string | null {
   return null;
 }
 
-// Provider read tools (e.g. Claude's `Read`) arrive as generic dynamic tool calls
-// without a `file-read` requestKind, so match their tool name to surface the read icon
-// instead of the generic tool/wrench fallback.
-function isFileReadToolEntry(workEntry: TimelineWorkEntry): boolean {
-  const name = (workEntry.toolName ?? "").toLowerCase().replace(/[^a-z]/g, "");
-  return name === "read" || name === "readfile" || name === "viewfile";
+// Exact-match candidate for icon selection: the normalized tool name wins; the
+// title's first word is the fallback for ACP calls that arrive with only a
+// `kind` and no native name (e.g. Grok's "Read /home/x" / "Find in src").
+function toolIdentityWord(workEntry: TimelineWorkEntry): string {
+  if (workEntry.toolName) {
+    return workEntry.toolName.toLowerCase().replace(/[^a-z]/g, "");
+  }
+  // A derived “Searched the web” label still describes a real web search.
+  if (workEntry.itemType === "web_search") return "";
+  const firstWord = workEntry.toolTitle?.trim().split(/\s+/, 1)[0] ?? "";
+  return firstWord.toLowerCase().replace(/[^a-z]/g, "");
 }
 
-// Provider search tools (Claude's `Grep`/`Glob`) wear the magnifier like
-// search commands do.
+// Provider read tools (Claude's `Read`, Grok/ACP `read_file`/`view`) arrive as
+// generic dynamic tool calls without a `file-read` requestKind, so match their
+// tool name to surface the read icon instead of the generic tool/wrench
+// fallback. The collapsed group summary shares the same read-name set in
+// toolCallGroup.logic.ts (READ_TOOL_NAMES).
+function isFileReadToolEntry(workEntry: TimelineWorkEntry): boolean {
+  const name = toolIdentityWord(workEntry);
+  return (
+    name === "read" ||
+    name === "reading" ||
+    name === "readfile" ||
+    name === "readfiles" ||
+    name === "readtextfile" ||
+    name === "view" ||
+    name === "viewfile" ||
+    name === "viewtextfile" ||
+    name === "hashlineread"
+  );
+}
+
+// Provider search tools (Claude's `Grep`/`Glob`, Grok/ACP `search`/`find`) wear
+// the magnifier like search commands do. Keep in sync with SEARCH_TOOL_NAMES
+// in toolCallGroup.logic.ts.
 function isSearchToolEntry(workEntry: TimelineWorkEntry): boolean {
-  const name = (workEntry.toolName ?? "").toLowerCase().replace(/[^a-z]/g, "");
-  return name === "grep" || name === "glob";
+  const name = toolIdentityWord(workEntry);
+  return (
+    name === "grep" ||
+    name === "glob" ||
+    name === "search" ||
+    name === "searching" ||
+    name === "searched" ||
+    name === "find" ||
+    name === "finding" ||
+    name === "found" ||
+    name === "findfiles" ||
+    name === "searchfiles" ||
+    name === "searchtool" ||
+    name === "hashlinegrep"
+  );
 }
 
 // Command rows reuse toolCallLabel's wrapper-aware classifier so reads wear the
 // open book, searches the magnifier, wrapped git/gh commands the GitHub mark,
-// and ordinary commands keep the terminal icon.
+// and ordinary commands keep the terminal icon. Structured read/search actions
+// (Codex commandActions, ACP `read` kinds) carry no command string; their
+// derived title ("Read"/"Searched") picks the icon instead.
 function commandWorkEntryIcon(workEntry: TimelineWorkEntry): LucideIcon {
   const command = workEntry.command ?? workEntry.rawCommand;
-  switch (command ? resolveCommandVisualKind(command) : "terminal") {
+  if (!command) {
+    if (isFileReadToolEntry(workEntry)) return FileReadIcon;
+    if (isSearchToolEntry(workEntry)) return SearchIcon;
+    return TerminalIcon;
+  }
+  switch (resolveCommandVisualKind(command)) {
     case "read":
       return FileReadIcon;
     case "search":
@@ -311,11 +357,14 @@ function workEntryIcon(workEntry: TimelineWorkEntry): LucideIcon {
   if (workEntry.itemType === "file_change") {
     return PencilIcon;
   }
-  if (workEntry.itemType === "web_search") return WebSearchIcon;
   if (workEntry.itemType === "image_generation") return ZapIcon;
   if (workEntry.itemType === "image_view") return EyeIcon;
+  // Read/search names outrank the generic buckets: Pi maps its native
+  // `grep`/`find` to web_search, and ACP read/execute kinds land on
+  // dynamic_tool_call — the icon should follow what the tool actually is.
   if (isFileReadToolEntry(workEntry)) return FileReadIcon;
   if (isSearchToolEntry(workEntry)) return SearchIcon;
+  if (workEntry.itemType === "web_search") return WebSearchIcon;
 
   switch (workEntry.itemType) {
     case "mcp_tool_call":
@@ -481,6 +530,14 @@ function commandRowDisplay(
   return literal
     ? { heading: running ? "chat:runStatus_running" : "chat:ran", object: literal, literal: true }
     : null;
+}
+
+// What a failed call's row says about its failure ("Failed · exit 1"), or null
+// for a call that did not fail. Shared with the working indicator.
+export function workEntryFailureMetaText(workEntry: TimelineWorkEntry): string | null {
+  if (toolWorkEntryStatus(workEntry) !== "failed") return null;
+  const { exitCode } = deriveToolFailureSummary(workEntry.toolDetails);
+  return exitCode !== null ? `Failed · exit ${exitCode}` : "Failed";
 }
 
 export interface WorkEntryDisplayParts {
@@ -729,22 +786,14 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
   );
   // A failed call says so explicitly, with its exit code, instead of the
   // generic lifecycle meta. The output itself stays behind the disclosure.
-  const failure =
-    toolWorkEntryStatus(workEntry) === "failed"
-      ? deriveToolFailureSummary(workEntry.toolDetails)
-      : null;
-  const liveActivityMetaText = failure
+  const failureMetaText = workEntryFailureMetaText(workEntry);
+  const liveActivityMetaText = failureMetaText
     ? null
     : workEntry.liveActivity
       ? formatLiveActivityMeta(workEntry.liveActivity, liveActivityNowMs, {
           subagent: isSubagentTaskRow,
         })
       : null;
-  const failureMetaText = failure
-    ? failure.exitCode !== null
-      ? `Failed · exit ${failure.exitCode}`
-      : "Failed"
-    : null;
 
   // A computer-control denial renders as an actionable card (enable + retry)
   // instead of a buried tool-error line. Kept after the hooks above so the

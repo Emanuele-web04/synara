@@ -15,7 +15,10 @@ final class WindowFrameStream: NSObject, SCStreamOutput, SCStreamDelegate {
     private let onFailure: (AppSnapFailure) -> Void
     private let queue = DispatchQueue(label: "dev.synara.window-frame-stream")
     private var stream: SCStream?
+    private var startingCapture = false
     private var stopped = false
+    private var stopResult: Result<Void, Error>?
+    private var stopCompletions: [(Result<Void, Error>) -> Void] = []
     private var timer: DispatchSourceTimer?
     private var sourceSize = CGSize.zero
     private var framesPerSecond: Int
@@ -74,16 +77,25 @@ final class WindowFrameStream: NSObject, SCStreamOutput, SCStreamDelegate {
                         configuration: self.configuration(),
                         delegate: self
                     )
-                    self.stream = stream
                     do {
                         try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: self.queue)
                     } catch {
                         self.fail("capture_setup_failed", error.localizedDescription)
                         return
                     }
-                    stream.startCapture { [weak self] error in
-                        guard let self, let error else { return }
-                        self.queue.async { self.fail("capture_start_failed", error.localizedDescription) }
+                    self.stream = stream
+                    self.startingCapture = true
+                    stream.startCapture { [self] error in
+                        queue.async { [self] in
+                            startingCapture = false
+                            if let error {
+                                self.stream = nil
+                                fail("capture_start_failed", error.localizedDescription)
+                            }
+                            // A timeout or task Stop can arrive during startCapture.
+                            // Stop only after the start result so a late start cannot leak a stream.
+                            if stopped, stopResult == nil { stopCaptureOnQueue() }
+                        }
                     }
                     if self.monitorsWindow { self.startWindowMonitor() }
                 }
@@ -100,8 +112,8 @@ final class WindowFrameStream: NSObject, SCStreamOutput, SCStreamDelegate {
         }
     }
 
-    func stop() {
-        queue.async { [self] in stopOnQueue() }
+    func stop(completion: ((Result<Void, Error>) -> Void)? = nil) {
+        queue.async { [self] in stopOnQueue(completion: completion) }
     }
 
     private func configuration() -> SCStreamConfiguration {
@@ -150,14 +162,39 @@ final class WindowFrameStream: NSObject, SCStreamOutput, SCStreamDelegate {
         timer.resume()
     }
 
-    private func stopOnQueue() {
+    private func stopOnQueue(completion: ((Result<Void, Error>) -> Void)? = nil) {
+        if let stopResult {
+            completion?(stopResult)
+            return
+        }
+        if let completion { stopCompletions.append(completion) }
         guard !stopped else { return }
         stopped = true
         timer?.cancel()
         timer = nil
-        let active = stream
+        if !startingCapture { stopCaptureOnQueue() }
+    }
+
+    private func stopCaptureOnQueue() {
+        guard let active = stream else {
+            completeStop(.success(()))
+            return
+        }
         stream = nil
-        active?.stopCapture { _ in }
+        active.stopCapture { [self] error in
+            queue.async { [self] in
+                withExtendedLifetime(active) {
+                    completeStop(error.map { .failure($0) } ?? .success(()))
+                }
+            }
+        }
+    }
+
+    private func completeStop(_ result: Result<Void, Error>) {
+        stopResult = result
+        let completions = stopCompletions
+        stopCompletions.removeAll()
+        for completion in completions { completion(result) }
     }
 
     private func fail(_ code: String, _ message: String) {
@@ -178,6 +215,15 @@ final class WindowFrameStream: NSObject, SCStreamOutput, SCStreamDelegate {
     }
 
     func stream(_ stream: SCStream, didStopWithError error: any Error) {
-        queue.async { [self] in fail("capture_stopped", error.localizedDescription) }
+        queue.async { [self] in
+            guard self.stream === stream else { return }
+            self.stream = nil
+            startingCapture = false
+            if stopped {
+                completeStop(.success(()))
+            } else {
+                fail("capture_stopped", error.localizedDescription)
+            }
+        }
     }
 }

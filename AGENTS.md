@@ -43,6 +43,17 @@ Synara ships two desktop apps from the same `main`: **Synara** (Stable) and **Sy
 - Keep menus compact. Variants of one action (handoff targets, copy variants, fork targets, hub moves) share a single parent row that opens a submenu instead of each taking a top-level line. Imperative context menus get this from `children` on `ContextMenuItem` via [contextMenuGroup.ts](apps/web/src/lib/contextMenuGroup.ts), which renders a native submenu on desktop and a flyout in the browser; React menus use `MenuSub` from [menu.tsx](apps/web/src/components/ui/menu.tsx). A group with a single entry stays a plain row.
 - UI text must follow the font size the user chose in Settings. Use the `text-ui` tokens defined in the `@theme` block of [index.css](apps/web/src/index.css) and driven by [useAppTypography.ts](apps/web/src/hooks/useAppTypography.ts): `text-ui` for body copy, `text-ui-sm`/`text-ui-xs` for secondary text, `text-ui-lg` for emphasized lines and small panel titles, and `text-chat*` for transcript content. Inherit the UI font family. Do not use fixed Tailwind sizes such as `text-sm`, `text-xs`, or `text-[11px]`, or the long `text-[length:var(--app-font-size-…)]` form. Only dialog titles and large headings may use a fixed size; `apps/web/src/uiFontSize.test.ts` fails when fixed sizes are added.
 
+## Test isolation
+
+Test files run in parallel worker processes, and the web unit suite runs in random order (`--sequence.shuffle`). A test must pass in any order and leave nothing behind for the next test or file:
+
+- Reproduce an order failure with the seed Vitest prints: `--sequence.seed=<seed>`. Fix the leak; never pin an order, add a retry or widen a timeout.
+- Restore what you change before the next test: stores to their full initial state (`useStore.setState(useStore.getInitialState(), true)`), spies with `vi.restoreAllMocks()`, globals with `vi.unstubAllGlobals()`, env with `vi.unstubAllEnvs()`, and stubbed storage or maps cleared in `beforeEach`.
+- `vi.clearAllMocks()` keeps implementations. A test that changes a mock's implementation (`mockReturnValue`, `mockImplementation`) must have it re-set in `beforeEach`.
+- Create temp directories, servers, ports and databases per test file, never shared across files, and close them in `afterEach`/`afterAll`.
+- A test that defines a non-configurable global (for example, the WebMCP bridge) belongs in its own file.
+- Never leave an empty `describe`; delete the shell together with its last test.
+
 ## Local instance isolation
 
 Use a separate home directory and unused server/web ports when another Synara instance is running. Check the dev runner's dry-run output before starting an isolated instance; do not reset the user's database or reuse production state to make a test pass.

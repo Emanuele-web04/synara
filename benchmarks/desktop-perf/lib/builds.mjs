@@ -234,6 +234,8 @@ function writeWindowState(home) {
 async function launchOnce(build, home, profile, drive) {
   writeWindowState(home);
   const app = launchDesktop({ buildDir: build.dir, home, profile, debugPort: await freePort() });
+  let outcome;
+  let launchFailure;
   try {
     const { session } = await attachMainPage(app);
     await sleep(6000);
@@ -244,17 +246,30 @@ async function launchOnce(build, home, profile, drive) {
       `[...document.querySelectorAll('[role="dialog"]')].map((element) => element.innerText.replace(/\\s+/g, " ").slice(0, 60))`,
     );
     session.close();
-    return { dismissed, result, openDialogs };
-  } finally {
+    outcome = { dismissed, result, openDialogs };
+  } catch (error) {
+    launchFailure = { error };
+  }
+  try {
     const quit = await quitDesktop(app);
     if (quit.forced) throw new Error("Template launch did not quit cleanly");
+  } catch (error) {
+    if (!launchFailure) throw error;
   }
+  if (launchFailure) throw launchFailure.error;
+  return outcome;
 }
 
-function seed(build, home, shape) {
+/**
+ * Writes threads into `home` with the server code of `build`. `mode: "append-realistic"`
+ * only adds the long threads of seed-realistic-threads.ts to an already seeded home.
+ */
+export function seed(build, home, shape, { mode } = {}) {
   const benchDir = join(build.dir, "apps/server/.bench");
   mkdirSync(benchDir, { recursive: true });
-  cpSync(join(HERE, "../seed-home.ts"), join(benchDir, "seed-home.ts"));
+  for (const file of ["seed-home.ts", "seed-realistic-threads.ts"]) {
+    cpSync(join(HERE, "..", file), join(benchDir, file));
+  }
   const output = run("bun", [".bench/seed-home.ts"], {
     cwd: join(build.dir, "apps/server"),
     env: {
@@ -263,6 +278,7 @@ function seed(build, home, shape) {
       BENCH_SEED_HOME: home,
       BENCH_SEED_WORKSPACES: WORKSPACES_DIR,
       ...(shape ? { BENCH_SEED_SHAPE: JSON.stringify(shape) } : {}),
+      ...(mode ? { BENCH_SEED_MODE: mode } : {}),
     },
   });
   return JSON.parse(output.split("\n").at(-1));

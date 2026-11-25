@@ -32,6 +32,7 @@ import {
   countOutstandingBackgroundWork,
   derivePendingBackgroundWork,
   hasLiveTurnTailWork,
+  isSessionOrLatestTurnRunning,
 } from "./session-logic";
 import { getRememberedProjectUiState, projectCwdKey } from "./storePersistence";
 import { resolveInitialLastVisitedAt } from "./threadVisitedPersistence";
@@ -120,6 +121,7 @@ export function threadSessionsEqual(
   if (left == null || right == null) return false;
   return (
     left.provider === right.provider &&
+    left.supportsNativeTurnSteering === right.supportsNativeTurnSteering &&
     left.status === right.status &&
     left.orchestrationStatus === right.orchestrationStatus &&
     left.runtimeMode === right.runtimeMode &&
@@ -226,6 +228,7 @@ export function threadShellsEqual(left: ThreadShell | undefined, right: ThreadSh
     left.hasPendingUserInput === right.hasPendingUserInput &&
     left.hasActionableProposedPlan === right.hasActionableProposedPlan &&
     left.pendingBackgroundTaskCount === right.pendingBackgroundTaskCount &&
+    left.latestReplyPreview === right.latestReplyPreview &&
     left.pendingInteractions === right.pendingInteractions &&
     left.lastVisitedAt === right.lastVisitedAt
   );
@@ -747,8 +750,9 @@ function shouldRetainLiveUserMessageForHotPath(
 ): boolean {
   const latestTurn = previousThread.latestTurn;
   if (latestTurn && message.turnId != null && message.turnId === latestTurn.turnId) {
-    return (
-      latestTurn.state === "running" || previousThread.session?.orchestrationStatus === "running"
+    return isSessionOrLatestTurnRunning(
+      previousThread.session?.orchestrationStatus,
+      latestTurn.state,
     );
   }
   const createdAtMs = Date.parse(message.createdAt);
@@ -950,6 +954,9 @@ function readModelSessionFromThreadSession(
       previousThread?.runtimeMode ??
       incomingSession?.runtimeMode ??
       "full-access",
+    ...(previousSession.supportsNativeTurnSteering !== undefined
+      ? { supportsNativeTurnSteering: previousSession.supportsNativeTurnSteering }
+      : {}),
     activeTurnId: previousSession.activeTurnId ?? null,
     lastError: previousSession.lastError ?? null,
     updatedAt: previousSession.updatedAt,
@@ -1776,6 +1783,9 @@ export function normalizeThreadSession(
     status: toLegacySessionStatus(incoming.status),
     orchestrationStatus: incoming.status,
     runtimeMode: incoming.runtimeMode,
+    ...(incoming.supportsNativeTurnSteering !== undefined
+      ? { supportsNativeTurnSteering: incoming.supportsNativeTurnSteering }
+      : {}),
     activeTurnId: incoming.activeTurnId ?? undefined,
     createdAt: incoming.updatedAt,
     updatedAt: incoming.updatedAt,
@@ -1788,6 +1798,7 @@ export function normalizeThreadSession(
     previous.status === nextSession.status &&
     previous.orchestrationStatus === nextSession.orchestrationStatus &&
     previous.runtimeMode === nextSession.runtimeMode &&
+    previous.supportsNativeTurnSteering === nextSession.supportsNativeTurnSteering &&
     previous.activeTurnId === nextSession.activeTurnId &&
     previous.createdAt === nextSession.createdAt &&
     previous.updatedAt === nextSession.updatedAt &&
@@ -2108,9 +2119,13 @@ export function normalizeThreadFromReadModel(
     ...(resolvedHasActionableProposedPlan !== undefined
       ? { hasActionableProposedPlan: resolvedHasActionableProposedPlan }
       : {}),
-    // Only thread shells carry the server's background-task count; detail keeps it.
+    // Only thread shells carry the server's background-task count and reply preview; detail
+    // keeps them.
     ...(previous?.pendingBackgroundTaskCount !== undefined
       ? { pendingBackgroundTaskCount: previous.pendingBackgroundTaskCount }
+      : {}),
+    ...(previous?.latestReplyPreview !== undefined
+      ? { latestReplyPreview: previous.latestReplyPreview }
       : {}),
     turnDiffSummaries,
     activities,
@@ -2277,6 +2292,9 @@ export function normalizeThreadShellSnapshot(
       : {}),
     ...(incoming.pendingBackgroundTaskCount !== undefined
       ? { pendingBackgroundTaskCount: incoming.pendingBackgroundTaskCount }
+      : {}),
+    ...(incoming.latestReplyPreview !== undefined
+      ? { latestReplyPreview: incoming.latestReplyPreview }
       : {}),
     ...(previous?.pendingInteractions !== undefined
       ? { pendingInteractions: previous.pendingInteractions }

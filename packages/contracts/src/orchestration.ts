@@ -862,6 +862,7 @@ export const OrchestrationSession = Schema.Struct({
   status: OrchestrationSessionStatus,
   providerName: Schema.NullOr(TrimmedNonEmptyString),
   providerInstanceId: Schema.optional(ProviderInstanceId),
+  supportsNativeTurnSteering: Schema.optional(Schema.Boolean),
   runtimeMode: RuntimeMode.pipe(Schema.withDecodingDefault(() => DEFAULT_RUNTIME_MODE)),
   activeTurnId: Schema.NullOr(TurnId),
   lastError: Schema.NullOr(TrimmedNonEmptyString),
@@ -1028,6 +1029,9 @@ export const ThreadGoalContinuationTrigger = Schema.Literals([
   "interaction-mode-updated",
   "turn-completed",
   "startup-recovery",
+  // `thread.turn.resume`: continue an interrupted or failed turn (Resume,
+  // Continue task, quit resume) without adding a chat message. No goal needed.
+  "manual-resume",
 ]);
 export type ThreadGoalContinuationTrigger = typeof ThreadGoalContinuationTrigger.Type;
 /**
@@ -1234,6 +1238,9 @@ export const OrchestrationThread = Schema.Struct({
 });
 export type OrchestrationThread = typeof OrchestrationThread.Type;
 
+/** Upper bound, in UTF-16 code units and including the trailing "…", of `latestReplyPreview`. */
+export const THREAD_LATEST_REPLY_PREVIEW_MAX_LENGTH = 240;
+
 export const OrchestrationThreadShell = Schema.Struct({
   ...UsageLimitRecoveryFields,
   /** Durable project-import provenance; ordinary chats never request imported history. */
@@ -1336,6 +1343,15 @@ export const OrchestrationThreadShell = Schema.Struct({
    * stopped/errored); 0 otherwise. Absent from older servers.
    */
   pendingBackgroundTaskCount: Schema.optional(NonNegativeInt),
+  /**
+   * Plain-text start of the thread's newest finished assistant message that has text, for list
+   * rows: Markdown and code-fence markup removed (code kept as text), whitespace and newlines
+   * collapsed to single spaces, trimmed, at most `THREAD_LATEST_REPLY_PREVIEW_MAX_LENGTH` UTF-16
+   * code units ending in "…" when cut on a grapheme boundary. Server-derived; absent when the
+   * thread has no such message, when it is archived, and from older servers. Changes when an
+   * assistant message finishes, never per streamed delta.
+   */
+  latestReplyPreview: Schema.optional(Schema.String),
 });
 export type OrchestrationThreadShell = typeof OrchestrationThreadShell.Type;
 
@@ -1768,6 +1784,17 @@ const ThreadInteractionModeSetCommand = Schema.Struct({
 export const ComputerControlMode = Schema.Literals(["off", "request", "chat"]);
 export type ComputerControlMode = typeof ComputerControlMode.Type;
 
+export const TURN_RESUME_MAX_PROMPT_CHARS = 2_000;
+const TurnResumePrompt = TrimmedNonEmptyString.check(
+  Schema.isMaxLength(TURN_RESUME_MAX_PROMPT_CHARS),
+);
+
+const ThreadResumePreconditionSchema = Schema.Struct({
+  /** Turn in flight when the chat was recorded; null while the provider was still connecting. */
+  recordedTurnId: Schema.NullOr(TurnId),
+  recordedAt: IsoDateTime,
+});
+
 export const ThreadTurnStartCommand = Schema.Struct({
   type: Schema.Literal("thread.turn.start"),
   asyncUserInputResponse: Schema.optional(AsyncUserInputResponse),
@@ -1803,13 +1830,48 @@ export const ThreadTurnStartCommand = Schema.Struct({
   // has nothing in flight, and no turn finished on its own since the record was
   // taken (the recorded turn itself, or any later one). Clients cannot set it:
   // ClientThreadTurnStartCommand omits the field, so decoding strips a spoofed value.
-  resumePrecondition: Schema.optional(
+  resumePrecondition: Schema.optional(ThreadResumePreconditionSchema),
+  // Server-only conditional dispatch for a completed wave of delegated work.
+  gatewayCompletionPrecondition: Schema.optional(
     Schema.Struct({
-      /** Turn in flight when the chat was recorded; null while the provider was still connecting. */
-      recordedTurnId: Schema.NullOr(TurnId),
-      recordedAt: IsoDateTime,
+      sourceTurnId: TurnId,
+      provider: ProviderKind,
+      instanceId: Schema.optional(ProviderInstanceId),
+      runtimeMode: RuntimeMode,
+      latestUserMessageAt: Schema.NullOr(IsoDateTime),
     }),
   ),
+  createdAt: IsoDateTime,
+});
+
+/**
+ * Continues the thread's interrupted work without adding a chat message: the
+ * newest request is delivered again when it never reached the provider,
+ * otherwise an interrupted or failed latest turn continues from the
+ * conversation.
+ */
+const ThreadTurnResumeCommand = Schema.Struct({
+  type: Schema.Literal("thread.turn.resume"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  computerControlGeneration: Schema.optional(NonNegativeInt),
+  // Server-only (quit resume), stripped from clients by ClientThreadTurnResumeCommand:
+  // the same atomic re-check `thread.turn.start` applies, and the recorded prompt.
+  resumePrecondition: Schema.optional(ThreadResumePreconditionSchema),
+  continuationPrompt: Schema.optional(TurnResumePrompt),
+  createdAt: IsoDateTime,
+});
+
+const ClientThreadTurnResumeCommand = Schema.Struct({
+  type: Schema.Literal("thread.turn.resume"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  /**
+   * The resuming person's current computer-control generation: their consent
+   * to restore the computer access a resent message asked for. Without it (a
+   * remote device, an automatic resume) the resend runs without computer access.
+   */
+  computerControlGeneration: Schema.optional(NonNegativeInt),
   createdAt: IsoDateTime,
 });
 
@@ -2023,6 +2085,7 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadRuntimeModeSetCommand,
   ThreadInteractionModeSetCommand,
   ThreadTurnStartCommand,
+  ThreadTurnResumeCommand,
   ThreadClaudeCacheRespondCommand,
   ThreadTurnInterruptCommand,
   ThreadTaskStopCommand,
@@ -2062,6 +2125,7 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadRuntimeModeSetCommand,
   ThreadInteractionModeSetCommand,
   ClientThreadTurnStartCommand,
+  ClientThreadTurnResumeCommand,
   ThreadClaudeCacheRespondCommand,
   ThreadTurnInterruptCommand,
   ThreadTaskStopCommand,
@@ -2081,6 +2145,8 @@ const ThreadSessionSetCommand = Schema.Struct({
   commandId: CommandId,
   threadId: ThreadId,
   session: OrchestrationSession,
+  // Server-only identity of a starting resume that has no visible user message.
+  pendingResumeMessageId: Schema.optional(MessageId),
   expectedSessionStatus: Schema.optional(OrchestrationSessionStatus),
   expectedSessionUpdatedAt: Schema.optional(IsoDateTime),
   createdAt: IsoDateTime,
@@ -2690,6 +2756,10 @@ export const ThreadGoalContinuationRequestedPayload = Schema.Struct({
   goalStartedAt: Schema.NullOr(IsoDateTime),
   trigger: ThreadGoalContinuationTrigger,
   sourceTurnId: Schema.optional(TurnId),
+  /** "manual-resume" only: provider input for the continuation; a default otherwise. */
+  resumePrompt: Schema.optional(TurnResumePrompt),
+  /** "manual-resume" only: consent to restore a resent message's computer access. */
+  resumeComputerControlGeneration: Schema.optional(NonNegativeInt),
   createdAt: IsoDateTime,
 });
 
@@ -2787,6 +2857,7 @@ export const ThreadSessionStopRequestedPayload = Schema.Struct({
 export const ThreadSessionSetPayload = Schema.Struct({
   threadId: ThreadId,
   session: OrchestrationSession,
+  pendingResumeMessageId: Schema.optional(MessageId),
 });
 
 export const ThreadProposedPlanUpsertedPayload = Schema.Struct({
@@ -3265,7 +3336,7 @@ export type OrchestrationReconcileProviderDeliveryResult =
  * the renderer can reply to the quit request only after the record exists.
  */
 export const QUIT_RESUME_MAX_THREADS = 256;
-export const QUIT_RESUME_MAX_PROMPT_CHARS = 2_000;
+export const QUIT_RESUME_MAX_PROMPT_CHARS = TURN_RESUME_MAX_PROMPT_CHARS;
 
 export const OrchestrationPrepareQuitResumeInput = Schema.Struct({
   threadIds: Schema.Array(ThreadId).check(

@@ -79,14 +79,23 @@ describe("decider same-thread provider handoff", () => {
     expect(single?.payload).not.toHaveProperty("branch");
   });
 
-  it("keeps same-provider account switches on the new-thread handoff", async () => {
+  it("hands off to another account of the same provider in place", async () => {
+    const target = { provider: "codex", instanceId: "codex-work", model: "gpt-5.4" } as const;
+    const event = await decideHandoff(target as ModelSelection);
+    const single = Array.isArray(event) ? event[0] : event;
+    expect(single).toMatchObject({
+      type: "thread.meta-updated",
+      payload: { modelSelection: target, providerHandoff: { sourceModelSelection: SOURCE } },
+    });
+  });
+
+  it("rejects a handoff to the account the thread already runs on", async () => {
+    await expect(decideHandoff({ provider: "codex", model: "gpt-5.5" })).rejects.toThrow(
+      /already runs on 'codex'/,
+    );
     await expect(
-      decideHandoff({
-        provider: "codex",
-        instanceId: "codex-work",
-        model: "gpt-5.4",
-      }),
-    ).rejects.toThrow(/hand off to a new thread instead/);
+      decideHandoff({ provider: "codex", instanceId: "codex", model: "gpt-5.5" } as ModelSelection),
+    ).rejects.toThrow(/already runs on 'codex'/);
   });
 
   it("rejects a handoff while the session is running", async () => {

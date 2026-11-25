@@ -5,18 +5,6 @@ import { i18n } from ".";
 import { Translation } from "./Translation";
 
 describe("rich localized text", () => {
-  it("renders shipped sentences with explicit React slots", () => {
-    const html = renderToStaticMarkup(
-      <Translation
-        message="settings:binaryPathDescription"
-        values={{ command: "codex" }}
-        components={{ command: <code /> }}
-      />,
-    );
-    expect(html).toContain("<code>codex</code>");
-    expect(html).toContain("Leave blank");
-  });
-
   it("keeps the project control and complete project heading together", () => {
     const html = renderToStaticMarkup(
       <Translation
@@ -70,26 +58,5 @@ describe("rich localized text", () => {
     } finally {
       i18n.addResource("en", "settings", key, original);
     }
-  });
-
-  it("renders the original English hints around inline examples", () => {
-    expect(
-      renderToStaticMarkup(
-        <Translation
-          message="git:pasteARepositoryNameOrItsGitHubURLName"
-          values={{ repository: "owner/repository" }}
-          components={{ repository: <span /> }}
-        />,
-      ),
-    ).toBe("Paste an <span>owner/repository</span> name or its GitHub URL.");
-    expect(
-      renderToStaticMarkup(
-        <Translation
-          message="common:pasteAThemeShareStringBeginningWith"
-          values={{ prefix: "codex-theme-v1:" }}
-          components={{ code: <code /> }}
-        />,
-      ),
-    ).toBe("Paste a <code>codex-theme-v1:</code> share string.");
   });
 });

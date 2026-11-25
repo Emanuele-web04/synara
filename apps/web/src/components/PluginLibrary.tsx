@@ -3,6 +3,7 @@
 // Layer: Route-level screen
 // Exports: PluginLibrary
 
+import { COARSE_HIT_AREA_CLASS_NAME, FOCUS_RING_CLASS_NAME } from "~/touchTargetStyles";
 import {
   PROVIDER_DISPLAY_NAMES,
   type ProviderKind,
@@ -212,7 +213,9 @@ function TabButton({
     <button
       type="button"
       className={cn(
-        "inline-flex h-10 items-center border-b-2 px-1 text-ui-lg font-medium transition-colors",
+        "inline-flex h-10 items-center rounded-t-sm border-b-2 px-1 text-ui-lg font-medium transition-colors",
+        FOCUS_RING_CLASS_NAME,
+        COARSE_HIT_AREA_CLASS_NAME,
         active
           ? "border-foreground text-foreground"
           : "border-transparent text-muted-foreground hover:text-foreground/80",
@@ -244,6 +247,8 @@ function ProviderToggleButton({
       type="button"
       className={cn(
         "inline-flex h-7 items-center gap-1.5 rounded-full px-2.5 text-ui font-medium transition-colors",
+        FOCUS_RING_CLASS_NAME,
+        COARSE_HIT_AREA_CLASS_NAME,
         active
           ? "bg-[var(--color-text-foreground)] text-[var(--color-background-surface)] shadow-xs"
           : "text-muted-foreground hover:bg-[var(--sidebar-accent)] hover:text-foreground",
@@ -548,29 +553,33 @@ export function PluginLibrary(props?: {
         />
       </div>
       <div className="flex-1" />
-      <div className="inline-flex rounded-full border border-border/60 bg-background/60 p-0.5">
-        {enabledProviderOrder.map((provider) => {
-          const capabilities = providerCapabilities[provider];
-          const label = PROVIDER_DISPLAY_NAMES[provider];
-          return (
-            <ProviderToggleButton
-              key={provider}
-              label={label}
-              provider={provider}
-              active={effectiveProvider === provider}
-              disabled={!capabilities.plugins && !capabilities.skills}
-              onClick={() => {
-                setSelectedProvider(provider);
-                if (selectedTab === "plugins" && !capabilities.plugins && capabilities.skills) {
-                  setSelectedTab("skills");
-                }
-                if (selectedTab === "skills" && !capabilities.skills && capabilities.plugins) {
-                  setSelectedTab("plugins");
-                }
-              }}
-            />
-          );
-        })}
+      {/* Scrolls sideways when the providers outgrow the bar; the block padding leaves room
+          for the pills' coarse-pointer hit areas inside the scroller. */}
+      <div className="-my-2 min-w-0 overflow-x-auto py-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        <div className="inline-flex rounded-full border border-border/60 bg-background/60 p-0.5">
+          {enabledProviderOrder.map((provider) => {
+            const capabilities = providerCapabilities[provider];
+            const label = PROVIDER_DISPLAY_NAMES[provider];
+            return (
+              <ProviderToggleButton
+                key={provider}
+                label={label}
+                provider={provider}
+                active={effectiveProvider === provider}
+                disabled={!capabilities.plugins && !capabilities.skills}
+                onClick={() => {
+                  setSelectedProvider(provider);
+                  if (selectedTab === "plugins" && !capabilities.plugins && capabilities.skills) {
+                    setSelectedTab("skills");
+                  }
+                  if (selectedTab === "skills" && !capabilities.skills && capabilities.plugins) {
+                    setSelectedTab("plugins");
+                  }
+                }}
+              />
+            );
+          })}
+        </div>
       </div>
     </>
   );

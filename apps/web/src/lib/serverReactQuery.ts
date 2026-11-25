@@ -4,6 +4,7 @@ import type {
   ServerConfig,
   ServerConsumeCodexResetCreditInput,
   ServerListProviderUsageInput,
+  ServerProviderUsageSnapshot,
   ServerProviderStatus,
   ServerStopLocalServerInput,
   StatsGetRecapInput,
@@ -13,6 +14,12 @@ import type {
 import { mutationOptions, queryOptions, type QueryClient } from "@tanstack/react-query";
 import { ensureNativeApi } from "~/nativeApi";
 import {
+  readLatestServerConfigSnapshot,
+  readLatestServerSettingsSnapshot,
+  waitForInitialServerConfigSnapshot,
+  waitForInitialServerSettingsSnapshot,
+} from "~/wsNativeApi";
+import {
   EXPENSIVE_READ_RETRY_OPTIONS,
   expensiveReadRetryDelay,
   shouldRetryExpensiveRead,
@@ -21,6 +28,8 @@ import { withWorkspaceKeybindings } from "./hosts/workspaceKeybindings";
 
 export const LOCAL_SERVERS_VISIBLE_REFETCH_INTERVAL_MS = 10_000;
 const LOCAL_SERVERS_DEFAULT_STALE_TIME_MS = 3_000;
+
+type ProviderUsageScope = "antigravity" | "other";
 
 export const serverQueryKeys = {
   all: ["server"] as const,
@@ -34,6 +43,8 @@ export const serverQueryKeys = {
     ["server", "providerUsage", provider ?? null, homePath ?? null] as const,
   providerUsageRoot: () => ["server", "providerUsage"] as const,
   allProviderUsage: () => ["server", "allProviderUsage"] as const,
+  scopedProviderUsage: (scope: ProviderUsageScope) =>
+    ["server", "allProviderUsage", scope] as const,
   profileStats: (utcOffsetMinutes: number) =>
     ["server", "profileStats", "peak-hour-v2", utcOffsetMinutes] as const,
   profileTokenStats: (utcOffsetMinutes: number) =>
@@ -52,12 +63,64 @@ export const serverMutationKeys = {
   stopLocalServer: () => ["server", "mutation", "stopLocalServer"] as const,
 };
 
+type NativeApiInstance = ReturnType<typeof ensureNativeApi>;
+
+let sharedInitialServerConfigRequest: {
+  readonly api: NativeApiInstance;
+  readonly request: Promise<ServerConfig>;
+} | null = null;
+
+/**
+ * Loads the config for a cache that holds none yet. The config subscription
+ * opens with a full snapshot, so boot reuses it (or briefly waits for it)
+ * instead of issuing a second `server.getConfig`. Only for that first load:
+ * the snapshot is the server's state at subscribe time, so a refetch must ask
+ * the server.
+ */
+function fetchInitialServerConfigShared(): Promise<ServerConfig> {
+  // Bound before anything is awaited. Resolving the API again after the wait
+  // would open a new connection on behalf of a query whose transport was
+  // disposed or replaced in the meantime; the bound one just rejects.
+  const api = ensureNativeApi();
+  const streamSnapshot = readLatestServerConfigSnapshot();
+  if (streamSnapshot !== null) {
+    return Promise.resolve(streamSnapshot);
+  }
+  if (sharedInitialServerConfigRequest?.api === api) {
+    return sharedInitialServerConfigRequest.request;
+  }
+  const pendingStreamSnapshot = waitForInitialServerConfigSnapshot();
+  const request = (
+    pendingStreamSnapshot !== null
+      ? pendingStreamSnapshot.then((awaitedSnapshot) => awaitedSnapshot ?? api.server.getConfig())
+      : api.server.getConfig()
+  ).finally(() => {
+    if (sharedInitialServerConfigRequest?.request === request) {
+      sharedInitialServerConfigRequest = null;
+    }
+  });
+  sharedInitialServerConfigRequest = { api, request };
+  return request;
+}
+
 export function serverConfigQueryOptions() {
   return queryOptions({
     queryKey: serverQueryKeys.config(),
-    queryFn: async () => {
-      const api = ensureNativeApi();
-      return withWorkspaceKeybindings(await api.server.getConfig());
+    queryFn: async ({ client, queryKey }) => {
+      // An invalidation or refetch means the caller believes the config changed.
+      if (client.getQueryData(queryKey) !== undefined) {
+        return withWorkspaceKeybindings(await ensureNativeApi().server.getConfig());
+      }
+      const config = await fetchInitialServerConfigShared();
+      const latest = latestProviderStatusSnapshotByQueryClient.get(client);
+      return withWorkspaceKeybindings(
+        latest?.reconciled
+          ? {
+              ...config,
+              providers: mergeProviderStatusSnapshots(config.providers, latest.providers),
+            }
+          : config,
+      );
     },
     staleTime: Infinity,
   });
@@ -208,7 +271,8 @@ export async function reconcileServerProviderStatuses(
       if (inFlight) return inFlight;
       // Coalesce initial stream hydration without fetchQuery's automatic cache
       // write, which would erase a newer cache writer before reconciliation.
-      const request = ensureNativeApi().server.getConfig();
+      // Only reached while the cache holds no config, so the boot snapshot applies.
+      const request = fetchInitialServerConfigShared();
       providerConfigHydrationByQueryClient.set(queryClient, request);
       try {
         return await request;
@@ -315,8 +379,25 @@ export function serverEnvironmentQueryOptions() {
 export function serverSettingsQueryOptions() {
   return queryOptions({
     queryKey: serverQueryKeys.settings(),
-    queryFn: async () => {
+    queryFn: async ({ client, queryKey }) => {
+      // Bound before the wait below, for the reason given in
+      // fetchInitialServerConfigShared.
       const api = ensureNativeApi();
+      // The settings stream may seed an empty cache at boot. A refetch always
+      // asks the server: it can run before the push for the change that caused it.
+      if (client.getQueryData(queryKey) === undefined) {
+        const immediateSnapshot = readLatestServerSettingsSnapshot();
+        if (immediateSnapshot !== null) {
+          return immediateSnapshot;
+        }
+        const pendingStreamSnapshot = waitForInitialServerSettingsSnapshot();
+        if (pendingStreamSnapshot !== null) {
+          const awaitedSnapshot = await pendingStreamSnapshot;
+          if (awaitedSnapshot !== null) {
+            return awaitedSnapshot;
+          }
+        }
+      }
       return api.server.getSettings();
     },
     staleTime: Infinity,
@@ -445,6 +526,31 @@ export async function fetchAllProviderUsage(input: ServerListProviderUsageInput 
   return api.server.listProviderUsage(input);
 }
 
+function filterProviderUsageScope(
+  data: readonly ServerProviderUsageSnapshot[],
+  scope: ProviderUsageScope,
+) {
+  return data.filter(
+    (snapshot) => (snapshot.provider === "antigravity") === (scope === "antigravity"),
+  );
+}
+
+// Keep both rail queries current after an explicit Settings refresh of the full batch.
+export function setProviderUsageQueryData(
+  queryClient: QueryClient,
+  data: readonly ServerProviderUsageSnapshot[],
+) {
+  queryClient.setQueryData(serverQueryKeys.allProviderUsage(), data);
+  queryClient.setQueryData(
+    serverQueryKeys.scopedProviderUsage("antigravity"),
+    filterProviderUsageScope(data, "antigravity"),
+  );
+  queryClient.setQueryData(
+    serverQueryKeys.scopedProviderUsage("other"),
+    filterProviderUsageScope(data, "other"),
+  );
+}
+
 export async function consumeCodexResetCredit(input: ServerConsumeCodexResetCreditInput) {
   const api = ensureNativeApi();
   return api.server.consumeCodexResetCredit(input);
@@ -553,24 +659,34 @@ export function serverUsageAnalyticsQueryOptions(
   });
 }
 
-// Live remaining-usage for every provider. Always fetches the full batch under a single query
-// key so every surface (settings panel, header chips, branch toolbar) shares one cache entry
-// and one request cycle; the server caches per-account snapshots, so the batch is cheap.
+// Single-provider surfaces use scoped batches so Antigravity's CLI can't delay unrelated quota.
+// Other surfaces keep the shared full-batch cache.
 export function serverAllProviderUsageQueryOptions(
   input:
     | boolean
     | {
         enabled?: boolean;
+        scope?: ProviderUsageScope;
       } = true,
 ) {
   const enabled = typeof input === "boolean" ? input : (input.enabled ?? true);
+  const scope = typeof input === "boolean" ? undefined : input.scope;
   return queryOptions({
-    queryKey: serverQueryKeys.allProviderUsage(),
+    queryKey: scope
+      ? serverQueryKeys.scopedProviderUsage(scope)
+      : serverQueryKeys.allProviderUsage(),
     enabled,
     staleTime: 60_000,
     refetchInterval: 60_000,
     refetchOnWindowFocus: false,
     retry: false,
-    queryFn: async () => fetchAllProviderUsage(),
+    queryFn: async () => {
+      if (!scope) return fetchAllProviderUsage();
+      const data = await fetchAllProviderUsage(
+        scope === "antigravity" ? { provider: "antigravity" } : { excludeProvider: "antigravity" },
+      );
+      // Older remote hosts can ignore excludeProvider. Keep each rail cache scoped.
+      return filterProviderUsageScope(data, scope);
+    },
   });
 }

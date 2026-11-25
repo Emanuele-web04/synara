@@ -6,6 +6,7 @@
 //      One component, one voice: a title, a line of orientation, and an action only where
 //      there is something to do.
 
+import { SIDEBAR_EMPTY_STATE_CLASS_NAME } from "~/sidebarRowStyles";
 import type { Space } from "~/types";
 import { Button } from "./ui/button";
 import { useTranslation } from "~/i18n";
@@ -24,11 +25,7 @@ export function SpaceEmptyState(props: {
   // a global "nothing yet" up as a per-Space problem, and the bulk-move action below
   // would open a picker with nothing in it.
   if (!props.hasProjectsElsewhere) {
-    return (
-      <p className="px-2 pt-4 text-center text-ui text-muted-foreground/58">
-        {t("common:emptyStates_noProjects")}
-      </p>
-    );
+    return <p className={SIDEBAR_EMPTY_STATE_CLASS_NAME}>{t("common:emptyStates_noProjects")}</p>;
   }
 
   const title = props.space

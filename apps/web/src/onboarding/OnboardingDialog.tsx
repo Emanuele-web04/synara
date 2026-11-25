@@ -52,6 +52,12 @@ import { type OnboardingReceiptRow, ReadyStep } from "./steps/ReadyStep";
 import { useProviderDetection } from "./useProviderDetection";
 import { useProviderSetup } from "./useProviderSetup";
 
+/**
+ * Product illustrations sit on a calm ground: the landscape stays in the margins, where
+ * it cannot fight the faux UI's own text.
+ */
+const ILLUSTRATION_STAGE_CLASS_NAME = "overflow-hidden bg-background/85";
+
 type Translate = ReturnType<typeof useTranslation>["t"];
 
 /** Counts up to ten read as words ("seven more"); larger ones stay digits. */
@@ -243,7 +249,7 @@ function OnboardingFlow(props: {
             description={t("onboarding:tasksDescription", { app: APP_BASE_NAME })}
             secondary={{ label: t("common:app_back"), onClick: goBack }}
             primary={{ label: t("git:continue"), onClick: goNext }}
-            stageClassName="overflow-hidden"
+            stageClassName={ILLUSTRATION_STAGE_CLASS_NAME}
           >
             <div className="size-full px-8 py-10">
               <FitStage {...TASKS_STAGE_SIZE}>
@@ -261,10 +267,10 @@ function OnboardingFlow(props: {
             description={t("onboarding:pocketDescription", { app: APP_BASE_NAME })}
             secondary={{ label: t("common:app_back"), onClick: goBack }}
             primary={{ label: t("git:continue"), onClick: goNext }}
-            stageClassName="overflow-hidden"
+            stageClassName={ILLUSTRATION_STAGE_CLASS_NAME}
           >
             <div className="size-full px-8 pt-10">
-              <FitStage {...POCKET_STAGE_SIZE} align="bottom">
+              <FitStage {...POCKET_STAGE_SIZE}>
                 <PocketIllustration
                   host={t(onMac ? "onboarding:pocketHostMac" : "onboarding:pocketHostComputer")}
                 />
@@ -354,9 +360,19 @@ function OnboardingFlow(props: {
             value:
               providerSummary.detecting > 0
                 ? t("settings:checking")
-                : readyAgents > 0
-                  ? t("onboarding:receiptAgentsReady", { count: readyAgents })
-                  : t("onboarding:receiptNoneYet"),
+                : [
+                    readyAgents > 0
+                      ? t("onboarding:receiptAgentsReady", { count: readyAgents })
+                      : t("onboarding:receiptNoneYet"),
+                    // A signed-out agent is the one thing still owed after the tour.
+                    ...(providerSummary.needsSignIn > 0
+                      ? [
+                          t("onboarding:receiptAgentsNeedSignIn", {
+                            count: providerSummary.needsSignIn,
+                          }),
+                        ]
+                      : []),
+                  ].join(" · "),
             done: readyAgents > 0,
           },
         ];
@@ -383,6 +399,7 @@ function OnboardingFlow(props: {
             live={liveProviders}
             onProjectAdded={() => setFinishAfterProject(true)}
             onExplore={props.onComplete}
+            onBack={goBack}
             onBusyChange={props.onProjectBusyChange}
           />
         );

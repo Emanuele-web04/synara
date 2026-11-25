@@ -12,22 +12,27 @@ version, release notes and lockfile are final.
   - Manual publication requires the explicit `publish_release=true` input.
 - Runs lint, typecheck and every test in parallel with native preparation and
   packaging. Packaging starts after exact-source preflight and its portable
-  JavaScript, Cua and icon inputs are ready; it does not wait for `quality` or
-  `server_tests`. Both GitHub and npm publication depend directly on successful
-  `quality`, all `server_tests` shards and native artifact jobs. No tests are
-  removed. Narrow `native`, `icon`, and `js` validation stages cannot publish and
-  omit these full-suite gates.
+  JavaScript is ready. Each native packaging job prepares its Cua input, and
+  only macOS packaging waits for the icon catalog. Native packaging runs
+  independently of `quality` and `server_tests`. Both GitHub and npm publication
+  depend directly on successful `quality`, all `server_tests` shards and native
+  artifact jobs. Narrow `native`, `icon`, and `js` validation stages cannot publish
+  and omit these full-suite gates.
 - Builds portable JavaScript once, verifies its source/lockfile/settings and
   output checksums on each consumer, and stages native dependencies per platform.
 - Builds five artifacts in parallel:
   - macOS `arm64` DMG
   - macOS `x64` DMG, cross-built on the same Apple Silicon runner type as
     `arm64` (the Intel runner took 15-20 minutes for the same work). Every
-    Mach-O in the app must carry the `x86_64` slice. A short `qualify_intel`
-    job then downloads it and runs the startup smoke on `macos-15-intel`:
-    under Rosetta 2 the app took 135 seconds to over 180 seconds to start.
-    That job installs only `@synara/scripts` and `@synara/cli`, the workspaces
-    the smoke imports.
+    Mach-O in the app must carry the `x86_64` slice. A `qualify_intel` job
+    downloads it and runs the startup smoke on `macos-15-intel`: under
+    Rosetta 2 the app took 135 seconds to over 180 seconds to start. That job
+    installs only `@synara/scripts` and `@synara/cli`, the workspaces the smoke
+    imports. It starts with the packaging job, installs, and then waits for
+    that job of the same run attempt to succeed before downloading its
+    artifact (see [CI setup](../.github/CI.md#intel-qualification-starts-with-packaging)).
+    Publication downloads only the artifact ID recorded after Intel startup
+    passes. Rerun Intel qualification after replacing a packaged x64 artifact.
   - Linux `x64` AppImage
   - Linux `arm64` AppImage on `ubuntu-24.04-arm`. It runs on a native arm64 host
     because `node-pty` and the patched Cua driver compile for the host, and the
@@ -260,19 +265,19 @@ rerun the producer, or intentionally bump the `cua-v1` key schema when invalidat
 the whole cache. Never edit provenance to make a hit pass. Packaging re-signs a
 separate staged copy, preserving cached bytes.
 
-Release native preparation starts after exact-source preflight alongside quality
-checks, portable JavaScript and the icon catalog restore. Cua preparation fetches
-only the release commit, except for the paired benchmark, which needs history.
-Packaging also fetches only the release commit. The packaging jobs download
-only their platform's prepared artifact from the same run, recompute the build
-environment key, and repeat executable/provenance verification. Missing artifacts
-or runner drift fail instead of falling back to unrelated binaries. These temporary
-handoff artifacts expire after 30 days; signing credentials are passed only to the
-packaging step. Once preflight and the required prepared inputs pass, packaging
-can run while quality and server tests are still in progress. This can spend
-native compute on a candidate whose tests later fail. Both GitHub and npm
-publication wait directly for the full quality/server-test gates and successful
-native qualification; no tests or release acceptance gates are skipped.
+Portable JavaScript, the icon catalog and quality checks start after exact-source
+preflight. When the portable output and any required icon catalog are ready,
+each macOS and Linux packaging runner restores or builds its exact Cua helper
+and verifies it on that runner. A helper cache miss affects only its platform.
+macOS-only symbol stripping code is included in the macOS Cua key. Packaging
+fetches only the release commit, and signing credentials are passed only to the
+packaging step. The build-only native and paired benchmark stages retain their
+dedicated Cua jobs. The paired benchmark needs full history for its baseline.
+
+Packaging can run while quality and server tests are still in progress. This
+can spend native compute on a candidate whose tests later fail. Both GitHub and
+npm publication wait directly for the full quality and server test gates and
+successful native qualification.
 
 When deploying changes to the cache/provenance logic, run the producer on `main`
 after merge and before the next release: the exact fingerprint changes with that
@@ -503,6 +508,11 @@ Each final release artifact still requires its own live scan. This server scan
 does not replace Windows 11 browser-download qualification, prove that the cloud
 classified a particular installer, or establish that an antivirus download block
 has been fixed.
+
+Windows builds omit the optional native cookie reader for external browser
+profiles. Packaged startup inspects both the extracted resources and the ASAR
+file inventory for the reader before launching the application. Windows users
+can sign in directly in the integrated browser and access Saved logins.
 
 Signing, provenance, and startup smoke alone do not establish Microsoft Defender
 acceptance. For a reported antivirus block, collect the exact artifact hash,

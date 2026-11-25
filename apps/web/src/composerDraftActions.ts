@@ -3,9 +3,7 @@
 // Exports: Zustand state creator consumed by the public facade.
 
 import {
-  type ModelSelection,
   type ProviderInstanceId,
-  type ProviderKind,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   ProviderInteractionMode,
   RuntimeMode,

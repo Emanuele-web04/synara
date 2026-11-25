@@ -1,9 +1,9 @@
 // FILE: UsageAnalyticsPanel.tsx
 // Purpose: The Usage Analytics tab: cost and tokens by day, provider, model, and
 //          project, plus cache use, turn origin, and weekly rhythm. "In Synara" uses
-//          Synara's own records; "This Mac" also reads Claude Code and Codex session
-//          files. Cost is at API rates: the provider's own figure when it reports
-//          one, else the tokens at API list prices.
+//          Synara's own records; "This Mac" / "This Device" also reads Claude Code and
+//          Codex session files. Cost is at API rates: the provider's own figure when it
+//          reports one, else the tokens at API list prices.
 // Layer: Web settings feature
 // Exports: UsageAnalyticsPanel
 
@@ -25,6 +25,7 @@ import {
   percentChange,
   PROVIDER_SERIES_COLOR,
   providerLabel,
+  usageAnalyticsDeviceScopeLabels,
   type UsageAnalyticsMetric,
   type UsageAnalyticsProvider,
   type UsageAnalyticsProviderTotal,
@@ -117,10 +118,15 @@ function percentOf(part: number, total: number): number {
   return total > 0 ? Math.round((part / total) * 1000) / 10 : 0;
 }
 
-export function UsageAnalyticsPanel() {
+export function UsageAnalyticsPanel({
+  initialScope = "synara",
+}: {
+  initialScope?: StatsUsageAnalyticsScope;
+} = {}) {
   const [range, setRange] = useState<UsageAnalyticsRange>("30d");
   const [metricChoice, setMetricChoice] = useState<UsageAnalyticsMetric | null>(null);
-  const [scope, setScope] = useState<StatsUsageAnalyticsScope>("synara");
+  const [scope, setScope] = useState<StatsUsageAnalyticsScope>(initialScope);
+  const deviceScope = usageAnalyticsDeviceScopeLabels();
   const todayKey = localDayKey(new Date());
   // Recomputed once a day so the query keys stay stable within a day.
   const windows = useMemo(() => {
@@ -183,7 +189,7 @@ export function UsageAnalyticsPanel() {
           onValueChange={setScope}
           options={[
             { value: "synara", label: "In Synara" },
-            { value: "mac", label: "This Mac" },
+            { value: "mac", label: deviceScope.pickerLabel },
           ]}
         />
       </div>
@@ -208,7 +214,7 @@ export function UsageAnalyticsPanel() {
             title="No usage in this period"
             description={
               scope === "mac"
-                ? "Chats in Synara and Claude Code or Codex sessions on this Mac show up here."
+                ? `Chats in Synara and Claude Code or Codex sessions on ${deviceScope.inlineLabel} show up here.`
                 : "Chats you run in Synara show up here as they use tokens."
             }
           />
@@ -218,7 +224,12 @@ export function UsageAnalyticsPanel() {
           aria-busy={loadingNewPeriod}
           className={cn("transition-opacity duration-150", loadingNewPeriod && "opacity-50")}
         >
-          <UsageAnalyticsBody view={view} metric={metric} rangeDays={dataWindow.days.length} />
+          <UsageAnalyticsBody
+            view={view}
+            metric={metric}
+            rangeDays={dataWindow.days.length}
+            deviceScopeInlineLabel={deviceScope.inlineLabel}
+          />
         </div>
       )}
     </div>
@@ -229,6 +240,7 @@ function UsageAnalyticsBody(props: {
   view: UsageAnalyticsView;
   metric: UsageAnalyticsMetric;
   rangeDays: number;
+  deviceScopeInlineLabel: string;
 }) {
   const { view, metric } = props;
   const [hidden, setHidden] = useState<ReadonlySet<UsageAnalyticsProvider>>(() => new Set());
@@ -552,8 +564,8 @@ function UsageAnalyticsBody(props: {
             {view.scope === "mac" && view.sessionFileProviders.length > 0 ? (
               <li>
                 {view.sessionFileProviders.map((provider) => providerLabel(provider)).join(", ")}:
-                every session on this Mac, read from their own session files. Other providers: chats
-                run in Synara.
+                every session on {props.deviceScopeInlineLabel}, read from their own session files.
+                Other providers: chats run in Synara.
               </li>
             ) : (
               <li>

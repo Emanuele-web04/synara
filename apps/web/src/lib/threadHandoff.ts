@@ -240,18 +240,6 @@ export function canCreateThreadHandoff(input: {
   return true;
 }
 
-/**
- * Continuing in the same thread rebinds its session to another provider. A
- * live session cannot move between accounts of one provider in place, so
- * those targets only offer a new thread (the server enforces the same rule).
- */
-export function canContinueThreadHandoff(input: {
-  readonly sourceProvider: ProviderKind;
-  readonly targetProvider: ProviderKind;
-}): boolean {
-  return input.targetProvider !== input.sourceProvider;
-}
-
 // Mirrors the outcome rows ProviderCommandReactor appends for a same-thread
 // handoff, keyed by the requesting command so the caller can await its result.
 export function providerHandoffOutcomeActivityIds(commandId: string): {

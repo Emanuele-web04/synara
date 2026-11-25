@@ -28,6 +28,7 @@ import {
   type OAuthRefreshResult,
 } from "../credentials";
 import { fetchJson, isAuthFailureStatus, isEdgeBlockedResponse } from "../http";
+import { createRefreshLock } from "./refreshLock";
 import {
   asFiniteNumber,
   asRecord,
@@ -199,19 +200,7 @@ function codexAuthNeedsRefresh(state: CodexOAuthState, nowMs: number): boolean {
 
 // Serializes refresh attempts per auth.json path within this process, so concurrent usage
 // fetches can't race each other into redeeming the same single-use refresh token twice.
-const refreshLocks = new Map<string, Promise<unknown>>();
-function withRefreshLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
-  const prev = refreshLocks.get(key) ?? Promise.resolve();
-  const run = prev.then(fn, fn);
-  refreshLocks.set(
-    key,
-    run.then(
-      () => undefined,
-      () => undefined,
-    ),
-  );
-  return run;
-}
+const withRefreshLock = createRefreshLock();
 
 /** Apply a token-endpoint rotation to the in-memory state and persist it back to auth.json.
  * Persistence failures are logged loudly but don't fail the fetch: the refreshed token still

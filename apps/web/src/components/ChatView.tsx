@@ -57,6 +57,7 @@ import {
 } from "~/hooks/useDesktopTopBarGutter";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { useIsMobile } from "~/hooks/useMediaQuery";
+import { useComputerPreviewBudgetPx } from "~/hooks/useComputerPreviewBudgetPx";
 import { useNewChatDefault } from "~/hooks/useNewChatDefault";
 import { useRefreshProviderStatusesNow } from "~/hooks/useProviderStatusRefresh";
 import { useRepoDiffTotals } from "~/hooks/useRepoDiffTotals";
@@ -66,6 +67,7 @@ import { useThreadRecap } from "~/hooks/useThreadRecap";
 import { useComposerPrediction } from "~/hooks/useComposerPrediction";
 import {
   canShowComposerPrediction,
+  resolveComposerPredictionInstanceId,
   resolveComposerPredictionTarget,
 } from "~/lib/composerPrediction";
 import { executionNamespace, readExecutionContext } from "~/lib/hosts/executionContext";
@@ -207,7 +209,6 @@ import {
 } from "../lib/threadEnvironment";
 import {
   canCreateThreadHandoff,
-  canContinueThreadHandoff,
   deriveBlockedProviderHandoff,
   ProviderHandoffBackgroundTasksError,
   resolveAvailableHandoffTargets,
@@ -234,6 +235,7 @@ import {
   hasLiveTurnTailWork,
   isLatestTurnSettled,
   isSessionAliveForSubagents,
+  runningSessionActiveTurnId,
   type ActiveTaskListState,
 } from "../session-logic";
 import {
@@ -288,6 +290,7 @@ import {
   resolveCommittedProviderModel,
   resolveDefaultEnvironmentPanelOpen,
   resolveEnvironmentPanelOpen,
+  shouldOfferComposerResume,
   resolveComposerHighlightedItemId,
   resolveEnvironmentPanelPreferenceUpdate,
   resolveEnvironmentPanelVisible,
@@ -300,6 +303,7 @@ import {
   shouldRenderProviderHealthBanner,
   shouldShowComposerProviderInstancePicker,
   shouldStartActiveTurnLayoutGrace,
+  turnNeedsProviderHandoff,
   type PendingFileUndo,
 } from "./ChatView.logic";
 import {
@@ -307,7 +311,7 @@ import {
   createThreadLineageSelector,
 } from "./ChatView.selectors";
 import { ComposerPromptEditor } from "./ComposerPromptEditor";
-import PlanSidebar from "./PlanSidebar";
+const PlanSidebar = lazy(() => import("./PlanSidebar"));
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
 import { RenameThreadDialog } from "./RenameThreadDialog";
 import { hasUnseenSnoozeReturn, resolveThreadProjectLabel } from "./Sidebar.logic";
@@ -335,7 +339,11 @@ import { ComposerExpiredUserInputNotice } from "./chat/ComposerExpiredUserInputN
 import { ComposerExtrasPanel } from "./chat/ComposerExtrasPanel";
 import { ComposerExtrasTrigger } from "./chat/ComposerExtrasTrigger";
 import { ComposerGoalHeader } from "./chat/ComposerGoalHeader";
-import { ComposerUsageLimitRecovery } from "./chat/ComposerUsageLimitRecovery";
+import {
+  ComposerUsageLimitCapsules,
+  ComposerUsageLimitCard,
+  usageLimitCardKey,
+} from "./chat/ComposerUsageLimitCapsules";
 import { ComposerInputBanners } from "./chat/ComposerInputBanners";
 import { ComposerTransportNotice } from "./chat/ComposerTransportNotice";
 import { ComposerLiveChangesHeader } from "./chat/ComposerLiveChangesHeader";
@@ -391,7 +399,6 @@ import { NewChatComputerPicker } from "./hosts/ComputerPicker";
 import { ProjectPicker } from "./chat/ProjectPicker";
 import { ProviderHealthBanner } from "./chat/ProviderHealthBanner";
 import { resolveProviderModelLabel } from "./chat/ProviderModelPicker";
-import { RateLimitBanner } from "./chat/RateLimitBanner";
 import { isMissingCheckpointBaselineActivity } from "../workLog";
 import type { RateLimitStatus } from "~/lib/rateLimitStatus";
 import { useRateLimitStatus } from "~/hooks/useRateLimitStatus";
@@ -404,6 +411,7 @@ import { WorkflowRunCapsule } from "./chat/WorkflowRunCard";
 import { deriveAgentActivityTimelineState } from "./chat/agentActivity.logic";
 import {
   ENVIRONMENT_DOCKED_CONTENT_INSET_PX,
+  ENVIRONMENT_DOCKED_MIN_COLUMN_WIDTH_PX,
   EnvironmentPanel,
   type EnvironmentPanelProps,
 } from "./chat/environment/EnvironmentPanel";
@@ -414,7 +422,11 @@ import {
   visibleCoordinatorSuggestionChips,
 } from "./chat/project/coordinatorSuggestions.logic";
 import { ProjectPanel } from "./chat/project/ProjectPanel";
-import { LibraryPanel } from "./chat/group/LibraryPanel";
+const LibraryPanel = lazy(() =>
+  import("./chat/group/LibraryPanel").then((module) => ({
+    default: module.LibraryPanel,
+  })),
+);
 import { useHubWorkItems } from "./chat/project/useHubWorkItems";
 import { hubWorkItemsBySourceMessage } from "./chat/project/hubWorkItems";
 import { useProjectAgentSummaries } from "./chat/project/useProjectAgentSummaries";
@@ -458,10 +470,6 @@ import { deriveFastModeNotice } from "~/lib/fastModeState";
 import { AmbientRailSlot } from "./chat/AmbientRailSlot";
 import { ComputerPreviewPopover } from "./chat/ComputerPreviewPopover";
 import {
-  computerPreviewBudgetPx,
-  computerPreviewCardCaps,
-} from "./chat/ComputerPreviewPopover.logic";
-import {
   selectThreadComputerPreviewLayout,
   selectThreadComputerPreviewSession,
   useComputerPreviewStore,
@@ -498,6 +506,7 @@ import { useStopBackgroundTask } from "./chat/useThreadBackgroundTasks";
 import { useThreadErrorToast } from "./chat/useThreadErrorToast";
 import { useTranscriptAssistantSelectionAction } from "./chat/useTranscriptAssistantSelectionAction";
 import {
+  COMPOSER_MODEL_LABEL_MIN_VISIBLE_WIDTH_PX,
   composerFooterPlanForTier,
   resolveNextComposerFooterTier,
   shouldUseCompactComposerFooter,
@@ -810,34 +819,38 @@ export default function ChatView({
     serverThread?.creationSource && serverThread.sourceThreadId
       ? serverThread.sourceThreadId
       : null;
-  const crossTaskSourceThread = useStore(
-    useMemo(() => createThreadSelector(crossTaskSourceThreadId), [crossTaskSourceThreadId]),
+  const crossTaskSourceThread = useStore((state) =>
+    crossTaskSourceThreadId ? (state.threadShellById?.[crossTaskSourceThreadId] ?? null) : null,
   );
+  // Read outside the memo: React Compiler infers `crossTaskSourceThread?.modelSelection`
+  // for an in-memo read, which no longer matches the dependency list and makes it skip
+  // optimizing this whole component.
+  const crossTaskSourceProvider = crossTaskSourceThread?.modelSelection.provider ?? null;
   const crossTaskOrigin = useMemo(
     () =>
       crossTaskSourceThreadId
         ? {
             sourceThreadId: crossTaskSourceThreadId,
-            sourceProvider: crossTaskSourceThread?.modelSelection.provider ?? null,
+            sourceProvider: crossTaskSourceProvider,
           }
         : null,
-    [crossTaskSourceThread?.modelSelection.provider, crossTaskSourceThreadId],
+    [crossTaskSourceProvider, crossTaskSourceThreadId],
   );
   const forkSourceThreadId = serverThread?.sidechatSourceThreadId
     ? null
     : (serverThread?.forkSourceThreadId ?? null);
-  const forkSourceThread = useStore(
-    useMemo(() => createThreadSelector(forkSourceThreadId), [forkSourceThreadId]),
+  const forkSourceTitle = useStore((state) =>
+    forkSourceThreadId ? (state.threadShellById?.[forkSourceThreadId]?.title ?? null) : null,
   );
   const forkSource = useMemo(
     () =>
       forkSourceThreadId
         ? {
             sourceThreadId: forkSourceThreadId,
-            sourceTitle: forkSourceThread?.title ?? "chat",
+            sourceTitle: forkSourceTitle ?? "chat",
           }
         : null,
-    [forkSourceThread?.title, forkSourceThreadId],
+    [forkSourceTitle, forkSourceThreadId],
   );
   const fallbackDraftProjectId = draftThread?.projectId ?? null;
   const fallbackDraftProject = useStore(
@@ -898,6 +911,9 @@ export default function ChatView({
   const [dismissedRateLimitBannerKey, setDismissedRateLimitBannerKey] = useState<string | null>(
     null,
   );
+  // The usage-limit card opens on its own for each limit episode; collapsing it keeps
+  // only its capsule until a new wait or reset reopens it.
+  const [collapsedUsageLimitCardKey, setCollapsedUsageLimitCardKey] = useState<string | null>(null);
   const [dismissedClaudeSwitchKey, setDismissedClaudeSwitchKey] = useState<string | null>(null);
   const [submittedClaudeSwitchKey, setSubmittedClaudeSwitchKey] = useState<string | null>(null);
   const [isModelPickerOpen, setIsModelPickerOpen] = useState(false);
@@ -1126,14 +1142,14 @@ export default function ChatView({
     () => deriveCumulativeCostUsd(threadActivities),
     [threadActivities],
   );
-  const quotaProvider = activeThread?.session?.provider ?? activeThread?.modelSelection.provider;
+  const threadProvider = activeThread?.session?.provider ?? activeThread?.modelSelection.provider;
   const quotaInstanceId =
     activeThread?.session?.providerInstanceId ??
     activeThread?.modelSelection.instanceId ??
-    quotaProvider;
+    threadProvider;
   const activeRateLimitStatus = useRateLimitStatus(
     threadActivities,
-    quotaProvider,
+    threadProvider,
     quotaInstanceId,
   );
   const enabledRateLimitStatus =
@@ -1485,10 +1501,8 @@ export default function ChatView({
     activeThread && coordinatorThreadIds.has(activeThread.id),
   );
   const {
-    hasThreadStarted,
     lockedProvider,
     boundProvider,
-    boundProviderInstanceId,
     serverConfigQuery,
     selectedProvider,
     providerInstances,
@@ -1570,6 +1584,15 @@ export default function ChatView({
   const showDebugTaskBanner = import.meta.env.DEV && featureFlags["show-debug-task-banner"];
 
   const phase = derivePhase(activeThread?.session ?? null);
+  const usageLimitInputs = {
+    rateLimitStatus: enabledRateLimitStatus,
+    recovery: phase !== "running" ? (activeThread?.usageLimitRecovery ?? null) : null,
+  };
+  const activeUsageLimitCardKey = activeThread
+    ? usageLimitCardKey(activeThread.id, usageLimitInputs)
+    : null;
+  const usageLimitCardOpen =
+    activeUsageLimitCardKey !== null && activeUsageLimitCardKey !== collapsedUsageLimitCardKey;
   const isConnecting = phase === "connecting";
   const providerDisplayName =
     PROVIDER_DISPLAY_NAMES[activeThread?.session?.provider ?? selectedProvider];
@@ -1662,8 +1685,8 @@ export default function ChatView({
   );
   const [openAgentActivityId, setOpenAgentActivityId] = useState<string | null>(null);
   const agentActivityTimelineState = useMemo(
-    () => deriveAgentActivityTimelineState(workLogEntries),
-    [workLogEntries],
+    () => deriveAgentActivityTimelineState(workLogEntries, threadProvider),
+    [workLogEntries, threadProvider],
   );
   const openAgentActivityDetail = openAgentActivityId
     ? (agentActivityTimelineState.detailById.get(openAgentActivityId) ?? null)
@@ -1872,10 +1895,7 @@ export default function ChatView({
     }
     const editTarget = resolveLatestTailUserMessageEditTarget({
       messages: activeThread.messages,
-      activeTurnId:
-        activeThread.session?.orchestrationStatus === "running"
-          ? (activeThread.session.activeTurnId ?? null)
-          : null,
+      activeTurnId: runningSessionActiveTurnId(activeThread.session),
     });
     return editTarget.editable ? (editTarget.messageId as MessageId) : null;
   }, [activeThread, isServerThread]);
@@ -2747,18 +2767,6 @@ export default function ChatView({
         : [],
     [activeThreadProvider, activeThreadProviderInstanceId, providerInstances, providerStatuses],
   );
-  const continueHandoffTargets = useMemo(
-    () =>
-      handoffTargets.filter(
-        (target) =>
-          activeThreadProvider !== null &&
-          canContinueThreadHandoff({
-            sourceProvider: activeThreadProvider,
-            targetProvider: target.provider,
-          }),
-      ),
-    [activeThreadProvider, handoffTargets],
-  );
   const sidechatTargetProviders = useMemo(
     () => [...new Set(handoffTargets.map((target) => target.provider))],
     [handoffTargets],
@@ -2854,10 +2862,6 @@ export default function ChatView({
         altKey: false,
         modKey: true,
       }),
-    [keybindings],
-  );
-  const traitsPickerShortcutLabel = useMemo(
-    () => shortcutLabelForCommand(keybindings, "traitsPicker.toggle"),
     [keybindings],
   );
   const onToggleDiff = useCallback(() => {
@@ -3148,6 +3152,10 @@ export default function ChatView({
     },
     [dismissEffortPreview, setIsModelPickerOpen, setIsTraitsPickerOpen],
   );
+  const handleOpenRecoveryModelPicker = useCallback(
+    () => handleModelPickerOpenChange(true),
+    [handleModelPickerOpenChange],
+  );
   const handleTraitsPickerOpenChange = useCallback(
     (open: boolean) => {
       dismissEffortPreview();
@@ -3313,16 +3321,32 @@ export default function ChatView({
   // or hides the side panel only when this thread already has a pane to show.
   const rightDockOpen = useRightDockStore((store) => selectRightDockState(threadId)(store).open);
   const isMobileViewport = useIsMobile();
+  const [mainContentElement, setMainContentElement] = useState<HTMLDivElement | null>(null);
+  const [isNarrowChatColumn, setIsNarrowChatColumn] = useState(false);
+  // A sidebar slide changes width every frame. Remember only the docking threshold.
+  useLayoutEffect(() => {
+    if (!mainContentElement) return;
+    const update = () => {
+      const width = mainContentElement.clientWidth;
+      setIsNarrowChatColumn(width > 0 && width < ENVIRONMENT_DOCKED_MIN_COLUMN_WIDTH_PX);
+    };
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(mainContentElement);
+    return () => observer.disconnect();
+  }, [mainContentElement]);
   // Temporary threads are visually identical to regular chats — they use the same
   // Environment panel + header controls. "Temporary" is purely a sidebar badge +
   // auto-delete-on-leave concern, never a stripped-down chat UI.
-  const environmentUsesFloatingOverlay =
+  const isConstrainedChatLayout =
     isTerminalEnvironmentContext || isMobileViewport || rightDockOpen || surfaceMode === "split";
+  // The column-width threshold changes docking without changing the open preference.
+  const environmentUsesFloatingOverlay = isConstrainedChatLayout || isNarrowChatColumn;
   const environmentDefaultOpen = resolveDefaultEnvironmentPanelOpen({
     environmentEnabled,
     isCenteredEmptyLanding,
     isTerminalPrimarySurface,
-    isConstrainedChatLayout: environmentUsesFloatingOverlay,
+    isConstrainedChatLayout,
     settingsDefaultOpen: settings.environmentPanelDefaultOpen,
   });
   // Every close (header toggle or panel action click) stores the cross-chat preference,
@@ -3644,10 +3668,17 @@ export default function ChatView({
           nextCompact &&
           leadingCluster !== null &&
           leadingCluster.scrollWidth > leadingCluster.clientWidth + 1;
+        const modelLabel = footerRow.querySelector<HTMLElement>("[data-composer-model-label]");
+        // Shed secondary controls first. Keep an ellipsized model name while it is legible.
+        const modelLabelNeedsSpace =
+          modelLabel !== null &&
+          modelLabel.scrollWidth > modelLabel.clientWidth + 1 &&
+          (composerFooterTierRef.current < 2 ||
+            modelLabel.clientWidth < COMPOSER_MODEL_LABEL_MIN_VISIBLE_WIDTH_PX);
         const nextStep = resolveNextComposerFooterTier({
           currentTier: composerFooterTierRef.current,
           clientWidth: footerRow.clientWidth,
-          isOverflowing: rowOverflows || leadingClips,
+          isOverflowing: rowOverflows || leadingClips || modelLabelNeedsSpace,
           demotionWidths: composerFooterDemotionWidthsRef.current,
         });
         composerFooterDemotionWidthsRef.current = nextStep.demotionWidths;
@@ -3665,16 +3696,13 @@ export default function ChatView({
     if (typeof ResizeObserver === "undefined") return;
 
     const observer = new ResizeObserver((entries) => {
-      const [entry] = entries;
-      if (!entry) return;
-
       syncComposerFooterLayout();
-
-      const nextHeight = entry.contentRect.height;
-      composerFormHeightRef.current = nextHeight;
+      const formEntry = entries.find((entry) => entry.target === composerForm);
+      if (formEntry) composerFormHeightRef.current = formEntry.contentRect.height;
     });
 
     observer.observe(composerForm);
+    if (composerStatusRowRef.current) observer.observe(composerStatusRowRef.current);
     return () => {
       observer.disconnect();
     };
@@ -3705,7 +3733,8 @@ export default function ChatView({
         !activeThreadIsSidechat,
       hostId: executionNamespace() ?? null,
       threadId: activeThread?.id ?? null,
-      providerInstanceId: activeThreadProviderInstanceId,
+      // Resolved like the server routes it, so a chat without an instance id still has one.
+      providerInstanceId: resolveComposerPredictionInstanceId(activeThread),
       latestTurn: activeLatestTurn,
       latestTurnSettled,
       hasStreamingAssistant: hasStreamingAssistantText,
@@ -4070,11 +4099,10 @@ export default function ChatView({
       }
       const resolvedInstanceId =
         selectionOptions?.instanceId ?? resolveDefaultProviderInstanceId(settings, provider);
-      // Picking another provider is a handoff, but the bound provider stays on
-      // its own account either way.
-      const instanceLockedProvider = lockedProvider ?? boundProvider;
+      // Picking another provider or account is a handoff; a thread that cannot
+      // hand off stays on its own account.
       const lockedInstanceId =
-        instanceLockedProvider !== null && provider === instanceLockedProvider
+        lockedProvider !== null
           ? (activeThread.session?.providerInstanceId ??
             activeThread.modelSelection.instanceId ??
             // A thread that never stored an account runs in the one the composer shows.
@@ -4147,7 +4175,6 @@ export default function ChatView({
     },
     [
       activeThread,
-      boundProvider,
       customModelsByProvider,
       lockedProvider,
       modelOptionsByProvider,
@@ -4694,22 +4721,26 @@ export default function ChatView({
     sendPreflightInFlightRef,
   });
 
-  // A provider picked in the composer over the thread's own one hands the
-  // thread off in place before the message is sent (same path as "Continue in
-  // this thread"). The send refuses up front while the thread is busy; once the
-  // message shows, a failed handoff rolls the send back into the composer.
+  // A provider or account picked in the composer over the thread's own one
+  // hands the thread off in place before the message is sent (same path as
+  // "Continue in this thread"). The send refuses up front while the thread is
+  // busy; once the message shows, a failed handoff rolls the send back into
+  // the composer.
   const canSendWithProviderHandoff = useStableCallback(
     (modelSelection?: ModelSelection): boolean => {
-      const targetProvider = modelSelection?.provider ?? selectedProvider;
+      const target = modelSelection ?? selectedModelSelection;
       if (
         !activeThread ||
-        boundProvider === null ||
-        targetProvider === boundProvider ||
-        !handoffDisabled
+        !handoffDisabled ||
+        !turnNeedsProviderHandoff({ thread: activeThread, modelSelection: target })
       ) {
         return true;
       }
-      const targetName = PROVIDER_DISPLAY_NAMES[targetProvider] ?? targetProvider;
+      const targetName =
+        target.provider === activeThread.modelSelection.provider
+          ? (providerInstances.find((instance) => instance.instanceId === target.instanceId)
+              ?.label ?? target.provider)
+          : (PROVIDER_DISPLAY_NAMES[target.provider] ?? target.provider);
       toastManager.add({
         type: "error",
         title: `Cannot switch to ${targetName} yet`,
@@ -4868,7 +4899,7 @@ export default function ChatView({
 
   const {
     onSubmitPlanFollowUp,
-    onContinueFailedTurn,
+    onResumeTurn,
     onEditUserMessage,
     onResumeWorkflowRun,
     onImplementPlanInNewThread,
@@ -4942,11 +4973,17 @@ export default function ChatView({
     t,
   );
   const runtimeUsageContextWindow = activeContextWindow;
+  const switchesClaudeAccount =
+    selectedProvider === "claudeAgent" &&
+    activeThread?.modelSelection.provider === "claudeAgent" &&
+    (selectedModelSelection.instanceId ?? selectedProvider) !==
+      (activeThread.modelSelection.instanceId ?? selectedProvider);
   const claudeSwitchKey =
     (activeThread?.messages.length ?? 0) > 0 &&
     boundProvider === "claudeAgent" &&
     activeThread?.modelSelection.provider === "claudeAgent" &&
     (selectedProvider !== "claudeAgent" ||
+      switchesClaudeAccount ||
       resolveApiModelId(selectedModelSelection) !== resolveApiModelId(activeThread.modelSelection))
       ? JSON.stringify([
           threadId,
@@ -4964,11 +5001,33 @@ export default function ChatView({
       setSubmittedClaudeSwitchKey(null);
     }
   }, [claudeSwitchKey]);
+  // An empty composer's Send becomes Resume; Enter on that empty draft resumes too.
+  const showComposerResume =
+    !showPlanFollowUpPrompt &&
+    !composerSendState.hasSendableContent &&
+    shouldOfferComposerResume({
+      isServerThread,
+      messages: activeThread?.messages ?? EMPTY_MESSAGES,
+      latestTurn: activeLatestTurn,
+      hasLiveWork: isWorking,
+      hasPendingRequests: pendingApprovals.length > 0 || pendingUserInputs.length > 0,
+      hasUsageLimitRecovery: activeThread?.usageLimitRecovery != null,
+      hasQueuedTurns: queuedComposerTurns.length > 0,
+      hasCacheReview: activeThread?.claudeCacheReview != null,
+      deliveryBlocked: isProviderDeliveryBlockDetail(activeThread?.error),
+    });
+  const onResumeFromComposer = useCallback(() => {
+    void onResumeTurn();
+  }, [onResumeTurn]);
   const onSend = useCallback(
     async (...args: Parameters<typeof submitComposerTurn>) => {
       if (isNativeSubagentMessagingUnavailable) {
         args[0]?.preventDefault();
         return false;
+      }
+      if (showComposerResume && args[2] === undefined) {
+        args[0]?.preventDefault();
+        return onResumeTurn();
       }
       // Keep the choice captured for this send: later picker changes belong to the
       // next message. Automatic queue drains must not acknowledge a new draft choice.
@@ -4979,7 +5038,13 @@ export default function ChatView({
       }
       return accepted;
     },
-    [claudeSwitchKey, isNativeSubagentMessagingUnavailable, submitComposerTurn],
+    [
+      claudeSwitchKey,
+      isNativeSubagentMessagingUnavailable,
+      onResumeTurn,
+      showComposerResume,
+      submitComposerTurn,
+    ],
   );
   const showClaudeModelSwitchNote =
     claudeSwitchKey !== null &&
@@ -5117,11 +5182,6 @@ export default function ChatView({
       provider={selectedProvider}
       model={selectedModelForPickerWithCustomFallback}
       lockedProvider={lockedProvider}
-      boundProviderInstance={
-        lockedProvider === null && boundProvider !== null && boundProviderInstanceId !== null
-          ? { provider: boundProvider, instanceId: boundProviderInstanceId }
-          : null
-      }
       providers={providerStatuses}
       modelOptionsByProvider={modelOptionsByProvider}
       modelOptionsByProviderInstance={modelOptionsByProviderInstance}
@@ -5135,6 +5195,7 @@ export default function ChatView({
       threadId={threadId}
       runtimeModel={selectedRuntimeModel}
       runtimeModelsByProvider={runtimeModelsByProvider}
+      runtimeModelsByProviderInstance={runtimeModelsByProviderInstance}
       runtimeAgents={dynamicAgents}
       modelOptions={selectedProviderModelOptions}
       prompt={prompt}
@@ -5157,10 +5218,7 @@ export default function ChatView({
             providerInstances={providerInstances}
             providers={providerStatuses}
             selectedProviderInstanceId={selectedProviderInstanceId}
-            selectionLocked={
-              lockedProvider !== null ||
-              (boundProvider !== null && selectedProvider === boundProvider)
-            }
+            selectionLocked={lockedProvider !== null}
             compact={isComposerFooterCompact}
             hideLabel={!composerFooterControlsPlan.showModelLabel}
             onProviderInstanceChange={onProviderInstanceSelect}
@@ -5730,20 +5788,30 @@ export default function ChatView({
   }, [setDismissedRateLimitBannerKey, activeRateLimitBannerDismissalKey]);
   const previewSession = useComputerPreviewStore(selectThreadComputerPreviewSession(threadId));
   const previewLayout = useComputerPreviewStore(selectThreadComputerPreviewLayout(threadId));
-  const mainContentRef = useRef<HTMLDivElement | null>(null);
-  const [mainContentWidth, setMainContentWidth] = useState(1600);
+  // Full-width single chat: overlay plus transcript/composer inset. Floating overlay when the
+  // column is already narrow — right dock open or a split pane (same as header compact mode).
+  // Terminal surfaces always float so opening Environment never resizes the terminal workspace.
+  const projectPanelVisible = projectPanelEnabled && auxiliarySurface === "project";
+  const libraryPanelVisible = projectPanelEnabled && auxiliarySurface === "library";
+  const [hasOpenedLibrary, setHasOpenedLibrary] = useState(false);
   useEffect(() => {
-    const element = mainContentRef.current;
-    if (!element) return;
-    const update = () => {
-      const width = element.clientWidth;
-      setMainContentWidth((previous) => (previous === width ? previous : width));
-    };
-    update();
-    const observer = new ResizeObserver(update);
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, []);
+    if (libraryPanelVisible) setHasOpenedLibrary(true);
+  }, [libraryPanelVisible]);
+  const environmentPanelVisibleEffective =
+    environmentPanelVisible && auxiliarySurface !== "project" && auxiliarySurface !== "library";
+  const environmentAppliesContentInset =
+    (environmentPanelVisibleEffective || projectPanelVisible || libraryPanelVisible) &&
+    !environmentUsesFloatingOverlay;
+  const environmentOverlayVariant = environmentUsesFloatingOverlay ? "floating" : "docked";
+  const environmentInsetPx = environmentAppliesContentInset
+    ? ENVIRONMENT_DOCKED_CONTENT_INSET_PX
+    : 0;
+  // The preview tracks its capped budget so column width alone does not trigger renders.
+  const previewBudgetPx = useComputerPreviewBudgetPx({
+    column: mainContentElement,
+    environmentInsetPx,
+    size: settings.computerPreviewSize === "large" ? "large" : "compact",
+  });
   const composerEffortOptionId = composerTraitSelection.primarySelectDescriptor?.id ?? "effort";
   const applyComputerControlEffortHint = useCallback(() => {
     setComposerDraftProviderModelOptions(
@@ -6258,33 +6326,10 @@ export default function ChatView({
     onClose: closeEnvironmentPanelAfterAction,
     onRegisterCommitAndPushTrigger,
   };
-  // Full-width single chat: overlay plus transcript/composer inset. Floating overlay when the
-  // column is already narrow — right dock open or a split pane (same as header compact mode).
-  // Terminal surfaces always float so opening Environment never resizes the terminal workspace.
-  const projectPanelVisible = projectPanelEnabled && auxiliarySurface === "project";
-  const libraryPanelVisible = projectPanelEnabled && auxiliarySurface === "library";
-  const environmentPanelVisibleEffective =
-    environmentPanelVisible && auxiliarySurface !== "project" && auxiliarySurface !== "library";
-  const environmentAppliesContentInset =
-    (environmentPanelVisibleEffective || projectPanelVisible || libraryPanelVisible) &&
-    !environmentUsesFloatingOverlay;
-  const environmentOverlayVariant = environmentUsesFloatingOverlay ? "floating" : "docked";
-
   // Ambient preview rail: the live card sits below the Environment card and
   // the chat frees its gutter, so it never covers the transcript. Space is
   // reserved only for a card that actually has content (live phase + a landed
   // frame), at its fitted width — never for an armed or waiting session.
-  const environmentInsetPx = environmentAppliesContentInset
-    ? ENVIRONMENT_DOCKED_CONTENT_INSET_PX
-    : 0;
-  const previewCaps = computerPreviewCardCaps(
-    settings.computerPreviewSize === "large" ? "large" : "compact",
-  );
-  const previewBudgetPx = computerPreviewBudgetPx({
-    mainContentWidthPx: mainContentWidth,
-    environmentInsetPx: environmentInsetPx,
-    caps: previewCaps,
-  });
   const previewReservesInset =
     environmentOverlayVariant === "docked" &&
     settings.autoOpenComputerPane &&
@@ -6381,7 +6426,7 @@ export default function ChatView({
       ) : (
         <div className="min-w-0 flex-1" />
       )}
-      <div className="ml-auto flex shrink-0 items-center gap-2 pr-0.5">
+      <div className="ml-auto flex min-w-0 shrink items-center gap-2 pr-0.5">
         {composerPickerControls}
         {composerContextMeter}
       </div>
@@ -6406,15 +6451,6 @@ export default function ChatView({
         data-chat-pane-scope={paneScopeId}
       >
         <ComposerColumnFrame>
-          {visibleActiveRateLimitStatus &&
-          (visibleActiveRateLimitStatus.status === "rejected" || !environmentEnabled) ? (
-            <div className="pb-2">
-              <RateLimitBanner
-                rateLimitStatus={visibleActiveRateLimitStatus}
-                onDismiss={dismissActiveRateLimitBanner}
-              />
-            </div>
-          ) : null}
           {/* A bare wrapper keeps the normal-flow panels' -mb-px seam onto the input shell
                 via margin collapse. */}
           <div>
@@ -6422,12 +6458,15 @@ export default function ChatView({
                 the stacked rail fused onto the input. */}
             <ComposerCapsuleRow>
               <ComposerTransportNotice />
-              {activeThread?.usageLimitRecovery && phase !== "running" ? (
-                <ComposerUsageLimitRecovery
-                  recovery={activeThread.usageLimitRecovery}
-                  onCancel={onInterruptFromStopControl}
-                />
-              ) : null}
+              <ComposerUsageLimitCapsules
+                {...usageLimitInputs}
+                // Environment → Usage carries the approaching-limit warning when it is shown.
+                showWarning={!environmentEnabled && visibleActiveRateLimitStatus !== null}
+                cardOpen={usageLimitCardOpen}
+                onOpenCard={() => setCollapsedUsageLimitCardKey(null)}
+                onDismissWarning={dismissActiveRateLimitBanner}
+                onCancelRecovery={onInterruptFromStopControl}
+              />
               {showComposerLiveChangesHeader ? (
                 <ComposerLiveChangesHeader
                   fileCount={activeTurnLiveDiffState.fileCount}
@@ -6489,9 +6528,11 @@ export default function ChatView({
                     />
                   }
                   message={
-                    selectedProvider === "claudeAgent"
-                      ? "Next reply may use more Claude allowance."
-                      : "Chat context uses the new provider’s allowance."
+                    selectedProvider !== "claudeAgent"
+                      ? "Chat context uses the new provider’s allowance."
+                      : switchesClaudeAccount
+                        ? "Chat context uses the new account’s allowance."
+                        : "Next reply may use more Claude allowance."
                   }
                   onDismiss={() => setDismissedClaudeSwitchKey(claudeSwitchKey)}
                   testId="composer-claude-model-switch-note"
@@ -6561,6 +6602,18 @@ export default function ChatView({
                   onAdvance={onAdvanceActivePendingUserInput}
                   onPrevious={onPreviousActivePendingUserInputQuestion}
                   onCancel={onCancelActivePendingUserInput}
+                />
+              </div>
+            ) : null}
+            {usageLimitCardOpen ? (
+              <div className="pb-2">
+                <ComposerUsageLimitCard
+                  {...usageLimitInputs}
+                  provider={threadProvider}
+                  instanceId={quotaInstanceId}
+                  onCollapse={() => setCollapsedUsageLimitCardKey(activeUsageLimitCardKey)}
+                  onCancelRecovery={onInterruptFromStopControl}
+                  onChangeModel={() => handleModelPickerOpenChange(true)}
                 />
               </div>
             ) : null}
@@ -6788,9 +6841,11 @@ export default function ChatView({
                       : isComposerApprovalState
                         ? t("chat:placeholder_resolveApproval")
                         : activePendingProgress
-                          ? activePendingProgress.activeQuestion?.options.length === 0
-                            ? t("chat:placeholder_typeAnswer")
-                            : t("chat:orTypeYourOwnAnswer")
+                          ? activePendingProgress.activeQuestion?.allowCustomAnswer === false
+                            ? ""
+                            : activePendingProgress.activeQuestion?.options.length === 0
+                              ? t("chat:placeholder_typeAnswer")
+                              : t("chat:orTypeYourOwnAnswer")
                           : showPlanFollowUpPrompt && activeProposedPlan
                             ? t("chat:placeholder_refinePlan")
                             : activeThread?.parentThreadId
@@ -6802,7 +6857,10 @@ export default function ChatView({
                                   : t("chat:doAnythingInSynara")
                   }
                   prediction={composerPrediction.ghost}
-                  disabled={isComposerEditorDisabled}
+                  disabled={
+                    isComposerEditorDisabled ||
+                    activePendingProgress?.activeQuestion?.allowCustomAnswer === false
+                  }
                   singleLine={composerSingleRow}
                 />
               </div>
@@ -6871,6 +6929,7 @@ export default function ChatView({
                     hasPrompt: prompt.trim().length > 0,
                     onInterrupt: onInterruptFromStopControl,
                     onImplementInNewThread: onImplementPlanInNewThread,
+                    ...(showComposerResume ? { onResume: onResumeFromComposer } : {}),
                   }}
                 />
               )}
@@ -6976,7 +7035,6 @@ export default function ChatView({
           handoffActionLabel={handoffActionLabel}
           handoffDisabled={handoffDisabled}
           handoffActionTargets={handoffTargets}
-          continueHandoffActionTargets={continueHandoffTargets}
           showHandoffAction={handoffAvailability.providerHandoff && settings.showHeaderHandoff}
           showHeaderActions={settings.showHeaderActions}
           gitCwd={threadWorkspaceCwd}
@@ -7080,7 +7138,10 @@ export default function ChatView({
         />
       ) : null}
       {/* Main content area with optional plan sidebar */}
-      <div ref={mainContentRef} className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden">
+      <div
+        ref={setMainContentElement}
+        className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden"
+      >
         {/* Chat column */}
         <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
           <div
@@ -7216,6 +7277,8 @@ export default function ChatView({
                       turnTakenOver,
                       isConnecting,
                       providerName: providerDisplayName,
+                      awaitingApproval: activePendingApproval !== null,
+                      awaitingUserInput: pendingUserInputs.length > 0,
                     })}
                     worktreeSetup={activeWorktreeSetup}
                     worktreeSetupPendingAction={worktreeSetupPendingAction}
@@ -7268,8 +7331,8 @@ export default function ChatView({
                       pendingApprovals.length > 0 ||
                       pendingUserInputs.length > 0
                     }
-                    onContinueFailedTurn={onContinueFailedTurn}
-                    onChangeRecoveryModel={() => handleModelPickerOpenChange(true)}
+                    onContinueFailedTurn={onResumeTurn}
+                    onChangeRecoveryModel={handleOpenRecoveryModelPicker}
                     unblockingThread={unblockingActiveThread}
                     onDismissThreadError={dismissActiveThreadError}
                     onUnblockThread={unblockThread}
@@ -7468,34 +7531,39 @@ export default function ChatView({
               }}
             />
           ) : null}
-          {projectPanelEnabled ? (
-            <LibraryPanel
-              open={libraryPanelVisible}
-              variant={environmentOverlayVariant}
-              projectId={activeProjectId}
-              onClose={() => setLibraryFromAuxiliary(false)}
-            />
+          {/* Load on first open and retain the panel's state and close transition. */}
+          {projectPanelEnabled && (libraryPanelVisible || hasOpenedLibrary) ? (
+            <Suspense fallback={null}>
+              <LibraryPanel
+                open={libraryPanelVisible}
+                variant={environmentOverlayVariant}
+                projectId={activeProjectId}
+                onClose={() => setLibraryFromAuxiliary(false)}
+              />
+            </Suspense>
           ) : null}
         </div>
         {/* end chat column */}
 
         {/* Plan sidebar */}
         {planSidebarOpen ? (
-          <PlanSidebar
-            activeTaskList={activeTaskList}
-            activeProposedPlan={sidebarProposedPlan}
-            markdownCwd={threadWorkspaceCwd ?? undefined}
-            workspaceRoot={threadArtifactWorkspaceRoot ?? undefined}
-            timestampFormat={timestampFormat}
-            onClose={() => {
-              setPlanSidebarOpen(false);
-              // Track that the user explicitly dismissed for this turn so auto-open won't fight them.
-              const turnKey = activeTaskList?.turnId ?? sidebarProposedPlan?.turnId ?? null;
-              if (turnKey) {
-                planSidebarDismissedForTurnRef.current = turnKey;
-              }
-            }}
-          />
+          <Suspense fallback={null}>
+            <PlanSidebar
+              activeTaskList={activeTaskList}
+              activeProposedPlan={sidebarProposedPlan}
+              markdownCwd={threadWorkspaceCwd ?? undefined}
+              workspaceRoot={threadArtifactWorkspaceRoot ?? undefined}
+              timestampFormat={timestampFormat}
+              onClose={() => {
+                setPlanSidebarOpen(false);
+                // Track that the user explicitly dismissed for this turn so auto-open won't fight them.
+                const turnKey = activeTaskList?.turnId ?? sidebarProposedPlan?.turnId ?? null;
+                if (turnKey) {
+                  planSidebarDismissedForTurnRef.current = turnKey;
+                }
+              }}
+            />
+          </Suspense>
         ) : null}
       </div>
       {/* end horizontal flex container */}

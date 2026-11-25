@@ -170,6 +170,7 @@ export interface WorkLogEntry {
   toolDetails?: WorkLogToolDetails;
   itemType?: ToolLifecycleItemType;
   requestKind?: WorkLogRequestKind;
+  grantedCommandApproval?: true;
   subagents?: ReadonlyArray<WorkLogSubagent>;
   subagentAction?: WorkLogSubagentAction;
   // Set on the one entry a turn's subagents fold into: the transcript renders
@@ -207,7 +208,14 @@ export interface WorkLogEntry {
   providerContextLifecycle?: ProviderContextLifecycleInfo;
   providerHandoff?: ProviderHandoffInfo;
   /** Durable terminal feedback; session readiness never clears a failed turn. */
-  turnFailure?: { cause: string; message: string; errorCode?: string };
+  turnFailure?: {
+    cause: string;
+    message: string;
+    errorCode?: string;
+    provider?: string;
+    // The provider refused the turn for quota: a pause until the limit resets, not a fault.
+    usageLimit?: boolean;
+  };
   // An answered agent question, paired with the answers the user submitted. It
   // renders as a question/answer exchange that stays visible outside the
   // collapsed turn instead of as two bare "User input" log lines.
@@ -220,6 +228,8 @@ export interface WorkLogEntry {
   // (e.g. user-input.requested -> question glyph) instead of the generic
   // tone fallback. Same rationale as `toolName` below.
   activityKind?: OrchestrationThreadActivity["kind"];
+  // Codex sends reasoning as its own item between tool calls in one work run.
+  codexReasoning?: true;
   // Provider-native event type carried through the activity payload (e.g.
   // "background_tasks_changed") so the timeline can pick a specific icon.
   nativeEventType?: string;
@@ -564,23 +574,32 @@ export function deriveWorkLogEntries(
   const ordered = orderedActivities(activities);
   const entries = ordered
     .filter((activity) => !isLogOnlyPiWarning(activity))
-    // Old hosts persisted startup diagnostics as warnings. Apply the ingestion policy on replay.
+    // App-server startup and stderr belong to diagnostics, including saved turns.
     .filter((activity) => {
-      if (activity.kind !== "runtime.warning" || activity.tone === "error") return true;
+      if (activity.kind !== "runtime.warning") return true;
       const payload = asRecord(activity.payload);
+      const message = asTrimmedString(payload?.message);
+      if (payload?.nativeEventType === CODEX_STDERR_NATIVE_EVENT_TYPE) return false;
+      const startup = asRecord(payload?.data);
+      const server = asTrimmedString(startup?.name);
       if (
+        startup?.status === "failed" &&
+        server &&
+        message?.startsWith(`MCP server "${server}" failed to start`)
+      ) {
+        return false;
+      }
+      if (
+        activity.tone === "error" ||
         payload?.willRetry === true ||
         asRecord(payload?.data)?.willRetry === true ||
         payload?.nativeEventType === "monitor_event" ||
         payload?.nativeEventType === "background_tasks_changed"
       )
         return true;
-      // Ingestion already judged the Codex stderr rows it marks, and stored their
-      // text normalized: judging that text again could hide a structured ERROR
-      // whose level the normalization removed.
-      if (payload?.nativeEventType === CODEX_STDERR_NATIVE_EVENT_TYPE) return true;
-      const message = asTrimmedString(payload?.message);
-      return !message || classifyCodexStderr(message)?.kind === "notice";
+      if (!message) return true;
+      const diagnostic = classifyCodexStderr(message);
+      return diagnostic?.kind === "notice" && !diagnostic.mcpSubscriptionError;
     })
     .filter((activity) => !isLogOnlyClaudeWarning(activity))
     .filter((activity) => !isTurnFailureActivity(activity))
@@ -627,6 +646,7 @@ export function deriveWorkLogEntries(
   // GitHub icon, user-input rows -> question / submit glyphs). Stripping
   // `toolName` here previously made those icon checks dead code, leaving the
   // generic wrench.
+  const grantedApprovals = grantedCommandApprovalActivityIds(ordered, options.activeTurnId);
   const derived = reconcileSettledLiveActivities(
     collapseDerivedWorkLogEntries(userInputExchangeEntries),
     ordered,
@@ -634,7 +654,12 @@ export function deriveWorkLogEntries(
     options,
   )
     .filter((entry) => !isUninformativeCommandStartEntry(entry))
-    .map((entry) => toPublicWorkLogEntry(entry, translate));
+    .map((entry) => {
+      const workEntry = toPublicWorkLogEntry(entry, translate);
+      return grantedApprovals?.has(entry.id)
+        ? { ...workEntry, grantedCommandApproval: true as const }
+        : workEntry;
+    });
   const handoffFastModeNotices = deriveHandoffFastModeNotices(ordered, translate);
   if (handoffFastModeNotices.size > 0) {
     for (const [index, entry] of derived.entries()) {
@@ -1183,6 +1208,13 @@ function isTurnFailureActivity(activity: OrchestrationThreadActivity): boolean {
   );
 }
 
+// Claude reports `rate_limit`; Codex reports its quota variants by name.
+const USAGE_LIMIT_ERROR_CODES: ReadonlySet<string> = new Set([
+  "rate_limit",
+  "usageLimitExceeded",
+  "rateLimitExceeded",
+]);
+
 function deriveTurnFailureEntries(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
   translate: typeof t,
@@ -1218,6 +1250,7 @@ function deriveTurnFailureEntries(
       previous?.turnFailure?.cause ??
       "The provider reported an error.";
     const errorCode = asTrimmedString(payload?.errorCode) ?? previous?.turnFailure?.errorCode;
+    const provider = asTrimmedString(payload?.provider) ?? previous?.turnFailure?.provider;
     const overloaded =
       errorCode === "server_overloaded" || /selected model is at capacity/i.test(cause);
     const message = overloaded
@@ -1239,7 +1272,13 @@ function deriveTurnFailureEntries(
       tone: "error",
       label: translate("chat:taskInterrupted"),
       activityKind: activity.kind,
-      turnFailure: { cause, message, ...(errorCode ? { errorCode } : {}) },
+      turnFailure: {
+        cause,
+        message,
+        ...(errorCode ? { errorCode } : {}),
+        ...(provider ? { provider } : {}),
+        ...(errorCode && USAGE_LIMIT_ERROR_CODES.has(errorCode) ? { usageLimit: true } : {}),
+      },
     });
   }
   return [...failures.values()];
@@ -1473,6 +1512,46 @@ function isQuietTurnLifecycleActivity(activity: OrchestrationThreadActivity): bo
   }
   // Provider lifecycle rows close internal state; assistant/result text is rendered from messages.
   return activity.tone !== "error";
+}
+
+// A granted command's approval rows stay visible, but no longer block the live tool line.
+function grantedCommandApprovalActivityIds(
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
+  activeTurnId: TurnId | null | undefined,
+): ReadonlySet<string> | undefined {
+  if (!activeTurnId) return undefined;
+  const openRequests = new Map<string, string>();
+  const granted = new Set<string>();
+  for (const activity of activities) {
+    if (
+      activity.turnId !== activeTurnId ||
+      (activity.kind !== "approval.requested" && activity.kind !== "approval.resolved")
+    ) {
+      continue;
+    }
+    const payload = asRecord(activity.payload);
+    const requestId = asTrimmedString(payload?.requestId);
+    if (!requestId || extractWorkLogRequestKind(payload) !== "command") continue;
+    const key = pendingRequestInstanceKey(
+      requestId,
+      asTrimmedString(payload?.lifecycleGeneration) ?? undefined,
+    );
+    if (activity.kind === "approval.requested") {
+      openRequests.set(key, activity.id);
+      continue;
+    }
+    const requestedId = openRequests.get(key);
+    openRequests.delete(key);
+    if (
+      requestedId &&
+      activity.tone !== "error" &&
+      (payload?.decision === "accept" || payload?.decision === "acceptForSession")
+    ) {
+      granted.add(requestedId);
+      granted.add(activity.id);
+    }
+  }
+  return granted;
 }
 
 function isQuietApprovalResolutionActivity(activity: OrchestrationThreadActivity): boolean {
@@ -1834,6 +1913,7 @@ export function parseUserInputQuestions(
           return {
             label: optionRecord.label,
             description: optionRecord.description,
+            ...(typeof optionRecord.value === "string" ? { value: optionRecord.value } : {}),
           };
         })
         .filter((option): option is UserInputQuestion["options"][number] => option !== null);
@@ -1842,6 +1922,9 @@ export function parseUserInputQuestions(
         header: question.header,
         question: question.question,
         options,
+        ...(typeof question.customAnswerId === "string" && question.customAnswerId.length > 0
+          ? { customAnswerId: question.customAnswerId }
+          : {}),
         ...(question.multiSelect === true ? { multiSelect: true } : {}),
       };
     })
@@ -1856,6 +1939,10 @@ function formatUserInputAnswer(
   question: UserInputQuestion,
 ): string | null {
   const value = answers?.[question.id] ?? answers?.[question.question];
+  if (value == null && question.customAnswerId) {
+    const custom = answers?.[question.customAnswerId];
+    if (typeof custom === "string") return custom.trim() || null;
+  }
   const parts =
     typeof value === "string"
       ? [value]
@@ -1866,7 +1953,7 @@ function formatUserInputAnswer(
           : [];
   const text = parts
     .filter((part): part is string => typeof part === "string")
-    .map((part) => part.trim())
+    .map((part) => (question.options.find((option) => option.value === part)?.label ?? part).trim())
     .filter((part) => part.length > 0)
     .join(", ");
   return text.length > 0 ? text : null;
@@ -3503,6 +3590,25 @@ function extractToolCommand(
   const dataInput = asRecord(data?.input);
   const dataArguments = asCommandArgumentRecord(data?.arguments ?? data?.args ?? data?.params);
   const rawInput = asCommandArgumentRecord(data?.rawInput);
+  if (hasTurnScopedProviderToolCallId(payload)) {
+    // Older ACP events copied backticked read/search targets into data.command.
+    // Sparse starts may omit the kind before a typed completion arrives.
+    const kind = data?.kind;
+    const legacyTarget =
+      /^(?:read(?:ing)?|find(?:ing)?|found|search(?:ing|ed)?)\s+`([^`]+)`/iu.exec(
+        asTrimmedString(payload?.title) ?? "",
+      )?.[1];
+    const hasLegacyTitleCommand =
+      (kind === undefined || kind === "other") &&
+      legacyTarget !== undefined &&
+      asTrimmedString(data?.command) === legacyTarget.trim() &&
+      !normalizeCommandValue(rawInput?.command) &&
+      !normalizeCommandValue(rawInput?.cmd) &&
+      !asTrimmedString(rawInput?.executable);
+    if (kind === "read" || kind === "search" || hasLegacyTitleCommand) {
+      return { command: null, rawCommand: null };
+    }
+  }
   const detailCommand =
     isCommandLikeDetail(payload) && typeof payload?.detail === "string"
       ? stripTrailingExitCode(payload.detail).output
@@ -3685,10 +3791,16 @@ function extractToolName(payload: Record<string, unknown> | null): string | null
   const itemInput = asRecord(item?.input);
   const dataInvocation = asRecord(data?.invocation);
   const itemInvocation = asRecord(item?.invocation);
+  // ACP adapters keep the provider-native name in rawInput (e.g. Grok's
+  // `read_file` / `bash`); they only promote Computer names to data.toolName.
+  const rawInput = asRecord(data?.rawInput);
   const candidates = [
     payload?.toolName,
     data?.toolName,
     data?.tool,
+    rawInput?._toolName,
+    rawInput?.toolName,
+    rawInput?.tool_name,
     dataInvocation?.tool,
     dataInvocation?.toolName,
     item?.toolName,

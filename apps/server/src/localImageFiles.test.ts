@@ -286,7 +286,7 @@ describe("resolveAllowedLocalPreviewFile", () => {
   });
 
   it("rejects PDFs outside the workspace even under the temp-dir image roots", async () => {
-    // Temp/generated-image roots exist for agent-produced images in chat
+    // Temp/generated-image roots exist for agent-produced media in chat
     // markdown; documents must only ever be served from the workspace.
     const tempDir = makeTempDir("synara-pdf-outside-");
     const pdfPath = path.join(tempDir, "leak.pdf");
@@ -311,6 +311,80 @@ describe("resolveAllowedLocalPreviewFile", () => {
     });
 
     assert.equal(result?.path, realpathSync(imagePath));
+  });
+
+  it("allows videos inside the workspace and the per-thread scratch roots", async () => {
+    const workspace = makeTempDir("synara-video-workspace-");
+    writeFileSync(path.join(workspace, ".git"), "gitdir: .git");
+    const workspaceVideo = path.join(workspace, "out", "demo.webm");
+    mkdirSync(path.dirname(workspaceVideo), { recursive: true });
+    writeFileSync(workspaceVideo, Buffer.from([0x1a, 0x45, 0xdf, 0xa3]));
+    const privateTempRoot = makeTempDir("synara-video-private-scratch-");
+    const scratchRoot = path.join(privateTempRoot, "synara-codex-workspaces");
+    const scratchVideo = path.join(scratchRoot, "private-thread", "recording.MOV");
+    mkdirSync(path.dirname(scratchVideo), { recursive: true });
+    writeFileSync(scratchVideo, Buffer.from([0, 0, 0, 0x14]));
+
+    const inWorkspace = await resolveAllowedLocalPreviewFile({
+      requestedPath: workspaceVideo,
+      cwd: workspace,
+    });
+    const inScratch = await resolveAllowedLocalPreviewFile({
+      requestedPath: scratchVideo,
+      cwd: null,
+      scratchWorkspacesRoot: scratchRoot,
+    });
+
+    assert.equal(inWorkspace?.path, realpathSync(workspaceVideo));
+    assert.equal(inWorkspace?.sizeBytes, 4);
+    assert.equal(inScratch?.path, realpathSync(scratchVideo));
+  });
+
+  it("allows agent recordings under the temp-dir roots without a workspace", async () => {
+    // Agent tools (e.g. simulator recordings) write videos straight to os.tmpdir().
+    const tempDir = makeTempDir("synara-video-tmp-root-");
+    const videoPath = path.join(tempDir, "simulator-recording.mp4");
+    writeFileSync(videoPath, Buffer.from([0, 0, 0, 0x18]));
+
+    const result = await resolveAllowedLocalPreviewFile({
+      requestedPath: videoPath,
+      cwd: null,
+    });
+
+    assert.equal(result?.path, realpathSync(videoPath));
+    assert.equal(result?.fileName, "simulator-recording.mp4");
+  });
+
+  it("keeps Codex generated_images roots image-only", async () => {
+    // Anchored inside the worktree so the temp-dir roots cannot satisfy the allowlist.
+    const fakeRoot = path.join(
+      process.cwd(),
+      `.test-codex-generated-video-${process.pid}-${Date.now()}`,
+    );
+    const codexHome = path.join(fakeRoot, ".codex");
+    const generatedDir = path.join(codexHome, "generated_images", "thread-video");
+    const imagePath = path.join(generatedDir, "call.png");
+    const videoPath = path.join(generatedDir, "call.mp4");
+    mkdirSync(generatedDir, { recursive: true });
+    writeFileSync(imagePath, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    writeFileSync(videoPath, Buffer.from([0, 0, 0, 0x18]));
+    try {
+      const image = await resolveAllowedLocalPreviewFile({
+        requestedPath: imagePath,
+        cwd: null,
+        codexHomePaths: [codexHome],
+      });
+      const video = await resolveAllowedLocalPreviewFile({
+        requestedPath: videoPath,
+        cwd: null,
+        codexHomePaths: [codexHome],
+      });
+
+      assert.equal(image?.path, realpathSync(imagePath));
+      assert.equal(video, null);
+    } finally {
+      rmSync(fakeRoot, { recursive: true, force: true });
+    }
   });
 
   it("rejects unsupported paths", async () => {

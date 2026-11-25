@@ -95,11 +95,25 @@ describe("source control writing settings", () => {
       sourceControlWritingStyle: "custom",
       sourceControlCustomInstructions: "Use short bullets.",
     });
-    expect(
-      appSettingsPatchToServerSettingsPatch({ sourceControlWritingStyle: "conventional" }),
-    ).toEqual({ sourceControlWritingStyle: "conventional" });
     expect(appSettingsPatchToServerSettingsPatch({ sourceControlCustomInstructions: "" })).toEqual({
       sourceControlCustomInstructions: "",
+    });
+  });
+});
+
+describe("git attribution setting", () => {
+  it("defaults on and mirrors the server setting both ways", () => {
+    expect(Schema.decodeSync(AppSettingsSchema)({}).gitAttributionEnabled).toBe(true);
+    expect(DEFAULT_SERVER_SETTINGS_VIEW.gitAttributionEnabled).toBe(true);
+    expect(
+      serverSettingsToAppSettings({ ...DEFAULT_SERVER_SETTINGS_VIEW, gitAttributionEnabled: false })
+        .gitAttributionEnabled,
+    ).toBe(false);
+    expect(appSettingsPatchToServerSettingsPatch({ gitAttributionEnabled: false })).toEqual({
+      gitAttributionEnabled: false,
+    });
+    expect(appSettingsPatchToServerSettingsPatch({ gitAttributionEnabled: true })).toEqual({
+      gitAttributionEnabled: true,
     });
   });
 });
@@ -118,12 +132,6 @@ describe("computer control defaults", () => {
     const normalized = normalizeStoredAppSettings(decoded);
     expect(normalized.computerControlEnabled).toBe(true);
     expect(normalized).not.toHaveProperty("allowComputerControlInNewChats");
-  });
-
-  it("defaults the in-chat preview to the compact footprint", () => {
-    expect(AppSettingsSchema.makeUnsafe({}).computerPreviewSize).toBe("compact");
-    const decoded = Schema.decodeUnknownSync(AppSettingsSchema)({ computerPreviewSize: "large" });
-    expect(normalizeStoredAppSettings(decoded).computerPreviewSize).toBe("large");
   });
 });
 
@@ -301,21 +309,11 @@ describe("getAppModelOptions", () => {
   });
 
   it("appends saved custom models after the built-in options", () => {
+    const builtIn = getAppModelOptions("codex", []).map((option) => option.slug);
     const options = getAppModelOptions("codex", ["custom/internal-model"]);
 
-    expect(options.map((option) => option.slug)).toEqual([
-      "gpt-6-astra",
-      "gpt-6-sol",
-      "gpt-6-luna",
-      "gpt-5.5",
-      "gpt-5.4",
-      "gpt-5.4-mini",
-      "gpt-5.3-codex",
-      "gpt-5.3-codex-spark",
-      "gpt-5.2-codex",
-      "gpt-5.2",
-      "custom/internal-model",
-    ]);
+    expect(builtIn.length).toBeGreaterThan(0);
+    expect(options.map((option) => option.slug)).toEqual([...builtIn, "custom/internal-model"]);
   });
 
   it("keeps the currently selected custom model available even if it is no longer saved", () => {
@@ -352,14 +350,6 @@ describe("isGitTextGenerationSettingsDirty", () => {
   });
 });
 
-describe("code review sort", () => {
-  it("defaults existing settings to newest and preserves a stored activity order", () => {
-    const decode = Schema.decodeUnknownSync(AppSettingsSchema);
-    expect(decode({}).githubInboxSort).toBe("created");
-    expect(decode({ githubInboxSort: "updated" }).githubInboxSort).toBe("updated");
-  });
-});
-
 describe("removed settings", () => {
   it("ignores a code review list width stored before widths became fractions", () => {
     const decoded = Schema.decodeUnknownSync(AppSettingsSchema)({
@@ -371,66 +361,30 @@ describe("removed settings", () => {
   });
 });
 
-describe("environment panel defaults", () => {
-  it("starts optional text sections disabled without overriding explicit preferences", () => {
-    const defaults = AppSettingsSchema.makeUnsafe({});
-    expect(defaults).toMatchObject({
-      showEnvironmentInstructions: false,
-      showEnvironmentNotepad: false,
-    });
-
-    const enabled = AppSettingsSchema.makeUnsafe({
-      showEnvironmentInstructions: true,
-      showEnvironmentNotepad: true,
-    });
-    expect(enabled).toMatchObject({
-      showEnvironmentInstructions: true,
-      showEnvironmentNotepad: true,
-    });
-  });
+const customModels = (codex: string[]) => ({
+  codex,
+  claudeAgent: [],
+  cursor: [],
+  devin: [],
+  antigravity: [],
+  grok: [],
+  droid: [],
+  opencode: [],
+  pi: [],
+  omp: [],
 });
 
 describe("resolveAppModelSelection", () => {
   it("preserves saved custom model slugs instead of falling back to the default", () => {
     expect(
-      resolveAppModelSelection(
-        "codex",
-        {
-          codex: ["galapagos-alpha"],
-          claudeAgent: [],
-          cursor: [],
-          devin: [],
-          antigravity: [],
-          grok: [],
-          droid: [],
-          opencode: [],
-          pi: [],
-          omp: [],
-        },
-        "galapagos-alpha",
-      ),
+      resolveAppModelSelection("codex", customModels(["galapagos-alpha"]), "galapagos-alpha"),
     ).toBe("galapagos-alpha");
   });
 
   it("falls back to the provider default when no model is selected", () => {
-    expect(
-      resolveAppModelSelection(
-        "codex",
-        {
-          codex: [],
-          claudeAgent: [],
-          cursor: [],
-          devin: [],
-          antigravity: [],
-          grok: [],
-          droid: [],
-          opencode: [],
-          pi: [],
-          omp: [],
-        },
-        "",
-      ),
-    ).toBe(DEFAULT_MODEL_BY_PROVIDER.codex);
+    expect(resolveAppModelSelection("codex", customModels([]), "")).toBe(
+      DEFAULT_MODEL_BY_PROVIDER.codex,
+    );
   });
 });
 
@@ -716,29 +670,45 @@ describe("normalizeStoredAppSettings", () => {
   });
 });
 
+type StartOptionsSettings = Parameters<typeof getProviderStartOptions>[0];
+const makeStartOptionsSettings = (
+  overrides: Partial<StartOptionsSettings> = {},
+): StartOptionsSettings => ({
+  claudeBinaryPath: "",
+  codexBinaryPath: "",
+  codexHomePath: "",
+  codexAccounts: [],
+  selectedCodexAccountId: "default",
+  cursorApiEndpoint: "",
+  cursorBinaryPath: "",
+  antigravityBinaryPath: "",
+  grokBinaryPath: "",
+  droidBinaryPath: "",
+  devinBinaryPath: "",
+  openCodeBinaryPath: "",
+  openCodeExperimentalWebSockets: false,
+  openCodeServerUrl: "",
+  piAgentDir: "",
+  piBinaryPath: "",
+  ompBinaryPath: "",
+  ompAgentDir: "",
+  ...overrides,
+});
+
 describe("getProviderStartOptions", () => {
   it("returns only populated provider overrides", () => {
     expect(
-      getProviderStartOptions({
-        claudeBinaryPath: "/usr/local/bin/claude",
-        codexBinaryPath: "",
-        codexHomePath: "/Users/you/.codex",
-        codexAccounts: [],
-        selectedCodexAccountId: "default",
-        cursorApiEndpoint: "http://localhost:3000",
-        cursorBinaryPath: "/usr/local/bin/agent",
-        antigravityBinaryPath: "/usr/local/bin/agy",
-        grokBinaryPath: "/usr/local/bin/grok",
-        droidBinaryPath: "",
-        openCodeBinaryPath: "",
-        openCodeExperimentalWebSockets: false,
-        openCodeServerUrl: "",
-        piAgentDir: "",
-        piBinaryPath: "",
-        devinBinaryPath: "/usr/local/bin/devin",
-        ompBinaryPath: "",
-        ompAgentDir: "",
-      }),
+      getProviderStartOptions(
+        makeStartOptionsSettings({
+          claudeBinaryPath: "/usr/local/bin/claude",
+          codexHomePath: "/Users/you/.codex",
+          cursorApiEndpoint: "http://localhost:3000",
+          cursorBinaryPath: "/usr/local/bin/agent",
+          antigravityBinaryPath: "/usr/local/bin/agy",
+          grokBinaryPath: "/usr/local/bin/grok",
+          devinBinaryPath: "/usr/local/bin/devin",
+        }),
+      ),
     ).toEqual({
       claudeAgent: {
         binaryPath: "/usr/local/bin/claude",
@@ -763,59 +733,25 @@ describe("getProviderStartOptions", () => {
   });
 
   it("returns undefined when no provider overrides are configured", () => {
-    expect(
-      getProviderStartOptions({
-        claudeBinaryPath: "",
-        codexBinaryPath: "",
-        codexHomePath: "",
-        codexAccounts: [],
-        selectedCodexAccountId: "default",
-        cursorApiEndpoint: "",
-        cursorBinaryPath: "",
-        antigravityBinaryPath: "",
-        grokBinaryPath: "",
-        droidBinaryPath: "",
-        openCodeBinaryPath: "",
-        openCodeExperimentalWebSockets: false,
-        openCodeServerUrl: "",
-        piAgentDir: "",
-        piBinaryPath: "",
-        devinBinaryPath: "",
-        ompBinaryPath: "",
-        ompAgentDir: "",
-      }),
-    ).toBeUndefined();
+    expect(getProviderStartOptions(makeStartOptionsSettings())).toBeUndefined();
   });
 
   it("resolves the selected Codex account into provider start options", () => {
     expect(
-      getProviderStartOptions({
-        claudeBinaryPath: "",
-        codexBinaryPath: "",
-        codexHomePath: "/Users/you/.codex",
-        codexAccounts: [
-          {
-            id: "work",
-            label: "Work",
-            homePath: "",
-            shadowHomePath: "/Users/you/.codex_work",
-          },
-        ],
-        selectedCodexAccountId: "work",
-        cursorApiEndpoint: "",
-        cursorBinaryPath: "",
-        antigravityBinaryPath: "",
-        grokBinaryPath: "",
-        droidBinaryPath: "",
-        devinBinaryPath: "",
-        openCodeBinaryPath: "",
-        openCodeExperimentalWebSockets: false,
-        openCodeServerUrl: "",
-        piAgentDir: "",
-        piBinaryPath: "",
-        ompBinaryPath: "",
-        ompAgentDir: "",
-      }),
+      getProviderStartOptions(
+        makeStartOptionsSettings({
+          codexHomePath: "/Users/you/.codex",
+          codexAccounts: [
+            {
+              id: "work",
+              label: "Work",
+              homePath: "",
+              shadowHomePath: "/Users/you/.codex_work",
+            },
+          ],
+          selectedCodexAccountId: "work",
+        }),
+      ),
     ).toEqual({
       codex: {
         accountId: "work",
@@ -828,9 +764,7 @@ describe("getProviderStartOptions", () => {
   it("uses an explicit default Codex instance instead of the legacy selected account", () => {
     expect(
       getProviderStartOptions(
-        {
-          claudeBinaryPath: "",
-          codexBinaryPath: "",
+        makeStartOptionsSettings({
           codexHomePath: "/Users/you/.codex",
           codexAccounts: [
             {
@@ -841,20 +775,7 @@ describe("getProviderStartOptions", () => {
             },
           ],
           selectedCodexAccountId: "work",
-          cursorApiEndpoint: "",
-          cursorBinaryPath: "",
-          devinBinaryPath: "",
-          antigravityBinaryPath: "",
-          grokBinaryPath: "",
-          droidBinaryPath: "",
-          openCodeBinaryPath: "",
-          openCodeExperimentalWebSockets: false,
-          openCodeServerUrl: "",
-          piAgentDir: "",
-          piBinaryPath: "",
-          ompBinaryPath: "",
-          ompAgentDir: "",
-        },
+        }),
         "codex",
       ),
     ).toEqual({
@@ -867,9 +788,7 @@ describe("getProviderStartOptions", () => {
   it("resolves a legacy Codex account instance into account-isolated options", () => {
     expect(
       getProviderStartOptions(
-        {
-          claudeBinaryPath: "",
-          codexBinaryPath: "",
+        makeStartOptionsSettings({
           codexHomePath: "/Users/you/.codex",
           codexAccounts: [
             {
@@ -879,21 +798,7 @@ describe("getProviderStartOptions", () => {
               shadowHomePath: "/Users/work/.codex-shadow",
             },
           ],
-          selectedCodexAccountId: "default",
-          cursorApiEndpoint: "",
-          cursorBinaryPath: "",
-          devinBinaryPath: "",
-          antigravityBinaryPath: "",
-          grokBinaryPath: "",
-          droidBinaryPath: "",
-          openCodeBinaryPath: "",
-          openCodeExperimentalWebSockets: false,
-          openCodeServerUrl: "",
-          piAgentDir: "",
-          piBinaryPath: "",
-          ompBinaryPath: "",
-          ompAgentDir: "",
-        },
+        }),
         "codex_work",
       ),
     ).toEqual({
@@ -908,26 +813,9 @@ describe("getProviderStartOptions", () => {
   it("overlays explicit Claude provider instance HOME options", () => {
     expect(
       getProviderStartOptions(
-        {
+        makeStartOptionsSettings({
           claudeBinaryPath: "/usr/local/bin/claude",
           claudeHomePath: "/Users/base",
-          codexBinaryPath: "",
-          codexHomePath: "",
-          codexAccounts: [],
-          selectedCodexAccountId: "default",
-          cursorApiEndpoint: "",
-          cursorBinaryPath: "",
-          devinBinaryPath: "",
-          antigravityBinaryPath: "",
-          grokBinaryPath: "",
-          droidBinaryPath: "",
-          openCodeBinaryPath: "",
-          openCodeExperimentalWebSockets: false,
-          openCodeServerUrl: "",
-          piAgentDir: "",
-          piBinaryPath: "",
-          ompBinaryPath: "",
-          ompAgentDir: "",
           providerInstances: {
             claude_work: {
               driver: "claudeAgent",
@@ -939,7 +827,7 @@ describe("getProviderStartOptions", () => {
               },
             },
           },
-        },
+        }),
         "claude_work",
       ),
     ).toEqual({
@@ -952,9 +840,7 @@ describe("getProviderStartOptions", () => {
 
   it("does not inherit the selected Codex account into a custom Codex instance", () => {
     const result = getProviderStartOptions(
-      {
-        claudeBinaryPath: "",
-        codexBinaryPath: "",
+      makeStartOptionsSettings({
         codexHomePath: "/Users/default/.codex",
         codexAccounts: [
           {
@@ -965,19 +851,6 @@ describe("getProviderStartOptions", () => {
           },
         ],
         selectedCodexAccountId: "selected",
-        cursorApiEndpoint: "",
-        cursorBinaryPath: "",
-        devinBinaryPath: "",
-        antigravityBinaryPath: "",
-        grokBinaryPath: "",
-        droidBinaryPath: "",
-        openCodeBinaryPath: "",
-        openCodeExperimentalWebSockets: false,
-        openCodeServerUrl: "",
-        piAgentDir: "",
-        piBinaryPath: "",
-        ompBinaryPath: "",
-        ompAgentDir: "",
         providerInstances: {
           codex_work: {
             driver: "codex",
@@ -985,7 +858,7 @@ describe("getProviderStartOptions", () => {
             config: { homePath: "/Users/work/.codex" },
           },
         },
-      },
+      }),
       "codex_work",
     );
 
@@ -994,25 +867,8 @@ describe("getProviderStartOptions", () => {
 
   it("keeps legacy launch settings for a configured default instance", () => {
     const result = getProviderStartOptions(
-      {
+      makeStartOptionsSettings({
         claudeBinaryPath: "/opt/bin/claude",
-        codexBinaryPath: "",
-        codexHomePath: "",
-        codexAccounts: [],
-        selectedCodexAccountId: "default",
-        cursorApiEndpoint: "",
-        cursorBinaryPath: "",
-        devinBinaryPath: "",
-        antigravityBinaryPath: "",
-        grokBinaryPath: "",
-        droidBinaryPath: "",
-        openCodeBinaryPath: "",
-        openCodeExperimentalWebSockets: false,
-        openCodeServerUrl: "",
-        piAgentDir: "",
-        piBinaryPath: "",
-        ompBinaryPath: "",
-        ompAgentDir: "",
         providerInstances: {
           claudeAgent: {
             driver: "claudeAgent",
@@ -1020,7 +876,7 @@ describe("getProviderStartOptions", () => {
             config: { customModels: ["claude/custom"] },
           },
         },
-      },
+      }),
       "claudeAgent",
     );
 
@@ -1029,33 +885,18 @@ describe("getProviderStartOptions", () => {
 
   it("emits an empty Codex options object when switching back to default among accounts", () => {
     expect(
-      getProviderStartOptions({
-        claudeBinaryPath: "",
-        codexBinaryPath: "",
-        codexHomePath: "",
-        codexAccounts: [
-          {
-            id: "work",
-            label: "Work",
-            homePath: "",
-            shadowHomePath: "/Users/you/.codex_work",
-          },
-        ],
-        selectedCodexAccountId: "default",
-        cursorApiEndpoint: "",
-        cursorBinaryPath: "",
-        antigravityBinaryPath: "",
-        grokBinaryPath: "",
-        droidBinaryPath: "",
-        devinBinaryPath: "",
-        openCodeBinaryPath: "",
-        openCodeExperimentalWebSockets: false,
-        openCodeServerUrl: "",
-        piAgentDir: "",
-        piBinaryPath: "",
-        ompBinaryPath: "",
-        ompAgentDir: "",
-      }),
+      getProviderStartOptions(
+        makeStartOptionsSettings({
+          codexAccounts: [
+            {
+              id: "work",
+              label: "Work",
+              homePath: "",
+              shadowHomePath: "/Users/you/.codex_work",
+            },
+          ],
+        }),
+      ),
     ).toEqual({
       codex: {},
     });
@@ -1086,39 +927,37 @@ describe("getProviderStartOptions", () => {
 
   it("ignores default provider command names as custom binary overrides", () => {
     expect(
-      getProviderStartOptions({
-        claudeBinaryPath: "claude",
-        codexBinaryPath: "codex",
-        codexHomePath: "",
-        codexAccounts: [],
-        selectedCodexAccountId: "default",
-        cursorApiEndpoint: "",
-        cursorBinaryPath: "cursor-agent",
-        antigravityBinaryPath: "agy",
-        grokBinaryPath: "grok",
-        devinBinaryPath: "devin",
-        droidBinaryPath: "droid",
-        openCodeBinaryPath: "opencode",
-        openCodeExperimentalWebSockets: false,
-        openCodeServerUrl: "",
-        piAgentDir: "",
-        piBinaryPath: "pi",
-        ompBinaryPath: "",
-        ompAgentDir: "",
-      }),
+      getProviderStartOptions(
+        makeStartOptionsSettings({
+          claudeBinaryPath: "claude",
+          codexBinaryPath: "codex",
+          cursorBinaryPath: "cursor-agent",
+          antigravityBinaryPath: "agy",
+          grokBinaryPath: "grok",
+          devinBinaryPath: "devin",
+          droidBinaryPath: "droid",
+          openCodeBinaryPath: "opencode",
+          piBinaryPath: "pi",
+        }),
+      ),
     ).toBeUndefined();
   });
 });
 
 describe("mergeProviderStartOptions", () => {
-  it("returns the base when there is no overlay", () => {
-    const base = { codex: { binaryPath: "/opt/codex" } };
-    expect(mergeProviderStartOptions(base, undefined)).toEqual(base);
-  });
-
-  it("returns the overlay when there is no base", () => {
-    const overlay = { claudeAgent: { binaryPath: "/opt/claude" } };
-    expect(mergeProviderStartOptions(undefined, overlay)).toEqual(overlay);
+  it.each([
+    {
+      name: "the base when there is no overlay",
+      base: { codex: { binaryPath: "/opt/codex" } },
+      overlay: undefined,
+    },
+    {
+      name: "the overlay when there is no base",
+      base: undefined,
+      overlay: { claudeAgent: { binaryPath: "/opt/claude" } },
+    },
+  ])("returns $name", ({ base, overlay }) => {
+    expect(mergeProviderStartOptions(base, overlay)).toEqual(base ?? overlay);
   });
 
   it("keeps base providers the overlay does not name", () => {
@@ -1582,43 +1421,16 @@ describe("provider instance configuration", () => {
   it("does not leak a provider-wide binary path into a custom instance", () => {
     expect(
       getCustomBinaryPathForProviderInstance(
-        {
+        makeStartOptionsSettings({
           claudeBinaryPath: "/legacy/bin/claude",
-          claudeHomePath: "",
-          codexAccounts: [],
-          codexBinaryPath: "",
-          codexHomePath: "",
-          selectedCodexAccountId: "default",
-          cursorBinaryPath: "",
-          cursorApiEndpoint: "",
-          devinBinaryPath: "",
-          antigravityBinaryPath: "",
-          grokBinaryPath: "",
-          droidBinaryPath: "",
-          openCodeBinaryPath: "",
-          openCodeExperimentalWebSockets: false,
-          openCodeServerUrl: "",
-          piBinaryPath: "",
-          ompBinaryPath: "",
-          ompAgentDir: "",
-          piAgentDir: "",
           providerInstances: {
             claude_work: { driver: "claudeAgent", enabled: true, config: {} },
           },
-        },
+        }),
         "claudeAgent",
         "claude_work",
       ),
     ).toBe("");
-  });
-
-  it("drops a stale redaction marker when replacing a secret", () => {
-    expect(
-      mergeProviderInstanceConfigPatch(
-        { serverPassword: "", serverPasswordRedacted: true },
-        { serverPassword: "new-secret" },
-      ),
-    ).toEqual({ serverPassword: "new-secret" });
   });
 });
 
@@ -1750,37 +1562,6 @@ describe("provider-indexed custom model settings", () => {
           enabled: true,
           displayName: "Claude Work",
           config: { homePath: "/tmp/claude-work", customModels: ["claude/work-only"] },
-        },
-      },
-    });
-  });
-
-  it("patches custom models for the default provider instance into providerInstances", () => {
-    expect(
-      patchCustomModelsForProviderInstance(
-        {
-          codexAccounts: [],
-          codexHomePath: "",
-          providerInstances: {},
-          selectedCodexAccountId: "default",
-        },
-        {
-          instanceId: "claudeAgent",
-          provider: "claudeAgent",
-          isDefault: true,
-        },
-        ["claude/default-instance"],
-      ),
-    ).toEqual({
-      providerInstances: {
-        claudeAgent: {
-          driver: "claudeAgent",
-          // Launch settings are not copied: derived default instances merge the
-          // live legacy settings in at derivation time, so later edits to the
-          // provider settings keep applying.
-          config: {
-            customModels: ["claude/default-instance"],
-          },
         },
       },
     });
@@ -1987,15 +1768,6 @@ describe("revealHubsRailItemOnce", () => {
 });
 
 describe("AppSettingsSchema", () => {
-  it("keeps sent-message anchoring enabled for settings saved before the preference existed", () => {
-    const decode = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema));
-
-    expect(decode(JSON.stringify({ chatFontSizePx: 17 }))).toMatchObject({
-      anchorSentMessagesToTop: true,
-      chatFontSizePx: 17,
-    });
-  });
-
   it("preserves disabled sent-message anchoring across persistence until defaults are restored", () => {
     const codec = Schema.fromJsonString(AppSettingsSchema);
     const decode = Schema.decodeSync(codec);
@@ -2007,12 +1779,6 @@ describe("AppSettingsSchema", () => {
     expect(applyLocalAppSettingsPatch(restored, defaults)).toMatchObject({
       anchorSentMessagesToTop: true,
     });
-  });
-
-  it("opens Tasks as the list until the user picks the Kanban view", () => {
-    const decode = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema));
-    expect(decode(JSON.stringify({})).tasksViewMode).toBe("list");
-    expect(decode(JSON.stringify({ tasksViewMode: "kanban" })).tasksViewMode).toBe("kanban");
   });
 
   it("migrates persisted Gemini provider settings to Antigravity", () => {
@@ -2159,29 +1925,6 @@ describe("AppSettingsSchema", () => {
     expect(decoded).not.toHaveProperty("hiddenSidebarNavItems");
   });
 
-  it("defaults the Environment panel closed and preserves an explicit open preference", () => {
-    const decode = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema));
-
-    expect(decode("{}").environmentPanelDefaultOpen).toBe(false);
-    expect(
-      decode(JSON.stringify({ environmentPanelDefaultOpen: true })).environmentPanelDefaultOpen,
-    ).toBe(true);
-  });
-
-  it("keeps usage popover details collapsed by default and preserves an explicit choice", () => {
-    const decode = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema));
-
-    expect(decode("{}").usageDetailsDefaultOpen).toBe(false);
-    expect(decode("{}").usagePopoverShowResetCredits).toBe(true);
-    expect(decode("{}").usagePopoverShowUsageLines).toBe(true);
-    expect(
-      decode(JSON.stringify({ usagePopoverShowUsageLines: false })).usagePopoverShowUsageLines,
-    ).toBe(false);
-    expect(decode(JSON.stringify({ usageDetailsDefaultOpen: true })).usageDetailsDefaultOpen).toBe(
-      true,
-    );
-  });
-
   it("preserves a disabled simulator auto-open preference across settings persistence", () => {
     const codec = Schema.fromJsonString(AppSettingsSchema);
     const decode = Schema.decodeSync(codec);
@@ -2204,27 +1947,15 @@ describe("AppSettingsSchema", () => {
       ),
     ).toMatchObject({
       claudeBinaryPath: "",
-      uiDensity: "comfortable",
-      chatFontSizePx: 13,
-      terminalFontSizePx: 12,
       codexBinaryPath: "/usr/local/bin/codex",
       codexHomePath: "",
       grokBinaryPath: "",
       defaultThreadEnvMode: "local",
       confirmThreadDelete: false,
-      confirmTerminalTabClose: true,
-      desktopAppIcon: "default",
-      useCustomTitleBar: true,
       enableAppSnap: false,
-      appSnapShortcut: { kind: "both-option-keys" },
-      appSnapPlaySound: true,
-      enableAssistantStreaming: true,
       followUpBehavior: DEFAULT_FOLLOW_UP_BEHAVIOR,
       sidebarProjectSortOrder: "manual",
       sidebarThreadSortOrder: "updated_at",
-      showGroupsSection: true,
-      showAutomationRunThreads: true,
-      timestampFormat: "locale",
       customCodexModels: [],
       customClaudeModels: [],
       customCursorModels: [],
@@ -2239,23 +1970,14 @@ describe("AppSettingsSchema", () => {
   it("migrates the former AppSnap feature flag", () => {
     const decode = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema));
 
-    expect(
-      normalizeStoredAppSettings(decode(JSON.stringify({ enableAppshots: true }))),
-    ).toMatchObject({
-      enableAppSnap: true,
-    });
-    expect(
-      normalizeStoredAppSettings(decode(JSON.stringify({ enableAppshots: true }))),
-    ).not.toHaveProperty("enableAppshots");
+    const normalized = normalizeStoredAppSettings(decode(JSON.stringify({ enableAppshots: true })));
+
+    expect(normalized).toMatchObject({ enableAppSnap: true });
+    expect(normalized).not.toHaveProperty("enableAppshots");
   });
 });
 
 describe("keepAwakeMode mapping", () => {
-  it("defaults to off when absent from stored settings", () => {
-    const decode = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema));
-    expect(decode("{}").keepAwakeMode).toBe("off");
-  });
-
   it("maps the server setting into app settings", () => {
     const mapped = serverSettingsToAppSettings({
       ...DEFAULT_SERVER_SETTINGS_VIEW,

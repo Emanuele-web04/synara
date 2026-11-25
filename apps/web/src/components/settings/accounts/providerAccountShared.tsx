@@ -66,20 +66,36 @@ export function providerInstanceUpdater(
   };
 }
 
+/** The part of an account the sign-in dialog needs. */
+export type ProviderSignInAccount = Pick<
+  ProviderInstanceOption,
+  "provider" | "instanceId" | "label"
+> &
+  Partial<ProviderInstanceOption>;
+
 /**
  * Starts an account's sign-in once its pending settings are saved, and owns the sign-in
  * dialog. Render `signInDialog` wherever the caller lays out its content.
  */
 export function useProviderAccountSignIn(
   updateSettingsAndWait: (patch: Partial<AppSettings>) => Promise<void>,
+  options?: {
+    /** Close the dialog as soon as the account is confirmed signed in. */
+    readonly closeWhenAuthenticated?: boolean;
+    /** Runs after the dialog closes, whatever the outcome. */
+    readonly onClosed?: () => void;
+  },
 ): {
-  startSignIn: (account: ProviderInstanceOption) => Promise<void>;
+  /** Resolves true once the sign-in dialog is open, false when it could not start. */
+  startSignIn: (account: ProviderSignInAccount) => Promise<boolean>;
   startingSignIn: boolean;
   signInDialog: ReactNode;
 } {
   const { t } = useTranslation();
 
-  const [signInAccount, setSignInAccount] = useState<ProviderInstanceOption | null>(null);
+  const [signInAccount, setSignInAccount] = useState<ProviderSignInAccount | null>(null);
+  const onClosedRef = useRef(options?.onClosed);
+  onClosedRef.current = options?.onClosed;
   const [startingSignIn, setStartingSignIn] = useState(false);
   const signInPendingRef = useRef(false);
   const mountedRef = useRef(true);
@@ -89,8 +105,8 @@ export function useProviderAccountSignIn(
       mountedRef.current = false;
     };
   }, []);
-  const startSignIn = async (account: ProviderInstanceOption) => {
-    if (signInPendingRef.current) return;
+  const startSignIn = async (account: ProviderSignInAccount) => {
+    if (signInPendingRef.current) return false;
     signInPendingRef.current = true;
     setStartingSignIn(true);
     try {
@@ -98,6 +114,7 @@ export function useProviderAccountSignIn(
       // the account's latest settings before it resolves the login environment.
       await updateSettingsAndWait({});
       if (mountedRef.current) setSignInAccount(account);
+      return mountedRef.current;
     } catch (error) {
       toastManager.add({
         type: "error",
@@ -105,6 +122,7 @@ export function useProviderAccountSignIn(
         description:
           error instanceof Error ? error.message : t("settings:unableToSaveProviderSettings"),
       });
+      return false;
     } finally {
       signInPendingRef.current = false;
       if (mountedRef.current) setStartingSignIn(false);
@@ -119,7 +137,11 @@ export function useProviderAccountSignIn(
         provider={signInAccount.provider}
         instanceId={String(signInAccount.instanceId)}
         accountLabel={signInAccount.label}
-        onClose={() => setSignInAccount(null)}
+        closeWhenAuthenticated={options?.closeWhenAuthenticated === true}
+        onClose={() => {
+          setSignInAccount(null);
+          onClosedRef.current?.();
+        }}
       />
     </Suspense>
   ) : null;

@@ -3,15 +3,11 @@
 // Layer: Web UI utility
 // Depends on: @pierre/diffs shared highlighter and diff theme utilities.
 
-import {
-  getFiletypeFromFileName,
-  getSharedHighlighter,
-  type DiffsHighlighter,
-  type SupportedLanguages,
-} from "@pierre/diffs";
+import type { DiffsHighlighter, SupportedLanguages } from "@pierre/diffs";
 
 import { basenameOfPath } from "../file-icons";
-import { fnv1a32, resolveDiffThemeName, type DiffThemeName } from "./diffRendering";
+import { resolveLanguageFromFileName } from "./fileLanguageMap";
+import { fnv1a32, resolveDiffThemeName, type DiffThemeName } from "./diffTheme";
 import { LRUCache } from "./lruCache";
 
 const MAX_HIGHLIGHT_CACHE_ENTRIES = 500;
@@ -26,7 +22,7 @@ const highlightedCodeCache = new LRUCache<string>(
 const highlighterPromiseCache = new Map<string, Promise<DiffsHighlighter>>();
 
 export function getSyntaxLanguageForPath(pathValue: string): string {
-  return getFiletypeFromFileName(basenameOfPath(pathValue));
+  return resolveLanguageFromFileName(basenameOfPath(pathValue));
 }
 
 export function createSyntaxHighlightCacheKey(
@@ -61,17 +57,21 @@ export function getSyntaxHighlighterPromise(language: string): Promise<DiffsHigh
   const cached = highlighterPromiseCache.get(language);
   if (cached) return cached;
 
-  const promise = getSharedHighlighter({
-    themes: [resolveDiffThemeName("dark"), resolveDiffThemeName("light")],
-    langs: [language as SupportedLanguages],
-    preferredHighlighter: "shiki-js",
-  }).catch((err) => {
-    highlighterPromiseCache.delete(language);
-    if (language === "text") {
-      throw err;
-    }
-    return getSyntaxHighlighterPromise("text");
-  });
+  const promise = import("@pierre/diffs")
+    .then(({ getSharedHighlighter }) =>
+      getSharedHighlighter({
+        themes: [resolveDiffThemeName("dark"), resolveDiffThemeName("light")],
+        langs: [language as SupportedLanguages],
+        preferredHighlighter: "shiki-js",
+      }),
+    )
+    .catch((err) => {
+      highlighterPromiseCache.delete(language);
+      if (language === "text") {
+        throw err;
+      }
+      return getSyntaxHighlighterPromise("text");
+    });
   highlighterPromiseCache.set(language, promise);
   return promise;
 }

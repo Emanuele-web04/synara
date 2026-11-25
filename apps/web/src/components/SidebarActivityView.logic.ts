@@ -5,7 +5,17 @@ export { resolveActivityDayStartMs } from "@synara/shared/inboxDay";
 // Exports: eligibility, stable ordering, settle helpers, the view-model builder, and the
 //          Priority ranking behind the section, the bell's dot, and "next needing attention".
 
-import type { ProjectId, ThreadId } from "@synara/contracts";
+import type {
+  OrchestrationThreadPullRequest,
+  OrchestrationThreadPullRequestLink,
+  ProjectId,
+  ThreadId,
+} from "@synara/contracts";
+import {
+  compareLinkedPullRequests,
+  pullRequestLinkKey,
+  visiblePullRequestLinks,
+} from "@synara/shared/threadPullRequestLinks";
 import type { SidebarThreadSummary } from "../types";
 import {
   groupSidebarThreadFamilies,
@@ -430,6 +440,39 @@ export type ChildThreadsTone = "waiting" | "active" | "quiet";
 export function resolveChildThreadsTone(tier: ActivityPriorityTier | null): ChildThreadsTone {
   if (tier === "waiting") return "waiting";
   return tier === null ? "quiet" : "active";
+}
+
+/**
+ * The pull requests an Activity row stands for. First the one the row resolves today (the
+ * thread's current PR: an open link before a settled one, the latest linked among equals, with
+ * its live state), which also decides the glyph and color; then the thread's other visible
+ * links, open first and most recently linked first. A row whose PR was ruled out (a moved
+ * checkout) shows none, so no stale link comes back through this list.
+ */
+export function resolveActivityRowPullRequests(
+  rowPullRequest: OrchestrationThreadPullRequest | null,
+  links: ReadonlyArray<OrchestrationThreadPullRequestLink> | null | undefined,
+): OrchestrationThreadPullRequest[] {
+  if (rowPullRequest === null) return [];
+  const rowKey = pullRequestLinkKey(rowPullRequest.url);
+  const others = visiblePullRequestLinks(links)
+    .filter((link) => pullRequestLinkKey(link.pullRequest.url) !== rowKey)
+    .toSorted(compareLinkedPullRequests)
+    .map((link) => link.pullRequest);
+  return [rowPullRequest, ...others];
+}
+
+/**
+ * How loudly an Activity row reads. Its title turns medium while the thread waits on the user
+ * or holds news they have not seen, and its reply preview steps back once nothing is new or
+ * running. `status` is what the row shows, so the open thread's resolved unread dot counts as seen.
+ */
+export function resolveActivityRowEmphasis(status: Pick<ThreadStatusPill, "label"> | null): {
+  titleEmphasized: boolean;
+  replySeen: boolean;
+} {
+  const tier = resolveActivityPriorityTier(status);
+  return { titleEmphasized: tier === "waiting" || tier === "unread", replySeen: tier === null };
 }
 
 export interface ActivityChildFamilies {

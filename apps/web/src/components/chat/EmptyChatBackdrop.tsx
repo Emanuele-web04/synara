@@ -310,8 +310,8 @@ function buildDensity(
 // into gentle patches by smooth value noise. No shape.
 const GRADIENT_BLOBS = [
   { x: 0.15, y: -0.05, radius: 0.45, strength: 0.9 },
-  { x: 0.6, y: 0.0, radius: 0.4, strength: 0.75 },
-  { x: 1.0, y: 0.15, radius: 0.32, strength: 0.6 },
+  { x: 0.6, y: 0, radius: 0.4, strength: 0.75 },
+  { x: 1, y: 0.15, radius: 0.32, strength: 0.6 },
 ] as const;
 const GRADIENT_PATCH_PX = 260;
 const GRADIENT_DETAIL_PX = 110;

@@ -213,6 +213,13 @@ export async function createApp(
       try {
         await accountDeletion.flush();
         await createPairingRendezvous(db, config.apiPublicUrl).cleanup();
+        // Before tunnel cleanup, so a host unlinked here retires its tunnel in the same pass.
+        const retired = await identity.hostKeys.retireStaleHosts();
+        if (retired.superseded > 0 || retired.abandoned > 0) {
+          console.log(
+            `[api] unlinked stale hosts: ${retired.superseded} superseded, ${retired.abandoned} abandoned`,
+          );
+        }
         await tunnels?.cleanup();
       } finally {
         // Retention used to run with every push sweep; a failing sweep above

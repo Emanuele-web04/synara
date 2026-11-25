@@ -9,7 +9,13 @@ import {
 import { describe, expect, it } from "vitest";
 
 import { derivePendingApprovals, derivePendingUserInputs } from "./pendingInteractionDerivation";
+import {
+  buildPendingUserInputAnswers,
+  setPendingUserInputCustomAnswer,
+  togglePendingUserInputOptionSelection,
+} from "./pendingUserInput";
 import { makeActivity } from "./storeTestFixtures";
+import { deriveWorkLogEntries } from "./workLog";
 
 function makePendingInteraction(
   interactionKind: OrchestrationPendingInteraction["interactionKind"],
@@ -430,6 +436,52 @@ describe("derivePendingApprovals", () => {
 });
 
 describe("derivePendingUserInputs", () => {
+  it.each([
+    { typedText: null, answers: { q1: "2" }, label: "Pear" },
+    { typedText: "2", answers: { q1_other: "2" }, label: "2" },
+  ])(
+    "keeps the selected ID and free-form response distinct ($label)",
+    ({ typedText, answers, label }) => {
+      const request = makeActivity({
+        id: "question",
+        sequence: 1,
+        kind: "user-input.requested",
+        payload: {
+          requestId: "req-antigravity",
+          questions: [
+            {
+              id: "q1",
+              header: "Fruit",
+              question: "Which fruit?",
+              options: [{ value: "2", label: "Pear", description: "Pear" }],
+              customAnswerId: "q1_other",
+            },
+          ],
+        },
+      });
+      const [pending] = derivePendingUserInputs([request]);
+      expect(pending).toBeDefined();
+      const question = pending!.questions[0]!;
+      const pear = question.options[0]!;
+      const draft =
+        typedText === null
+          ? togglePendingUserInputOptionSelection(question, undefined, pear.value ?? pear.label)
+          : setPendingUserInputCustomAnswer(undefined, typedText);
+      const submitted = buildPendingUserInputAnswers(pending!.questions, { q1: draft });
+      expect(submitted).toEqual(answers);
+
+      const resolved = makeActivity({
+        id: "answer",
+        sequence: 2,
+        kind: "user-input.resolved",
+        payload: { requestId: "req-antigravity", answers: submitted },
+      });
+      expect(deriveWorkLogEntries([request, resolved], undefined)).toMatchObject([
+        { id: "answer", userInputExchange: [{ id: "q1", answer: label }] },
+      ]);
+    },
+  );
+
   it.each([
     {
       name: "current generation stale failure",

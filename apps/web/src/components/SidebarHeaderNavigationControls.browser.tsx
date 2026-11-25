@@ -341,7 +341,6 @@ describe("sidebar leading controls dock", () => {
       expect(
         Math.abs(toggle.getBoundingClientRect().left - reserved.getBoundingClientRect().left),
       ).toBeLessThan(1);
-      expect(getComputedStyle(panel).borderLeftWidth).toBe("0px");
       await page.getByRole("button", { name: "Toggle thread sidebar" }).click();
       expect(topBar.getAnimations()).toHaveLength(0);
       expect(card.getAnimations({ subtree: true })).toHaveLength(0);

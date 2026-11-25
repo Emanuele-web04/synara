@@ -1,13 +1,22 @@
 // FILE: composerPrediction.ts
 // Purpose: The pure rules behind composer predictions: which settled turn may request one,
-//          when the ghost text may show, when a result or an edit discards it, and when Tab
-//          accepts it. Also the in-memory store that keeps one entry per key.
+//          when the ghost text may show, what a result means for the turn, when a request
+//          is retried, and which key accepts it. Also the in-memory store that keeps one
+//          entry per key.
 // Layer: Web logic (no React, no transport)
-// Exports: composerPredictionKey, resolveComposerPredictionTarget, canShowComposerPrediction,
-//          shouldAcceptComposerPredictionOnTab, shouldDiscardComposerPredictionAfterEdit,
+// Exports: composerPredictionKey, resolveComposerPredictionInstanceId,
+//          resolveComposerPredictionTarget, canShowComposerPrediction,
+//          shouldAcceptComposerPrediction, composerPredictionEntryForResult,
 //          nextComposerPredictionRequest, fitComposerPredictionText, composerPredictionStore
 
-import type { OrchestrationLatestTurn, ThreadId, TurnId } from "@synara/contracts";
+import type {
+  ModelSelection,
+  OrchestrationLatestTurn,
+  ServerGenerateComposerPredictionResult,
+  ThreadId,
+  TurnId,
+} from "@synara/contracts";
+import { resolveModelSelectionInstanceId } from "@synara/shared/providerInstances";
 import { createStore } from "zustand/vanilla";
 
 /** The key a prediction lives under: host, provider instance (account), thread, and turn. */
@@ -18,20 +27,27 @@ export interface ComposerPredictionTarget {
 }
 
 /**
- * `pending` while the request runs; `ready` once a suggestion arrived; `failed` after the
- * first request error, which may be retried once (a dropped connection is not an answer);
- * `done` when the turn has no suggestion to show anymore (none came back, it failed twice,
- * it was accepted, or the user typed). A `done` key is never requested or shown again.
+ * `pending` while a request runs; `ready` once a suggestion arrived (typing only hides it);
+ * `unavailable` after a request got no answer (the server could not produce one this time,
+ * or the request itself failed), retried on {@link COMPOSER_PREDICTION_RETRY_DELAYS_MS};
+ * `done` when the turn has nothing to show anymore (the model answered with no suggestion,
+ * or it was accepted). A `done` key is never requested or shown again.
  */
 export type ComposerPredictionEntry =
   | {
       readonly status: "pending";
       readonly controller: AbortController;
-      /** True for the single retry after a failed first request. */
-      readonly retry: boolean;
+      /** 1 for the first request for the key, counting up with each retry. */
+      readonly attempt: number;
     }
   | { readonly status: "ready"; readonly suggestion: string }
-  | { readonly status: "failed" }
+  | {
+      readonly status: "unavailable";
+      /** Requests that got no answer so far. */
+      readonly attempts: number;
+      /** A provider may have already run, so only the first request can be retried. */
+      readonly limitRetries?: true;
+    }
   | { readonly status: "done" };
 
 export interface VisibleComposerPrediction {
@@ -90,6 +106,26 @@ export function fitComposerPredictionText(
     }
   }
   return `${first.slice(0, keptChars)}${COMPOSER_PREDICTION_ELLIPSIS}`;
+}
+
+/**
+ * The provider instance (account) a chat's prediction runs on, resolved the way the server
+ * routes it: the live session's instance, else the chat's model selection with its
+ * provider standing in for a missing instance id (chats from before instance ids).
+ */
+export function resolveComposerPredictionInstanceId(
+  thread:
+    | {
+        readonly session?: { readonly providerInstanceId?: string | undefined } | null | undefined;
+        readonly modelSelection: Pick<ModelSelection, "provider" | "instanceId">;
+      }
+    | null
+    | undefined,
+): string | null {
+  if (!thread) return null;
+  return (
+    thread.session?.providerInstanceId ?? resolveModelSelectionInstanceId(thread.modelSelection)
+  );
 }
 
 export function composerPredictionKey(input: {
@@ -168,12 +204,12 @@ export function canShowComposerPrediction(input: {
 }
 
 /**
- * Tab takes the suggestion only when, on the editor's current state, the composer is
- * focused and empty, the suggestion is still the ready one for the current key, no
- * modifier is held, and no IME composition is running. Anything else keeps Tab's
- * normal behavior.
+ * Tab or Right Arrow takes the suggestion only when, on the editor's current state, the
+ * composer is focused and empty, the suggestion is still the ready one for the current key,
+ * no modifier is held, and no IME composition is running. Anything else keeps the key's
+ * normal behavior. The caller decides which keys may accept; Enter never does.
  */
-export function shouldAcceptComposerPredictionOnTab(input: {
+export function shouldAcceptComposerPrediction(input: {
   readonly event: Pick<
     KeyboardEvent,
     "shiftKey" | "altKey" | "ctrlKey" | "metaKey" | "isComposing" | "keyCode"
@@ -194,12 +230,19 @@ export function shouldAcceptComposerPredictionOnTab(input: {
   return input.entry?.status === "ready" && input.entry.suggestion === prediction.suggestion;
 }
 
+/**
+ * How long to wait before asking again after each request that got no answer. Once these
+ * run out the key stays quiet until it is left and entered again.
+ */
+export const COMPOSER_PREDICTION_RETRY_DELAYS_MS: ReadonlyArray<number> = [2_000, 5_000, 15_000];
+
 /** Most entries the store keeps; the oldest key is forgotten first. */
 export const COMPOSER_PREDICTION_STORE_LIMIT = 64;
 /** Most settled keys remembered, in memory and in the window's session storage. */
 export const COMPOSER_PREDICTION_SETTLED_LIMIT = 256;
 
-const SETTLED_STORAGE_KEY = "synara:composer-prediction-settled:v1";
+// v1 also recorded transient failures and discarded drafts as settled turns.
+const SETTLED_STORAGE_KEY = "synara:composer-prediction-settled:v2";
 
 function readSettledKeys(): ReadonlySet<string> {
   try {
@@ -226,8 +269,9 @@ interface ComposerPredictionStoreState {
   readonly entries: ReadonlyMap<string, ComposerPredictionEntry>;
   /**
    * Keys whose turn is settled for good (`done`). Kept apart from `entries` so eviction and
-   * a window reload cannot bring back a suggestion the user already used or typed over.
-   * Only these opaque keys are stored; suggestion text never leaves memory.
+   * a window reload cannot bring back a suggestion the user already used, or ask again for
+   * a turn the model had nothing for. Only these opaque keys are stored; suggestion text
+   * never leaves memory.
    */
   readonly settledKeys: ReadonlySet<string>;
   readonly setEntry: (key: string, entry: ComposerPredictionEntry) => void;
@@ -272,32 +316,36 @@ export const composerPredictionStore = createStore<ComposerPredictionStoreState>
 }));
 
 /**
- * Whether a request may start for a key: never for a settled one, once for a new one, and
- * once more after a failed first request. Null when no request should start.
+ * Whether a request may start for a key, and after how long: never for a settled one, at
+ * once for a new one, and after the next retry delay for one that got no answer, until
+ * the delays run out. Null when no request should start.
  */
 export function nextComposerPredictionRequest(input: {
   readonly entry: ComposerPredictionEntry | undefined;
   readonly settled: boolean;
-}): { readonly retry: boolean } | null {
-  if (input.settled) return null;
-  if (input.entry === undefined) return { retry: false };
-  return input.entry.status === "failed" ? { retry: true } : null;
+}): { readonly attempt: number; readonly delayMs: number } | null {
+  const { entry, settled } = input;
+  if (settled) return null;
+  if (entry === undefined) return { attempt: 1, delayMs: 0 };
+  if (entry.status !== "unavailable" || (entry.limitRetries && entry.attempts >= 2)) return null;
+  const delayMs = COMPOSER_PREDICTION_RETRY_DELAYS_MS[entry.attempts - 1];
+  return delayMs === undefined ? null : { attempt: entry.attempts + 1, delayMs };
 }
 
 /**
- * Whether a prompt change discards the prediction for the same key: any edit while it is
- * pending or ready means the user is writing their own message, so it never comes back for
- * that turn. A key change (another chat, account, or turn) is not an edit.
+ * The entry a request's result leaves: a suggestion is ready to show; the model's own "none"
+ * settles the turn. Only a confirmed pre-generation miss gets the full retry schedule.
+ * For an older server's bare null or a lost response, the provider may already have run.
  */
-export function shouldDiscardComposerPredictionAfterEdit(input: {
-  readonly previous: { readonly key: string | null; readonly prompt: string };
-  readonly next: { readonly key: string | null; readonly prompt: string };
-  readonly entry: ComposerPredictionEntry | undefined;
-}): boolean {
-  return (
-    input.next.key !== null &&
-    input.previous.key === input.next.key &&
-    input.previous.prompt !== input.next.prompt &&
-    (input.entry?.status === "pending" || input.entry?.status === "ready")
-  );
+export function composerPredictionEntryForResult(
+  result: ServerGenerateComposerPredictionResult,
+  attempt: number,
+): ComposerPredictionEntry {
+  if (result.suggestion) return { status: "ready", suggestion: result.suggestion };
+  if (result.outcome === "none") return { status: "done" };
+  return {
+    status: "unavailable",
+    attempts: attempt,
+    ...(result.outcome === "unavailable" ? {} : { limitRetries: true as const }),
+  };
 }

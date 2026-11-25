@@ -13,19 +13,19 @@ interface LatestProjectStore {
 
 export const useLatestProjectStore = create<LatestProjectStore>()(
   persist(
-    (set) => ({
+    (set, get) => ({
       latestProjectId: null,
-      setLatestProjectId: (projectId) => set({ latestProjectId: projectId }),
-      clearLatestProjectId: (projectId) =>
-        set((state) => {
-          if (projectId && state.latestProjectId !== projectId) {
-            return state;
-          }
-          if (state.latestProjectId === null) {
-            return state;
-          }
-          return { latestProjectId: null };
-        }),
+      setLatestProjectId: (projectId) => {
+        if (get().latestProjectId === projectId) return;
+        set({ latestProjectId: projectId });
+      },
+      clearLatestProjectId: (projectId) => {
+        const current = get().latestProjectId;
+        if (current === null || (projectId && current !== projectId)) {
+          return;
+        }
+        set({ latestProjectId: null });
+      },
     }),
     {
       name: LATEST_PROJECT_STORAGE_KEY,

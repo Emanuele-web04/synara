@@ -1,13 +1,18 @@
-import { QueryClient, QueryObserver } from "@tanstack/react-query";
+import { MutationObserver, QueryClient, QueryObserver } from "@tanstack/react-query";
 import { describe, expect, it, vi } from "vitest";
 
-const { readWorkingTreeDiff } = vi.hoisted(() => ({
+const { readWorkingTreeDiff, createDetachedWorktree } = vi.hoisted(() => ({
   readWorkingTreeDiff: vi.fn(async (input: { filePath?: string }) => ({
     patch: input.filePath ?? "all",
     truncated: false,
   })),
+  createDetachedWorktree: vi.fn(async (input: { cwd: string; ref: string }) => ({
+    worktree: { path: `${input.cwd}-worktree`, branch: null, ref: input.ref },
+  })),
 }));
-vi.mock("../nativeApi", () => ({ ensureNativeApi: () => ({ git: { readWorkingTreeDiff } }) }));
+vi.mock("../nativeApi", () => ({
+  ensureNativeApi: () => ({ git: { readWorkingTreeDiff, createDetachedWorktree } }),
+}));
 import {
   gitQueryKeys,
   gitStatusQueryOptions,
@@ -16,6 +21,7 @@ import {
   invalidateGitQueriesForCwds,
   isGitExpensiveReadCapacityError,
   gitMutationKeys,
+  gitCreateDetachedWorktreeMutationOptions,
   gitRunStackedActionMutationOptions,
   refreshGitActionAvailability,
   refreshGitQueriesForCwd,
@@ -96,6 +102,47 @@ describe("git mutation options", () => {
     await vi.waitFor(() => expect(statusCalls).toBe(1));
     statusGate.resolve();
     await refresh;
+    unsubscribe();
+  });
+
+  it("resolves worktree creation without waiting for the global Git refresh", async () => {
+    const queryClient = new QueryClient();
+    // An unrelated checkout cached earlier in the session whose status read hangs.
+    const otherCwd = "/repo/other-checkout";
+    const statusKey = gitQueryKeys.status(otherCwd);
+    let statusCalls = 0;
+    const statusGate = deferredVoid();
+    queryClient.setQueryData(statusKey, { branch: "main" });
+    const observer = new QueryObserver(queryClient, {
+      queryKey: statusKey,
+      queryFn: async () => {
+        statusCalls += 1;
+        await statusGate.promise;
+        return { branch: "main" };
+      },
+      staleTime: Number.POSITIVE_INFINITY,
+    });
+    const unsubscribe = observer.subscribe(() => undefined);
+    const mutation = new MutationObserver(
+      queryClient,
+      gitCreateDetachedWorktreeMutationOptions({ queryClient }),
+    );
+
+    const result = await mutation.mutate({ cwd: "/repo/project", ref: "main" });
+
+    expect(result.worktree.path).toBe("/repo/project-worktree");
+    expect(createDetachedWorktree).toHaveBeenCalledWith({
+      cwd: "/repo/project",
+      ref: "main",
+      path: null,
+    });
+    // The settled refresh still runs in the background and is still in flight.
+    await vi.waitFor(() => expect(statusCalls).toBe(1));
+    expect(queryClient.getQueryState(statusKey)?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryState(statusKey)?.fetchStatus).toBe("fetching");
+
+    statusGate.resolve();
+    await vi.waitFor(() => expect(queryClient.getQueryState(statusKey)?.fetchStatus).toBe("idle"));
     unsubscribe();
   });
 });

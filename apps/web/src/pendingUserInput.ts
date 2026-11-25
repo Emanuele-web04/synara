@@ -51,17 +51,33 @@ export function resolvePendingUserInputAnswer(
   question: UserInputQuestion,
   draft: PendingUserInputDraftAnswer | undefined,
 ): string | string[] | null {
-  const customAnswer = normalizeDraftAnswer(draft?.customAnswer);
+  const customAnswer =
+    question.allowCustomAnswer === false ? null : normalizeDraftAnswer(draft?.customAnswer);
   if (customAnswer) {
     return customAnswer;
   }
 
-  const selectedOptionLabels = normalizeSelectedOptionLabels(draft?.selectedOptionLabels);
+  const selectedOptionLabels = selectedQuestionOptions(question, draft);
   if (question.multiSelect) {
     return selectedOptionLabels.length > 0 ? selectedOptionLabels : null;
   }
 
   return selectedOptionLabels[0] ?? null;
+}
+
+// Persisted drafts still use the original property name. Native values are opaque.
+function selectedQuestionOptions(
+  question: UserInputQuestion,
+  draft: PendingUserInputDraftAnswer | undefined,
+): string[] {
+  if (
+    question.allowCustomAnswer === false ||
+    question.options.some((option) => option.value !== undefined)
+  ) {
+    const offered = new Set(question.options.map((option) => option.value ?? option.label));
+    return [...new Set(draft?.selectedOptionLabels)].filter((value) => offered.has(value));
+  }
+  return normalizeSelectedOptionLabels(draft?.selectedOptionLabels);
 }
 
 export function setPendingUserInputCustomAnswer(
@@ -86,7 +102,7 @@ export function togglePendingUserInputOptionSelection(
   optionLabel: string,
 ): PendingUserInputDraftAnswer {
   if (question.multiSelect) {
-    const selectedOptionLabels = normalizeSelectedOptionLabels(draft?.selectedOptionLabels);
+    const selectedOptionLabels = selectedQuestionOptions(question, draft);
     const nextSelectedOptionLabels = selectedOptionLabels.includes(optionLabel)
       ? selectedOptionLabels.filter((label) => label !== optionLabel)
       : [...selectedOptionLabels, optionLabel];
@@ -112,7 +128,15 @@ export function buildPendingUserInputAnswers(
   const answers: Record<string, string | string[]> = {};
 
   for (const question of questions) {
-    const answer = resolvePendingUserInputAnswer(question, draftAnswers[question.id]);
+    const draft = draftAnswers[question.id];
+    if (question.customAnswerId && question.allowCustomAnswer !== false) {
+      const customAnswer = normalizeDraftAnswer(draft?.customAnswer);
+      if (customAnswer) {
+        answers[question.customAnswerId] = customAnswer;
+        continue;
+      }
+    }
+    const answer = resolvePendingUserInputAnswer(question, draft);
     if (!answer) {
       return null;
     }
@@ -179,10 +203,13 @@ export function derivePendingUserInputProgress(
     questionIndex: normalizedQuestionIndex,
     activeQuestion,
     activeDraft,
-    selectedOptionLabels: normalizeSelectedOptionLabels(activeDraft?.selectedOptionLabels),
+    selectedOptionLabels: activeQuestion
+      ? selectedQuestionOptions(activeQuestion, activeDraft)
+      : [],
     customAnswer,
     resolvedAnswer,
-    usingCustomAnswer: customAnswer.trim().length > 0,
+    usingCustomAnswer:
+      activeQuestion?.allowCustomAnswer !== false && customAnswer.trim().length > 0,
     answeredQuestionCount,
     isLastQuestion,
     isComplete: buildPendingUserInputAnswers(questions, draftAnswers) !== null,

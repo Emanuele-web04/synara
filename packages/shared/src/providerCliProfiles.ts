@@ -63,43 +63,61 @@ export function providerCliCommandName(input: {
 
 // Login entry points verified against each CLI's authentication documentation.
 // Pi-family /login is a TUI command: never pass it as a model prompt argument.
+// `flow` says how much of the login Synara can guide: a "browser" login prints a link and
+// finishes in the browser, an "interactive" one asks questions in the terminal itself.
 export const PROVIDER_AUTHENTICATION = {
   codex: {
+    flow: "browser",
     args: ["login"],
     instructions: "Complete the browser sign-in. Synara will check this account afterward.",
   },
   claudeAgent: {
+    flow: "browser",
     args: ["auth", "login"],
     instructions:
       "Choose your login method and complete the browser sign-in, including any Apple or organization prompts.",
   },
-  cursor: { args: ["login"], instructions: "Complete the Cursor browser sign-in." },
+  cursor: {
+    flow: "browser",
+    args: ["login"],
+    instructions: "Complete the Cursor browser sign-in.",
+  },
   devin: {
+    flow: "interactive",
     args: ["auth", "login"],
     instructions:
       "Choose your Devin or Windsurf login and follow the browser or enterprise sign-in prompts.",
   },
   antigravity: {
+    flow: "interactive",
     args: [],
     instructions:
       "Follow Antigravity's sign-in prompts. Your browser or system credential store may ask for approval.",
   },
   grok: {
+    flow: "browser",
     args: ["login"],
     instructions: "Complete the Grok browser sign-in or the authorization steps shown below.",
   },
-  droid: { args: [], instructions: "Follow Droid's startup and browser sign-in prompts." },
+  droid: {
+    flow: "interactive",
+    args: [],
+    instructions: "Follow Droid's startup and browser sign-in prompts.",
+  },
   opencode: {
+    flow: "interactive",
     args: ["auth", "login"],
     instructions: "Choose a model provider, then complete its OAuth or API-key setup.",
   },
   pi: {
+    flow: "interactive",
     args: [],
     instructions:
       "Complete any startup prompts, then choose Sign-in options to select a model provider and authenticate.",
     interactiveCommand: "/login",
   },
   omp: {
+    flow: "interactive",
     args: [],
     instructions:
       "Complete any startup prompts, then choose Sign-in options to select a model provider and authenticate.",
@@ -108,6 +126,7 @@ export const PROVIDER_AUTHENTICATION = {
 } as const satisfies Record<
   ProviderKind,
   {
+    readonly flow: "browser" | "interactive";
     readonly args: readonly string[];
     readonly instructions: string;
     readonly interactiveCommand?: string;

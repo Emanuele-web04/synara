@@ -5,6 +5,8 @@
 // Layer: Inbox UI
 // Exports: InboxTasks
 
+import { cn } from "~/lib/utils";
+import { COARSE_HIT_AREA_TALL_CLASS_NAME } from "~/touchTargetStyles";
 import type { TodoDueDate } from "@synara/contracts";
 import { useRef } from "react";
 
@@ -56,7 +58,10 @@ export function InboxTasks({
         <button
           type="button"
           onClick={onOpenTasks}
-          className="text-ui-sm text-muted-foreground outline-none hover:text-foreground focus-visible:underline"
+          className={cn(
+            "text-ui-sm text-muted-foreground outline-none hover:text-foreground focus-visible:underline",
+            COARSE_HIT_AREA_TALL_CLASS_NAME,
+          )}
         >
           {t("common:allTasks")}
         </button>

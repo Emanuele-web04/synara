@@ -3,19 +3,21 @@
 //          which conversation text the model reads, and which provider instance, model,
 //          and effort generate it.
 // Layer: Server domain logic (no IO)
-// Exports: isComposerPredictionTurnCurrent, buildComposerPredictionConversation,
+// Exports: resolveComposerPredictionTurnBlocker, isComposerPredictionTurnCurrent,
+//          buildComposerPredictionConversation,
 //          resolveComposerPredictionRouting, lowestSupportedEffort,
 //          resolveComposerPredictionHedgeDelayMs
 
-import type {
-  GitTextGenerationProvider,
-  MessageId,
-  ModelSelection,
-  OrchestrationMessage,
-  OrchestrationThreadShell,
-  ProviderKind,
-  ServerSettings,
-  TurnId,
+import {
+  DEFAULT_GIT_TEXT_GENERATION_MODEL,
+  type GitTextGenerationProvider,
+  type MessageId,
+  type ModelSelection,
+  type OrchestrationMessage,
+  type OrchestrationThreadShell,
+  type ProviderKind,
+  type ServerSettings,
+  type TurnId,
 } from "@synara/contracts";
 import { getModelCapabilities } from "@synara/shared/model";
 import {
@@ -36,24 +38,45 @@ type ComposerPredictionThread = Pick<
   "archivedAt" | "latestTurn" | "session" | "hasPendingApprovals" | "hasPendingUserInput"
 >;
 
+/** Why a turn cannot be predicted right now; a content-free code for logs. */
+export type ComposerPredictionTurnBlocker =
+  | "thread-missing"
+  | "thread-archived"
+  | "turn-not-latest"
+  | "turn-incomplete"
+  | "session-busy"
+  | "pending-approval"
+  | "pending-user-input";
+
 /**
- * True while `expectedTurnId` is still the thread's latest turn, that turn
- * completed with a final assistant reply, and nothing is running or waiting on
- * the user. Checked before and again after generation.
+ * Null while `expectedTurnId` is still the thread's latest turn, that turn completed with a
+ * final assistant reply, and nothing is running or waiting on the user; otherwise the first
+ * reason it is not. Checked before and again after generation.
  */
+export function resolveComposerPredictionTurnBlocker(
+  thread: ComposerPredictionThread | undefined,
+  expectedTurnId: TurnId,
+): ComposerPredictionTurnBlocker | null {
+  if (!thread) return "thread-missing";
+  if (thread.archivedAt != null) return "thread-archived";
+  const turn = thread.latestTurn;
+  if (!turn || turn.turnId !== expectedTurnId) return "turn-not-latest";
+  if (turn.state !== "completed" || turn.completedAt === null || turn.assistantMessageId === null) {
+    return "turn-incomplete";
+  }
+  const sessionStatus = thread.session?.status;
+  if (sessionStatus === "running" || sessionStatus === "starting") return "session-busy";
+  if (thread.hasPendingApprovals === true) return "pending-approval";
+  if (thread.hasPendingUserInput === true) return "pending-user-input";
+  return null;
+}
+
+/** True when {@link resolveComposerPredictionTurnBlocker} finds nothing in the way. */
 export function isComposerPredictionTurnCurrent(
   thread: ComposerPredictionThread | undefined,
   expectedTurnId: TurnId,
 ): boolean {
-  if (!thread || thread.archivedAt != null) return false;
-  const turn = thread.latestTurn;
-  if (!turn || turn.turnId !== expectedTurnId) return false;
-  if (turn.state !== "completed" || turn.completedAt === null || turn.assistantMessageId === null) {
-    return false;
-  }
-  const sessionStatus = thread.session?.status;
-  if (sessionStatus === "running" || sessionStatus === "starting") return false;
-  return thread.hasPendingApprovals !== true && thread.hasPendingUserInput !== true;
+  return resolveComposerPredictionTurnBlocker(thread, expectedTurnId) === null;
 }
 
 type ComposerPredictionMessage = Pick<OrchestrationMessage, "id" | "role" | "text" | "streaming">;
@@ -244,13 +267,24 @@ export function resolveComposerPredictionHedgeDelayMs(input: {
 }
 
 export type ComposerPredictionRouting = TextGenerationProviderInput & {
-  readonly source: "git-writing-model" | "chat-model";
+  readonly source: "git-writing-model" | "prediction-model" | "chat-model";
+};
+
+/**
+ * Smaller model a provider predicts with when the Git-writing model belongs to
+ * another instance, so a chat on a frontier model does not pay frontier rates for
+ * a one-line guess after every turn. Providers without an entry keep the chat's model.
+ */
+const COMPOSER_PREDICTION_MODEL: Partial<Record<GitTextGenerationProvider, string>> = {
+  claudeAgent: "claude-sonnet-5-5",
+  codex: DEFAULT_GIT_TEXT_GENERATION_MODEL,
 };
 
 /**
  * Routes a prediction to the chat's own provider instance (its account). The
  * configured Git-writing model is used only when it resolves to that same
- * instance; otherwise the chat's model. Either one runs at its lowest catalog effort. Null
+ * instance; otherwise the provider's smaller prediction model, or the chat's
+ * model when the provider has none. Each runs at its lowest catalog effort. Null
  * when the instance is missing or disabled, its driver has no dedicated text
  * generation, or the session and the thread disagree about the instance.
  */
@@ -272,13 +306,27 @@ export function resolveComposerPredictionRouting(input: {
   const useConfigured =
     configured.provider === driver &&
     resolveModelSelectionInstanceId(configured) === instance.instanceId;
-  // Lowest effort on both paths: a short prediction gains nothing from reasoning, and a
+  const predictionModel = COMPOSER_PREDICTION_MODEL[driver];
+  const source: ComposerPredictionRouting["source"] = useConfigured
+    ? "git-writing-model"
+    : predictionModel
+      ? "prediction-model"
+      : "chat-model";
+  // The prediction model drops the chat's options: they belong to another model, and
+  // one such as fast mode would bill a premium for a throwaway suggestion.
+  const base =
+    source === "git-writing-model"
+      ? configured
+      : source === "prediction-model"
+        ? ({ provider: driver, model: predictionModel } as ModelSelection)
+        : chatSelection;
+  // Lowest effort on every path: a short prediction gains nothing from reasoning, and a
   // Git-writing selection without an effort would otherwise run at the Git-writing default.
-  const selection = withLowestEffort(useConfigured ? configured : chatSelection, driver);
+  const selection = withLowestEffort(base, driver);
   // Only the instance's own options: global defaults could name another account.
   const routed = resolveTextGenerationInputForSelection(
     { ...selection, provider: driver, instanceId: instance.instanceId } as ModelSelection,
     providerStartOptionsFromInstance(instance),
   );
-  return routed ? { ...routed, source: useConfigured ? "git-writing-model" : "chat-model" } : null;
+  return routed ? { ...routed, source } : null;
 }

@@ -16,13 +16,15 @@ import { createRequire } from "node:module";
 import { runInNewContext } from "node:vm";
 
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { afterEach, describe, it, vi } from "vitest";
 
 import { buildMacLauncher, configureMacLauncher, copyMacAppBundle } from "./electron-launcher.mjs";
 
+afterEach(() => vi.restoreAllMocks());
+
 function createLauncherFixture(t, { iconComposer = false } = {}) {
   const root = mkdtempSync(join(tmpdir(), "synara-electron-signing-"));
-  t.after(() => rmSync(root, { recursive: true, force: true }));
+  t.onTestFinished(() => rmSync(root, { recursive: true, force: true }));
   const desktopDirectory = join(root, "apps", "desktop");
   const iconComposerPath = join(root, "assets", "prod", "Synara.icon");
   const source = join(root, "vendor", "Electron.app");
@@ -187,7 +189,7 @@ describe("macOS Electron launcher signature", () => {
   });
 
   it("still signs and caches the flat icon when actool is unavailable", (t) => {
-    const warn = t.mock.method(console, "warn", () => {});
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const fixture = createLauncherFixture(t, { iconComposer: true });
     fixture.failIconCompilation({ status: 1, stderr: "actool is unavailable" });
 
@@ -218,30 +220,20 @@ describe("macOS Electron launcher signature", () => {
     assert.deepEqual(fixture.commands, []);
   });
 
-  for (const [version, reason] of [
-    [2, "generated bundles were signed"],
-    [6, "the audio capture usage description was added"],
-    [7, "localized permission descriptions were added"],
-    [8, "localized permission descriptions were removed"],
-  ]) {
-    it(`rebuilds launchers cached before ${reason}`, (t) => {
-      const fixture = createLauncherFixture(t);
-      const executable = fixture.build();
-      const metadata = JSON.parse(readFileSync(fixture.metadataPath, "utf8"));
-      writeFileSync(
-        fixture.metadataPath,
-        JSON.stringify({ ...metadata, launcherVersion: version }),
-      );
-      fixture.commands.length = 0;
+  it("rebuilds a launcher with stale cache metadata", (t) => {
+    const fixture = createLauncherFixture(t);
+    const executable = fixture.build();
+    const metadata = JSON.parse(readFileSync(fixture.metadataPath, "utf8"));
+    writeFileSync(fixture.metadataPath, JSON.stringify({ ...metadata, launcherVersion: 8 }));
+    fixture.commands.length = 0;
 
-      assert.equal(fixture.build(), executable);
-      assert.equal(
-        fixture.commands.some(({ command }) => command === "/usr/bin/codesign"),
-        true,
-      );
-      assert.equal(JSON.parse(readFileSync(fixture.metadataPath, "utf8")).launcherVersion, 9);
-    });
-  }
+    assert.equal(fixture.build(), executable);
+    assert.equal(
+      fixture.commands.some(({ command }) => command === "/usr/bin/codesign"),
+      true,
+    );
+    assert.equal(JSON.parse(readFileSync(fixture.metadataPath, "utf8")).launcherVersion, 9);
+  });
 
   for (const [label, cdhashes, expectReset] of [
     [
@@ -258,7 +250,7 @@ describe("macOS Electron launcher signature", () => {
       writeFileSync(fixture.metadataPath, JSON.stringify({ ...metadata, appVersion: "0.0.1" }));
       fixture.commands.length = 0;
       fixture.displayCdhashes(...cdhashes);
-      t.mock.method(console, "warn", () => {});
+      vi.spyOn(console, "warn").mockImplementation(() => {});
 
       fixture.build();
       const resets = fixture.commands.filter(({ command }) => command === "/usr/bin/tccutil");
@@ -443,7 +435,7 @@ describe("macOS source bundle reopen", () => {
 describe("macOS Electron launcher copy", { skip: process.platform !== "darwin" }, () => {
   it("keeps framework symlink targets relative after relocation", (t) => {
     const root = mkdtempSync(join(tmpdir(), "synara-electron-launcher-"));
-    t.after(() => rmSync(root, { recursive: true, force: true }));
+    t.onTestFinished(() => rmSync(root, { recursive: true, force: true }));
     const source = join(root, "source", "Electron.app");
     const target = join(root, "runtime", "Synara (Dev).app");
     const framework = join(source, "Contents", "Frameworks", "Electron Framework.framework");

@@ -68,7 +68,7 @@ export function TaskQuickAdd({
         value={draftTitle}
         onChange={(event) => setDraftTitle(event.target.value)}
         onKeyDown={handleKeyDown}
-        className="font-system-ui h-10 min-w-0 flex-1 bg-transparent text-ui text-foreground outline-none placeholder:text-muted-foreground/70"
+        className="font-system-ui h-10 min-w-0 flex-1 -mx-1 rounded-md bg-transparent px-1 text-ui text-foreground outline-none placeholder:text-muted-foreground/70 focus-visible:ring-2 focus-visible:ring-[color:var(--color-border-focus)]"
       />
     </label>
   );

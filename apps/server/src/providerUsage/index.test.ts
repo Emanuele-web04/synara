@@ -279,6 +279,19 @@ function usageTestLayer() {
 }
 
 describe("listProviderUsage account routing", () => {
+  it("skips usage fetches for an excluded provider", async () => {
+    fetchMock.mockResolvedValue(okSnapshot(NOW_MS));
+    const result = await Effect.runPromise(
+      listProviderUsage({ excludeProvider: "codex" }).pipe(
+        Effect.provide(usageTestLayer()),
+        Effect.scoped,
+      ),
+    );
+
+    expect(result).toEqual([]);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it.each(["same-source", "environment-only"] as const)(
     "reads the private Codex account overlay for a %s account",
     async (kind) => {

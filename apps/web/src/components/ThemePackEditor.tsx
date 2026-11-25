@@ -3,6 +3,7 @@
 // Layer: Web settings UI
 // Exports: ThemePackEditor
 
+import { COARSE_HIT_AREA_TALL_CLASS_NAME, FOCUS_RING_CLASS_NAME } from "~/touchTargetStyles";
 import { DESKTOP_WINDOW_BLUR_RADIUS_MAX, DESKTOP_WINDOW_BLUR_RADIUS_MIN } from "@synara/contracts";
 import { type CSSProperties, useEffect, useId, useMemo, useRef, useState } from "react";
 import { HexColorPicker } from "react-colorful";
@@ -66,6 +67,8 @@ const COLOR_PICKER_COMMIT_DELAY_MS = 220;
 const EDITOR_TEXT_ACTION_CLASS_NAME = cn(
   "rounded-md px-2 py-1 text-ui leading-snug text-[var(--color-text-foreground-secondary)]",
   ELEVATED_HOVER_SURFACE_RAISED_TEXT_CLASS_NAME,
+  FOCUS_RING_CLASS_NAME,
+  COARSE_HIT_AREA_TALL_CLASS_NAME,
 );
 
 export function ThemePackEditor({
@@ -165,7 +168,7 @@ export function ThemePackEditor({
             </button>
           ) : null}
         </div>
-        <div className="flex items-center gap-1">
+        <div className="flex w-full min-w-0 items-center gap-1 sm:w-auto">
           <ImportThemeDialog variant={variant} onImport={handleImport} />
           <button
             type="button"
@@ -183,7 +186,10 @@ export function ThemePackEditor({
           >
             <SelectTrigger
               size="sm"
-              className={cn(SETTINGS_CONTROL_RADIUS_CLASS_NAME, "ml-1 min-w-52 gap-2")}
+              className={cn(
+                SETTINGS_CONTROL_RADIUS_CLASS_NAME,
+                "ml-1 min-w-0 flex-1 gap-2 sm:min-w-52 sm:flex-none",
+              )}
               aria-label={t("common:codeTheme", { value0: titleLabel })}
             >
               <SelectValue className="flex-1 text-left">
@@ -294,7 +300,7 @@ export function ThemePackEditor({
         </ThemeRow>
 
         <ThemeRow label={t("common:theme_uiFont")}>
-          <div className="flex flex-col items-end gap-1">
+          <div className="flex min-w-0 flex-col items-end gap-1">
             <FontInput
               value={theme.fonts.ui ?? ""}
               placeholder={t("common:theme_systemDefault")}
@@ -302,7 +308,7 @@ export function ThemePackEditor({
               onChange={(next) => updateThemeFonts(variant, { ui: next.length > 0 ? next : null })}
             />
             {systemUiFont ? (
-              <span className="text-ui-sm text-muted-foreground">
+              <span className="max-w-44 text-end text-ui-sm break-words text-muted-foreground sm:max-w-none sm:whitespace-nowrap">
                 {t("common:useSystemUIFontIsOnThemeFontsAre")}
               </span>
             ) : null}
@@ -529,6 +535,9 @@ export function ColorPill({
           className={cn(
             "rounded-md p-1 text-[var(--color-text-foreground-tertiary)]",
             ELEVATED_HOVER_SURFACE_RAISED_TEXT_CLASS_NAME,
+            FOCUS_RING_CLASS_NAME,
+            COARSE_HIT_AREA_TALL_CLASS_NAME,
+            "pointer-coarse:after:-inset-x-1",
           )}
           aria-label={t("common:reset", { value0: ariaLabel })}
           title={t("common:theme_resetToDefault")}

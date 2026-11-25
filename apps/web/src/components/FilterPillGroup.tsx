@@ -4,6 +4,7 @@
 // Layer: Shared list presentation
 // Exports: FilterPillGroup
 
+import { COARSE_HIT_AREA_CLASS_NAME, FOCUS_RING_CLASS_NAME } from "~/touchTargetStyles";
 import { CHAT_SURFACE_CONTROL_ACTIVE_CLASS_NAME } from "~/components/chat/chatHeaderControls";
 import { cn } from "~/lib/utils";
 
@@ -36,6 +37,8 @@ export function FilterPillGroup<T extends string>({
           // elevated-secondary tint is a 2–4% hover wash and disappears on dark surfaces.
           className={cn(
             "rounded-md px-2.5 py-1 transition-colors",
+            FOCUS_RING_CLASS_NAME,
+            COARSE_HIT_AREA_CLASS_NAME,
             option.value === value
               ? CHAT_SURFACE_CONTROL_ACTIVE_CLASS_NAME
               : "text-muted-foreground hover:text-foreground",

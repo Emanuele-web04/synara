@@ -26,6 +26,7 @@ import type {
 import { githubAvatarUrlForLogin } from "@synara/shared/githubAvatar";
 import { parseGitHubRepositoryNameWithOwnerFromPullRequestUrl } from "@synara/shared/githubRepository";
 import {
+  compareLinkedPullRequests,
   isPullRequestDismissed,
   pullRequestLinkKey,
   resolveCurrentPullRequestLink,
@@ -129,17 +130,6 @@ import {
 import { useTranslation } from "~/i18n";
 
 const EMPTY_PULL_REQUEST_LINKS: ReadonlyArray<OrchestrationThreadPullRequestLink> = [];
-
-// Open PRs first, then the most recently linked.
-function compareLinkedPullRequests(
-  left: OrchestrationThreadPullRequestLink,
-  right: OrchestrationThreadPullRequestLink,
-): number {
-  const leftOpen = left.pullRequest.state === "open" ? 0 : 1;
-  const rightOpen = right.pullRequest.state === "open" ? 0 : 1;
-  if (leftOpen !== rightOpen) return leftOpen - rightOpen;
-  return Date.parse(right.linkedAt) - Date.parse(left.linkedAt);
-}
 
 /** Shares the menu/stack action and loads its settings only when the control is shown. */
 function PullRequestAutoFixToggle(props: {

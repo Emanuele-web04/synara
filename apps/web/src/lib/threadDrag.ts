@@ -27,6 +27,10 @@ export function endThreadDrag(): void {
   activeThreadDragId = null;
 }
 
+/**
+ * `dragImage` defaults to the dragged element. A row whose press target is an empty overlay
+ * passes its visible row instead.
+ */
 export function beginThreadDrag(
   event: {
     readonly dataTransfer: DataTransfer;
@@ -35,11 +39,11 @@ export function beginThreadDrag(
     readonly clientY: number;
   },
   threadId: ThreadId,
+  dragImage: EventTarget | null = event.currentTarget,
 ): void {
   activeThreadDragId = threadId;
   event.dataTransfer.effectAllowed = "copyMove";
   event.dataTransfer.setData(THREAD_DRAG_MIME, JSON.stringify({ threadId }));
-  const dragImage = event.currentTarget;
   if (dragImage instanceof HTMLElement) {
     const rect = dragImage.getBoundingClientRect();
     event.dataTransfer.setDragImage(

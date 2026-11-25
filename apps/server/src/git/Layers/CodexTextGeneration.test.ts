@@ -951,92 +951,55 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGenerationLive", (it) => {
     ),
   );
 
-  it.effect("keeps image attachments as text metadata without exposing local files", () =>
-    withFakeCodexEnv(
-      {
-        output: JSON.stringify({
-          branch: "fix/ui-regression",
-        }),
-        forbidImage: true,
-        stdinMustContain: "Attachment metadata:",
-      },
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const path = yield* Path.Path;
-        const { attachmentsDir } = yield* ServerConfig;
-        const attachmentId = `thread-branch-image-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-        const attachmentPath = path.join(attachmentsDir, `${attachmentId}.png`);
-        yield* fs.makeDirectory(attachmentsDir, { recursive: true });
-        yield* fs.writeFile(attachmentPath, Buffer.from("hello"));
+  it.effect(
+    "keeps image attachments as text metadata without exposing or touching local files",
+    () =>
+      withFakeCodexEnv(
+        {
+          output: JSON.stringify({
+            branch: "fix/ui-regression",
+          }),
+          forbidImage: true,
+          stdinMustContain: "Attachment metadata:",
+        },
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const path = yield* Path.Path;
+          const { attachmentsDir } = yield* ServerConfig;
+          const attachmentId = `thread-branch-image-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+          const attachmentPath = path.join(attachmentsDir, `${attachmentId}.png`);
+          yield* fs.makeDirectory(attachmentsDir, { recursive: true });
+          yield* fs.writeFile(attachmentPath, Buffer.from("hello"));
 
-        const textGeneration = yield* TextGeneration;
-        const generated = yield* textGeneration
-          .generateBranchName({
-            cwd: process.cwd(),
-            message: "Fix layout bug from screenshot.",
-            attachments: [
-              {
-                type: "image",
-                id: attachmentId,
-                name: "bug.png",
-                mimeType: "image/png",
-                sizeBytes: 5,
-              },
-            ],
-          })
-          .pipe(Effect.ensuring(fs.remove(attachmentPath).pipe(Effect.catch(() => Effect.void))));
-
-        expect(generated.branch).toBe("fix/ui-regression");
-      }),
-    ),
-  );
-
-  it.effect("does not pass persisted attachment paths to the text-only Codex child", () =>
-    withFakeCodexEnv(
-      {
-        output: JSON.stringify({
-          branch: "fix/ui-regression",
-        }),
-        forbidImage: true,
-      },
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const path = yield* Path.Path;
-        const { attachmentsDir } = yield* ServerConfig;
-        const attachmentId = `thread-1-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-        const imagePath = path.join(attachmentsDir, `${attachmentId}.png`);
-        yield* fs.makeDirectory(attachmentsDir, { recursive: true });
-        yield* fs.writeFile(imagePath, Buffer.from("hello"));
-
-        const textGeneration = yield* TextGeneration;
-        const generated = yield* textGeneration
-          .generateBranchName({
-            cwd: process.cwd(),
-            message: "Fix layout bug from screenshot.",
-            attachments: [
-              {
-                type: "image",
-                id: attachmentId,
-                name: "bug.png",
-                mimeType: "image/png",
-                sizeBytes: 5,
-              },
-            ],
-          })
-          .pipe(
-            Effect.tap(() =>
-              fs.stat(imagePath).pipe(
-                Effect.map((fileInfo) => {
-                  expect(fileInfo.type).toBe("File");
-                }),
+          const textGeneration = yield* TextGeneration;
+          const generated = yield* textGeneration
+            .generateBranchName({
+              cwd: process.cwd(),
+              message: "Fix layout bug from screenshot.",
+              attachments: [
+                {
+                  type: "image",
+                  id: attachmentId,
+                  name: "bug.png",
+                  mimeType: "image/png",
+                  sizeBytes: 5,
+                },
+              ],
+            })
+            .pipe(
+              Effect.tap(() =>
+                fs.stat(attachmentPath).pipe(
+                  Effect.map((fileInfo) => {
+                    expect(fileInfo.type).toBe("File");
+                  }),
+                ),
               ),
-            ),
-            Effect.ensuring(fs.remove(imagePath).pipe(Effect.catch(() => Effect.void))),
-          );
+              Effect.ensuring(fs.remove(attachmentPath).pipe(Effect.catch(() => Effect.void))),
+            );
 
-        expect(generated.branch).toBe("fix/ui-regression");
-      }),
-    ),
+          expect(generated.branch).toBe("fix/ui-regression");
+        }),
+      ),
   );
 
   it.effect("does not resolve missing attachment ids for the text-only Codex child", () =>

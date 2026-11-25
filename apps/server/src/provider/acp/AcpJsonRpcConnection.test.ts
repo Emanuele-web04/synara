@@ -628,6 +628,38 @@ describe("AcpSessionRuntime", () => {
     );
   });
 
+  it.effect("changes the mode of a resumed session that exposes only the legacy modes API", () =>
+    Effect.gen(function* () {
+      const runtime = yield* AcpSessionRuntime;
+      const started = yield* runtime.start();
+      expect(started.sessionSetupMethod).toBe("resume");
+      expect(yield* runtime.getModeState).toMatchObject({ currentModeId: "ask" });
+
+      yield* runtime.setMode("architect", { legacy: true });
+
+      expect(yield* runtime.getModeState).toMatchObject({ currentModeId: "architect" });
+    }).pipe(
+      Effect.provide(
+        AcpSessionRuntime.layer({
+          spawn: {
+            command: bunExe,
+            args: [mockAgentPath],
+            env: {
+              SYNARA_ACP_SUPPORT_SESSION_RESUME: "1",
+              SYNARA_ACP_LEGACY_MODES_ONLY: "1",
+            },
+          },
+          cwd: process.cwd(),
+          resumeSessionId: "mock-session-1",
+          clientInfo: { name: "synara-test", version: "0.0.0" },
+          authMethodId: "test",
+        }),
+      ),
+      Effect.scoped,
+      Effect.provide(NodeServices.layer),
+    ),
+  );
+
   it.effect("resolves semantic mode config ids and exposes commands and forks", () => {
     const requestEvents: Array<AcpSessionRequestLogEvent> = [];
     return Effect.gen(function* () {
