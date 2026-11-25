@@ -119,7 +119,7 @@ export function makeHostConnectionsPort(deps: HostConnectionsPortDeps): HostConn
     deps.registry.setConnector(
       hostId,
       host.name,
-      async (client, signal) => {
+      async (client, signal, dialOptions) => {
         const listed = listedForDial.get(hostId);
         listedForDial.delete(hostId);
         const fresh =
@@ -129,20 +129,25 @@ export function makeHostConnectionsPort(deps: HostConnectionsPortDeps): HostConn
           );
         if (!fresh?.linked || fresh.environmentId !== host.environmentId)
           throw new RemoteHostTrustError("Remote host identity changed");
-        const currentAnchor = await deps.readTrust(fresh);
+        const [currentAnchor, identity] = await Promise.all([
+          deps.readTrust(fresh),
+          deps.accountSession.dialIdentity(),
+        ]);
         if (
           !currentAnchor ||
           currentAnchor.rootFingerprint !== anchor.rootFingerprint ||
           JSON.stringify(currentAnchor.executionScope) !== JSON.stringify(anchor.executionScope)
         )
           throw new RemoteHostTrustError("Remote trust changed. Pair this host again.");
-        const identity = await deps.accountSession.dialIdentity();
         return dialHost({
           host: fresh,
           anchor: currentAnchor,
           identity,
           client,
           signal,
+          ...(dialOptions?.cachedCredential
+            ? { cachedCredential: dialOptions.cachedCredential }
+            : {}),
           requestGrant: async () => (await deps.accountSession.requestGrant({ hostId })).grant,
         });
       },

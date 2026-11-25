@@ -309,7 +309,7 @@ const STREAM_BACKED_REQUEST_METHODS: ReadonlySet<string> = new Set([
   WS_METHODS.gitCreateDetachedWorktree,
   WS_METHODS.projectsProvisionFromGitHub,
 ]);
-const INITIAL_RECONNECT_RETRY_MS = 500;
+const INITIAL_RECONNECT_RETRY_MS = 100;
 /**
  * A socket-level protocol failure must revive the session: the latched
  * `currentError` fails every request locally until the runtime is replaced.
@@ -1238,6 +1238,8 @@ export class WsTransport {
   private readonly declineCompression: boolean;
   private readonly recovery: RecoveryState = createInitialRecoveryState();
   private recoveryEscalationTimer: number | null = null;
+  private reconnectWakeController: AbortController | null = null;
+  private readonly cleanupEnvironmentListeners: () => void;
 
   constructor(
     url?: string,
@@ -1259,6 +1261,30 @@ export class WsTransport {
       ? "remote"
       : "local";
     this.protocolOpenTimeoutMs = options?.protocolOpenTimeoutMs;
+    // React immediately when the network comes back or the app/tab returns to
+    // the foreground instead of sitting through the rest of a backoff timer.
+    const wakeReconnect = () => {
+      if (this.disposed || this.isRecoveryTripped()) return;
+      if (this.reconnectWakeController && !this.reconnectWakeController.signal.aborted) {
+        this.reconnectFailures = 0;
+        this.reconnectWakeController.abort();
+      }
+    };
+    const onVisibilityChange = () => {
+      if (typeof document !== "undefined" && document.visibilityState === "visible") {
+        wakeReconnect();
+      }
+    };
+    const hasWindowEvents =
+      typeof window !== "undefined" && typeof window.addEventListener === "function";
+    const hasDocumentEvents =
+      typeof document !== "undefined" && typeof document.addEventListener === "function";
+    if (hasWindowEvents) window.addEventListener("online", wakeReconnect);
+    if (hasDocumentEvents) document.addEventListener("visibilitychange", onVisibilityChange);
+    this.cleanupEnvironmentListeners = () => {
+      if (hasWindowEvents) window.removeEventListener("online", wakeReconnect);
+      if (hasDocumentEvents) document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
     // The desktop opens its window before its backend listens. Connecting
     // earlier only fails and then waits out a backoff step.
     this.backendReady =
@@ -1792,6 +1818,8 @@ export class WsTransport {
   async dispose(): Promise<void> {
     if (this.disposed) return;
     this.disposed = true;
+    this.cleanupEnvironmentListeners?.();
+    this.reconnectWakeController = null;
     this.unaryRequestQueue.close(new Error("Transport disposed"));
     this.clearRecoveryEscalationTimer();
     // Abort pending startup waits and negotiation before either can create
@@ -2474,7 +2502,21 @@ export class WsTransport {
       const delayMs = getReconnectRetryDelayMs(this.reconnectFailures);
       this.reconnectFailures += 1;
       this.recovery.candidateFailedSessionId = null;
-      await delayWithAbort(delayMs, this.lifetime.signal);
+      const wakeController = new AbortController();
+      this.reconnectWakeController = wakeController;
+      try {
+        await delayWithAbort(
+          delayMs,
+          AbortSignal.any([this.lifetime.signal, wakeController.signal]),
+        );
+      } catch (error) {
+        if (this.lifetime.signal.aborted) throw error;
+        // Woken early by an online/foreground event; proceed immediately.
+      } finally {
+        if (this.reconnectWakeController === wakeController) {
+          this.reconnectWakeController = null;
+        }
+      }
 
       const session = this.createSession();
       this.clientPromise = session.clientPromise;

@@ -244,13 +244,7 @@ export async function startHostConnectivity(
     grants,
     identity,
     keyGeneration: credentials.hostKeyGeneration,
-    authorizeDevice: async (userId, deviceJkt) => {
-      const generation = await authorizeDevice(userId, deviceJkt);
-      void Effect.runPromise(
-        options.remoteTrust.markConnected(trustScope, deviceJkt, new Date().toISOString()),
-      ).catch(() => {});
-      return generation;
-    },
+    authorizeDevice,
   });
   const gateway = new RemoteConnectionGateway({
     mintService,
@@ -261,8 +255,8 @@ export async function startHostConnectivity(
     authorizeDevice: async (userId, deviceJkt, generation) => {
       await authorizeDevice(userId, deviceJkt, generation);
     },
-    bridgeToLocal: (socket, peer) =>
-      bridgeRemoteSocketToLocalRpc(socket, peer, {
+    bridgeToLocal: async (socket, peer) => {
+      await bridgeRemoteSocketToLocalRpc(socket, peer, {
         listeningPort: options.listeningPort,
         sessions: options.localSessions,
         attachmentScope: {
@@ -270,7 +264,11 @@ export async function startHostConnectivity(
           deviceJkt: peer.deviceJkt,
           trustGeneration: peer.trustGeneration,
         },
-      }),
+      });
+      void Effect.runPromise(
+        options.remoteTrust.markConnected(trustScope, peer.deviceJkt, new Date().toISOString()),
+      ).catch(() => {});
+    },
   });
   const controller = new AbortController();
   const stops: Array<() => void | Promise<void>> = [];

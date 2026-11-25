@@ -15,8 +15,8 @@ import {
 } from "@synara/contracts";
 import { Effect, Option, Schema } from "effect";
 import type * as SqlClient from "effect/unstable/sql/SqlClient";
-import { calculateJwkThumbprint, importJWK, jwtVerify } from "jose";
-import { fromMarkdown } from "mdast-util-from-markdown";
+import { loadJose } from "./lazyJose";
+import { loadFromMarkdown } from "./lazyMarkdown";
 import { assertBoundedLifetime } from "./hostAuth/grantVerifier";
 import { PROVIDER_RUNTIME_INGESTION_CONSUMER } from "./persistence/Services/ProviderRuntimeEvents";
 import type { RemoteDeviceTrustRepositoryShape } from "./persistence/Services/RemoteDeviceTrust";
@@ -137,7 +137,9 @@ function readFinalPreview(sql: SqlClient.SqlClient, threadId: string, turnId: st
       /<proposed_plan>[\s\S]*?(?:<\/proposed_plan>|$)/giu,
       "",
     );
-    const firstLine = markdown ? firstVisibleLine(fromMarkdown(markdown)) : "";
+    const firstLine = markdown
+      ? firstVisibleLine((yield* Effect.promise(loadFromMarkdown))(markdown))
+      : "";
     return {
       title,
       provider,
@@ -153,6 +155,7 @@ async function verifyRecipient(
 ): Promise<boolean> {
   if (deviceKey.kty !== "EC") return false;
   try {
+    const { calculateJwkThumbprint, importJWK, jwtVerify } = await loadJose();
     const { preview, ...binding } = watch;
     if ((await calculateJwkThumbprint(deviceKey)) !== watch.deviceJkt) return false;
     const { payload } = await jwtVerify(preview.proof, await importJWK(deviceKey, "ES256"), {

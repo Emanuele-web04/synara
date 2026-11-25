@@ -72,6 +72,12 @@ export default defineConfig({
   external: [/^bun:/u, /^@earendil-works\//u],
   minify: true,
   sourcemap: buildSourcemap,
+  // `effect` imports `yaml` in ConfigProvider; its bindings are tree-shaken out,
+  // but because `yaml` stays external, Rolldown would otherwise preserve a dead
+  // `import "yaml"` side-effect on the cold boot path (~13ms). `yaml` is pure.
+  treeshake: {
+    moduleSideEffects: [{ test: /^yaml$/u, external: true, sideEffects: false }],
+  },
   define: {
     __SYNARA_MIGRATION_RUNTIME_SOURCE_DIGEST__: JSON.stringify(migrationRuntimeSourceDigest),
   },
