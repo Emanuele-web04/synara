@@ -43,7 +43,7 @@ describe("rail usage accounts", () => {
     expect(toggleRailUsageAccount(added, "opencode", false, visible)).toEqual(saved);
     expect(
       resolveRailUsageAccounts(added, accounts).map((account) => account.instance.instanceId),
-    ).toEqual(saved);
+    ).toEqual(added);
   });
 
   it("allows two accounts of the same provider and distinguishes their names", () => {
@@ -61,10 +61,14 @@ describe("rail usage accounts", () => {
   it("drops duplicate, removed, and disabled accounts before applying the cap", () => {
     expect(
       selectedIds(["removed", "claude_disabled", "codex", "codex", "claude_work", "cursor"]),
-    ).toEqual(["codex", "claude_work"]);
-    expect(selectedIds(["codex", "claudeAgent", "claude_work"]).length).toBe(
-      MAX_RAIL_USAGE_ACCOUNTS,
-    );
+    ).toEqual(["codex", "claude_work", "cursor"]);
+    expect(selectedIds(["codex", "claudeAgent", "claude_work", "cursor", "opencode"])).toEqual([
+      "codex",
+      "claudeAgent",
+      "claude_work",
+      "cursor",
+    ]);
+    expect(MAX_RAIL_USAGE_ACCOUNTS).toBe(4);
     expect(selectedIds([])).toEqual([]);
   });
 
@@ -92,9 +96,8 @@ describe("toggleRailUsageAccount", () => {
   });
 
   it("ignores another account past the cap", () => {
-    expect(
-      toggleRailUsageAccount(["claudeAgent", "claude_work"], "codex", true, available),
-    ).toEqual(["claudeAgent", "claude_work"]);
+    const full = ["claudeAgent", "claude_work", "codex", "cursor"];
+    expect(toggleRailUsageAccount(full, "opencode", true, available)).toEqual(full);
   });
 });
 

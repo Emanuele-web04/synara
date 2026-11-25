@@ -10,8 +10,8 @@ import type { RailUsageWindow } from "~/appSettings";
 import { providerAccountQualifiedLabel } from "~/lib/providerInstancePresentation";
 import type { ProviderUsageDisplayRow } from "~/lib/providerUsageDisplay";
 
-/** The rail is one icon wide, so only a couple of rings fit above the Help button. */
-export const MAX_RAIL_USAGE_ACCOUNTS = 2;
+/** The rail is one icon wide; its top items scroll, so up to four rings fit above the Help button. */
+export const MAX_RAIL_USAGE_ACCOUNTS = 4;
 
 export interface RailUsageAccount {
   readonly instance: ResolvedProviderInstance;
