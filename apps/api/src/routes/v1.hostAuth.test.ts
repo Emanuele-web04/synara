@@ -1081,7 +1081,20 @@ describe.skipIf(!TEST_DATABASE_URL)("Slice A host account API", () => {
 
     it("binds verified sessions and independently revokes account access with retryable provider delivery", async () => {
       const { app, db } = buildApp();
-      const owner = await signIn();
+      const { verifier } = createWorkosIdentityProvider(config);
+      const email = `device-sign-out-${randomUUID()}@example.com`;
+      await verifier.createOtpChallenge({ email });
+      const challenge = workos.currentMagicAuth(email);
+      if (!challenge) throw new Error("Test identity provider did not issue a code");
+      const { accessToken, refreshToken, user } = await verifier.authenticateWithOtp({
+        email,
+        code: challenge.code,
+      });
+      const owner = {
+        token: accessToken,
+        userId: user.id,
+        orgId: workos.addOrganization({ name: "Device sign-out test" }).id,
+      };
       const other = await signIn(owner);
       const outsider = await signIn();
       const device = await registerDevice(app, owner);
@@ -1101,6 +1114,13 @@ describe.skipIf(!TEST_DATABASE_URL)("Slice A host account API", () => {
       expect(
         (await app.request("/api/v1/devices", { headers: authHeaders(owner.token) })).status,
       ).toBe(401);
+      const refreshed = await app.request("/api/v1/auth/refresh", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ refreshToken }),
+      });
+      expect(refreshed.status).toBe(401);
+      expect(await refreshed.json()).toMatchObject({ error: "unauthorized" });
       const retried = await app.request(path, {
         method: "DELETE",
         headers: authHeaders(other.token),

@@ -446,7 +446,11 @@ configured or started before the request was forwarded (`Retry-After: 5`). A
 failure after forwarding stays the generic `503`, since its outcome is unknown.
 Upstream `429 rate_limited`, timeouts, other unknown outcomes and lost API
 responses remain distinct: they do not prove that a token was unused. Only
-`401 unauthorized` from the refresh endpoint proves a terminal refusal. Identity
+`401 unauthorized` from the refresh endpoint proves a terminal refusal. Before
+returning the rotated pair, the API verifies the new access token and checks the
+same local session-revocation and account-erasure records used by protected
+routes. A session signed out locally receives `401` while provider delivery is
+still pending. Identity
 metadata or verification-key outages surface as server failures, so they do not
 tell desktop clients to renew a valid session. Invalid or expired access tokens
 still receive `401 unauthorized`.
