@@ -486,6 +486,10 @@ jobs:
           test -f apps/desktop/dist-electron/preload.js
           grep -nE "desktopBridge|getWsUrl|PICK_FOLDER_CHANNEL|wsUrl" apps/desktop/dist-electron/preload.js
 
+      - name: Verify server performance budgets
+        if: steps.changes.outputs.code == 'true'
+        run: node scripts/check-server-perf-budgets.ts
+
       - name: Enforce job budget
         env:
           CI_JOB_BUDGET_SECONDS: "285"
