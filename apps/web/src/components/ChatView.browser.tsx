@@ -8717,8 +8717,16 @@ describe("ChatView transcript geometry (full app)", () => {
         .getByRole("button", { name: "Create and checkout new branch", exact: false })
         .click();
       await page.getByLabelText("Branch name").fill("feature/keep-draft");
-      await page.getByRole("button", { name: "Create and switch", exact: true }).click();
+      const escapedSubmit = vi.fn();
+      // Observe the submit before any asynchronous composer dispatch can hide a leak.
+      window.addEventListener("submit", escapedSubmit);
+      try {
+        await page.getByRole("button", { name: "Create and switch", exact: true }).click();
+      } finally {
+        window.removeEventListener("submit", escapedSubmit);
+      }
 
+      expect(escapedSubmit).not.toHaveBeenCalled();
       await expect.poll(() => checkout.mock.calls.length).toBe(1);
       expect(createBranch).toHaveBeenCalledWith(
         expect.objectContaining({ branch: "feature/keep-draft" }),
