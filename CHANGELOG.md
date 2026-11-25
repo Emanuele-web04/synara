@@ -2,7 +2,7 @@
 
 ## 1.6.7 — 2026-11-25
 
-**More reliable Antigravity answers, macOS shutdown, and provider usage refresh.**
+**Windows browser-import hardening, more reliable Antigravity answers, and cleaner macOS shutdown.**
 
 ### Changed
 
@@ -15,6 +15,13 @@
 - Antigravity question cards display native choice text and send the expected identifiers for selected and custom answers. ([#2295](https://github.com/Emanuele-web04/synara/pull/2295))
 - The macOS backend exits after shutdown even if the updater IPC channel is still open. ([#2296](https://github.com/Emanuele-web04/synara/pull/2296))
 - Codex and Grok usage refreshes serialize concurrent refresh requests per account within the server process. ([#2294](https://github.com/Emanuele-web04/synara/pull/2294))
+
+### Performance and size since 1.6.5
+
+1.6.7 carries forward these improvements from 1.6.6.
+
+- In headless Chromium on an Apple M5 Pro with 83 seeded chats, startup used **61 HTTP requests instead of 315** and transferred **22.5% less HTTP data**. On an emulated slow link, median splash dismissal fell from **1.58 s to 0.71 s**. ([#2266](https://github.com/Emanuele-web04/synara/pull/2266))
+- In a local unsigned Apple Silicon packaging comparison, the DMG was **22% smaller**, the updater ZIP **21% smaller**, and the installed app used **27% fewer bytes**. ([#2288](https://github.com/Emanuele-web04/synara/pull/2288))
 
 ### Verification
 

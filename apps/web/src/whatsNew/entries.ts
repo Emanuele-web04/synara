@@ -32,6 +32,14 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
           "Windows builds remove the native browser cookie reader. Sign in directly to your sites in the Synara browser. Saved logins and existing browser sessions remain available.",
       },
       {
+        id: "startup-and-app-size-since-165",
+        title: "Faster startup and smaller downloads since 1.6.5",
+        description:
+          "1.6.7 carries forward the startup and packaging improvements introduced in 1.6.6.",
+        details:
+          "In a Chromium benchmark, startup used 61 HTTP requests instead of 315, and median splash dismissal on an emulated slow link fell from 1.58 s to 0.71 s. In a local Apple Silicon comparison, the DMG was 22% smaller and the installed app used 27% fewer bytes.",
+      },
+      {
         id: "antigravity-question-answers",
         title: "More reliable Antigravity questions",
         description:
