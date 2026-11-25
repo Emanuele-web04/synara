@@ -14,16 +14,9 @@ import {
   type GrantClaims,
 } from "@synara/contracts";
 import { Schema } from "effect";
-import {
-  calculateJwkThumbprint,
-  importJWK,
-  importPKCS8,
-  jwtVerify,
-  SignJWT,
-  type JWK,
-  type JWTHeaderParameters,
-} from "jose";
+import type { JWK, JWTHeaderParameters } from "jose";
 
+import { loadJose } from "../lazyJose";
 import type { HostIdentity } from "../hostIdentity";
 import {
   assertBoundedLifetime,
@@ -37,6 +30,7 @@ function hostIssuer(environmentId: string): string {
 }
 
 async function deviceVerificationKey(jwk: DevicePublicKeyJwk): Promise<CryptoKey> {
+  const { importJWK } = await loadJose();
   return importJWK(jwk as JWK, jwk.kty === "EC" ? "ES256" : "EdDSA") as Promise<CryptoKey>;
 }
 
@@ -78,6 +72,7 @@ export class HostMintService {
   }
 
   async mint(mintRequestJwt: string): Promise<MintedSessionCredential> {
+    const { calculateJwkThumbprint, importPKCS8, jwtVerify, SignJWT } = await loadJose();
     const now = this.#grants.now();
     let grant: GrantClaims;
     let deviceJkt: string;

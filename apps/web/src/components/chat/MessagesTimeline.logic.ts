@@ -246,9 +246,9 @@ export interface LiveToolCallDisplay {
   tone: LiveToolCallTone;
 }
 
-// The work claimed by the working row. `chunkId` identifies either the start
-// of the run or a single entry when the rest stays visible in history.
-// `display` is what the indicator shows for the run; null reads "Thinking".
+// The work claimed by the working row. `chunkId` identifies the single entry
+// the indicator wears; every other entry of its run stays visible in history.
+// `display` is what the indicator shows for that entry; null reads "Thinking".
 export interface LiveToolCallTarget {
   groupId: string;
   chunkId: string;
@@ -300,19 +300,18 @@ function trailingToolRunTarget(
   }
 
   let start = entries.length;
-  let hasCodexReasoning = false;
   while (start > 0) {
     const entry = entries[start - 1]!;
     if (!entry.codexReasoning && !isSummarizableToolCallEntry(entry)) break;
-    hasCodexReasoning ||= entry.codexReasoning === true;
     start -= 1;
   }
   if (start === entries.length) return null;
   const display = pickLiveToolCallDisplay(entries.slice(start));
-  if (hasCodexReasoning) {
-    return display ? { groupId, chunkId: display.entry.id, entryOnly: true, display } : null;
-  }
-  return { groupId, chunkId: entries[start]!.id, display };
+  // The indicator wears only the call of the moment. The rest of the run stays
+  // in the transcript so its summary, details and reasoning remain one click
+  // away while the work runs; with nothing to wear the run stays whole and the
+  // indicator reads "Thinking".
+  return display ? { groupId, chunkId: display.entry.id, entryOnly: true, display } : null;
 }
 
 // Resolves the run the working row claims, or null when there is none. Only a
@@ -349,8 +348,9 @@ export function findLiveToolCallTarget(
   return null;
 }
 
-// A normal live run takes the tail. A command claimed after approval leaves
-// the intervening approval rows in history.
+// Removes the single entry the working indicator wears, so its group keeps the
+// rest of the run in history. `entryOnly` false keeps the old whole-run scope
+// for callers that need to hide an entire tail.
 export function withoutLiveToolCallRun(
   entries: WorkLogEntry[],
   chunkId: string | null,
@@ -377,7 +377,7 @@ export function resolveLiveTailClaim(
 }
 
 // True when a standalone work row has nothing left to render because the
-// working indicator wears its only run: it must not leave an empty padded gap.
+// working indicator wears its only entry: it must not leave an empty padded gap.
 export function isWorkRowYieldedToLiveToolCall(
   row: MessagesTimelineRow,
   liveToolCall: Pick<LiveToolCallTarget, "groupId" | "chunkId" | "entryOnly"> | null,

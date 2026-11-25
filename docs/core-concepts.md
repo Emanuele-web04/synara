@@ -214,7 +214,9 @@ task when the work needs a different owner, branch, or review boundary.
 
 Finished work folds into a compact **Worked for** disclosure above the final answer. Expand it
 to read the tools and full narration; turning off finished-turn folding keeps the work visible.
-Active turns show **Working for** with a live duration. These labels use the chat font size and
+Active turns show **Working for** with a live duration. The running call sits in the working
+indicator, while the rest of the current run stays in the transcript as a summary you can expand
+to read its commands, reasoning, and details. These labels use the chat font size and
 keep the divider below the label, without model badges or completion icons.
 **Stopped by you** requires a request explicitly marked as user Stop, followed by an interrupted
 outcome for that turn. Agent, automatic, steering, and historical interruptions without that actor

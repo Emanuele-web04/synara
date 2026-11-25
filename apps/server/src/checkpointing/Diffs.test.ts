@@ -49,6 +49,27 @@ describe("parseCheckpointFilesFromUnifiedDiff", () => {
     ]);
   });
 
+  it("summarizes each file in a provider patch without Git headers", async () => {
+    const diff = [
+      "--- a/file.txt",
+      "+++ a/file.txt",
+      "@@ -1 +1 @@",
+      "-old",
+      "+new",
+      "--- previous.txt",
+      "+++ renamed.txt",
+      "@@ -1 +1,2 @@",
+      " retained",
+      "+added",
+      "",
+    ].join("\n");
+
+    expect(await Effect.runPromise(parseCheckpointFilesFromUnifiedDiff(diff))).toEqual([
+      { path: "a/file.txt", kind: "modified", additions: 1, deletions: 1 },
+      { path: "renamed.txt", kind: "renamed", additions: 1, deletions: 0 },
+    ]);
+  });
+
   it("normalizes CRLF input before parsing", async () => {
     const diff = [
       "diff --git a/a.txt b/a.txt",

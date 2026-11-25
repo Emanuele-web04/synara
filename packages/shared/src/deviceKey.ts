@@ -30,7 +30,19 @@ import {
   type DevicePublicKeyJwk,
   type Es256PublicKeyJwk,
 } from "@synara/contracts";
-import { base64url, calculateJwkThumbprint, SignJWT, type JWK } from "jose";
+import type { JWK } from "jose";
+
+type JoseModule = typeof import("jose");
+let josePromise: Promise<JoseModule> | undefined;
+function loadJose(): Promise<JoseModule> {
+  if (!josePromise) {
+    josePromise = import("jose").catch((error) => {
+      josePromise = undefined;
+      throw error;
+    });
+  }
+  return josePromise;
+}
 
 /**
  * WebCrypto generation parameters. Exported so a platform keystore that mints
@@ -113,6 +125,7 @@ export async function exportPublicJwk(key: CryptoKey | CryptoKeyPair): Promise<E
  * on one byte would reject every grant with an error that points nowhere.
  */
 export async function deviceThumbprint(jwk: DevicePublicKeyJwk): Promise<string> {
+  const { calculateJwkThumbprint } = await loadJose();
   return calculateJwkThumbprint(jwk as JWK, "sha256");
 }
 
@@ -181,6 +194,7 @@ export interface DeviceRegistrationInput extends ProofTiming {
  * the device is known by from then on.
  */
 export async function signDeviceRegistration(input: DeviceRegistrationInput): Promise<string> {
+  const { SignJWT } = await loadJose();
   const { iat, exp } = proofWindow(input, DEVICE_REGISTER_MAX_AGE_SECONDS);
   return new SignJWT({
     publicKeyJwk: input.publicJwk,
@@ -214,10 +228,10 @@ export function dpopHttpUri(url: string): string {
 
 /** base64url(SHA-256(credential)) — RFC 9449's `ath` claim. */
 export async function credentialHash(credential: string): Promise<string> {
-  const digest = await globalThis.crypto.subtle.digest(
-    "SHA-256",
-    new TextEncoder().encode(credential),
-  );
+  const [{ base64url }, digest] = await Promise.all([
+    loadJose(),
+    globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(credential)),
+  ]);
   return base64url.encode(new Uint8Array(digest));
 }
 
@@ -243,6 +257,7 @@ export interface DpopProofInput extends Pick<ProofTiming, "nowSeconds"> {
  * what binds the proof to the credential's `cnf.jkt`.
  */
 export async function signDpopProof(input: DpopProofInput): Promise<string> {
+  const { SignJWT } = await loadJose();
   const iat = Math.floor(input.nowSeconds ?? Date.now() / 1000);
   const claims: Record<string, unknown> = {
     htu: dpopHttpUri(input.url),
@@ -280,6 +295,7 @@ export interface MintRequestInput extends ProofTiming {
  * holding the grant's `cnf.jkt` is the one asking.
  */
 export async function signMintRequest(input: MintRequestInput): Promise<string> {
+  const { SignJWT } = await loadJose();
   const { iat, exp } = proofWindow(input, MINT_REQUEST_MAX_AGE_SECONDS);
   return new SignJWT({ publicKeyJwk: input.publicJwk, grant: input.grant })
     .setProtectedHeader({

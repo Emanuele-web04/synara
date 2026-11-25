@@ -1664,8 +1664,13 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         return branchLastCommit;
       });
 
-    const readStatusDetails = (cwd: string, refreshUpstream: boolean) =>
+    const readStatusDetails = (
+      cwd: string,
+      refreshUpstream: boolean,
+      options: { readonly includeRepoMetadata?: boolean } = {},
+    ) =>
       Effect.gen(function* () {
+        const includeRepoMetadata = options.includeRepoMetadata ?? true;
         const operation = "GitCore.statusDetails.isInsideWorkTree";
         const args = ["rev-parse", "--is-inside-work-tree"] as const;
         const isInsideWorkTree = yield* executeGit(operation, cwd, args, {
@@ -1729,6 +1734,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
 
         // Run branch config, ahead-count, remote metadata, and working-tree diff
         // stats concurrently instead of serially to minimize git subprocess latency.
+        // Skip remote/PR-base queries when `status()` does not consume them.
         const [
           upstreamBranch,
           configuredPrBaseBranch,
@@ -1749,7 +1755,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
                   Effect.catch(() => Effect.succeed(null)),
                 )
               : Effect.succeed(null),
-            branch
+            includeRepoMetadata && branch
               ? runGitStdout(
                   "GitCore.statusDetails.configuredPrBaseBranch",
                   cwd,
@@ -1770,26 +1776,28 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
                   aheadCount: parsedStatus.aheadCount,
                   behindCount: parsedStatus.behindCount,
                 }),
-            resolvePrimaryRemoteName(cwd).pipe(
-              Effect.catch(() => Effect.succeed(null)),
-              Effect.flatMap(
-                (
-                  primaryRemoteName,
-                ): Effect.Effect<{
-                  readonly primaryRemoteName: string | null;
-                  readonly defaultBranchName: string | null;
-                }> =>
-                  primaryRemoteName === null
-                    ? Effect.succeed({ primaryRemoteName: null, defaultBranchName: null })
-                    : resolveDefaultBranchName(cwd, primaryRemoteName).pipe(
-                        Effect.catch(() => Effect.succeed(null)),
-                        Effect.map((defaultBranchName) => ({
-                          primaryRemoteName,
-                          defaultBranchName,
-                        })),
-                      ),
-              ),
-            ),
+            includeRepoMetadata
+              ? resolvePrimaryRemoteName(cwd).pipe(
+                  Effect.catch(() => Effect.succeed(null)),
+                  Effect.flatMap(
+                    (
+                      primaryRemoteName,
+                    ): Effect.Effect<{
+                      readonly primaryRemoteName: string | null;
+                      readonly defaultBranchName: string | null;
+                    }> =>
+                      primaryRemoteName === null
+                        ? Effect.succeed({ primaryRemoteName: null, defaultBranchName: null })
+                        : resolveDefaultBranchName(cwd, primaryRemoteName).pipe(
+                            Effect.catch(() => Effect.succeed(null)),
+                            Effect.map((defaultBranchName) => ({
+                              primaryRemoteName,
+                              defaultBranchName,
+                            })),
+                          ),
+                  ),
+                )
+              : Effect.succeed({ primaryRemoteName: null, defaultBranchName: null }),
             needsMoveAwareCheck ? readMoveAwareWorkingTreeSummary(cwd) : Effect.succeed(null),
             hasWorkingTreeChanges && !needsMoveAwareCheck
               ? Effect.all(
@@ -2014,7 +2022,9 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
 
     const status: GitCoreShape["status"] = (input) =>
       Effect.gen(function* () {
-        const details = yield* readStatusDetails(input.cwd, false);
+        const details = yield* readStatusDetails(input.cwd, false, {
+          includeRepoMetadata: false,
+        });
         if (details.hasUpstream) {
           yield* scheduleStatusUpstreamRefresh(input.cwd);
         }

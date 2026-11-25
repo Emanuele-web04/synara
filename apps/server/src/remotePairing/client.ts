@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { RemotePairingBundle } from "@synara/contracts";
-import { calculateJwkThumbprint, SignJWT } from "jose";
+import { loadJose } from "../lazyJose";
 import {
   exchangeRemoteFrame,
   openRemoteChannel,
@@ -61,6 +61,7 @@ export async function pairRemoteHost(
     // without one the host falls back to manual owner approval.
     const grant = await input.requestGrant().catch(() => undefined);
     signal.throwIfAborted();
+    const { calculateJwkThumbprint, SignJWT } = await loadJose();
     const proof = await new SignJWT({ nonce: challenge.nonce, inviteId: bundle.inviteId })
       .setProtectedHeader({ alg: "ES256", typ: REMOTE_PAIRING_PROOF_TYPE })
       .setIssuer("synara-device")

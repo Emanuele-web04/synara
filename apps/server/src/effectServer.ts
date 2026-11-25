@@ -172,9 +172,11 @@ export function startServerRuntimePipeline<R>(input: {
     // process start cannot replay state-dependent commands against the terminal
     // projection.
     yield* input.orchestrationReactor.reconcileSettledOpenTurns;
-    for (const reactor of input.reactors) {
-      yield* Scope.provide(reactor.start(), input.subscriptionsScope);
-    }
+    yield* Effect.forEach(
+      input.reactors,
+      (reactor) => Scope.provide(reactor.start(), input.subscriptionsScope),
+      { concurrency: "unbounded", discard: true },
+    );
   });
 }
 
@@ -208,19 +210,23 @@ export const createEffectServer = Effect.fn(function* (
   const usageLimitRecoveryReactor = yield* UsageLimitRecoveryReactor;
   const readiness = yield* makeServerReadiness;
 
-  // Start the runtime before serving config snapshots. This both performs the
-  // startup sync and attaches the file watcher; calling only the sync helper
-  // leaves live edits invisible until the next server restart.
-  yield* keybindings.start.pipe(
-    Effect.catch((error) =>
-      Effect.logWarning("failed to start keybindings runtime on startup", {
-        path: error.configPath,
-        detail: error.detail,
-        cause: error.cause,
-      }),
-    ),
+  // Start keybindings and settings concurrently before serving config snapshots;
+  // they own independent config files and watchers.
+  yield* Effect.all(
+    [
+      keybindings.start.pipe(
+        Effect.catch((error) =>
+          Effect.logWarning("failed to start keybindings runtime on startup", {
+            path: error.configPath,
+            detail: error.detail,
+            cause: error.cause,
+          }),
+        ),
+      ),
+      serverSettings.start,
+    ],
+    { concurrency: "unbounded", discard: true },
   );
-  yield* serverSettings.start;
   yield* readiness.markPushBusReady;
   yield* readiness.markKeybindingsReady;
 

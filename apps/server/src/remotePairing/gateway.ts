@@ -1,17 +1,30 @@
 import { randomBytes } from "node:crypto";
 import {
   DevicePublicKeyJwk,
+  type ReliabilityCode,
   type RemotePairingDevice,
   type RemoteTrustScope,
 } from "@synara/contracts";
 import { Effect, Schema } from "effect";
-import { calculateJwkThumbprint, importJWK, jwtVerify } from "jose";
 import type WebSocket from "ws";
+import { loadJose } from "../lazyJose";
 import type { AuthControlPlaneShape } from "../auth/Services/AuthControlPlane";
-import { HostMintError, type HostGrantVerifier } from "../hostAuth/grantVerifier";
+import {
+  assertBoundedLifetime,
+  HostMintError,
+  HostTokenIssuedInFutureError,
+  type HostGrantVerifier,
+} from "../hostAuth/grantVerifier";
 import type { RemoteDeviceTrustRepositoryShape } from "../persistence/Services/RemoteDeviceTrust";
+import { reportReliabilityIssue } from "../reliability";
 
 export const REMOTE_PAIRING_PROOF_TYPE = "synara-remote-pairing+jwt";
+
+const pairingFailureByState = {
+  begin: "remote.pairing_invitation_failed",
+  proof: "remote.pairing_proof_rejected",
+  pending: "remote.pairing_approval_failed",
+} as const;
 
 /** Spends the owner's account grant for this device key, or reports a generic refusal. */
 async function acceptOwnerGrant(
@@ -53,7 +66,10 @@ export function acceptRemotePairing(
   let pendingBytes = 0;
   let pendingFrames = 0;
   let handling = Promise.resolve();
-  let deadline = setTimeout(() => socket.close(1008, "Pairing timed out"), 15_000);
+  let deadline = setTimeout(() => {
+    reportReliabilityIssue("remote.pairing_handshake_timeout", { logLocally: true });
+    socket.close(1008, "Pairing timed out");
+  }, 15_000);
   const sendStatus = async () => {
     if (!context) throw new Error("Pairing not started");
     const current = context;
@@ -97,6 +113,7 @@ export function acceptRemotePairing(
       pendingBytes -= Buffer.byteLength(raw);
       pendingFrames -= 1;
       if (closed) return;
+      let failure: ReliabilityCode = pairingFailureByState[state];
       try {
         const frame = JSON.parse(raw) as Record<string, unknown>;
         if (frame.v !== 2) throw new Error("Unsupported pairing protocol");
@@ -113,6 +130,7 @@ export function acceptRemotePairing(
           const invitation = await Effect.runPromise(
             pairing.verifyInvitation(scope, frame.inviteId, frame.secret),
           );
+          const { calculateJwkThumbprint } = await loadJose();
           const deviceJkt = await calculateJwkThumbprint(publicKey);
           if (invitation.pendingDevice && invitation.pendingDevice.deviceJkt !== deviceJkt)
             throw new Error("Invitation already claimed by another key");
@@ -133,6 +151,7 @@ export function acceptRemotePairing(
           frame.type === "pairing_proof" &&
           typeof frame.proof === "string"
         ) {
+          const { importJWK, jwtVerify } = await loadJose();
           const algorithm = context.device.publicKey.kty === "EC" ? "ES256" : "EdDSA";
           const { payload } = await jwtVerify(
             frame.proof,
@@ -143,7 +162,6 @@ export function acceptRemotePairing(
               issuer: "synara-device",
               audience: `synara-host:${scope.environmentId}`,
               requiredClaims: ["exp", "iat", "jti"],
-              maxTokenAge: "60s",
             },
           );
           if (
@@ -151,10 +169,18 @@ export function acceptRemotePairing(
             payload.inviteId !== context.inviteId ||
             payload.sub !== scope.userId ||
             typeof payload.exp !== "number" ||
-            typeof payload.iat !== "number" ||
-            payload.exp - payload.iat > 60
+            typeof payload.iat !== "number"
           )
             throw new Error("Invalid pairing proof");
+          // A controller's clock can lead the host's. Keep JOSE's strict expiry
+          // check and use the shared bound for the signed proof's issue time.
+          assertBoundedLifetime(
+            { iat: payload.iat, exp: payload.exp },
+            60,
+            "Pairing proof",
+            Math.floor(Date.now() / 1_000),
+          );
+          failure = "remote.pairing_approval_failed";
           const ownerGrant =
             typeof frame.grant === "string" &&
             grants !== undefined &&
@@ -182,7 +208,11 @@ export function acceptRemotePairing(
           return;
         }
         throw new Error("Unexpected pairing message");
-      } catch {
+      } catch (cause) {
+        reportReliabilityIssue(
+          cause instanceof HostTokenIssuedInFutureError ? "remote.pairing_clock_skew" : failure,
+          { logLocally: true },
+        );
         // Never echo invitation secrets, proofs or key material in close reasons.
         socket.close(1008, "Pairing failed. Check the invitation on the host.");
       }

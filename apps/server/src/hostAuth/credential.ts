@@ -12,8 +12,9 @@ import {
   type DevicePublicKeyJwk,
 } from "@synara/contracts";
 import { Schema } from "effect";
-import { calculateJwkThumbprint, importJWK, importSPKI, jwtVerify, type JWK } from "jose";
+import type { JWK } from "jose";
 
+import { loadJose } from "../lazyJose";
 import type { HostIdentity } from "../hostIdentity";
 import { JwtReplayCache } from "./replayCache";
 
@@ -35,6 +36,7 @@ export async function verifySessionCredential(input: {
   readonly replayCache?: JwtReplayCache;
   readonly nowSeconds?: number;
 }): Promise<VerifiedSessionCredential> {
+  const { calculateJwkThumbprint, importJWK, importSPKI, jwtVerify } = await loadJose();
   const verifiedCredential = await jwtVerify(
     input.credential,
     await importSPKI(input.identity.publicKeyPem, "EdDSA"),

@@ -17,7 +17,8 @@ import {
 import { isSupportedLocalImagePath } from "@synara/shared/localPreviewFiles";
 import { isWindowsAbsolutePath } from "@synara/shared/path";
 import { Cause, Effect, Option } from "effect";
-import { fromMarkdown } from "mdast-util-from-markdown";
+
+import { loadFromMarkdown } from "./lazyMarkdown.ts";
 
 import { LOCAL_LOOPBACK_ATTACHMENT_PRINCIPAL } from "./managedAttachmentPrincipal.ts";
 import {
@@ -67,8 +68,9 @@ function localImageReference(value: string): string | null {
 }
 
 // AST image nodes exclude code fences, inline code and ordinary links.
-function imageReferences(text: string): readonly string[] {
+async function imageReferences(text: string): Promise<readonly string[]> {
   if (!text.includes("![") || text.length > PROVIDER_SEND_TURN_MAX_INPUT_CHARS) return [];
+  const fromMarkdown = await loadFromMarkdown();
   const root = fromMarkdown(text);
   const definitions = new Map<string, string>();
   const nodes: MarkdownNode[] = [root];
@@ -214,7 +216,7 @@ export function stageAssistantImageAttachments<R = never>(input: {
   const attemptedIds: string[] = [];
   const now = new Date().toISOString();
   return Effect.gen(function* () {
-    const references = imageReferences(input.text);
+    const references = yield* Effect.tryPromise(() => imageReferences(input.text));
     if (!references.length) return { attachments: [], attachmentIds: [] };
     const roots = yield* Effect.tryPromise(() =>
       Promise.all(input.sourceRoots.map((root) => fs.realpath(root).catch(() => null))),

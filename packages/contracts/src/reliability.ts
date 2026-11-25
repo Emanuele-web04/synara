@@ -3,6 +3,11 @@ import * as Schema from "effect/Schema";
 // Keep new Remote host failure signals on the desktop Beta channel.
 const BETA_HOST_RELIABILITY_CODES = [
   "remote.admission_refused",
+  "remote.pairing_invitation_failed",
+  "remote.pairing_proof_rejected",
+  "remote.pairing_clock_skew",
+  "remote.pairing_approval_failed",
+  "remote.pairing_handshake_timeout",
   "remote.authorization_failed",
   "remote.authorization_denied",
   "remote.authorization_subscription_required",

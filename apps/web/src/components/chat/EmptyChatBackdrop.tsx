@@ -667,7 +667,7 @@ export function EmptyChatBackdrop(props: { style: EmptyChatBackdropStyle }) {
       // Parked under an invisible ancestor (a retained chat owner): do no canvas work, and
       // check again slowly so motion resumes after the pane is shown again.
       if (!container!.checkVisibility({ visibilityProperty: true, opacityProperty: true })) {
-        if (animate) scheduleNext(1000);
+        if (animate || ripples.length > 0 || dirty) scheduleNext(1000);
         return;
       }
       if (nowMs - lastFrameMs >= frameInterval(nowMs)) {

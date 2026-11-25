@@ -7,18 +7,18 @@ import {
   type ApiJwks,
 } from "@synara/contracts";
 import { Schema } from "effect";
-import { createLocalJWKSet, errors, jwtVerify } from "jose";
+import type { JSONWebKeySet } from "jose";
 
+import { loadJose } from "../lazyJose";
 import { JwtReplayCache } from "./replayCache";
 
 /** jose's unknown-kid signal, matching the relay's detection. */
 function isUnknownKidError(error: unknown): boolean {
   return (
-    error instanceof errors.JWKSNoMatchingKey ||
-    (typeof error === "object" &&
-      error !== null &&
-      "code" in error &&
-      (error as { code?: unknown }).code === "ERR_JWKS_NO_MATCHING_KEY")
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as { code?: unknown }).code === "ERR_JWKS_NO_MATCHING_KEY"
   );
 }
 
@@ -33,6 +33,8 @@ export class HostMintError extends Error {
   }
 }
 
+export class HostTokenIssuedInFutureError extends Error {}
+
 export function assertBoundedLifetime(
   claims: { iat: number; exp: number },
   maximumSeconds: number,
@@ -43,7 +45,7 @@ export function assertBoundedLifetime(
     throw new Error(`${label} lifetime exceeds ${maximumSeconds}s`);
   }
   if (claims.iat > nowSeconds + JWT_CLOCK_TOLERANCE_SECONDS) {
-    throw new Error(`${label} iat is too far in the future`);
+    throw new HostTokenIssuedInFutureError(`${label} iat is too far in the future`);
   }
   if (claims.exp < nowSeconds) {
     throw new Error(`${label} has expired`);
@@ -92,8 +94,9 @@ export class HostGrantVerifier {
     binding: { deviceJkt: string; subject?: string },
     now = this.now(),
   ): Promise<GrantClaims> {
+    const { createLocalJWKSet, jwtVerify } = await loadJose();
     const verifyGrant = async (jwks: ApiJwks) =>
-      jwtVerify(grantJwt, createLocalJWKSet(jwks as Parameters<typeof createLocalJWKSet>[0]), {
+      jwtVerify(grantJwt, createLocalJWKSet(jwks as JSONWebKeySet), {
         algorithms: ["EdDSA"],
         audience: SYNARA_RELAY_AUDIENCE,
         issuer: this.options.apiIssuer,
