@@ -1,10 +1,11 @@
 # Connectors
 
-Connectors let agents in Synara use remote MCP servers such as Supabase, Linear, or Notion.
-The user signs in once in **Settings → Connectors**, and new chats get the server's tools.
-Connectors are available in Stable and Beta builds from current `main`, including RPCs, OAuth
+Connectors let agents in Synara use remote MCP servers such as Supabase, Linear, or Notion,
+loopback HTTP servers, and local stdio commands. Add them in **Settings → Connectors** or ask
+in a chat; new chats receive their tools after approval and any required sign-in.
+Connectors are available in Stable and Beta builds from current source, including RPCs, OAuth
 callbacks and proxy routes. Each app reads only its own saved connectors; credentials are not
-copied from Beta into Stable. Existing published Stable builds do not gain this support until updated.
+copied from Beta into Stable. Published builds gain these additions only after updating.
 
 One sign-in covers every provider account configured in Synara on this machine, such as all
 Claude accounts, Codex, and OpenCode, because the tokens live in Synara's own store rather than
@@ -34,13 +35,13 @@ which tool policy treats as trusted.
 
 ## Provider coverage
 
-| Provider                      | Connectors                                                                                   |
-| ----------------------------- | -------------------------------------------------------------------------------------------- |
-| Claude                        | Yes, as SDK `mcpServers` HTTP entries                                                        |
-| Codex                         | Yes, in the per-thread config only (re-sent on every credential renewal)                     |
-| OpenCode                      | Yes, through `mcp.add` on the managed server; a connector that fails to start is skipped     |
-| Cursor, Grok, Droid, Oh My Pi | Only when the agent advertises ACP HTTP MCP support; the stdio proxy carries no MCP sessions |
-| Pi, Devin, Antigravity        | No                                                                                           |
+| Provider                      | Connectors                                                                               |
+| ----------------------------- | ---------------------------------------------------------------------------------------- |
+| Claude                        | Yes, as SDK `mcpServers` HTTP entries                                                    |
+| Codex                         | Yes, in the per-thread config only (re-sent on every credential renewal)                 |
+| OpenCode                      | Yes, through `mcp.add` on the managed server; a connector that fails to start is skipped |
+| Cursor, Grok, Droid, Oh My Pi | HTTP when advertised by the agent, otherwise Synara's session-aware stdio proxy          |
+| Pi, Devin, Antigravity        | No                                                                                       |
 
 Running sessions keep the connector set they started with. A disconnected connector answers its
 remaining calls with a JSON-RPC error.
@@ -65,10 +66,88 @@ Each preset sits on one shelf (`category`: Popular, Developer tools, or Producti
 how Settings → Connectors groups the catalog under its search field.
 
 Convex's hosted server (`mcp.convex.dev`) only guides setup and scaling; its deployment tools run
-in the local `npx convex mcp start` server, which connectors cannot reach. WorkOS has no Simple
+in the local `npx convex mcp start` server, which can be added as a stdio connector. WorkOS has no Simple
 Icons mark, so its icon is the site favicon.
 
-Custom URLs must be public `https://` endpoints without credentials.
+Custom URLs must be public `https://` endpoints without credentials, or `http://` on
+`localhost`, `127.0.0.0/8`, or `[::1]`. The outbound client pins loopback DNS resolutions
+and refuses redirects out of the selected origin. Public plain HTTP remains rejected.
+
+## Add from chat and import
+
+- `synara_list_mcp_connectors` lists transport, status, supported providers and URL origin
+  or command. URL paths/queries are omitted because they can contain credentials.
+- `synara_add_mcp_connector` accepts a preset, a named URL, or a named command with an
+  argument array and optional `cwd`/`env`. It saves an inert proposal and shows a card.
+- `synara_remove_mcp_connector` also creates a proposal. Removal needs UI confirmation.
+- `synara_import_mcp_servers` discovers Claude Code user/current-project entries in
+  `~/.claude.json`, `~/.codex/config.toml`, the workspace `.mcp.json`, and Claude Desktop's
+  platform config. Each candidate gets a card; only the entries the user accepts are added.
+  Disabled entries are skipped. Custom HTTP headers, environment-backed HTTP credentials,
+  and unsupported configurations are reported as skipped, without exposing their values.
+  Environment values are imported literally; provider-specific variable interpolation is not applied.
+
+Only the owning computer's authenticated UI can resolve a proposal. MCP tools cannot approve
+one, even in full-access sessions. Choose **Review connection** to see the exact expanded
+command, argument array, working directory and environment keys before **Approve connector**
+becomes available; values stay hidden. Pending proposals and connector
+environment values are stored only in the existing secret-store document. Approval of an HTTP
+connector opens its OAuth authorization URL in the browser if sign-in is required.
+
+Saved connectors show their app icon when recognized (including Paper's official app artwork),
+name and connection status. A **Custom** badge identifies connectors outside the built-in catalog.
+**Connection details** expands the configuration and supported providers without putting command
+paths on the main card. Remote custom servers retain the existing site-favicon fallback.
+
+## Local servers
+
+Use **Add local server** for a URL such as `http://127.0.0.1:29979/mcp`, or command
+`~/.paper/bin/paper` with arguments `["mcp"]`. `~` expands in the command, arguments and
+working directory; commands are not interpreted as shell strings. Relative working directories
+are resolved against the proposing chat's workspace, or the home directory in Settings.
+
+An unavailable local connector stays saved as **Not running** and is omitted from new provider
+sessions. HTTP health is checked in the background; unavailable stdio servers are retried.
+Stdio commands run through the shared platform process boundary, with separate MCP sessions
+per provider bearer, bounded initialization, cancellation and owned process-tree cleanup.
+Ambient Synara credentials and provider API keys are stripped; explicitly configured environment
+values reach only the local MCP subprocess. Removal closes its processes before reporting success.
+
+Running chats keep their current connector set: newly added connectors are **available in new
+threads**. Gateway forwarding supports request/response MCP calls; server-initiated sampling,
+elicitation and standalone notification streams are not supported. Session revocation is swept
+in the background, while explicit disconnect and stdio-client shutdown close sessions directly.
+
+## Paired devices
+
+Synara Remote 1.0.6-remote.12 and later let authenticated paired clients read the
+connector list for the computer running their chat. iPhone and iPad build 0.1
+(136) and later use it for @ suggestions, filtered to connected services and
+supported providers. Older desktop hosts can return an empty list.
+
+Connections belong to that computer’s app data home. A service connected on the
+Mini is not automatically connected on the MacBook or in another Synara flavor.
+Connect it in Settings → Connectors on the execution computer, then start a new
+chat so the provider receives its tools.
+
+The paired view includes names, status and URL origins only; URL credentials,
+paths and queries are removed; stdio entries are withheld. OAuth setup, proposals, connecting and disconnecting remain
+local-owner operations. No connector token is transferred to the phone.
+
+## Vercel sign-in renewal
+
+Vercel requires the OAuth `offline_access` scope to issue a refresh token.
+Synara includes it when connecting to `https://mcp.vercel.com`, preserving the
+scopes the server requested. The grant stays on the execution computer and uses
+the existing refresh path after token expiry or a desktop restart. Other
+connectors keep their existing scope selection.
+
+Older Vercel grants with only `openid` have no refresh token and need one new
+sign-in after this fix is installed. The user chooses project access in Vercel’s
+consent page; Synara does not silently expand that project selection. A source
+fix is not an upgrade to an already-issued grant.
+
+See [Vercel’s scope reference](https://vercel.com/docs/sign-in-with-vercel/scopes-and-permissions).
 
 ## Limits
 

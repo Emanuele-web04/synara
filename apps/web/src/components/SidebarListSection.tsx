@@ -21,6 +21,7 @@ export function SidebarSectionLabel({
   as: Tag = "div",
   className,
   onContextMenu,
+  action,
 }: {
   label: string;
   /** "h2" where the label heads a landmark section (the code review list). */
@@ -28,11 +29,17 @@ export function SidebarSectionLabel({
   className?: string;
   /** Project blocks carry the same right-click menu as a classic project row. */
   onContextMenu?: (position: SidebarRowContextMenuPosition) => void;
+  /** A control at the end of the label row, such as Priority's clear-read eraser. */
+  action?: ReactNode;
 }) {
   return (
     <Tag
       data-slot="activity-section-label"
-      className={cn("m-0 mb-1.5 px-2 font-normal", className)}
+      className={cn(
+        "m-0 mb-1.5 px-2 font-normal",
+        action ? "flex items-center justify-between gap-2" : null,
+        className,
+      )}
       {...(onContextMenu
         ? {
             onContextMenu: (event: MouseEvent) => {
@@ -44,6 +51,7 @@ export function SidebarSectionLabel({
         : {})}
     >
       <span className={SIDEBAR_SECTION_LABEL_CLASS_NAME}>{label}</span>
+      {action}
     </Tag>
   );
 }
@@ -122,7 +130,7 @@ export function SidebarShowMoreRow({
 
   if (!canShowMore && !canShowLess) return null;
   const buttonClassName = cn(
-    "h-7 cursor-pointer rounded-lg px-2.5 text-left text-ui text-muted-foreground/79 hover:text-foreground",
+    "h-7 cursor-pointer rounded-lg px-2.5 text-left text-ui text-muted-foreground hover:text-foreground",
     SIDEBAR_ROW_FOCUS_CLASS_NAME,
     className,
   );

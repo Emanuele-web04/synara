@@ -34,11 +34,6 @@ describe("MCP_CONNECTOR_PRESETS", () => {
     }
   });
 
-  it("marks presets that need the user's own OAuth app", () => {
-    expect(findMcpConnectorPreset("slack")).toMatchObject({ requiresOwnApp: true });
-    expect(findMcpConnectorPreset("supabase")?.requiresOwnApp).toBeUndefined();
-  });
-
   it("leaves out vendors that refuse an unregistered client", () => {
     for (const id of ["figma", "github"]) {
       expect(findMcpConnectorPreset(id)).toBeUndefined();
@@ -58,7 +53,11 @@ describe("normalizeMcpConnectorUrl", () => {
     ["", "Enter the server URL.", "required"],
     ["https://mcp.example.com/" + "x".repeat(2048), "The URL is too long.", "too-long"],
     ["mcp.example.com", "Enter a full URL, like https://mcp.example.com/mcp.", "invalid"],
-    ["http://mcp.example.com/mcp", "The URL must start with https://.", "https-required"],
+    [
+      "http://mcp.example.com/mcp",
+      "Use https:// for public servers. HTTP is allowed only for loopback hosts (localhost, 127.0.0.0/8, or ::1).",
+      "https-required",
+    ],
     [
       "https://user:pass@mcp.example.com/mcp",
       "Remove the user name or password from the URL.",
@@ -67,6 +66,23 @@ describe("normalizeMcpConnectorUrl", () => {
     ["https://localhost/mcp", "Use the server's public address.", "public-host"],
   ])("rejects %j", (raw, reason, reasonCode) => {
     expect(normalizeMcpConnectorUrl(raw)).toEqual({ ok: false, reason, reasonCode });
+  });
+
+  it.each([
+    "http://localhost:29979/mcp",
+    "http://127.0.0.1:29979/mcp",
+    "http://127.42.0.7/mcp",
+    "http://[::1]:29979/mcp",
+  ])("accepts loopback HTTP %s", (url) => {
+    expect(normalizeMcpConnectorUrl(url)).toEqual({ ok: true, url });
+  });
+  it.each([
+    "http://localhost.example.com/mcp",
+    "http://192.168.1.1/mcp",
+    "http://[::ffff:127.0.0.1]/mcp",
+    "file:///mcp",
+  ])("rejects non-loopback HTTP or non-HTTP transport %s", (url) => {
+    expect(normalizeMcpConnectorUrl(url).ok).toBe(false);
   });
 });
 
@@ -107,7 +123,8 @@ describe("connector mentions", () => {
   it("offers connectors only to providers whose sessions receive them", () => {
     expect(providerSupportsMcpConnectors("claudeAgent")).toBe(true);
     expect(providerSupportsMcpConnectors("codex")).toBe(true);
-    for (const provider of ["pi", "devin", "antigravity"]) {
+    expect(providerSupportsMcpConnectors("antigravity")).toBe(true);
+    for (const provider of ["pi", "devin"]) {
       expect(providerSupportsMcpConnectors(provider)).toBe(false);
     }
   });

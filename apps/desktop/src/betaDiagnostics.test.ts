@@ -2,7 +2,17 @@
 // Purpose: Queue, sanitize, and flush behavior for beta-only diagnostics.
 
 import { createServer, type Server } from "node:http";
-import { mkdtempSync, readFileSync, existsSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  existsSync,
+  lstatSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -15,7 +25,6 @@ import { DESKTOP_DIAGNOSTIC_ISSUE_PREFIX } from "@synara/contracts";
 
 import {
   BetaDiagnostics,
-  readLogTail,
   resolveBetaDiagnosticsEndpoint,
   sanitizeBetaDiagnosticsPayload,
   BETA_DIAGNOSTICS_ENDPOINT,
@@ -95,7 +104,7 @@ describe("sanitizeBetaDiagnosticsPayload", () => {
     expect("targetVersion" in sanitized).toBe(false);
   });
 
-  it("redacts free text in error payloads", () => {
+  it("keeps technical error fields and rebuilds the content-independent fingerprint", () => {
     const sanitized = sanitizeBetaDiagnosticsPayload(
       {
         kind: "error",
@@ -109,41 +118,12 @@ describe("sanitizeBetaDiagnosticsPayload", () => {
     expect(sanitized).toEqual({
       kind: "error",
       source: "renderer",
-      message: "failed for <email> at ~/…/app",
-      stack: expect.stringContaining("[redacted]"),
-      fingerprint: "abcdef0123456789",
+      message: "Error at renderer:1:1",
+      stack: "at renderer:1:1",
+      fingerprint: expect.stringMatching(/^[0-9a-f]{16}$/),
     });
     expect(JSON.stringify(sanitized)).not.toContain("ghp_");
     expect(JSON.stringify(sanitized)).not.toContain("alice");
-  });
-
-  it("sanitizes usage payloads: providers, counts, duplicates", () => {
-    const sanitized = sanitizeBetaDiagnosticsPayload(
-      {
-        kind: "usage",
-        providers: [
-          { provider: "claudeAgent", threads: 3.7, turns: 9.9, turnsFailed: 1 },
-          // Legacy name migrates to the current ProviderKind and merges.
-          { provider: "gemini" as never, threads: 2, turns: 4, turnsFailed: 0 },
-          { provider: "antigravity", threads: 1, turns: 5, turnsFailed: 2 },
-          { provider: "notaprovider" as never, threads: 9, turns: 9, turnsFailed: 9 },
-          { provider: "claudeAgent", threads: 1, turns: Number.NaN, turnsFailed: -3 },
-        ],
-        projects: 4.6,
-        activeThreads: -2,
-      },
-      "/tmp/x",
-      "usage.daily",
-    );
-    expect(sanitized).toEqual({
-      kind: "usage",
-      providers: [
-        { provider: "claudeAgent", threads: 4, turns: 9, turnsFailed: 1 },
-        { provider: "antigravity", threads: 3, turns: 9, turnsFailed: 2 },
-      ],
-      projects: 4,
-      activeThreads: 0,
-    });
   });
 
   it("clamps usage counts and drops extra fields", () => {
@@ -169,7 +149,6 @@ describe("sanitizeBetaDiagnosticsPayload", () => {
     expect(JSON.stringify(sanitized)).not.toContain("user@example.com");
     expect(sanitized).toEqual({
       kind: "usage",
-      providers: [{ provider: "codex", threads: 100_000, turns: 1, turnsFailed: 0 }],
       projects: 100_000,
       activeThreads: 1,
     });
@@ -220,7 +199,7 @@ describe("sanitizeBetaDiagnosticsPayload", () => {
     expect(bad).toEqual({ kind: "lifecycle" });
   });
 
-  it("redacts and caps crash logTail", () => {
+  it("drops crash log tails entirely", () => {
     const longTail = `line with password=hunter2\n${"x".repeat(40 * 1024)}`;
     const sanitized = sanitizeBetaDiagnosticsPayload(
       {
@@ -232,21 +211,7 @@ describe("sanitizeBetaDiagnosticsPayload", () => {
       "/Users/alice",
     );
     const logTail = "logTail" in sanitized ? sanitized.logTail : undefined;
-    expect(logTail).toBeDefined();
-    expect(logTail!.length).toBeLessThanOrEqual(16 * 1024);
-    expect(logTail).not.toContain("hunter2");
-  });
-});
-
-describe("readLogTail", () => {
-  it("returns the last lines of a log file and undefined for missing files", () => {
-    const root = makeRoot();
-    const logPath = join(root, "desktop-main.log");
-    writeFileSync(logPath, Array.from({ length: 300 }, (_, i) => `line-${i}`).join("\n"));
-    const tail = readLogTail(logPath)!;
-    expect(tail).toContain("line-299");
-    expect(tail).not.toContain("line-50");
-    expect(readLogTail(join(root, "missing.log"))).toBeUndefined();
+    expect(logTail).toBeUndefined();
   });
 });
 
@@ -287,22 +252,17 @@ describe("BetaDiagnostics error tracking", () => {
         "-----END PRIVATE KEY-----\nexitCode=5",
     });
     const first = readQueue(root)[0].payload.logTail;
-    expect(first).toContain("chat.send started");
-    expect(first).toContain("exitCode=5");
-    expect(first).not.toMatch(/private prompt|private-thread|private action name|SyntheticKeyPart/);
-    expect(first.length).toBeLessThanOrEqual(16 * 1024);
+    expect(first).toBeUndefined();
     now = new Date(now.getTime() + 11 * 60_000);
     for (let i = 0; i < 30; i++) {
       diag.recordActivity({ activity: "project.import", phase: i % 2 ? "failed" : "started" });
     }
     diag.trackError("renderer", new Error("import failed"));
     const stack = readQueue(root)[1].payload.stack;
-    expect(stack).not.toContain("chat.send");
-    expect(stack.match(/project.import/g)).toHaveLength(24);
-    expect(stack).toContain("import failed");
+    expect(stack ?? "").not.toMatch(/chat.send|project.import|import failed/);
     now = new Date(now.getTime() + 11 * 60_000);
     diag.trackError("renderer", new Error("later failure"));
-    expect(readQueue(root)[2].payload.stack).not.toContain("Beta diagnostic context");
+    expect(readQueue(root)[2].payload.stack ?? "").not.toContain("Beta diagnostic context");
   });
 
   it("samples bounded numeric memory history and stops its timer on disposal", async () => {
@@ -328,9 +288,7 @@ describe("BetaDiagnostics error tracking", () => {
       vi.advanceTimersByTime(90_000);
       diag.trackError("main", new Error("memory context"));
       const stack = readQueue(root)[0].payload.stack;
-      expect(stack.match(/memory MiB/g)).toHaveLength(4);
-      expect(stack).toContain("main=4 renderer=20 gpu=30 utility=40");
-      expect(stack).not.toContain("never send");
+      expect(stack ?? "").not.toMatch(/memory MiB|never send|main=4/);
       await diag.dispose(0);
       const calls = sampleMemory.mock.calls.length;
       vi.advanceTimersByTime(90_000);
@@ -385,7 +343,6 @@ describe("BetaDiagnostics error tracking", () => {
             kind: "update",
             outcome: "error",
             errorContext: context,
-            message: "Updater failure for <email>",
           },
         },
       ]);
@@ -405,13 +362,13 @@ describe("BetaDiagnostics error tracking", () => {
       prompt: "private chat content",
     });
     const [event] = readQueue(root);
-    expect(event.payload.message).toContain("_nonReactive");
-    expect(event.payload.stack).toContain("View.tsx:12:3");
+    expect(event.payload.message).toBe("TypeError at renderer:12:3");
+    expect(event.payload.stack).toBe("at renderer:12:3");
     expect(JSON.stringify(event)).not.toMatch(/alice|private-project|private chat content/);
   });
 
   it.each(["http://127.0.0.1", "https://localhost", "ws://127.0.0.1", "wss://[::1]"])(
-    "groups %s failures across loopback ports without grouping external ports",
+    "groups %s and external failures without retaining addresses or message-derived identity",
     (origin) => {
       const root = makeRoot();
       const diag = makeDiagnostics(root);
@@ -426,8 +383,8 @@ describe("BetaDiagnostics error tracking", () => {
         );
       }
       const events = readQueue(root);
-      expect(events).toHaveLength(3);
-      expect(events[0].payload.message).toContain(":56268/");
+      expect(events).toHaveLength(1);
+      expect(events[0].payload.message).toBe("Error");
       expect(JSON.stringify(events)).not.toContain("private-route");
     },
   );
@@ -487,8 +444,10 @@ describe("BetaDiagnostics error tracking", () => {
       now: () => now,
     });
     for (let i = 0; i < 40; i += 1) {
-      // Distinct messages so the per-fingerprint throttle does not apply.
-      diag.trackError("main", new Error(`failure-${i}`));
+      // Distinct technical frames exercise the session cap without hashing message text.
+      const error = new Error(`failure-${i}`);
+      error.stack = `Error: ignored\n    at task (main.js:${i + 1}:1)`;
+      diag.trackError("main", error);
       now = new Date(now.getTime() + 1000);
     }
     expect(readQueue(root)).toHaveLength(30);
@@ -496,7 +455,7 @@ describe("BetaDiagnostics error tracking", () => {
 });
 
 describe("BetaDiagnostics", () => {
-  it("retains a redacted updater failure message only on update.error", () => {
+  it("keeps updater categories while dropping every failure message", () => {
     const root = makeRoot();
     const diag = makeDiagnostics(root);
     const payload = {
@@ -512,7 +471,7 @@ describe("BetaDiagnostics", () => {
       .trim()
       .split("\n")
       .map((line) => JSON.parse(line));
-    expect(events[0].payload.message).toContain("Cannot find beta-mac.yml");
+    expect(events[0].payload.message).toBeUndefined();
     expect(events[1].payload.message).toBeUndefined();
     expect(JSON.stringify(events)).not.toMatch(/secret|private\/feed|user@example/);
   });
@@ -667,6 +626,103 @@ describe("BetaDiagnostics", () => {
     expect(existsSync(queuePath)).toBe(false);
   });
 
+  it("aborts revoked uploads and keeps a re-enabled queue independent of late receipts", async () => {
+    const root = makeRoot();
+    let sharing = true;
+    const diagnostics = new BetaDiagnostics({
+      homeDir: root,
+      appVersion: "1.0.6-remote.17",
+      platform: "linux",
+      arch: "x64",
+      env: {},
+      flavor: "remote",
+      isEnabled: () => sharing,
+    });
+    const requests: Array<{ signal: AbortSignal; resolve: (response: Response) => void }> = [];
+    const fetchMock = vi.fn(
+      (_url: unknown, init: RequestInit) =>
+        new Promise<Response>((resolve) => {
+          requests.push({ signal: init.signal as AbortSignal, resolve });
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      diagnostics.track("app.start", { kind: "lifecycle" });
+      const revoked = diagnostics.flush();
+      expect(requests).toHaveLength(1);
+      sharing = false;
+      diagnostics.discardQueue();
+      expect(requests[0]!.signal.aborted).toBe(true);
+      sharing = true;
+      diagnostics.resumeSharing();
+      diagnostics.track("app.exit", { kind: "lifecycle" });
+      const current = diagnostics.flush();
+      expect(requests).toHaveLength(2);
+      // A transport may settle after abort; it no longer owns this queue.
+      requests[0]!.resolve(new Response(null, { status: 200 }));
+      await revoked;
+      diagnostics.track("app.start", { kind: "lifecycle" });
+      await diagnostics.flush();
+      expect(requests).toHaveLength(2);
+      requests[1]!.resolve(new Response(null, { status: 200 }));
+      await current;
+      expect(readQueue(root).map((record) => record.event)).toEqual(["app.start"]);
+      const final = diagnostics.flush();
+      requests[2]!.resolve(new Response(null, { status: 200 }));
+      await final;
+      expect(readQueue(root)).toEqual([]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("sanitizes offline legacy usage records again before sending them after restart", async () => {
+    const received: string[] = [];
+    const server = createServer((req, res) => {
+      let body = "";
+      req.on("data", (chunk) => (body += chunk));
+      req.on("end", () => {
+        received.push(body);
+        res.writeHead(200).end();
+      });
+    });
+    servers.push(server);
+    const port = await listen(server);
+    const root = makeRoot();
+    const diagnostics = makeDiagnostics(root, `http://127.0.0.1:${port}`);
+    diagnostics.track("usage.daily", {
+      kind: "usage",
+      providers: [],
+      projects: 1,
+      activeThreads: 1,
+    });
+    const queuePath = join(root, "diagnostics", "events.jsonl");
+    const legacy = JSON.parse(readFileSync(queuePath, "utf8"));
+    legacy.privateEnvelope = "privateCustomer";
+    legacy.payload.providers = [{ provider: "privateProvider", threads: 1, turns: 1 }];
+    legacy.payload.turnBreakdown = [
+      {
+        provider: "claudeAgent",
+        model: "claude-opus-42-7",
+        effort: "privateEffort",
+        interactionMode: "plan",
+        runtimeMode: "full-access",
+        origin: "user",
+        outcome: "succeeded",
+        turns: 1,
+      },
+    ];
+    writeFileSync(queuePath, `${JSON.stringify(legacy)}\n`);
+    await makeDiagnostics(root, `http://127.0.0.1:${port}`).flush();
+    expect(received).toHaveLength(1);
+    expect(received[0]).not.toMatch(
+      /privateCustomer|privateProvider|privateEffort|claude-opus-42-7/,
+    );
+    expect(JSON.parse(received[0]!).payload).not.toHaveProperty("providers");
+    expect(JSON.parse(received[0]!).payload).not.toHaveProperty("turnBreakdown");
+    expect(readQueue(root)).toEqual([]);
+  });
+
   it("dispose waits for an in-flight flush, then sends what queued meanwhile", async () => {
     const received: string[] = [];
     let firstRequest = true;
@@ -761,6 +817,65 @@ describe("BetaDiagnostics", () => {
     expect(readQueue(root).filter((event) => event.event === "usage.daily")).toHaveLength(1);
   });
 
+  it("relays the turn breakdown with categories only", () => {
+    const root = makeRoot();
+    const now = new Date("2026-10-17T12:00:00.000Z");
+    const diag = new BetaDiagnostics({
+      homeDir: root,
+      appVersion: "1.0.6-remote.17",
+      platform: "darwin",
+      arch: "arm64",
+      env: {},
+      now: () => now,
+      flavor: "remote",
+    });
+    const row = {
+      provider: "claudeAgent",
+      model: "claude-fable-5-1",
+      effort: "high",
+      interactionMode: "plan",
+      runtimeMode: "full-access",
+      origin: "user",
+      outcome: "succeeded",
+      turns: 2,
+      durationMs: 1000,
+      durationSamples: 2,
+      inputTokens: 10,
+      outputTokens: 5,
+      cachedInputTokens: 1,
+      tokenSamples: 2,
+    };
+    writeFileSync(
+      join(root, "diagnostics", "usage-snapshot.json"),
+      JSON.stringify({
+        v: 1,
+        generatedAt: new Date(now.getTime() - 60_000).toISOString(),
+        providers: [],
+        projects: 0,
+        activeThreads: 0,
+        turnBreakdown: [
+          row,
+          { ...row, model: "a model with spaces" },
+          {
+            ...row,
+            provider: "privateClient",
+            model: "claude-opus-42-7",
+            effort: "privateEffort",
+            interactionMode: "privateMode",
+            runtimeMode: "privatePermission",
+            origin: "privateOrigin",
+          },
+          { ...row, outcome: "running" },
+          { ...row, secret: "dropped" },
+        ],
+      }),
+    );
+    diag.maybeTrackDailyUsage();
+    const [event] = readQueue(root).filter((e) => e.event === "usage.daily");
+    expect(event.flavor).toBe("remote");
+    expect(event.payload).not.toHaveProperty("turnBreakdown");
+  });
+
   it("maybeTrackDailyUsage sends once per UTC day and records the day", () => {
     const root = makeRoot();
     const now = new Date("2026-09-24T12:00:00.000Z");
@@ -779,7 +894,6 @@ describe("BetaDiagnostics", () => {
     expect(events).toHaveLength(1);
     expect(events[0].payload).toEqual({
       kind: "usage",
-      providers: [{ provider: "claudeAgent", threads: 2, turns: 5, turnsFailed: 1 }],
       projects: 3,
       activeThreads: 2,
     });
@@ -1024,4 +1138,247 @@ it("passes stall reports through the shared issue allowlist and redaction pipeli
   });
   expect(queued).not.toMatch(/private|person/);
   await diagnostics.dispose();
+});
+
+describe("Remote diagnostics", () => {
+  it("labels events as Remote and collects nothing while sharing is off", () => {
+    const root = makeRoot();
+    let sharing = true;
+    const diagnostics = new BetaDiagnostics({
+      homeDir: root,
+      appVersion: "1.0.6-remote.17",
+      platform: "linux",
+      arch: "x64",
+      flavor: "remote",
+      isEnabled: () => sharing,
+    });
+    const queuePath = join(root, "diagnostics", "events.jsonl");
+    diagnostics.track("app.start", { kind: "lifecycle" });
+    expect(JSON.parse(readFileSync(queuePath, "utf8").trim())).toMatchObject({
+      flavor: "remote",
+      event: "app.start",
+    });
+
+    sharing = false;
+    diagnostics.discardQueue();
+    expect(diagnostics.isCollecting()).toBe(false);
+    diagnostics.track("app.start", { kind: "lifecycle" });
+    diagnostics.trackError("main", new Error("boom"));
+    expect(existsSync(queuePath)).toBe(false);
+    // A saved off choice must discard a queue left by a previous interrupted process.
+    writeFileSync(queuePath, "old queued diagnostics\n");
+    const restoredOff = new BetaDiagnostics({
+      homeDir: root,
+      appVersion: "1.0.6-remote.18",
+      platform: "linux",
+      arch: "x64",
+      flavor: "remote",
+      isEnabled: () => false,
+    });
+    expect(restoredOff.isCollecting()).toBe(false);
+    expect(existsSync(queuePath)).toBe(false);
+  });
+});
+
+describe("Remote keeps free text on the device", () => {
+  const remote = (root: string, isEnabled: () => boolean = () => true) =>
+    new BetaDiagnostics({
+      homeDir: root,
+      appVersion: "1.0.6-remote.17",
+      platform: "darwin",
+      arch: "arm64",
+      env: {},
+      flavor: "remote",
+      isEnabled,
+    });
+  const queued = (root: string) => {
+    const path = join(root, "diagnostics", "events.jsonl");
+    return existsSync(path)
+      ? readFileSync(path, "utf8")
+          .trim()
+          .split("\n")
+          .filter(Boolean)
+          .map((line) => JSON.parse(line))
+      : [];
+  };
+
+  it("sends an error's type and frames, never its message, and no crash log", () => {
+    const root = makeRoot();
+    const diagnostics = remote(root);
+    const error = new TypeError(
+      "Failed to read /Volumes/Work/AcmeSecret/strategy.txt: customer renewal draft\n    at customer renewal draft",
+    );
+    error.stack = `TypeError: ${error.message}\n    at readPlan (main.js:10:5)\n    at run (main.js:20:3)`;
+    diagnostics.trackError("main", error);
+    diagnostics.track("app.child-process-crash", {
+      kind: "crash",
+      processType: "backend",
+      reason: "crashed",
+      logTail: "customer renewal draft",
+    });
+    diagnostics.trackIssue("main", { code: "git.push.failed", reason: "timeout", durationMs: 120 });
+    diagnostics.trackError("main", "Handled issue: private-customer-secret (private_reason)");
+    const named = new Error("PrivateCustomer");
+    named.stack = "PrivateCustomerError: hidden\n    at PrivateCustomer (main.js:30:7)";
+    diagnostics.trackError("main", named);
+    const raw = readFileSync(join(root, "diagnostics", "events.jsonl"), "utf8");
+    expect(raw).not.toContain("AcmeSecret");
+    expect(raw).not.toContain("renewal");
+    expect(raw).not.toMatch(/private-customer|private_reason|PrivateCustomer/);
+    const [errorEvent, crashEvent, issueEvent] = queued(root);
+    expect(errorEvent.payload).toMatchObject({
+      message: "TypeError at main:10:5",
+      stack: "at main:10:5\nat main:20:3",
+    });
+    expect(crashEvent.payload.logTail).toBeUndefined();
+    expect(issueEvent.payload.message).toBe("Handled issue: git.push.failed (timeout)");
+  });
+
+  it("keeps a fixed updater reason while stripping the failure message", () => {
+    const root = makeRoot();
+    const diagnostics = remote(root);
+    const initial = createInitialDesktopUpdateState(
+      "1.0.6-remote.39",
+      { hostArch: "arm64", appArch: "arm64", runningUnderArm64Translation: false },
+      "remote",
+    );
+    const checking = reduceDesktopUpdateStateOnCheckStart(initial, new Date().toISOString());
+    diagnostics.trackUpdateStateChange(
+      checking,
+      reduceDesktopUpdateStateOnCheckFailure(
+        checking,
+        "Cannot find remote-mac.yml in the latest release artifacts (https://private/customer?token=secret)",
+        new Date().toISOString(),
+      ),
+    );
+    diagnostics.track("update.error", {
+      kind: "update",
+      outcome: "error",
+      // @ts-expect-error Untrusted categories must be rejected before queueing.
+      reason: "private-customer",
+      message: "private customer message",
+    });
+    diagnostics.track("update.check", { kind: "update", outcome: "ok", reason: "timeout" });
+    const events = queued(root);
+    expect(events[0].payload).toEqual({
+      kind: "update",
+      outcome: "error",
+      errorContext: "check",
+      reason: "manifest",
+    });
+    expect(events[1].payload.reason).toBeUndefined();
+    expect(events[2].payload.reason).toBeUndefined();
+    expect(JSON.stringify(events)).not.toMatch(/private|customer|secret|message|stack|logTail/);
+  });
+
+  it("collects no context while sharing is off and skips snapshots reaching into that time", () => {
+    const root = makeRoot();
+    let sharing = false;
+    const diagnostics = remote(root, () => sharing);
+    diagnostics.recordActivity({ activity: "git.push", phase: "started" });
+    sharing = true;
+    diagnostics.resumeSharing();
+    writeFileSync(
+      join(root, "diagnostics", "usage-snapshot.json"),
+      JSON.stringify({
+        v: 1,
+        generatedAt: new Date().toISOString(),
+        providers: [],
+        projects: 0,
+        activeThreads: 0,
+      }),
+    );
+    diagnostics.maybeTrackDailyUsage();
+    diagnostics.trackError("main", new Error("boom"));
+    const events = queued(root);
+    expect(events.some((event) => event.event === "usage.daily")).toBe(false);
+    expect(JSON.stringify(events)).not.toContain("git.push");
+  });
+});
+
+it("clears only regular diagnostic staging files across startup, revocation and flush", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => new Response(null, { status: 204 })),
+  );
+  try {
+    for (const phase of [
+      "constructor-on",
+      "constructor-off",
+      "start",
+      "opt-out",
+      "flush",
+    ] as const) {
+      const root = makeRoot();
+      const dir = join(root, "diagnostics");
+      mkdirSync(dir, { recursive: true });
+      let sharing = phase !== "constructor-off";
+      const make = () =>
+        new BetaDiagnostics({
+          homeDir: root,
+          appVersion: "1.0.6-remote.18",
+          platform: "linux",
+          arch: "x64",
+          flavor: "remote",
+          isEnabled: () => sharing,
+          env: {},
+        });
+      const owned = [
+        `events.jsonl.trim-${process.pid + 1}`,
+        `events.jsonl.flush-${process.pid + 2}`,
+        `events.jsonl.sanitize-${process.pid + 3}`,
+      ];
+      const unrelated = [
+        "notes.txt",
+        "events.jsonl.trim-0",
+        "events.jsonl.flush-01",
+        "events.jsonl.sanitize-user",
+        "other.jsonl.trim-4321",
+      ];
+      const links = ["trim", "flush", "sanitize"].map(
+        (kind) => `events.jsonl.${kind}-${process.pid}`,
+      );
+      const target = join(root, "preserved-target.txt");
+      const seed = () => {
+        for (const name of owned)
+          writeFileSync(join(dir, name), "private customer prompt from interrupted write");
+        for (const name of unrelated) writeFileSync(join(dir, name), "preserve unrelated file");
+        mkdirSync(join(dir, `events.jsonl.trim-${process.pid + 4}`));
+        writeFileSync(target, "preserve private link target");
+        for (const name of links) symlinkSync(target, join(dir, name));
+      };
+      let diagnostics: BetaDiagnostics;
+      if (phase.startsWith("constructor")) {
+        seed();
+        if (!sharing) writeFileSync(join(dir, "events.jsonl"), "private queued content");
+        diagnostics = make();
+      } else {
+        diagnostics = make();
+        if (phase === "flush") diagnostics.track("app.start", { kind: "lifecycle" });
+        seed();
+        if (phase === "start") diagnostics.start();
+        else if (phase === "opt-out") {
+          sharing = false;
+          diagnostics.discardQueue();
+        } else await diagnostics.flush();
+      }
+      try {
+        for (const name of owned)
+          expect(existsSync(join(dir, name)), `${phase}: ${name}`).toBe(false);
+        for (const name of unrelated)
+          expect(readFileSync(join(dir, name), "utf8")).toBe("preserve unrelated file");
+        expect(lstatSync(join(dir, `events.jsonl.trim-${process.pid + 4}`)).isDirectory()).toBe(
+          true,
+        );
+        for (const name of links) expect(lstatSync(join(dir, name)).isSymbolicLink()).toBe(true);
+        expect(readFileSync(target, "utf8")).toBe("preserve private link target");
+        if (!sharing || phase !== "flush")
+          expect(existsSync(join(dir, "events.jsonl"))).toBe(false);
+      } finally {
+        await diagnostics.dispose();
+      }
+    }
+  } finally {
+    vi.unstubAllGlobals();
+  }
 });

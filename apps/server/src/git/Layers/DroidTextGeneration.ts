@@ -23,12 +23,14 @@ import {
   buildAutomationCompletionEvaluationPrompt,
   buildBranchNamePrompt,
   buildCommitMessagePrompt,
+  buildComposerPredictionPrompt,
   buildDiffSummaryPrompt,
   buildPrContentPrompt,
   buildThreadRecapPrompt,
   buildProjectDigestPrompt,
   buildThreadTitlePrompt,
   sanitizeCommitSubject,
+  sanitizeComposerPrediction,
   sanitizeDiffSummary,
   sanitizeThreadRecap,
   sanitizePrTitle,
@@ -263,6 +265,16 @@ const makeDroidTextGeneration = Effect.gen(function* () {
         }),
       );
     }),
+    generateComposerPrediction: Effect.fn("DroidTextGeneration.generateComposerPrediction")(
+      function* (input: OperationInputOf<"generateComposerPrediction">) {
+        return yield* runDroidAcpOperation(
+          "generateComposerPrediction",
+          input,
+          (input) => buildComposerPredictionPrompt({ conversation: input.conversation }),
+          (generated) => ({ suggestion: sanitizeComposerPrediction(generated.suggestion) }),
+        );
+      },
+    ),
     generateProjectDigest: Effect.fn("DroidTextGeneration.generateProjectDigest")(function* (
       input: OperationInputOf<"generateProjectDigest">,
     ) {

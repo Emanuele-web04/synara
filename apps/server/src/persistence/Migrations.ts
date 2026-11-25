@@ -1,3 +1,15 @@
+import Migration0142 from "./Migrations/142_AuthAccessOrigin.ts";
+import Migration0140 from "./Migrations/140_RemoteAccessControls.ts";
+import Migration0139 from "./Migrations/139_RemoteConnectionPreferences.ts";
+import Migration0138 from "./Migrations/138_RemoteDeviceTrust.ts";
+import {
+  classifyAccountMigrationLineage,
+  migrationTrackerFingerprint,
+  validateAccountMigrationSchema,
+  type MigrationIdentity,
+} from "./AccountMigrationLineage.ts";
+import Migration0136 from "./Migrations/136_AccountUsageSync.ts";
+import Migration0137 from "./Migrations/137_AccountUsageSyncIdentity.ts";
 /**
  * MigrationsLive - Migration runner with inline loader
  *
@@ -153,6 +165,10 @@ import Migration0134 from "./Migrations/134_ProjectionThreadsForkSourceMessage.t
 import Migration0135 from "./Migrations/135_ProjectionMessageTurnActivityIndex.ts";
 // Slots 136–140 are already released in the Remote lineage; new common migrations follow them.
 import Migration0141 from "./Migrations/141_ProjectionThreadsUsageLimitRecovery.ts";
+import Migration0143 from "./Migrations/143_UsageAnalyticsDeletedTokens.ts";
+import Migration0144 from "./Migrations/144_ProjectionThreadsPullRequestLinks.ts";
+import Migration0145 from "./Migrations/145_ProjectionThreadSessionSteering.ts";
+import Migration0146 from "./Migrations/146_AgentGatewayOperationWaves.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -304,7 +320,17 @@ export const migrationEntries = [
   [133, "ProjectionTurnsWorkspaceInitialization", Migration0133],
   [134, "ProjectionThreadsForkSourceMessage", Migration0134],
   [135, "ProjectionMessageTurnActivityIndex", Migration0135],
+  [136, "AccountUsageSync", Migration0136],
+  [137, "AccountUsageSyncIdentity", Migration0137],
+  [138, "RemoteDeviceTrust", Migration0138],
+  [139, "RemoteConnectionPreferences", Migration0139],
+  [140, "RemoteAccessControls", Migration0140],
   [141, "ProjectionThreadsUsageLimitRecovery", Migration0141],
+  [142, "AuthAccessOrigin", Migration0142],
+  [143, "UsageAnalyticsDeletedTokens", Migration0143],
+  [144, "ProjectionThreadsPullRequestLinks", Migration0144],
+  [145, "ProjectionThreadSessionSteering", Migration0145],
+  [146, "AgentGatewayOperationWaves", Migration0146],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>
@@ -335,6 +361,41 @@ export const LATEST_MIGRATION_ID = Math.max(...migrationEntries.map(([id]) => id
 const canonicalMigrationNamesById: ReadonlyMap<number, string> = new Map(
   migrationEntries.map(([id, name]) => [id, name] as const),
 );
+
+/** Released main (including v1.1.0) reserved 136–140 and recorded the common migration at 141. */
+export const isReleasedMainMigrationGap = (
+  recordedNamesById: ReadonlyMap<number, string>,
+): boolean => {
+  const releasedEntries = migrationEntries.filter(([id]) => id <= 135 || id === 141);
+  return (
+    recordedNamesById.size === releasedEntries.length &&
+    releasedEntries.every(([id, name]) => recordedNamesById.get(id) === name)
+  );
+};
+
+export const planAccountMigrationRepair = (rows: readonly MigrationIdentity[]) =>
+  classifyAccountMigrationLineage(rows, canonicalMigrationNamesById);
+
+export const inspectAccountMigrationRepair = (rows: readonly MigrationIdentity[]) =>
+  Effect.gen(function* () {
+    const fail = (cause: unknown) =>
+      new MigrationLineageError({
+        firstDivergedId: rows.find((r) => r.name.startsWith("AccountUsageSync"))?.migration_id ?? 0,
+        expectedName: "recognized account lineage and schema",
+        recordedName: cause instanceof Error ? cause.message : String(cause),
+      });
+    const plan = yield* Effect.try({ try: () => planAccountMigrationRepair(rows), catch: fail });
+    if (!plan) return null;
+    const sql = yield* SqlClient.SqlClient;
+    const columns = yield* sql<Record<string, unknown>>`PRAGMA table_info(account_usage_sync)`;
+    if (columns.length === 0) return yield* Effect.fail(fail("Missing account_usage_sync table"));
+    const values = yield* sql<Record<string, unknown>>`SELECT * FROM account_usage_sync`;
+    yield* Effect.try({
+      try: () => validateAccountMigrationSchema(columns, values, plan.requiresIdentity),
+      catch: fail,
+    });
+    return plan;
+  });
 
 const IMPORTED_SCHEMA_RECONCILIATION_MIGRATION_ID = 32;
 
@@ -500,6 +561,31 @@ export const reconcileMigrationLineage = Effect.gen(function* () {
   let recorded = yield* sql<{ readonly migration_id: number; readonly name: string }>`
     SELECT migration_id, name FROM effect_sql_migrations ORDER BY migration_id ASC
   `;
+  // Classify and validate before even a legacy rename can mutate this database.
+  // Startup holds the lifecycle lock and has persisted the recovery marker first.
+  const accountRepair = yield* inspectAccountMigrationRepair(recorded);
+  if (accountRepair) {
+    yield* sql.withTransaction(
+      Effect.gen(function* () {
+        const current =
+          yield* sql<MigrationIdentity>`SELECT migration_id, name FROM effect_sql_migrations ORDER BY migration_id ASC`;
+        if (migrationTrackerFingerprint(current) !== accountRepair.fingerprint) {
+          return yield* Effect.fail(
+            new MigrationLineageError({
+              firstDivergedId: accountRepair.resumeAfter + 1,
+              expectedName: "unchanged tracker",
+              recordedName: "tracker changed during repair",
+            }),
+          );
+        }
+        for (const row of accountRepair.removeTrackerRows) {
+          yield* sql`DELETE FROM effect_sql_migrations WHERE migration_id = ${row.migration_id} AND name = ${row.name}`;
+        }
+      }),
+    );
+    recorded =
+      yield* sql<MigrationIdentity>`SELECT migration_id, name FROM effect_sql_migrations ORDER BY migration_id ASC`;
+  }
   const recordedNamesBeforeCanonicalization = new Map(
     recorded.map((row) => [row.migration_id, row.name]),
   );

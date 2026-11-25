@@ -313,6 +313,52 @@ describe("offline SQLite compaction", () => {
     assertRetained(dbPath);
   });
 
+  it("refuses Bun before inspecting or locking the database", async () => {
+    const { directory, dbPath } = await fixture();
+    const before = await digest(dbPath);
+    const original = Object.getOwnPropertyDescriptor(process.versions, "bun");
+    Object.defineProperty(process.versions, "bun", { configurable: true, value: "1.4.4" });
+    try {
+      const output = capture();
+      expect(await runCompactDatabaseCli([dbPath], output.output)).toBe(1);
+      expect(output.errors.join("\n")).toContain("Bun is not supported");
+      expect(output.logs).toEqual([]);
+      expect(output.warnings).toEqual([]);
+      expect(await digest(dbPath)).toBe(before);
+      expect(await fs.readdir(directory)).toEqual(["state.sqlite"]);
+    } finally {
+      if (original) Object.defineProperty(process.versions, "bun", original);
+      else Reflect.deleteProperty(process.versions, "bun");
+    }
+  });
+
+  it("requires an explicit target and keeps other channel databases untouched", async () => {
+    const { directory, dbPath } = await fixture();
+    const channelPaths = await Promise.all(
+      [".synara", ".synara-beta", ".synara-remote"].map(async (channel) => {
+        const target = path.join(directory, channel, "userdata", "state.sqlite");
+        await fs.mkdir(path.dirname(target), { recursive: true });
+        await fs.copyFile(dbPath, target);
+        return target;
+      }),
+    );
+    vi.stubEnv("HOME", directory);
+    vi.stubEnv("USERPROFILE", directory);
+    vi.stubEnv("SYNARA_HOME", path.join(directory, ".synara"));
+    vi.stubEnv("SYNARA_DESKTOP_FLAVOR", "remote");
+    const before = await Promise.all(channelPaths.map(digest));
+
+    expect(await runCompactDatabaseCli([], capture().output)).toBe(2);
+    expect(await runCompactDatabaseCli(["state.sqlite"], capture().output)).toBe(2);
+    expect(await Promise.all(channelPaths.map(digest))).toEqual(before);
+
+    const remotePath = channelPaths[2]!;
+    expect(await runCompactDatabaseCli([remotePath], capture().output)).toBe(0);
+    expect(await Promise.all(channelPaths.slice(0, 2).map(digest))).toEqual(before.slice(0, 2));
+    expect((await fs.stat(remotePath)).size).toBeLessThan((await fs.stat(dbPath)).size);
+    assertRetained(remotePath);
+  });
+
   it("requires an explicit existing absolute database and rejects links", async () => {
     const output = capture();
     expect(await runCompactDatabaseCli(["state.sqlite"], output.output)).toBe(2);

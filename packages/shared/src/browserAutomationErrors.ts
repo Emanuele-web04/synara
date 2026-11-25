@@ -48,6 +48,9 @@ export const makeBrowserAutomationError = (
     ...invariant,
     ...(input.operationId === undefined ? {} : { operationId: input.operationId }),
     ...(input.tabId === undefined ? {} : { tabId: input.tabId }),
+    ...(fixedInvariant || contextualInput.cause === undefined
+      ? {}
+      : { cause: contextualInput.cause }),
   });
 };
 

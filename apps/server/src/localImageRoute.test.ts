@@ -2,7 +2,8 @@
 // Boots the same `localImageEffectRouteLayer` that `makeEffectHttpRouteLayer` wires
 // into `effectServer.ts` and exercises it through a real HTTP listener.
 import http from "node:http";
-import { mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -17,6 +18,7 @@ import { HttpRouter } from "effect/unstable/http";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { ServerAuth, type ServerAuthShape } from "./auth/Services/ServerAuth";
+import { RemoteSessionRegistryLive } from "./remoteSessions/sessionRegistry";
 import {
   resolveDefaultChatWorkspaceRoot,
   resolveDefaultGroupsWorkspaceRoot,
@@ -230,6 +232,7 @@ async function withEffectServer(
   const servicesLayer = Layer.mergeAll(
     Layer.succeed(ServerConfig, config),
     Layer.succeed(ServerAuth, makeFakeServerAuth()),
+    RemoteSessionRegistryLive,
     ...(options.providerRegistry
       ? [Layer.succeed(ProviderAdapterRegistry, options.providerRegistry)]
       : []),
@@ -287,6 +290,29 @@ describe("localImageEffectRouteLayer", () => {
       expect(previewResponse.status).toBe(200);
       expect(previewResponse.headers.get("content-type")).toContain("image/png");
       expect(previewResponse.headers.get("content-disposition")).toBeNull();
+      expect(Buffer.from(await previewResponse.arrayBuffer())).toEqual(
+        Buffer.from([0x89, 0x50, 0x4e, 0x47]),
+      );
+      for (const [range, bytes] of [
+        ["bytes=1-2", [0x50, 0x4e]],
+        ["bytes=-2", [0x4e, 0x47]],
+        ["bytes=2-", [0x4e, 0x47]],
+      ] as const) {
+        const part = await fetch(`${origin}/api/local-image?${params}`, {
+          headers: { Range: range },
+        });
+        expect(part.status).toBe(206);
+        expect(part.headers.get("accept-ranges")).toBe("bytes");
+        expect(part.headers.get("content-length")).toBe("2");
+        expect(Buffer.from(await part.arrayBuffer())).toEqual(Buffer.from(bytes));
+      }
+      for (const range of ["bytes=10-20", "bytes=3-1", "bytes=-0", "bytes=0-1,2-3", "bytes=a-b"]) {
+        const invalid = await fetch(`${origin}/api/local-image?${params}`, {
+          headers: { Range: range },
+        });
+        expect(invalid.status).toBe(416);
+        expect(invalid.headers.get("content-range")).toBe("bytes */4");
+      }
 
       params.set("download", "1");
       const downloadResponse = await fetch(`${origin}/api/local-image?${params}`);
@@ -294,6 +320,52 @@ describe("localImageEffectRouteLayer", () => {
       expect(downloadResponse.headers.get("content-disposition")).toBe(
         'attachment; filename="hero.png"',
       );
+    });
+  });
+
+  it("streams workspace videos with their video content type and byte ranges", async () => {
+    const workspace = makeTempDir("synara-effect-video-workspace-");
+    writeFileSync(path.join(workspace, ".git"), "gitdir: .git");
+    const config = makeServerConfig({ cwd: workspace });
+    const bytes = Buffer.from(Array.from({ length: 64 }, (_, index) => index));
+    const files = [
+      ["demo.mp4", "video/mp4"],
+      ["demo.m4v", "video/x-m4v"],
+      ["demo.webm", "video/webm"],
+      ["demo.mov", "video/quicktime"],
+      ["demo.ogv", "video/ogg"],
+    ] as const;
+    for (const [fileName] of files) writeFileSync(path.join(workspace, fileName), bytes);
+
+    await withEffectServer(config, localImageEffectRouteLayer, async (origin) => {
+      for (const [fileName, contentType] of files) {
+        const params = new URLSearchParams({
+          path: path.join(workspace, fileName),
+          cwd: workspace,
+        });
+        const full = await fetch(`${origin}/api/local-image?${params}`);
+        expect(full.status).toBe(200);
+        expect(full.headers.get("content-type")).toBe(contentType);
+        expect(full.headers.get("accept-ranges")).toBe("bytes");
+        expect(full.headers.get("x-content-type-options")).toBe("nosniff");
+        await full.arrayBuffer();
+
+        // Media elements probe with an open-ended range, then seek.
+        for (const [range, start, end] of [
+          ["bytes=0-", 0, 63],
+          ["bytes=16-31", 16, 31],
+          ["bytes=-8", 56, 63],
+        ] as const) {
+          const part = await fetch(`${origin}/api/local-image?${params}`, {
+            headers: { Range: range },
+          });
+          expect(part.status).toBe(206);
+          expect(part.headers.get("content-type")).toBe(contentType);
+          expect(part.headers.get("content-range")).toBe(`bytes ${start}-${end}/64`);
+          expect(part.headers.get("content-length")).toBe(String(end - start + 1));
+          expect(Buffer.from(await part.arrayBuffer())).toEqual(bytes.subarray(start, end + 1));
+        }
+      }
     });
   });
 
@@ -357,6 +429,64 @@ describe("localImageEffectRouteLayer", () => {
       params.delete("grant");
       const ungrantedResponse = await fetch(`${origin}/api/local-image?${params}`);
       expect(ungrantedResponse.status).toBe(404);
+    });
+  });
+
+  it("opens a generated PNG in a sibling Git worktree only with its canonical file grant", async () => {
+    // Keep the fixture outside temporary roots, which already permit generated images.
+    const root = makeRepoTempDir("synara-linked-preview-");
+    const workspace = path.join(root, "playjelly");
+    const worktree = path.join(root, "playjelly-test-synara");
+    mkdirSync(workspace);
+    const git = (args: string[]) =>
+      execFileSync("git", ["-C", workspace, ...args], { stdio: "pipe" });
+    git(["init", "--quiet"]);
+    git([
+      "-c",
+      "user.name=Preview fixture",
+      "-c",
+      "user.email=preview@example.invalid",
+      "-c",
+      "commit.gpgsign=false",
+      "-c",
+      "core.hooksPath=/dev/null",
+      "commit",
+      "--quiet",
+      "--allow-empty",
+      "-m",
+      "Preview fixture",
+    ]);
+    git(["worktree", "add", "--quiet", "--detach", worktree]);
+    const imagePath = path.join(worktree, "dossiers-graphique.png");
+    const unrelatedPath = path.join(root, "unrelated.png");
+    const linkPath = path.join(worktree, "image-link.png");
+    const bytes = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a7dUAAAAASUVORK5CYII=",
+      "base64",
+    );
+    writeFileSync(imagePath, bytes);
+    writeFileSync(unrelatedPath, bytes);
+    symlinkSync(imagePath, linkPath);
+    const config = makeServerConfig({ cwd: workspace });
+
+    await withEffectServer(config, localImageEffectRouteLayer, async (origin) => {
+      const params = new URLSearchParams({ path: imagePath, cwd: workspace });
+      const preview = () => fetch(`${origin}/api/local-image?${params}`);
+      expect((await preview()).status).toBe(404);
+      const grant = await createLocalPreviewGrant({ requestedPath: linkPath });
+      params.set("grant", grant.grant);
+      const response = await preview();
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toContain("image/png");
+      expect(Buffer.from(await response.arrayBuffer())).toEqual(bytes);
+
+      // Neither the containing worktree nor a subsequently retargeted link inherits the grant.
+      params.set("path", unrelatedPath);
+      expect((await preview()).status).toBe(404);
+      rmSync(linkPath);
+      symlinkSync(unrelatedPath, linkPath);
+      params.set("path", linkPath);
+      expect((await preview()).status).toBe(404);
     });
   });
 

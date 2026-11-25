@@ -104,7 +104,13 @@ import {
 } from "./provider/supervisedProcessTeardown.ts";
 import { ensureIsolatedScratchWorkspace, resolveScratchWorkspaceCwd } from "./scratchWorkspaces.ts";
 import { createLogger } from "./logger";
-import { MCP_CONNECTOR_SERVER_NAME_SUFFIX } from "@synara/shared/mcpConnectors";
+import {
+  classifyCodexStderr,
+  isCodexMultiAgentDeprecationWarning,
+  normalizeCodexProcessLine,
+  isIgnorableCodexProcessLine,
+  normalizeCodexUserVisibleErrorMessage,
+} from "@synara/shared/codexStderr";
 import { transcribeVoiceWithChatGptSession } from "./voiceTranscription.ts";
 import {
   CODEX_APP_SERVER_MAX_DISCOVERY_FRAME_BYTES,
@@ -210,6 +216,9 @@ type CodexSessionApprovalOverride = {
 export class CodexSessionAuthInvalidatedError extends Error {}
 
 interface CodexSessionContext {
+  reportedMultiAgentDeprecation?: boolean;
+  reportedMcpSubscriptionErrors?: Set<string>;
+  mcpStartupServers?: Set<string>;
   authInvalidation?: string;
   readonly autoApproveSynaraTools?: boolean;
   readonly enableComputerControl?: boolean;
@@ -422,29 +431,8 @@ const CODEX_VERSION_CHECK_MAX_OUTPUT_BYTES = 1024 * 1024;
  */
 const CODEX_VERSION_CHECK_CACHE_TTL_MS = 10 * 60 * 1000;
 
-const ANSI_ESCAPE_CHAR = String.fromCharCode(27);
-const ANSI_ESCAPE_REGEX = new RegExp(`${ANSI_ESCAPE_CHAR}\\[[0-9;]*m`, "g");
-const CODEX_STDERR_LOG_REGEX =
-  /^\d{4}-\d{2}-\d{2}T\S+\s+(TRACE|DEBUG|INFO|WARN|ERROR)\s+\S+:\s+(.*)$/;
-const BENIGN_ERROR_LOG_SNIPPETS = [
-  "state db missing rollout path for thread",
-  "state db record_discrepancy: find_thread_path_by_id_str_in_subdir, falling_back",
-];
-const BENIGN_PROCESS_OUTPUT_REGEXES = [/^(?:\^C)?Token usage:/i];
-// Codex's MCP client failing OAuth for a server from the user's own
-// config.toml (e.g. an expired Stripe grant). That is the user's Codex setup,
-// not this chat, so it stays out of the transcript; Synara's own server and
-// connectors never use Codex OAuth.
-const CODEX_MCP_OAUTH_LOG_REGEX = /\bcodex_rmcp_client::oauth\S*:.*?\bfor server ([A-Za-z0-9_.-]+)/;
 const loggedUserMcpOAuthServers = new Set<string>();
 
-function userConfiguredMcpOAuthServer(line: string): string | null {
-  const server = CODEX_MCP_OAUTH_LOG_REGEX.exec(line)?.[1];
-  if (!server) return null;
-  return server === SYNARA_MCP_SERVER_NAME || server.endsWith(MCP_CONNECTOR_SERVER_NAME_SUFFIX)
-    ? null
-    : server;
-}
 const RECOVERABLE_THREAD_RESUME_ERROR_SNIPPETS = [
   "not found",
   // Codex writes a thread's rollout on its first turn, so a thread opened and
@@ -487,19 +475,6 @@ function asString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
-function normalizeCodexProcessLine(rawLine: string): string {
-  return (
-    rawLine.includes(ANSI_ESCAPE_CHAR) ? rawLine.replaceAll(ANSI_ESCAPE_REGEX, "") : rawLine
-  ).trim();
-}
-
-function isIgnorableCodexProcessLine(line: string): boolean {
-  if (!line) {
-    return true;
-  }
-  return BENIGN_PROCESS_OUTPUT_REGEXES.some((pattern) => pattern.test(line));
-}
-
 function isCodexProtocolEnvelope(value: Record<string, unknown>): boolean {
   if (typeof value.method === "string") {
     return true;
@@ -518,20 +493,6 @@ function logIgnoredCodexStdout(rawLine: string, line: string, reason: string): v
     preview: line.slice(0, 160),
     length: rawLine.length,
   });
-}
-
-function normalizeCodexUserVisibleErrorMessage(rawMessage: string): string {
-  const message = normalizeCodexProcessLine(rawMessage);
-
-  const duplicateFunctionArgMatch = message.match(
-    /failed to parse function arguments: duplicate field `([^`]+)`/i,
-  );
-  if (duplicateFunctionArgMatch) {
-    const fieldName = duplicateFunctionArgMatch[1];
-    return `Tool call failed because the same argument was sent twice${fieldName ? ` (${fieldName})` : ""}.`;
-  }
-
-  return message;
 }
 
 export function readCodexAccountSnapshot(response: unknown): CodexAccountSnapshot {
@@ -1073,37 +1034,32 @@ export function parseCodexUserInputQuestions(
   return parsedQuestions.length > 0 ? parsedQuestions : undefined;
 }
 
-export function classifyCodexStderrLine(rawLine: string): { message: string } | null {
-  const line = normalizeCodexProcessLine(rawLine);
-  if (isIgnorableCodexProcessLine(line)) {
+// The same classifier also filters diagnostics persisted by older hosts in the web transcript.
+export function classifyCodexStderrLine(
+  rawLine: string,
+  mirroredUserConfigPath?: string,
+): { message: string; configWarning?: true; mcpSubscriptionError?: string } | null {
+  const diagnostic = classifyCodexStderr(rawLine, mirroredUserConfigPath, {
+    errorLikePlainLinesOnly: true,
+  });
+  if (diagnostic?.kind === "user-mcp-oauth") {
+    if (!loggedUserMcpOAuthServers.has(diagnostic.server)) {
+      loggedUserMcpOAuthServers.add(diagnostic.server);
+      log.warn("codex MCP OAuth failed for a server in the user's Codex config", {
+        server: diagnostic.server,
+      });
+    }
     return null;
   }
-
-  const match = line.match(CODEX_STDERR_LOG_REGEX);
-  if (match) {
-    const level = match[1];
-    if (level && level !== "ERROR") {
-      return null;
-    }
-
-    const isBenignError = BENIGN_ERROR_LOG_SNIPPETS.some((snippet) => line.includes(snippet));
-    if (isBenignError) {
-      return null;
-    }
-
-    const userMcpServer = userConfiguredMcpOAuthServer(line);
-    if (userMcpServer) {
-      if (!loggedUserMcpOAuthServers.has(userMcpServer)) {
-        loggedUserMcpOAuthServers.add(userMcpServer);
-        log.warn("codex MCP OAuth failed for a server in the user's Codex config", {
-          server: userMcpServer,
-        });
+  return diagnostic
+    ? {
+        message: diagnostic.message,
+        ...(diagnostic.configWarning ? { configWarning: diagnostic.configWarning } : {}),
+        ...(diagnostic.mcpSubscriptionError
+          ? { mcpSubscriptionError: diagnostic.mcpSubscriptionError }
+          : {}),
       }
-      return null;
-    }
-  }
-
-  return { message: normalizeCodexUserVisibleErrorMessage(line) };
+    : null;
 }
 
 export function isRecoverableThreadResumeError(error: unknown): boolean {
@@ -1812,9 +1768,13 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         turnStartParams.summary = "none";
       }
     }
-    if (input.serviceTier !== undefined) {
-      turnStartParams.serviceTier = input.serviceTier;
-    }
+    const switchingAwayFromUltrafast =
+      context.serviceTier === "ultrafast" &&
+      normalizedModel !== undefined &&
+      normalizedModel !== context.session.model;
+    const serviceTier =
+      input.serviceTier === undefined && switchingAwayFromUltrafast ? "default" : input.serviceTier;
+    if (serviceTier !== undefined) turnStartParams.serviceTier = serviceTier;
     if (input.effort) {
       turnStartParams.effort = input.effort;
     }
@@ -1839,7 +1799,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     }
     const turnId = TurnId.makeUnsafe(turnIdRaw);
 
-    if (input.serviceTier !== undefined) context.serviceTier = input.serviceTier;
+    if (serviceTier !== undefined) context.serviceTier = serviceTier;
 
     this.updateSession(context, {
       status: "running",
@@ -4271,9 +4231,23 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       const raw = chunk.toString();
       const lines = raw.split(/\r?\n/g);
       for (const rawLine of lines) {
-        const classified = classifyCodexStderrLine(rawLine);
+        const classified = classifyCodexStderrLine(rawLine, context.authTracking?.sourceConfigPath);
         if (!classified) {
           continue;
+        }
+
+        if (classified.configWarning) {
+          this.handleServerNotification(context, {
+            method: "configWarning",
+            params: { summary: classified.message, details: null },
+          });
+          continue;
+        }
+        if (classified.mcpSubscriptionError) {
+          const reported = (context.reportedMcpSubscriptionErrors ??= new Set());
+          if (reported.has(classified.mcpSubscriptionError)) continue;
+          // Bound retained server-provided strings; an unrecognized error is never suppressed.
+          if (reported.size < 32) reported.add(classified.mcpSubscriptionError);
         }
 
         this.emitErrorEvent(context, "process/stderr", classified.message);
@@ -4416,6 +4390,42 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     context: CodexSessionContext,
     notification: JsonRpcNotification,
   ): void {
+    const configSummary =
+      notification.method === "configWarning"
+        ? this.readString(notification.params, "summary")
+        : notification.method === "warning"
+          ? this.readString(notification.params, "message")
+          : undefined;
+    if (
+      configSummary &&
+      isCodexMultiAgentDeprecationWarning(configSummary) &&
+      !this.readString(notification.params, "details") &&
+      !this.readString(notification.params, "path") &&
+      this.readObject(notification.params)?.range == null
+    ) {
+      if (context.reportedMultiAgentDeprecation) return;
+      context.reportedMultiAgentDeprecation = true;
+      // All three Codex channels describe one configuration issue, regardless of arrival order.
+      const threadId = this.readString(notification.params, "threadId");
+      notification = {
+        method: "configWarning",
+        params: { summary: configSummary, details: null, ...(threadId ? { threadId } : {}) },
+      };
+    }
+    if (notification.method === "mcpServer/startupStatus/updated") {
+      const name = this.readString(notification.params, "name");
+      const status = this.readString(notification.params, "status");
+      if (name && status) {
+        const servers = (context.mcpStartupServers ??= new Set());
+        const key = `${this.readString(notification.params, "threadId") ?? ""}:${name}`;
+        // Initial stdout can arrive after stderr from that same attempt. Only a
+        // known server restarting (or becoming ready) releases the duplicate guard.
+        if (status === "ready" || (status === "starting" && servers.has(key))) {
+          context.reportedMcpSubscriptionErrors?.clear();
+        }
+        if (servers.size < 32) servers.add(key);
+      }
+    }
     const rawRoute = this.readRouteFields(notification.params);
     this.rememberCollabReceiverTurns(context, notification.params, rawRoute.turnId);
     const resolvedCollaborationRoute = this.resolveCollaborationRoute(context, notification.params);

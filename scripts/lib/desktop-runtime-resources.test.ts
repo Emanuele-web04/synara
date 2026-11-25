@@ -7,7 +7,7 @@ import { BETA_ASSET_PATHS, BRAND_ASSET_PATHS } from "./brand-assets.ts";
 import { stageDesktopRuntimeResources } from "./desktop-runtime-resources.ts";
 
 it.layer(NodeServices.layer)("stageDesktopRuntimeResources", (it) => {
-  it.effect("preserves runtime assets while leaving bundle-only files in build resources", () =>
+  it.effect("preserves runtime assets while leaving installer artwork in build resources", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
@@ -27,7 +27,8 @@ it.layer(NodeServices.layer)("stageDesktopRuntimeResources", (it) => {
       const bundleOnlyFiles = [
         "dmgly/assets/dmg-background.png",
         "dmgly/assets/app-icon.png",
-        "localizations/zh-Hans.lproj/InfoPlist.strings",
+        "cua-driver/cua-driver",
+        "cloudflared/cloudflared",
       ];
 
       for (const file of [...runtimeFiles, ...bundleOnlyFiles]) {
@@ -49,7 +50,8 @@ it.layer(NodeServices.layer)("stageDesktopRuntimeResources", (it) => {
         );
       }
       assert.equal(yield* fs.exists(path.join(runtimeResources, "dmgly")), false);
-      assert.equal(yield* fs.exists(path.join(runtimeResources, "localizations")), false);
+      assert.equal(yield* fs.exists(path.join(runtimeResources, "cua-driver")), false);
+      assert.equal(yield* fs.exists(path.join(runtimeResources, "cloudflared")), false);
       for (const file of bundleOnlyFiles) {
         assert.equal(
           yield* fs.readFileString(path.join(buildResources, file)),

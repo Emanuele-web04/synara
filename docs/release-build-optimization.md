@@ -312,6 +312,9 @@ This follows Apple's [custom notarization workflow](https://developer.apple.com/
 and [distribution packaging requirements](https://developer.apple.com/documentation/xcode/packaging-mac-software-for-distribution).
 App and DMG service waits remain sequential. Overlapping ZIP work was considered
 but deferred; the Intel validation preserves the existing finalization ordering.
+(November 2026: the update ZIP now overlaps the DMG notarization wait. In three
+signed build-only runs, DMG upload, wait and ZIP took 144–178 s of wall time
+against 186–234 s serially; see [CI setup](../.github/CI.md#macos-packaging-overlap).)
 
 No larger/paid runners or infrastructure were enabled. Existing runner classes
 remain unchanged. The default-branch producer consumes three native jobs when

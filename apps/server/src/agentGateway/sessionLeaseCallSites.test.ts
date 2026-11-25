@@ -29,7 +29,7 @@ interface LeaseSiteExpectation {
 }
 
 const LEASE_SITES: readonly LeaseSiteExpectation[] = [
-  { file: "AntigravityAdapter.ts", capabilityArguments: ["context.gatewayCapabilityInput"] },
+  { file: "AntigravityAdapter.ts", capabilityArguments: [SESSION_START_INPUT] },
   { file: "ClaudeAdapter.ts", capabilityArguments: [SESSION_START_INPUT] },
   {
     file: "CodexAdapter.ts",
@@ -156,7 +156,7 @@ describe("agent gateway lease call sites", () => {
     const enabled = { enableComputerControl: true, cwd: "/tmp/project" };
     // The start input passed straight through.
     expect(agentGatewayCapabilitiesFor(enabled)).toContain("computer:control");
-    // The projection Antigravity, Pi, and the Codex manager store instead.
+    // The projection Pi and the Codex manager store instead.
     expect(agentGatewayCapabilitiesFor(captureAgentGatewayCapabilityInput(enabled))).toContain(
       "computer:control",
     );

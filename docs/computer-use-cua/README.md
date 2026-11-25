@@ -242,6 +242,11 @@ replaced after ten seconds using the existing restart backoff. Native event-tap
 failures keep their permission-aware retry path; input stays refused until a
 listener reports ready and any required fresh observation completes.
 
+AppSnap captures one window image per request. On macOS 14 and later it uses
+ScreenCaptureKit's single-image API. On macOS 13 it waits for the capture
+stream to stop before reporting a successful screenshot. The watcher stays
+available for the next capture. Computer's live preview has its own stream.
+
 If Settings shows a switch on but the fresh check reports denied, verify the
 exact running app and signing identity. Local ad-hoc rebuilds can leave a stale
 grant. Remove and re-add that exact updated copy, then complete macOS

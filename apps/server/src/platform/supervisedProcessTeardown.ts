@@ -16,12 +16,12 @@ import {
   type CapturedProcessTreeInspection,
   type ProcessTreeKiller,
   type TerminalKillSignal,
-} from "./processTreeController";
+} from "./processTreeController.ts";
 import {
   createPreparedWindowsTeardownProcessSnapshotObserver,
   createWindowsTeardownProcessSnapshotObserver,
   type TeardownProcessChildrenSnapshotObserver,
-} from "./windowsProcessSnapshot";
+} from "./windowsProcessSnapshot.ts";
 
 const DEFAULT_TERM_GRACE_MS = 1_500;
 const DEFAULT_FORCE_EXIT_MS = 1_500;

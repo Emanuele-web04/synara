@@ -302,3 +302,62 @@ describe("transcript detach on reader gestures", () => {
     }
   });
 });
+
+describe("transcript follow when the composer changes height", () => {
+  // A composer prediction's ghost rows grow and shrink the composer like a multi-line draft;
+  // the transcript's bottom inset follows that height.
+  it("keeps a reader at the end as it grows and leaves a reader who scrolled up in place", async () => {
+    const node = document.createElement("div");
+    node.style.cssText = "height: 200px; overflow: auto";
+    const content = document.createElement("div");
+    content.style.height = "1000px";
+    node.append(content);
+    document.body.append(node);
+    const listRef = {
+      current: {
+        scrollToEnd: async () => {
+          node.scrollTop = node.scrollHeight;
+        },
+        getScrollableNode: () => node,
+      } as unknown as LegendListRef,
+    };
+    function Harness({ insetPx }: { insetPx: number }) {
+      useChatTranscriptScroll({
+        activeThreadId: ThreadId.makeUnsafe("thread"),
+        legendListRef: listRef,
+        timelineEntries: EMPTY_TIMELINE,
+        hasStreamingAssistantText: false,
+        composerTranscriptInsetPx: insetPx,
+        isInactiveSplitPane: false,
+      });
+      return null;
+    }
+    // The timeline pads its content by the inset in the same commit that changes it.
+    const setInset = async (insetPx: number) => {
+      content.style.paddingBottom = `${insetPx}px`;
+      await screen.rerender(<Harness insetPx={insetPx} />);
+      await waitForFrames();
+    };
+    const distanceFromEnd = () => node.scrollHeight - node.clientHeight - node.scrollTop;
+    const screen = await render(<Harness insetPx={0} />);
+    try {
+      node.scrollTop = node.scrollHeight;
+      await waitForFrames();
+
+      for (const insetPx of [48, 96]) {
+        await setInset(insetPx);
+        expect(distanceFromEnd()).toBeLessThan(1);
+      }
+
+      node.scrollTop = 300;
+      await waitForFrames();
+      for (const insetPx of [144, 48, 0]) {
+        await setInset(insetPx);
+        expect(node.scrollTop).toBe(300);
+      }
+    } finally {
+      await screen.unmount();
+      node.remove();
+    }
+  });
+});

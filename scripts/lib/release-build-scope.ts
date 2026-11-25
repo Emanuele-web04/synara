@@ -1,3 +1,5 @@
+// FILE: release-build-scope.ts
+// Purpose: Selects qualified release platforms without weakening publication gates.
 const platforms = [
   {
     id: "mac-arm64",
@@ -26,6 +28,16 @@ const platforms = [
     arch: "x64",
   },
   {
+    id: "linux-arm64",
+    label: "Linux arm64",
+    // node-pty and the patched Cua driver compile natively, so an arm64
+    // package needs an arm64 host; GitHub hosts that runner for public repos.
+    runner: "ubuntu-24.04-arm",
+    platform: "linux",
+    target: "AppImage",
+    arch: "arm64",
+  },
+  {
     id: "win-x64",
     label: "Windows x64",
     runner: "windows-2022",
@@ -40,10 +52,27 @@ export function resolveReleaseBuildScope(
   stage = "artifact",
   publish = false,
   cuaBenchmarkBaseline = "",
+  flavor: "production" | "beta" | "remote" = "production",
+  lane: "bridge" | "clean" = "clean",
 ) {
   if (!["artifact", "native", "icon", "js", "preflight"].includes(stage))
     throw new Error(`Unknown build stage: ${stage}`);
-  const selected = platforms.filter((entry) => platform === "all" || platform === entry.id);
+  if (lane !== "bridge" && lane !== "clean") throw new Error(`Unknown release lane: ${lane}`);
+  const knownPlatformIds = new Set<string>(platforms.map((entry) => entry.id));
+  if (platform !== "all" && !knownPlatformIds.has(platform))
+    throw new Error(`Unknown build platform: ${platform}`);
+  if (lane === "bridge" && platform === "linux-arm64")
+    throw new Error("Linux arm64 is not part of the pinned compatibility lane.");
+  if (flavor === "remote" && !["all", "mac-arm64", "linux-x64", "win-x64"].includes(platform))
+    throw new Error("Synara Remote supports mac-arm64, linux-x64 and win-x64.");
+  const selected = platforms.filter(
+    (entry) =>
+      (platform === "all" || platform === entry.id) &&
+      (flavor !== "remote" || (entry.id !== "mac-x64" && entry.id !== "linux-arm64")) &&
+      // The pinned compatibility release predates arm64 Linux support, so it
+      // must not publish an arm64 build that would read the x86_64 feed.
+      (lane !== "bridge" || entry.id !== "linux-arm64"),
+  );
   if (selected.length === 0) throw new Error(`Unknown build platform: ${platform}`);
   if (publish && (platform !== "all" || stage !== "artifact"))
     throw new Error("Publication requires all platforms and the complete artifact stage.");
@@ -60,13 +89,13 @@ export function resolveReleaseBuildScope(
   )
     throw new Error("Cua benchmark requires one native macOS platform and a full baseline commit.");
   return {
-    matrix: {
-      include: stage === "native" ? selected.filter((entry) => entry.platform !== "win") : selected,
-    },
+    mac_matrix: { include: selected.filter((entry) => entry.platform === "mac") },
+    non_mac_matrix: { include: selected.filter((entry) => entry.platform !== "mac") },
+    package_non_mac: stage === "artifact" && selected.some((entry) => entry.platform !== "mac"),
     cua_matrix: { include: selected.filter((entry) => entry.platform !== "win") },
-    prepare_cua:
-      (stage === "native" || stage === "artifact") &&
-      selected.some((entry) => entry.platform !== "win"),
+    // Artifact runs provision on their own packaging runners. The separate
+    // matrix is only needed for build-only native validation and benchmarks.
+    prepare_cua: stage === "native",
     build_icon:
       stage === "icon" ||
       (stage === "artifact" && selected.some((entry) => entry.platform === "mac")),
@@ -78,6 +107,6 @@ export function resolveReleaseBuildScope(
     // builds, packaging or publication.
     quality_gates: stage === "artifact" || stage === "preflight",
     package_artifacts: stage === "artifact",
-    build_server: stage === "artifact" && platform === "all",
+    build_server: stage === "artifact" && platform === "all" && flavor !== "remote",
   };
 }

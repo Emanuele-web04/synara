@@ -1,3 +1,4 @@
+import { claimLegacyExecutionStorage } from "./lib/hosts/executionStorage";
 // FILE: appSettings.ts
 // Purpose: Normalizes persisted UI settings and maps them to server/provider options.
 // Layer: Web settings state
@@ -29,6 +30,7 @@ import {
   type ProviderStartOptions,
   type ServerSettingsView,
   type ServerSettingsPatch,
+  type ServerUpdateSettingsInput,
 } from "@synara/contracts";
 import {
   getDefaultModel,
@@ -45,7 +47,6 @@ import type { SynaraDesktopFlavor } from "@synara/shared/desktopIdentity";
 import { codexAccountInstanceId } from "@synara/shared/providerInstances";
 import { useLocalStorage } from "./hooks/useLocalStorage";
 import { APP_SETTINGS_STORAGE_KEY } from "./appSettingsStorage";
-import { LANGUAGE_PREFERENCES, normalizeLanguagePreference } from "./i18n/locale";
 import { EnvMode } from "./components/BranchToolbar.logic";
 import { normalizeCursorModelVariantBaseId } from "./cursorModelVariants";
 import { formatProviderModelOptionName, type ProviderModelOption } from "./providerModelOptions";
@@ -370,19 +371,9 @@ const PersistedHiddenModels = Schema.Array(
 );
 
 export const AppSettingsSchema = Schema.Struct({
-  language: Schema.Unknown.pipe(
-    Schema.decodeTo(
-      Schema.Literals(LANGUAGE_PREFERENCES),
-      SchemaTransformation.transform({
-        decode: normalizeLanguagePreference,
-        encode: (value): unknown => value,
-      }),
-    ),
-    withDefaults(() => "system" as const),
-  ),
   claudeBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   claudeEnableArtifacts: Schema.Boolean.pipe(withDefaults(() => false)),
-  claudeConfirmColdCacheResume: Schema.Boolean.pipe(withDefaults(() => false)),
+  claudeConfirmColdCacheResume: Schema.Boolean.pipe(withDefaults(() => true)),
   // Server-backed first-run marker; see ServerSettings.onboardingCompletedAt.
   onboardingCompletedAt: Schema.NullOr(Schema.String).pipe(withDefaults((): string | null => null)),
   claudeHomePath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
@@ -486,6 +477,9 @@ export const AppSettingsSchema = Schema.Struct({
   // (and the surfaces derived from it: Kanban, Activity, project picker). Runs stay
   // listed on the automation's page and findable via search either way.
   showAutomationRunThreads: Schema.Boolean.pipe(withDefaults(() => true)),
+  // Nest threads an agent created from another thread (synara_create_thread) under that
+  // creator thread in the project sidebar tree.
+  nestAgentCreatedThreads: Schema.Boolean.pipe(withDefaults(() => false)),
   // Local-only UI preferences: which optional sections of the chat Environment panel are
   // shown. The git block (Changes/Worktree/branch/Commit and Push) is always visible; these
   // toggle the sections beneath it via the panel header's gear menu.
@@ -535,6 +529,11 @@ export const AppSettingsSchema = Schema.Struct({
   // Started threads: show reasoning effort as a stepped slider card in the composer's
   // model menu instead of radio rows. New chats keep the split model/effort pickers.
   composerEffortSlider: Schema.Boolean.pipe(withDefaults(() => true)),
+  // After a turn settles, show one predicted next message as ghost text in the
+  // empty composer (Tab inserts it as a draft).
+  showComposerSuggestions: Schema.Boolean.pipe(withDefaults(() => true)),
+  // Off hides the early "Approaching rate limit" banner. A reached limit still shows.
+  showRateLimitWarnings: Schema.Boolean.pipe(withDefaults(() => true)),
   // Desktop on macOS: the message trail moves with the Mac's audio output,
   // the microphone, or both. Opt-in because the first use asks macOS for access.
   messageTrailAudioSource: MessageTrailAudioSource.pipe(withDefaults(() => "off" as const)),
@@ -619,8 +618,14 @@ export const AppSettingsSchema = Schema.Struct({
     withDefaults(() => "repository" as const),
   ),
   sourceControlCustomInstructions: SourceControlCustomInstructions.pipe(withDefaults(() => "")),
+  // Server-backed: end the description of a pull request Synara creates with a
+  // "Created with Synara" link.
+  gitAttributionEnabled: Schema.Boolean.pipe(withDefaults(() => true)),
   uiFontFamily: Schema.String.check(Schema.isMaxLength(256)).pipe(withDefaults(() => "")),
   defaultProvider: PersistedProviderKind.pipe(withDefaults(() => "codex" as const)),
+  // Local-only: the account (provider instance) of `defaultProvider` that new chats
+  // start on. Empty follows the agent's default, including a legacy Codex selection.
+  defaultProviderInstanceId: Schema.String.pipe(withDefaults(() => "")),
   // Local-only UI preference: providers explicitly hidden from the composer picker.
   // The active/locked provider for a thread is always shown regardless, so users
   // never get stuck on a thread whose provider they later chose to hide.
@@ -1126,6 +1131,92 @@ export function getProviderInstanceOptions(
     });
 }
 
+export interface NewChatDefault {
+  readonly defaultProvider: ProviderKind;
+  /** Null means the agent's default account. */
+  readonly defaultProviderInstanceId: ProviderInstanceId | null;
+}
+
+export type NewChatDefaultSettings = Pick<
+  AppSettings,
+  | "codexAccounts"
+  | "codexHomePath"
+  | "defaultProvider"
+  | "defaultProviderInstanceId"
+  | "providerInstances"
+  | "selectedCodexAccountId"
+> &
+  Partial<Pick<AppSettings, "disabledProviders">>;
+
+// One shared object per (agent, account) pair, so equal defaults are the same
+// reference and memo dependencies on them survive unrelated settings writes.
+const newChatDefaultByKey = new Map<string, NewChatDefault>();
+const newChatDefaultBySettings = new WeakMap<NewChatDefaultSettings, NewChatDefault>();
+
+function internNewChatDefault(
+  defaultProvider: ProviderKind,
+  defaultProviderInstanceId: ProviderInstanceId | null,
+): NewChatDefault {
+  const key = `${defaultProvider}\u0000${defaultProviderInstanceId ?? ""}`;
+  let newChatDefault = newChatDefaultByKey.get(key);
+  if (!newChatDefault) {
+    newChatDefault = Object.freeze({ defaultProvider, defaultProviderInstanceId });
+    newChatDefaultByKey.set(key, newChatDefault);
+  }
+  return newChatDefault;
+}
+
+/**
+ * The agent and account new chats fall back to when nothing else picks one. The
+ * stored account is dropped when it no longer exists, is switched off, belongs to
+ * another agent, or its agent is disabled. Equal results are the same object.
+ */
+export function resolveNewChatDefault(settings: NewChatDefaultSettings): NewChatDefault {
+  const cached = newChatDefaultBySettings.get(settings);
+  if (cached) return cached;
+  const defaultProvider = settings.defaultProvider;
+  const storedInstanceId = settings.defaultProviderInstanceId?.trim();
+  const legacyInstanceId =
+    !storedInstanceId && defaultProvider === "codex"
+      ? resolveDefaultProviderInstanceId(settings, defaultProvider)
+      : null;
+  const requestedInstanceId =
+    storedInstanceId || (legacyInstanceId === defaultProvider ? null : legacyInstanceId);
+  let defaultProviderInstanceId: ProviderInstanceId | null = null;
+  if (requestedInstanceId && !settings.disabledProviders?.includes(defaultProvider)) {
+    const account = getProviderInstanceOptions(settings).find(
+      (option) => option.instanceId === requestedInstanceId,
+    );
+    if (account && account.enabled && account.provider === defaultProvider) {
+      defaultProviderInstanceId = account.instanceId;
+    }
+  }
+  const resolved = internNewChatDefault(defaultProvider, defaultProviderInstanceId);
+  newChatDefaultBySettings.set(settings, resolved);
+  return resolved;
+}
+
+/** A new-chat default pinned to `provider` on its default account, for explicit provider picks. */
+export function newChatDefaultForProvider(provider: ProviderKind): NewChatDefault {
+  return internNewChatDefault(provider, null);
+}
+
+/**
+ * The settings default account for a new chat on `provider`. It applies only when
+ * `provider` is the settings default agent and no project default chose the
+ * provider; otherwise the caller keeps its own (or the agent's default) account.
+ */
+export function newChatDefaultInstanceIdFor(
+  newChatDefault: NewChatDefault | null | undefined,
+  provider: ProviderKind | null | undefined,
+  projectDefaultProvider: ProviderKind | null | undefined,
+): ProviderInstanceId | null {
+  if (!newChatDefault || projectDefaultProvider || provider !== newChatDefault.defaultProvider) {
+    return null;
+  }
+  return newChatDefault.defaultProviderInstanceId;
+}
+
 export function getUnsupportedProviderInstanceOptions(
   settings: Pick<AppSettings, "providerInstances">,
 ): UnsupportedProviderInstanceOption[] {
@@ -1621,6 +1712,7 @@ export function serverSettingsToAppSettings(settings: ServerSettingsView): Parti
     textGenerationModel: settings.textGenerationModelSelection.model,
     sourceControlWritingStyle: settings.sourceControlWritingStyle,
     sourceControlCustomInstructions: settings.sourceControlCustomInstructions,
+    gitAttributionEnabled: settings.gitAttributionEnabled,
     onboardingCompletedAt: settings.onboardingCompletedAt ?? null,
   };
 }
@@ -1759,6 +1851,9 @@ export function appSettingsPatchToServerSettingsPatch(
   }
   if (patch.sourceControlCustomInstructions !== undefined) {
     serverPatch.sourceControlCustomInstructions = patch.sourceControlCustomInstructions;
+  }
+  if (hasOwn(patch, "gitAttributionEnabled")) {
+    serverPatch.gitAttributionEnabled = Boolean(patch.gitAttributionEnabled);
   }
   if (
     hasOwn(patch, "textGenerationModel") ||
@@ -1948,7 +2043,7 @@ function isServerSettingsPatchEmpty(patch: ServerSettingsPatch): boolean {
 
 export function buildInitialServerSettingsMigrationPatch(
   settings: AppSettings,
-): ServerSettingsPatch {
+): ServerUpdateSettingsInput {
   const patch: Partial<Mutable<AppSettings>> = {};
   const normalizedSettings = normalizeAppSettings(settings);
   const defaults = DEFAULT_APP_SETTINGS;
@@ -2013,11 +2108,14 @@ export function buildInitialServerSettingsMigrationPatch(
     }
   }
 
-  if (Object.keys(normalizedSettings.providerInstances).length > 0) {
-    patch.providerInstances = normalizedSettings.providerInstances;
-  }
-
-  return appSettingsPatchToServerSettingsPatch(patch);
+  const legacyProviderInstances = normalizedSettings.providerInstances;
+  const { providers: legacyProviders, ...serverPatch } =
+    appSettingsPatchToServerSettingsPatch(patch);
+  return {
+    ...serverPatch,
+    ...(legacyProviders !== undefined ? { legacyProviders } : {}),
+    ...(Object.keys(legacyProviderInstances).length > 0 ? { legacyProviderInstances } : {}),
+  };
 }
 
 // After the initial server migration, browser storage must never hold plaintext
@@ -2092,7 +2190,9 @@ export function normalizeInitialStoredAppSettingsForServerMigration(
   migrationCompleted: boolean,
 ): AppSettings {
   const normalized = normalizeAppSettings(settings);
-  return migrationCompleted ? normalizeStoredAppSettings(normalized) : normalized;
+  return migrationCompleted
+    ? normalizeStoredAppSettings(normalized)
+    : { ...normalized, openCodeServerPassword: settings.openCodeServerPassword };
 }
 
 export function getCustomModelsForProvider(
@@ -2725,6 +2825,9 @@ function resolveAppSettings(
   return settings;
 }
 
+let lastNormalizedLocalSettingsRef: AppSettings | null = null;
+let lastNormalizedMigrationCompleted: boolean | null = null;
+
 export function useAppSettings() {
   const queryClient = useQueryClient();
   const serverSettingsQuery = useQuery(serverSettingsQueryOptions());
@@ -2735,7 +2838,7 @@ export function useAppSettings() {
   );
   const normalizedStoredSettingsRef = useRef(false);
   const serverSettingsMutationQueueRef = useRef<Promise<void>>(Promise.resolve());
-  const pendingServerSettingsMigrationPatchRef = useRef<ServerSettingsPatch | null>(null);
+  const pendingServerSettingsMigrationPatchRef = useRef<ServerUpdateSettingsInput | null>(null);
   const enqueueServerSettingsMutation = useCallback(
     <Result>(mutation: () => Promise<Result>): Promise<Result> => {
       const queued = serverSettingsMutationQueueRef.current.then(
@@ -2759,22 +2862,39 @@ export function useAppSettings() {
       return;
     }
     normalizedStoredSettingsRef.current = true;
+    const migrationCompleted = hasCompletedServerSettingsMigration();
+    if (
+      lastNormalizedLocalSettingsRef === localSettings &&
+      lastNormalizedMigrationCompleted === migrationCompleted
+    ) {
+      return;
+    }
 
     setSettings((previous) => {
-      const normalized = normalizeAppSettings(previous);
-      const migrationCompleted = hasCompletedServerSettingsMigration();
-      if (!migrationCompleted) {
+      const currentMigrationCompleted = hasCompletedServerSettingsMigration();
+      if (!currentMigrationCompleted) {
         pendingServerSettingsMigrationPatchRef.current =
-          buildInitialServerSettingsMigrationPatch(normalized);
+          buildInitialServerSettingsMigrationPatch(previous);
       }
       // Legacy localStorage may be the only remaining plaintext source until
       // the server confirms migration; redact it immediately after that write.
-      return normalizeInitialStoredAppSettingsForServerMigration(normalized, migrationCompleted);
+      const next = normalizeInitialStoredAppSettingsForServerMigration(
+        previous,
+        currentMigrationCompleted,
+      );
+      lastNormalizedLocalSettingsRef = next;
+      lastNormalizedMigrationCompleted = currentMigrationCompleted;
+      return next;
     });
-  }, [setSettings]);
+  }, [localSettings, setSettings]);
 
   useEffect(() => {
-    if (!serverSettingsQuery.data || serverSettingsMigrationInFlight) {
+    if (
+      !serverSettingsQuery.data ||
+      serverSettingsMigrationInFlight ||
+      !globalThis.localStorage ||
+      !claimLegacyExecutionStorage(globalThis.localStorage)
+    ) {
       return;
     }
     if (hasCompletedServerSettingsMigration()) {
@@ -2796,6 +2916,15 @@ export function useAppSettings() {
       ensureNativeApi().server.updateSettings(migrationPatch),
     )
       .then((nextSettings) => {
+        // Older controllers can ignore the import fields. Only an authoritative
+        // receipt allows us to remove the only local copy of imported secrets.
+        if (
+          (migrationPatch.legacyProviders !== undefined ||
+            migrationPatch.legacyProviderInstances !== undefined) &&
+          nextSettings.legacyProviderImportAcknowledged !== true
+        ) {
+          return;
+        }
         queryClient.setQueryData(serverQueryKeys.settings(), nextSettings);
         globalThis.localStorage?.setItem(SERVER_SETTINGS_MIGRATION_STORAGE_KEY, "1");
         pendingServerSettingsMigrationPatchRef.current = null;
@@ -2833,9 +2962,21 @@ export function useAppSettings() {
   const updateSettingsAndWait = async (patch: Partial<AppSettings>): Promise<void> => {
     const providerInstancesBeforePatch =
       patch.providerInstances !== undefined ? localSettings.providerInstances : undefined;
-    // The pending migration ref retains the one plaintext snapshot that still
-    // needs to reach the server; browser state and storage stay redacted.
-    setSettings((prev) => applyLocalAppSettingsPatch(prev, patch));
+    setSettings((previous) => {
+      const next = applyLocalAppSettingsPatch(previous, patch);
+      if (hasCompletedServerSettingsMigration()) return next;
+      // Keep the existing import source through unrelated local edits until the
+      // server acknowledges it. Newly entered credentials still stay server-only.
+      return {
+        ...next,
+        ...(patch.providerInstances === undefined
+          ? { providerInstances: previous.providerInstances }
+          : {}),
+        ...(patch.openCodeServerPassword === undefined
+          ? { openCodeServerPassword: previous.openCodeServerPassword }
+          : {}),
+      };
+    });
     await enqueueServerSettingsMutation(async () => {
       const currentServerSettings =
         queryClient.getQueryData<ServerSettingsView>(serverQueryKeys.settings()) ??

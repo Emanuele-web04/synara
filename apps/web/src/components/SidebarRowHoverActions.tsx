@@ -4,7 +4,7 @@
 // Exports: SidebarRowHoverActions
 
 import type { ReactNode } from "react";
-import { cn } from "~/lib/utils";
+import { RowHoverActions } from "./RowHoverActions";
 
 export function SidebarRowHoverActions({
   threadId,
@@ -14,14 +14,8 @@ export function SidebarRowHoverActions({
   children: ReactNode;
 }) {
   return (
-    <div
-      data-testid={`thread-hover-actions-${threadId}`}
-      className={cn(
-        "pointer-events-none absolute inset-y-0 right-0 my-auto inline-flex items-center",
-        "opacity-0 transition-opacity group-hover/thread-row:pointer-events-auto group-hover/thread-row:opacity-100 group-focus-within/thread-row:pointer-events-auto group-focus-within/thread-row:opacity-100",
-      )}
-    >
+    <RowHoverActions group="thread-row" data-testid={`thread-hover-actions-${threadId}`}>
       {children}
-    </div>
+    </RowHoverActions>
   );
 }

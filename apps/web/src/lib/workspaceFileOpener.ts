@@ -139,8 +139,9 @@ export function resolveWorkspaceFileOpenTarget(
  * Out-of-workspace fallback for surfaces that can preview binary files: a
  * session that starts before its chat workspace exists runs in a scratch
  * directory under the OS temp dir, and the agent references those files by
- * absolute path. Images and PDFs stream through the allowlisted local-image
- * route (which also serves the scratch root), so they can still open in-app.
+ * absolute path. Images, videos and PDFs stream through the allowlisted
+ * local-image route (which also serves the scratch root), so they can still
+ * open in-app.
  * Anything else returns null — the text file-read RPC only accepts
  * workspace-relative paths, so those references fall back to the external
  * editor.
@@ -204,7 +205,7 @@ export function prefetchWorkspaceFile(
   workspaceRoot: string,
   relativePath: string,
 ): void {
-  // Images and PDFs stream through the local-image HTTP route, so there is no
+  // Images, videos and PDFs stream through the local-image HTTP route, so there is no
   // text read to warm and no syntax highlighter to load.
   if (isSupportedLocalPreviewFilePath(relativePath)) {
     return;

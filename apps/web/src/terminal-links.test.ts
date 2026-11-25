@@ -54,6 +54,53 @@ describe("extractTerminalLinks", () => {
       },
     ]);
   });
+
+  it("keeps the drive letter on Windows paths written with forward slashes", () => {
+    const links = extractTerminalLinks("open C:/Users/julius/project/src/main.ts:12");
+    expect(links).toEqual([
+      {
+        kind: "path",
+        text: "C:/Users/julius/project/src/main.ts:12",
+        start: 5,
+        end: 43,
+      },
+    ]);
+    expect(resolvePathLinkTarget(links[0]!.text, "C:\\Users\\julius\\project")).toBe(
+      "C:/Users/julius/project/src/main.ts:12",
+    );
+  });
+
+  it("leaves backslash Windows paths and POSIX paths unchanged", () => {
+    const line =
+      "C:\\Users\\julius\\project\\src\\main.ts:12 and /Users/julius/project/src/main.ts:12 from host:/var/www/site";
+    expect(extractTerminalLinks(line)).toEqual([
+      {
+        kind: "path",
+        text: "C:\\Users\\julius\\project\\src\\main.ts:12",
+        start: 0,
+        end: 38,
+      },
+      {
+        kind: "path",
+        text: "/Users/julius/project/src/main.ts:12",
+        start: 43,
+        end: 79,
+      },
+      {
+        kind: "path",
+        text: "/var/www/site",
+        start: 90,
+        end: 103,
+      },
+    ]);
+  });
+
+  it("does not read the end of a host name as a drive", () => {
+    expect(extractTerminalLinks("docker cp web-a:/app/x git@h:/repo")).toEqual([
+      { kind: "path", text: "/app/x", start: 16, end: 22 },
+      { kind: "path", text: "/repo", start: 29, end: 34 },
+    ]);
+  });
 });
 
 describe("resolvePathLinkTarget", () => {

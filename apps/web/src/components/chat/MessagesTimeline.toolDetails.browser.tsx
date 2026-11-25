@@ -13,7 +13,6 @@ import { formatTimestamp } from "../../timestampFormat";
 import { deriveTimelineEntries, type TimelineEntry } from "../../workLog";
 import { MessagesTimeline } from "./MessagesTimeline";
 import { TimelineWorkEntryRow } from "./TimelineWorkEntryRow";
-import { BackgroundTaskRow, BackgroundTaskStopContext } from "./BackgroundTaskRow";
 
 function ToolDetailsTimeline({ entries }: { entries?: TimelineEntry[] }) {
   return (
@@ -110,44 +109,6 @@ async function settleLayout(): Promise<void> {
 }
 
 describe("MessagesTimeline tool details", () => {
-  it("updates one background row through completion and sends Stop to the running task", async () => {
-    const host = createTimelineHost();
-    const onStop = vi.fn();
-    const task = {
-      taskId: "background-command",
-      taskType: "local_bash",
-      description: "Delayed echo",
-      command: "sleep 20 && echo done",
-      status: "running" as const,
-      startedAt: "2026-10-10T00:00:00Z",
-      completedAt: null,
-      exitCode: null,
-    };
-    const view = (next: Parameters<typeof BackgroundTaskRow>[0]["task"]) => (
-      <BackgroundTaskStopContext.Provider value={onStop}>
-        <BackgroundTaskRow task={next} fontSizePx={13} />
-      </BackgroundTaskStopContext.Provider>
-    );
-    const screen = await render(view(task), { container: host });
-    try {
-      const row = host.querySelector("[data-background-task='background-command']");
-      const button = host.querySelector<HTMLButtonElement>("button");
-      expect(button?.textContent).toContain("Stop");
-      button?.click();
-      expect(onStop).toHaveBeenCalledWith("background-command");
-      await screen.rerender(
-        view({ ...task, status: "finished", completedAt: "2026-10-10T00:00:20Z", exitCode: 0 }),
-      );
-      expect(host.querySelector("[data-background-task='background-command']")).toBe(row);
-      expect(host.textContent).toContain("finished");
-      expect(host.textContent).toContain("20s");
-      expect(host.querySelector("button")).toBeNull();
-    } finally {
-      await screen.unmount();
-      host.remove();
-    }
-  });
-
   afterEach(() => {
     document.body.innerHTML = "";
   });
@@ -239,6 +200,8 @@ describe("MessagesTimeline tool details", () => {
             turnId: newTurn,
             tone: "tool",
             label: "Current tool",
+            // Running, so the working indicator below the request wears it.
+            toolStatus: "running",
             createdAt: "2026-09-07T00:02:02Z",
           },
         ],
@@ -354,17 +317,11 @@ describe("MessagesTimeline tool details", () => {
     const screen = await render(<LiveActivityTimeline />, { container: host });
 
     try {
-      expect(document.body.textContent ?? "").toContain("Running bun install");
-      expect(document.body.textContent ?? "").toContain("Active");
-      expect(document.body.textContent ?? "").toContain("2m 14s elapsed");
-      expect(document.body.textContent ?? "").toContain("42%");
-      expect(document.body.textContent ?? "").not.toContain("Resolving packages");
+      // A running call reads like any tool call; timing waits in the details.
       const displayText = document.querySelector("[data-work-entry-display-text='true']");
-      const activityMeta = document.querySelector("[data-live-activity-meta='true']");
-      expect(displayText?.closest("p")).toBe(activityMeta?.closest("p"));
-      expect(displayText?.closest("p")?.textContent ?? "").toContain(
-        "Running bun install · Active",
-      );
+      expect(displayText?.closest("p")?.textContent ?? "").toBe("Running bun install");
+      expect(document.querySelector("[data-live-activity-meta='true']")).toBeNull();
+      expect(document.body.textContent ?? "").not.toContain("Resolving packages");
 
       const trigger = document.querySelector<HTMLButtonElement>(
         '[data-tool-detail-trigger="true"]',
@@ -375,6 +332,7 @@ describe("MessagesTimeline tool details", () => {
       await expect.poll(() => document.body.textContent ?? "").toContain("Resolving packages");
       expect(document.body.textContent ?? "").toContain("Activity");
       expect(document.body.textContent ?? "").toContain("Running tool");
+      expect(document.body.textContent ?? "").toMatch(/Elapsed\s*2m 1\ds/);
       expect(document.body.textContent ?? "").toContain("42%");
       for (const time of document.querySelectorAll<HTMLTimeElement>("time[datetime]")) {
         expect(time.textContent).toBe(formatTimestamp(time.dateTime, "24-hour"));

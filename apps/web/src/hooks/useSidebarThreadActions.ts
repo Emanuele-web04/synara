@@ -28,6 +28,10 @@ import {
   useProjectAgentSummariesStore,
 } from "../components/chat/project/useProjectAgentSummaries";
 import { toastManager } from "../components/ui/toast";
+import {
+  showUndoToast,
+  THREAD_UNDO_TOAST_DURATION_MS as ARCHIVE_UNDO_TOAST_DURATION_MS,
+} from "../lib/threadUndoToast";
 import { deleteActiveThreadFromClient } from "../lib/activeThreadDelete";
 import { releaseOrphanedWorktreeAfterArchive } from "../lib/archiveThreadWorktreeCleanup";
 import { reconcileDeletedThreadsFromClient } from "../lib/deletedThreadClientReconciliation";
@@ -68,7 +72,6 @@ import { useThreadSelectionStore } from "../threadSelectionStore";
 import type { Project, SidebarThreadSummary } from "../types";
 import { t, useTranslation } from "~/i18n";
 
-const ARCHIVE_UNDO_TOAST_DURATION_MS = 8000;
 /**
  * How long a confirmed settle override may outlive its projection push. Well
  * past normal push latency: the expiry is a last resort against a lost or
@@ -480,26 +483,18 @@ export function useSidebarThreadActions(input: {
         });
       void updateSettled(isSettled).then((confirmed) => {
         if (!confirmed || !isSettled) return;
-        toastManager.add({
-          id: `done-undo:${threadId}:${randomUUID()}`,
-          timeout: 0,
-          data: {
-            allowCrossThreadVisibility: true,
-            dismissAfterVisibleMs: ARCHIVE_UNDO_TOAST_DURATION_MS,
-            archiveUndo: {
-              message: t("workspace:markedAsDone"),
-              onUndo: async () => {
-                const restored = await updateSettled(false);
-                if (restored && returnToThreadOnUndo) {
-                  void navigate({
-                    to: "/$threadId",
-                    params: { threadId },
-                    replace: true,
-                  });
-                }
-                return restored;
-              },
-            },
+        showUndoToast(`done-undo:${threadId}:${randomUUID()}`, {
+          message: t("workspace:markedAsDone"),
+          onUndo: async () => {
+            const restored = await updateSettled(false);
+            if (restored && returnToThreadOnUndo) {
+              void navigate({
+                to: "/$threadId",
+                params: { threadId },
+                replace: true,
+              });
+            }
+            return restored;
           },
         });
       });
@@ -965,7 +960,7 @@ export function useSidebarThreadActions(input: {
   );
 
   const confirmAndArchiveThread = useCallback(
-    async (threadId: ThreadId) => {
+    async (threadId: ThreadId, isAvailable?: () => boolean) => {
       const thread = sidebarThreadSummaryById[threadId];
       if (!thread) return;
       if (appSettings.confirmThreadArchive) {
@@ -979,6 +974,8 @@ export function useSidebarThreadActions(input: {
           : await showConfirmDialogFallback(confirmationMessage);
         if (!confirmed) return;
       }
+      if (isAvailable && !isAvailable())
+        throw new Error("This computer is no longer available. Reconnect before archiving.");
       await archiveThreadWithUndo(threadId);
     },
     [archiveThreadWithUndo, appSettings.confirmThreadArchive, sidebarThreadSummaryById, t],
@@ -1179,7 +1176,9 @@ export function useSidebarThreadActions(input: {
   return {
     pinnedThreadIds,
     pinnedThreadIdSet,
+    setThreadPinned,
     toggleThreadPinned,
+    setThreadSettled,
     setThreadSettledWithToast,
     setThreadSnoozedUntil,
     snoozeThread,

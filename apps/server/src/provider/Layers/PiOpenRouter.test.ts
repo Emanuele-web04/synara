@@ -1,3 +1,4 @@
+import { importTestPiPackage } from "../testing/piSdkFixture.ts";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -10,6 +11,23 @@ import { ModelRuntime, ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { ServerConfig } from "../../config.ts";
 import { PiAdapter } from "../Services/PiAdapter.ts";
 import { makePiAdapterLive, refreshPiOpenRouterModels } from "./PiAdapter.ts";
+
+// Lifecycle tests replace the selected CLI's transport here, while retaining the real SDK.
+vi.mock("../piSdkImports.ts", async (importOriginal) => {
+  const loader = await importOriginal<typeof import("../piSdkImports.ts")>();
+  const importAi = loader.makePiPackageImporter(
+    import.meta.resolve("@earendil-works/pi-coding-agent"),
+  );
+  return {
+    ...loader,
+    resolvePiInstallation: async () => ({
+      importPackage: (specifier: string) =>
+        specifier === "@earendil-works/pi-coding-agent"
+          ? import("@earendil-works/pi-coding-agent")
+          : importAi(specifier),
+    }),
+  };
+});
 
 const captured = vi.hoisted(() => ({ model: undefined as unknown }));
 vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
@@ -114,12 +132,12 @@ it("does not fetch for absent auth, custom endpoints, or extension-owned catalog
     authPath: path.join(dir, "auth.json"),
     modelsPath: path.join(dir, "models.json"),
   });
-  await refreshPiOpenRouterModels(runtime);
+  await refreshPiOpenRouterModels(runtime, importTestPiPackage);
   expect(request).not.toHaveBeenCalled();
   await runtime.setRuntimeApiKey("openrouter", "test-only");
   runtime.registerProvider("openrouter", { baseUrl: "https://custom.example/v1", models: [] });
   await runtime.refresh({ allowNetwork: false });
-  await refreshPiOpenRouterModels(runtime);
+  await refreshPiOpenRouterModels(runtime, importTestPiPackage);
   expect(request).not.toHaveBeenCalled();
   expect(
     new ModelRegistry(runtime).getAll().filter((model) => model.provider === "openrouter"),
@@ -136,7 +154,10 @@ it("uses the selected instance environment for offline discovery", async () => {
     modelsPath: path.join(firstDir, "models.json"),
   });
   await first.setRuntimeApiKey("openrouter", "test-only");
-  await refreshPiOpenRouterModels(first, { environment: {}, instanceId: "pi_work" });
+  await refreshPiOpenRouterModels(first, importTestPiPackage, {
+    environment: {},
+    instanceId: "pi_work",
+  });
   expect(request).toHaveBeenCalledTimes(1);
 
   request.mockClear();
@@ -147,7 +168,7 @@ it("uses the selected instance environment for offline discovery", async () => {
     modelsPath: path.join(secondDir, "models.json"),
   });
   await second.setRuntimeApiKey("openrouter", "test-only");
-  await refreshPiOpenRouterModels(second, {
+  await refreshPiOpenRouterModels(second, importTestPiPackage, {
     environment: { PI_OFFLINE: "1" },
     instanceId: "pi_work",
   });
@@ -173,7 +194,7 @@ it("preserves models.json overrides over live metadata", async () => {
     authPath: path.join(dir, "auth.json"),
     modelsPath: path.join(dir, "models.json"),
   });
-  await refreshPiOpenRouterModels(runtime);
+  await refreshPiOpenRouterModels(runtime, importTestPiPackage);
   expect(runtime.getModel("openrouter", "vendor/new-model")).toMatchObject({
     contextWindow: 8192,
     maxTokens: 1024,

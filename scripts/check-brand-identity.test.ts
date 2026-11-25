@@ -24,6 +24,30 @@ const releaseAttribution = `**A review of the Synara codebase found an analytics
 const inAppReleaseAttribution = `"A review of the Synara codebase found an analytics configuration that came from the original ${firstSpacedDisplayName} codebase when Synara was created as a clone in March.",`;
 
 describe("brand identity guard", () => {
+  it("keeps upstream remote provenance scoped to one exact attribution", () => {
+    const path = "docs/implementation/cloudflare-remote/UPSTREAM-COMPATIBILITY.md";
+    const section = "# Upstream managed-connection compatibility";
+    const attribution = `Read-only upstream: [upstream repository](https://github.com/pingdotgg/${firstName}/tree/d15210cd3da79f9a1a495a6309d912d76362a046), commit \`d15210cd3da79f9a1a495a6309d912d76362a046\`, 2026-09-28. Required references read: \`docs/internals/${shortName}-connect.md\`, \`docs/operations/connect-setup.md\`, \`docs/user/remote-access.md\`, \`infra/relay/README.md\`. Followed \`ManagedEndpointProvider.ts\`, \`ManagedEndpointRuntime.ts\`, and shared \`relayClient.ts\`. MIT, Copyright 2026 ${companyDisplayName} Inc. Patterns adapted; no source copied at this checkpoint.`;
+    expect(findBrandIdentityViolations([{ path, contents: `${section}\n${attribution}` }])).toEqual(
+      [],
+    );
+    expect(
+      findBrandIdentityViolations([
+        { path, contents: `${section}\n${attribution}\n${attribution}` },
+      ]),
+    ).toHaveLength(1);
+    expect(
+      findBrandIdentityViolations([
+        { path: "docs/product.md", contents: `${section}\n${attribution}` },
+      ]),
+    ).toHaveLength(1);
+    expect(
+      findBrandIdentityViolations([
+        { path, contents: `${section}\n${attribution}\nWelcome to ${firstDisplayName}` },
+      ]),
+    ).toHaveLength(1);
+  });
+
   it("scans owned files while ignoring initialized and absent gitlinks", () => {
     const cwd = mkdtempSync(join(tmpdir(), "synara-brand-"));
     const git = (...args: string[]) => execFileSync("git", args, { cwd, encoding: "utf8" }).trim();

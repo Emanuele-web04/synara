@@ -23,19 +23,7 @@ export function cuaBuildFlags(env) {
   );
 }
 
-export function collectCuaCacheInputs(root, env = process.env) {
-  // Compiler paths/wrappers may change bytes at an unchanged path. The release
-  // cache supports the selected runner toolchain, not arbitrary wrappers.
-  for (const key of Object.keys(env)) {
-    if (
-      /^(RUSTC($|_)|RUSTDOC$|CC($|_)|CXX($|_)|AR($|_)|CARGO_BUILD_(RUSTC|RUSTC_WRAPPER|RUSTC_WORKSPACE_WRAPPER)$|CARGO_TARGET_.*_LINKER$)/.test(
-        key,
-      ) &&
-      env[key]
-    )
-      throw new Error(`Release Cua cache does not support toolchain override ${key}.`);
-  }
-  const output = (command, args) => execFileSync(command, args, { encoding: "utf8" }).trim();
+export function collectCuaFileFingerprints(root, platform = process.platform) {
   const hashFile = (path) =>
     createHash("sha256")
       .update(readFileSync(resolve(root, path)))
@@ -49,10 +37,27 @@ export function collectCuaCacheInputs(root, env = process.env) {
     "apps/desktop/scripts/find-cua-artifact.mjs",
     "scripts/lib/build-timing.ts",
     ".github/actions/provision-cua/action.yml",
+    ...(platform === "darwin" ? ["apps/desktop/scripts/strip-mac-cua-symbols.mjs"] : []),
     ...readdirSync(resolve(root, patchRoot))
       .toSorted()
       .map((name) => `${patchRoot}/${name}`),
   ];
+  return Object.fromEntries(paths.map((path) => [path, hashFile(path)]));
+}
+
+export function collectCuaCacheInputs(root, env = process.env) {
+  // Compiler paths/wrappers may change bytes at an unchanged path. The release
+  // cache supports the selected runner toolchain, not arbitrary wrappers.
+  for (const key of Object.keys(env)) {
+    if (
+      /^(RUSTC($|_)|RUSTDOC$|CC($|_)|CXX($|_)|AR($|_)|CARGO_BUILD_(RUSTC|RUSTC_WRAPPER|RUSTC_WORKSPACE_WRAPPER)$|CARGO_TARGET_.*_LINKER$)/.test(
+        key,
+      ) &&
+      env[key]
+    )
+      throw new Error(`Release Cua cache does not support toolchain override ${key}.`);
+  }
+  const output = (command, args) => execFileSync(command, args, { encoding: "utf8" }).trim();
   return {
     platform: process.platform,
     arch: process.arch,
@@ -89,7 +94,7 @@ export function collectCuaCacheInputs(root, env = process.env) {
             "pkg-config",
           ]),
     flags: cuaBuildFlags(env),
-    files: Object.fromEntries(paths.map((path) => [path, hashFile(path)])),
+    files: collectCuaFileFingerprints(root),
   };
 }
 

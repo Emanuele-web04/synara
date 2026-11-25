@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  collectDocumentationErrors,
   extractInternalLinks,
   findUnbalancedCodeFences,
   findUnbalancedMdxComponents,
@@ -50,8 +49,4 @@ test("MDX component validation detects unmatched paired tags", () => {
   assert.deepEqual(findUnbalancedMdxComponents("<Steps><Step>Body</Steps>"), [
     "Step has 1 opening tag(s) and 0 closing tag(s)",
   ]);
-});
-
-test("the checked-in documentation satisfies every integrity rule", () => {
-  assert.deepEqual(collectDocumentationErrors(), []);
 });

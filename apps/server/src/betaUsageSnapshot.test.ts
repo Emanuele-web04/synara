@@ -75,10 +75,9 @@ describe("writeBetaUsageSnapshot", () => {
     const file = join(root, "diagnostics", BETA_USAGE_SNAPSHOT_FILE_NAME);
     const snapshot = JSON.parse(readFileSync(file, "utf8"));
     expect(snapshot.v).toBe(1);
+    expect(snapshot).not.toHaveProperty("turnBreakdown");
     expect(typeof snapshot.generatedAt).toBe("string");
-    expect(snapshot.providers).toEqual([
-      { provider: "claudeAgent", threads: 2, turns: 4, turnsFailed: 1 },
-    ]);
+    expect(snapshot).not.toHaveProperty("providers");
     expect(snapshot.projects).toBe(1); // deleted project excluded
     expect(snapshot.activeThreads).toBe(3); // stale turn's thread still counted
     // Atomic: no temp files left behind, private mode.
@@ -94,25 +93,28 @@ describe("writeBetaUsageSnapshot", () => {
     const snapshot = JSON.parse(
       readFileSync(join(root, "diagnostics", BETA_USAGE_SNAPSHOT_FILE_NAME), "utf8"),
     );
-    expect(snapshot.providers).toEqual([]);
+    expect(snapshot).not.toHaveProperty("providers");
     expect(snapshot.projects).toBe(0);
     expect(snapshot.activeThreads).toBe(0);
   });
 });
 
-describe("beta gate", () => {
-  it("main.ts starts the snapshot job only for the beta bundle id", () => {
+describe("bundle gate", () => {
+  it("main.ts starts the snapshot job only for the Beta and Remote bundle ids", () => {
     const mainSource = readFileSync(
       join(dirname(fileURLToPath(import.meta.url)), "main.ts"),
       "utf8",
     );
-    // The job is invoked inside the SYNARA_DESKTOP_BUNDLE_ID_ENV ===
-    // SYNARA_BETA_BUNDLE_ID branch, not unconditionally. The gate sits in the
-    // few lines directly above the call (the same bundle-id gate also guards
-    // the earlier beta-import block, so anchor on the call site itself).
+    // The job is invoked inside the Beta/Remote bundle-id branch, not
+    // unconditionally. The gate sits in the few lines directly above the call
+    // (a bundle-id gate also guards the earlier beta-import block, so anchor on
+    // the call site itself).
     const callIndex = mainSource.lastIndexOf("startBetaUsageSnapshotJob");
     expect(callIndex).toBeGreaterThan(0);
     const gate = mainSource.slice(callIndex - 400, callIndex + 100);
-    expect(gate).toContain("process.env[SYNARA_DESKTOP_BUNDLE_ID_ENV] === SYNARA_BETA_BUNDLE_ID");
+    expect(gate).toContain("const desktopBundleId = process.env[SYNARA_DESKTOP_BUNDLE_ID_ENV];");
+    expect(gate).toContain(
+      "desktopBundleId === SYNARA_BETA_BUNDLE_ID || desktopBundleId === SYNARA_REMOTE_BUNDLE_ID",
+    );
   });
 });

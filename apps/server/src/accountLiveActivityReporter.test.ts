@@ -1,0 +1,549 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import { Effect, Layer } from "effect";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
+import { expect, it, vi } from "vitest";
+import { jwtVerify, importJWK } from "jose";
+import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite";
+import { resolveEnvironmentId, writeAccountCredentials } from "./accountAuth";
+import { generateAndPersistHostIdentity } from "./hostIdentity";
+import { createAccountLiveActivityReporter } from "./accountLiveActivityReporter";
+import type { RemoteDeviceTrustRepositoryShape } from "./persistence/Services/RemoteDeviceTrust";
+
+vi.mock("./remoteFeaturePolicy", () => ({ accountLiveActivityEnabled: () => true }));
+
+it.each([
+  ["completed", null, "ready"],
+  ["running", "approval", "needsApproval"],
+  ["running", "userInput", "needsInput"],
+] as const)(
+  "reports subscribed %s/%s turns with host proof and no chat content",
+  async (state, interaction, expected) => {
+    const home = await mkdtemp(join(tmpdir(), "synara-activity-reporter-"));
+    const identityPath = join(home, "secrets", "host-identity.json");
+    const identity = await generateAndPersistHostIdentity(identityPath);
+    const account = {
+      accountUrl: "https://account.example.test",
+      workosClientId: "test",
+      workosApiUrl: "https://identity.example.test",
+      userId: "user",
+      organizationId: "org",
+      hostId: "00000000-0000-4000-8000-000000000001",
+      hostOwnerUserId: "user",
+      hostKeyGeneration: 1,
+      accessToken: "test-access",
+      refreshToken: "test-refresh",
+    };
+    await writeAccountCredentials(home, account);
+    const sent: unknown[] = [];
+    const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+      expect(url).toBe(`${account.accountUrl}/api/v1/hosts/${account.hostId}/live-activities`);
+      const proof = String(new Headers(init?.headers).get("authorization")).slice(10);
+      await jwtVerify(proof, await importJWK(identity.publicKeyJwk, "EdDSA"), {
+        audience: `${account.accountUrl}/api/v1`,
+        subject: account.hostId,
+      });
+      if (init?.method === "PUT") {
+        sent.push(JSON.parse(String(init.body)));
+        return Response.json({ ok: true });
+      }
+      return Response.json({ turns: [{ threadId: "watched", turnId: "turn-1" }] });
+    });
+    vi.stubGlobal("fetch", fetch);
+    try {
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const sql = yield* SqlClient.SqlClient;
+            yield* sql`INSERT INTO projection_turns(thread_id,turn_id,state,requested_at,started_at,checkpoint_files_json)
+        VALUES ('watched','turn-1',${state},'2026-10-09T10:00:00.000Z','2026-10-09T10:00:00.000Z','[]'),
+        ('private','turn-2','running','2026-10-09T10:00:00.000Z','2026-10-09T10:00:00.000Z','[]')`;
+            if (interaction)
+              yield* sql`INSERT INTO projection_pending_interactions
+            (interaction_kind,request_id,thread_id,turn_id,status,created_at)
+            VALUES (${interaction},'request','watched','turn-1','pending','2026-10-09T10:00:00.000Z')`;
+            const reporter = createAccountLiveActivityReporter({
+              baseDir: home,
+              hostIdentityPath: identityPath,
+              sql,
+              initialDelayMs: 0,
+            });
+            try {
+              yield* Effect.promise(() =>
+                vi.waitFor(() => expect(sent).toHaveLength(1), { timeout: 5000 }),
+              );
+              expect(sent[0]).toMatchObject({
+                turns: [
+                  { threadId: "watched", turnId: "turn-1", state: expected, startedAt: 1791540000 },
+                ],
+              });
+              expect(JSON.stringify(sent)).not.toContain("private");
+            } finally {
+              reporter.stop();
+            }
+          }).pipe(Effect.provide(SqlitePersistenceMemory.pipe(Layer.provide(NodeServices.layer)))),
+        ),
+      );
+    } finally {
+      vi.unstubAllGlobals();
+      await rm(home, { recursive: true, force: true });
+    }
+  },
+);
+
+const quotaReset = "2026-11-01T10:00:00.000Z";
+const link = (turnId: string, resumedTurnId?: string) => ({
+  id: `quota-${turnId}`,
+  turnId,
+  resetAt: quotaReset,
+  autoResume: true as const,
+  state: resumedTurnId ? ("resuming" as const) : ("waiting" as const),
+  ...(resumedTurnId ? { resumedTurnId } : {}),
+});
+const recoveryCases = [
+  {
+    name: "waiting",
+    current: link("source"),
+    expected: { state: "usageLimit", usageLimitResetAt: Date.parse(quotaReset) / 1_000 },
+  },
+  {
+    name: "admitted without provider turn",
+    current: { ...link("source"), state: "resuming" },
+    expected: { state: "resuming" },
+  },
+  {
+    name: "admitted id before projection turn exists",
+    current: link("source", "resumed"),
+    expected: { state: "resuming", effectiveTurnId: "resumed" },
+  },
+  {
+    name: "running recorded continuation",
+    current: link("source", "resumed"),
+    resumedState: "running",
+    expected: { state: "running", effectiveTurnId: "resumed", startedAt: 1791540060 },
+  },
+  {
+    name: "fast completion between polls",
+    history: [link("source", "resumed")],
+    resumedState: "completed",
+    expected: { state: "ready", effectiveTurnId: "resumed", startedAt: 1791540060 },
+  },
+  {
+    name: "cancelled wait",
+    history: [link("source")],
+    cancelled: "source",
+    expected: { state: "stopped" },
+  },
+  { name: "unrelated new human turn", history: [link("source")], expected: { state: "stopped" } },
+  {
+    name: "late cancellation of admitted turn",
+    history: [link("source", "resumed")],
+    resumedState: "error",
+    cancelled: "resumed",
+    expected: { state: "stopped" },
+  },
+  {
+    name: "two recorded quota continuations",
+    history: [link("source", "resumed"), link("resumed", "final")],
+    resumedState: "error",
+    finalState: "completed",
+    expected: { state: "ready", effectiveTurnId: "final", startedAt: 1791540120 },
+  },
+  {
+    name: "cyclic recovery history",
+    history: [link("source", "resumed"), link("resumed", "source")],
+    resumedState: "error",
+    expected: { state: "stopped" },
+  },
+  {
+    name: "ordinary completion before an unrelated human turn",
+    sourceState: "completed",
+    cancelled: "source",
+    expected: { state: "ready", startedAt: 1791540000 },
+  },
+  { name: "more than 64 recorded continuations", longChain: true, expected: { state: "stopped" } },
+  {
+    name: "malformed historical recovery",
+    history: [{ ...link("source"), autoResume: false }],
+    expected: { state: "stopped" },
+  },
+  {
+    name: "terminal ingestion still pending",
+    pendingTerminal: true,
+    expected: { state: "resuming" },
+  },
+  {
+    name: "ordinary acknowledged failure",
+    pendingTerminal: true,
+    acknowledged: true,
+    expected: { state: "failed", startedAt: 1791540000 },
+  },
+] as const;
+
+it.each(recoveryCases)(
+  "keeps an original killed-phone watch exact through $name",
+  async (scenario) => {
+    const home = await mkdtemp(join(tmpdir(), "synara-quota-activity-"));
+    const identityPath = join(home, "host-identity.json");
+    await generateAndPersistHostIdentity(identityPath);
+    await writeAccountCredentials(home, {
+      accountUrl: "https://account.example.test",
+      workosClientId: "test",
+      workosApiUrl: "https://identity.example.test",
+      userId: "user",
+      organizationId: "org",
+      hostId: "00000000-0000-4000-8000-000000000001",
+      hostOwnerUserId: "user",
+      hostKeyGeneration: 1,
+      accessToken: "test-access",
+      refreshToken: "test-refresh",
+    });
+    const sent: Array<{ turns: Array<Record<string, unknown>> }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        if (init?.method === "PUT") {
+          sent.push(JSON.parse(String(init.body)));
+          return Response.json({ ok: true });
+        }
+        return Response.json({ turns: [{ threadId: "watched", turnId: "source" }] });
+      }),
+    );
+    try {
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const sql = yield* SqlClient.SqlClient;
+            const migration = yield* sql<{ id: number }>`SELECT migration_id AS id
+              FROM effect_sql_migrations WHERE migration_id=141`;
+            expect(migration).toEqual([{ id: 141 }]);
+            const current = "current" in scenario ? JSON.stringify(scenario.current) : null;
+            const cancelled = "cancelled" in scenario ? scenario.cancelled : null;
+            yield* sql`INSERT INTO projection_threads(thread_id,project_id,title,created_at,updated_at,usage_limit_recovery_json,usage_limit_recovery_cancelled_turn_id)
+        VALUES ('watched','project','PRIVATE TITLE','2026-10-09T10:00:00.000Z','2026-10-09T10:00:00.000Z',${current},${cancelled})`;
+            yield* sql`INSERT INTO projection_turns(thread_id,turn_id,state,requested_at,started_at,checkpoint_files_json)
+        VALUES ('watched','source',${"sourceState" in scenario ? scenario.sourceState : "error"},'2026-10-09T10:00:00.000Z','2026-10-09T10:00:00.000Z','[]'),
+        ('watched','unrelated-human','running','2026-10-09T10:03:00.000Z','2026-10-09T10:03:00.000Z','[]')`;
+            if ("resumedState" in scenario)
+              yield* sql`INSERT INTO projection_turns(thread_id,turn_id,state,requested_at,started_at,checkpoint_files_json)
+        VALUES ('watched','resumed',${scenario.resumedState},'2026-10-09T10:01:00.000Z','2026-10-09T10:01:00.000Z','[]')`;
+            if ("finalState" in scenario)
+              yield* sql`INSERT INTO projection_turns(thread_id,turn_id,state,requested_at,started_at,checkpoint_files_json)
+        VALUES ('watched','final',${scenario.finalState},'2026-10-09T10:02:00.000Z','2026-10-09T10:02:00.000Z','[]')`;
+            if ("longChain" in scenario)
+              for (let step = 1; step <= 65; step++) {
+                yield* sql`INSERT INTO projection_turns(thread_id,turn_id,state,requested_at,started_at,checkpoint_files_json)
+                VALUES ('watched',${`chain-${step}`},'error','2026-10-09T10:00:00.000Z','2026-10-09T10:00:00.000Z','[]')`;
+              }
+            const history =
+              "longChain" in scenario
+                ? Array.from({ length: 65 }, (_, step) =>
+                    link(step === 0 ? "source" : `chain-${step}`, `chain-${step + 1}`),
+                  )
+                : "history" in scenario
+                  ? scenario.history
+                  : [];
+            let sequence = 0;
+            for (const recovery of history) {
+              sequence += 1;
+              yield* sql`INSERT INTO orchestration_events(sequence,event_id,aggregate_kind,stream_id,stream_version,event_type,occurred_at,actor_kind,payload_json,metadata_json)
+          VALUES (${sequence},${`event-${sequence}`},'thread','watched',${sequence},'thread.meta-updated','2026-10-09T10:01:00.000Z','system',${JSON.stringify({ usageLimitRecovery: recovery })},'{}')`;
+            }
+            yield* sql`INSERT INTO projection_state(projector,last_applied_sequence,updated_at)
+        VALUES ('projection.hot',${sequence},'2026-10-09T10:02:00.000Z')
+        ON CONFLICT(projector) DO UPDATE SET last_applied_sequence=${sequence}`;
+            if ("pendingTerminal" in scenario) {
+              yield* sql`INSERT INTO provider_runtime_events(sequence,event_id,thread_id,turn_id,event_type,event_json,persisted_at)
+          VALUES (1,'terminal-source','watched','source','turn.completed','{}','2026-10-09T10:00:00.000Z')`;
+              if ("acknowledged" in scenario)
+                yield* sql`UPDATE provider_runtime_event_consumers SET last_acked_sequence=1 WHERE consumer_name='provider-runtime-ingestion.v1'`;
+            }
+            const plan = yield* sql<{
+              detail: string;
+            }>`EXPLAIN QUERY PLAN SELECT sequence FROM orchestration_events
+        WHERE aggregate_kind='thread' AND event_type='thread.meta-updated'
+          AND json_type(payload_json,'$.usageLimitRecovery')='object'
+          AND stream_id='watched' AND json_extract(payload_json,'$.usageLimitRecovery.turnId')='source'
+          AND sequence<=${sequence} ORDER BY sequence DESC LIMIT 1`;
+            expect(
+              plan.some((row) => row.detail.includes("idx_orch_usage_limit_recovery_source")),
+            ).toBe(true);
+            const reporter = createAccountLiveActivityReporter({
+              baseDir: home,
+              hostIdentityPath: identityPath,
+              sql,
+              initialDelayMs: 0,
+            });
+            try {
+              yield* Effect.promise(() =>
+                vi.waitFor(() => expect(sent).toHaveLength(1), { timeout: 5000 }),
+              );
+              expect(sent[0]?.turns).toEqual([
+                { threadId: "watched", turnId: "source", ...scenario.expected },
+              ]);
+              expect(JSON.stringify(sent)).not.toContain("PRIVATE TITLE");
+              if (["usageLimit", "resuming", "stopped"].includes(scenario.expected.state))
+                expect(sent[0]?.turns[0]).not.toHaveProperty("startedAt");
+            } finally {
+              reporter.stop();
+            }
+          }).pipe(Effect.provide(SqlitePersistenceMemory.pipe(Layer.provide(NodeServices.layer)))),
+        ),
+      );
+    } finally {
+      vi.unstubAllGlobals();
+      await rm(home, { recursive: true, force: true });
+    }
+  },
+);
+
+/** Real time for file I/O while the reporter's own timers stay fake. */
+async function waitForIo(ms = 50) {
+  const until = Date.now() + ms;
+  while (Date.now() < until) await new Promise((resolve) => setImmediate(resolve));
+}
+
+async function advancePollClock(ms: number) {
+  await vi.advanceTimersByTimeAsync(ms);
+  // The poll schedules its next timer after file I/O and response handling finish.
+  const until = Date.now() + 2_000;
+  while (vi.getTimerCount() === 0 && Date.now() < until)
+    await new Promise((resolve) => setImmediate(resolve));
+  expect(vi.getTimerCount()).toBeGreaterThan(0);
+}
+
+async function cadenceFixture() {
+  const home = await mkdtemp(join(tmpdir(), "synara-activity-cadence-"));
+  const identityPath = join(home, "host-identity.json");
+  await generateAndPersistHostIdentity(identityPath);
+  await writeAccountCredentials(home, {
+    accountUrl: "https://account.example.test",
+    workosClientId: "test",
+    workosApiUrl: "https://identity.example.test",
+    userId: "user",
+    organizationId: "org",
+    hostId: "00000000-0000-4000-8000-000000000001",
+    hostOwnerUserId: "user",
+    hostKeyGeneration: 1,
+    accessToken: "test-access",
+    refreshToken: "test-refresh",
+  });
+  await resolveEnvironmentId(home);
+  return { home, identityPath };
+}
+
+it("asks for watches only once remote access was ever set up on this host", async () => {
+  const { home, identityPath } = await cadenceFixture();
+  const fetch = vi.fn(async () => Response.json({ turns: [] }));
+  vi.stubGlobal("fetch", fetch);
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  vi.spyOn(Math, "random").mockReturnValue(0.5);
+  let setUp = false;
+  const hasIdentity = vi.fn(() => Effect.succeed(setUp));
+  const reporter = createAccountLiveActivityReporter({
+    baseDir: home,
+    hostIdentityPath: identityPath,
+    sql: {} as SqlClient.SqlClient,
+    completionPreviewTrust: {
+      remoteTrust: { hasIdentity } as unknown as RemoteDeviceTrustRepositoryShape,
+      tlsIdentityPath: join(home, "missing-root.json"),
+    },
+  });
+  try {
+    await advancePollClock(1_000);
+    expect(hasIdentity).toHaveBeenCalledTimes(1);
+    expect(fetch).not.toHaveBeenCalled();
+    // The first approval is noticed on the next 15 s cycle, as an empty watch list is today.
+    setUp = true;
+    await advancePollClock(15_000);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  } finally {
+    reporter.stop();
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+/** A stand-in for the session registry: `connect` opens a device session. */
+function remoteSessionsFixture() {
+  const listeners = new Set<() => void>();
+  let open = 0;
+  return {
+    remoteSessions: {
+      open: () => open > 0,
+      onOpened: (listener: () => void) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+    },
+    connect: () => {
+      open++;
+      for (const listener of listeners) listener();
+    },
+    disconnect: () => {
+      open--;
+    },
+  };
+}
+
+it("backs off refused reads and reads again whenever a device connects", async () => {
+  const { home, identityPath } = await cadenceFixture();
+  const fetch = vi.fn(async () =>
+    Response.json({ error: "not_host_owner", message: "Refused" }, { status: 403 }),
+  );
+  vi.stubGlobal("fetch", fetch);
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+  vi.spyOn(Math, "random").mockReturnValue(0.5);
+  const devices = remoteSessionsFixture();
+  const reporter = createAccountLiveActivityReporter({
+    baseDir: home,
+    hostIdentityPath: identityPath,
+    sql: {} as SqlClient.SqlClient,
+    remoteSessions: devices.remoteSessions,
+  });
+  try {
+    await advancePollClock(1_000);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    // One minute after the first refusal, as before; then two.
+    await advancePollClock(59_000);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    await advancePollClock(1_000);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    await advancePollClock(119_000);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    await advancePollClock(1_000);
+    expect(fetch).toHaveBeenCalledTimes(3);
+    // A device connecting means access may be back: read within the watched
+    // cadence of the last read, not in four minutes.
+    devices.connect();
+    await advancePollClock(5_000);
+    expect(fetch).toHaveBeenCalledTimes(4);
+    // Still refused: the backoff continues while that device stays connected...
+    await advancePollClock(60_000);
+    expect(fetch).toHaveBeenCalledTimes(4);
+    // ...and a second device connecting wakes it again.
+    devices.connect();
+    await advancePollClock(0);
+    expect(fetch).toHaveBeenCalledTimes(5);
+  } finally {
+    reporter.stop();
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+it("reads the watch list while devices connect and, after a grace window, once a minute", async () => {
+  const { home, identityPath } = await cadenceFixture();
+  const fetch = vi.fn(async () => Response.json({ turns: [] }));
+  vi.stubGlobal("fetch", fetch);
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+  vi.spyOn(Math, "random").mockReturnValue(0.5);
+  const devices = remoteSessionsFixture();
+  const reporter = createAccountLiveActivityReporter({
+    baseDir: home,
+    hostIdentityPath: identityPath,
+    sql: {} as SqlClient.SqlClient,
+    remoteSessions: devices.remoteSessions,
+  });
+  // One cadence per step: each read finishes real file I/O before it schedules the next.
+  const advance = async (ms: number) => {
+    for (let left = ms; left >= 0; left -= 15_000) {
+      await advancePollClock(Math.min(left, 15_000));
+      if (left <= 15_000) break;
+    }
+  };
+  try {
+    await advance(1_000);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    // No device has connected: the next read is a minute away, still inside
+    // the account's 90 s first-report window for a watch registered meanwhile.
+    await advance(30_000);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    devices.connect();
+    await advance(0);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    await advance(15_000);
+    expect(fetch).toHaveBeenCalledTimes(3);
+    devices.disconnect();
+    // Within the grace window the 15 s cadence continues.
+    await advance(9 * 60_000);
+    const atGraceEnd = fetch.mock.calls.length;
+    expect(atGraceEnd).toBeGreaterThanOrEqual(3 + 36);
+    await advance(2 * 60_000);
+    const settled = fetch.mock.calls.length;
+    await advance(3 * 60_000);
+    expect(fetch.mock.calls.length - settled).toBe(3);
+  } finally {
+    reporter.stop();
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+it("reports a watched turn when it changes and otherwise as a heartbeat inside the API window", async () => {
+  const { home, identityPath } = await cadenceFixture();
+  const puts: unknown[] = [];
+  const fetch = vi.fn(async (_url: string, init?: RequestInit) => {
+    if (init?.method === "PUT") {
+      puts.push(JSON.parse(String(init.body)));
+      return Response.json({ ok: true });
+    }
+    return Response.json({ turns: [{ threadId: "watched", turnId: "turn-1" }] });
+  });
+  vi.stubGlobal("fetch", fetch);
+  try {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient;
+          yield* sql`INSERT INTO projection_turns(thread_id,turn_id,state,requested_at,started_at,checkpoint_files_json)
+            VALUES ('watched','turn-1','running','2026-10-09T10:00:00.000Z','2026-10-09T10:00:00.000Z','[]')`;
+          vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+          vi.spyOn(Math, "random").mockReturnValue(0.5);
+          const reporter = createAccountLiveActivityReporter({
+            baseDir: home,
+            hostIdentityPath: identityPath,
+            sql,
+          });
+          const advance = (ms: number) =>
+            Effect.promise(async () => {
+              for (let left = ms; left > 0; left -= 5_000) {
+                await vi.advanceTimersByTimeAsync(Math.min(left, 5_000));
+                await waitForIo(100);
+              }
+            });
+          try {
+            yield* advance(1_000);
+            expect(puts).toHaveLength(1);
+            // Unchanged for 25 s: read every 5 s, nothing sent.
+            yield* advance(25_000);
+            expect(puts).toHaveLength(1);
+            // The heartbeat keeps the host fresh well inside the 90 s staleness window.
+            yield* advance(5_000);
+            expect(puts).toHaveLength(2);
+            // A change is sent on the next read.
+            yield* sql`UPDATE projection_turns SET state='completed' WHERE turn_id='turn-1'`;
+            yield* advance(5_000);
+            expect(puts).toHaveLength(3);
+            expect(puts[2]).toMatchObject({ turns: [{ turnId: "turn-1", state: "ready" }] });
+          } finally {
+            reporter.stop();
+            vi.restoreAllMocks();
+            vi.useRealTimers();
+          }
+        }).pipe(Effect.provide(SqlitePersistenceMemory.pipe(Layer.provide(NodeServices.layer)))),
+      ),
+    );
+  } finally {
+    vi.unstubAllGlobals();
+    await rm(home, { recursive: true, force: true });
+  }
+});

@@ -83,6 +83,8 @@ export interface ProviderSessionStartOutcomeOptions {
    * driver stays protected: another home or account still cannot take it over.
    */
   readonly abandonOtherProviderContinuation?: boolean;
+  /** An explicit handoff to another account of this driver starts a fresh session. */
+  readonly startFreshForAccountHandoff?: true;
 }
 
 /** Durable identity of one Stop; its authority never transfers to a later turn. */
@@ -288,6 +290,14 @@ export interface ProviderServiceShape {
   readonly hasLiveRuntimeTasks?: (input: { readonly threadId: ThreadId }) => Effect.Effect<boolean>;
 
   /**
+   * The extra folders the thread's persisted runtime was launched with, or undefined
+   * without a binding. Covers runtimes this process recovered or prewarmed itself.
+   */
+  readonly getSessionAdditionalDirectories?: (
+    threadId: ThreadId,
+  ) => Effect.Effect<ReadonlyArray<string> | undefined, ProviderServiceError>;
+
+  /**
    * Forget a stale provider-native resume cursor while preserving local routing
    * metadata such as provider options and runtime mode.
    */
@@ -331,6 +341,16 @@ export interface ProviderServiceShape {
     readonly threadId: ThreadId;
     readonly numTurns: number;
   }) => Effect.Effect<void, ProviderServiceError>;
+
+  /**
+   * Start a thread's stopped runtime from its persisted binding ahead of the
+   * next turn, through the same recovery a turn send would run. Resolves true
+   * only when it started one; a live runtime, an active turn, or nothing to
+   * resume is a no-op.
+   */
+  readonly prewarmSession?: (input: {
+    readonly threadId: ThreadId;
+  }) => Effect.Effect<boolean, ProviderServiceError>;
 
   /**
    * Trigger provider-native context compaction for a thread.

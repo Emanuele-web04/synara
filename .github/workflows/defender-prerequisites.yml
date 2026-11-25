@@ -1,0 +1,76 @@
+# Live qualification of the release guard prerequisites, not a Synara installer.
+name: Windows Defender Prerequisites
+
+on:
+  pull_request:
+    paths:
+      - scripts/verify-windows-defender.ps1
+      - scripts/verify-windows-defender.test.ps1
+      - .github/workflows/ci.yml
+      - .github/workflows/defender-prerequisites.yml
+      - .github/workflows/release-platform.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  prerequisites:
+    name: Live Defender prerequisite qualification
+    runs-on: windows-2022
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Test guard contracts with mocked Defender
+        shell: pwsh
+        run: pwsh -NoProfile -NonInteractive -File scripts/verify-windows-defender.test.ps1
+
+      - name: Qualify live service, signatures and MAPS on a public system probe
+        id: probe
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $probeHome = Join-Path $env:RUNNER_TEMP 'synara-defender-prerequisites'
+          $probeAssets = New-Item -ItemType Directory -Path "$probeHome/assets" -Force
+          $probeEvidence = New-Item -ItemType Directory -Path "$probeHome/evidence" -Force
+          $probeSource = Join-Path $env:SystemRoot 'System32/where.exe'
+          $probeDestination = Join-Path $probeAssets.FullName 'prerequisite-probe.exe'
+          $receipt = @{
+              state = 'PROBE_NOT_QUALIFIED'
+              qualification = 'Defender prerequisites only, not a Synara installer'
+              publicSource = 'Microsoft Windows System32/where.exe'
+              neverExecuted = $true
+          }
+          $receipt | ConvertTo-Json | Set-Content "$probeEvidence/probe-manifest.json"
+          $signature = Get-AuthenticodeSignature -LiteralPath $probeSource
+          if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'Microsoft') {
+              throw 'The public system probe does not have a valid Microsoft signature.'
+          }
+          $expected = (Get-FileHash -LiteralPath $probeSource -Algorithm SHA256).Hash
+          Copy-Item -LiteralPath $probeSource -Destination $probeDestination
+          $receipt.state = 'PROBE_STAGED_NOT_QUALIFIED'
+          $receipt.expectedSha256 = $expected
+          $receipt | ConvertTo-Json | Set-Content "$probeEvidence/probe-manifest.json"
+          # Run the real guard in a fresh PowerShell process, with no contract mocks.
+          # The copied public binary is scanned and hashed, never executed.
+          & ./scripts/verify-windows-defender.ps1 -AssetsDirectory $probeAssets.FullName -EvidenceDirectory $probeEvidence.FullName
+          if ((Get-FileHash -LiteralPath $probeSource -Algorithm SHA256).Hash -ne $expected -or
+              (Get-FileHash -LiteralPath $probeDestination -Algorithm SHA256).Hash -ne $expected) {
+              throw 'The public source or its staged probe changed during qualification.'
+          }
+          $receipt.state = 'PREREQUISITES_QUALIFIED_NOT_SYNARA_INSTALLER'
+          $receipt | ConvertTo-Json | Set-Content "$probeEvidence/probe-manifest.json"
+
+      - name: Preserve live prerequisite evidence
+        if: always() && steps.probe.outcome != 'skipped'
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-defender-prerequisites-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/synara-defender-prerequisites/evidence/
+          retention-days: 7
+          if-no-files-found: error

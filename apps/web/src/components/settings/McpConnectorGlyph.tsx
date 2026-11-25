@@ -9,6 +9,7 @@ import {
   BRAND_GLYPH_TILE_CLASS_NAME,
   type BrandArtwork,
   KNOWN_BRAND_ARTWORK,
+  normalizeBrandKey,
 } from "~/lib/brandIcons";
 import { cn } from "~/lib/utils";
 
@@ -24,12 +25,20 @@ export function McpConnectorGlyph(props: {
   className?: string;
   iconClassName?: string;
 }) {
+  const appIcon = KNOWN_BRAND_ARTWORK[normalizeBrandKey(props.name)]?.appIcon;
   return (
-    <span aria-hidden="true" className={cn(BRAND_GLYPH_TILE_CLASS_NAME, props.className)}>
+    <span
+      aria-hidden="true"
+      className={cn(
+        BRAND_GLYPH_TILE_CLASS_NAME,
+        appIcon && "border-transparent bg-transparent",
+        props.className,
+      )}
+    >
       <ConnectorIcon
         name={props.name}
         url={props.url}
-        className={cn("size-5", props.iconClassName)}
+        className={cn(appIcon ? "size-11" : "size-5", props.iconClassName)}
       />
     </span>
   );

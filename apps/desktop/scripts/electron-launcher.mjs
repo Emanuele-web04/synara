@@ -16,7 +16,11 @@ import {
 } from "node:fs";
 import { createRequire } from "node:module";
 import { TCC_SERVICE_NAMES } from "@synara/shared/computerGrants";
-import { resolveSynaraDesktopFlavor, synaraDesktopIdentity } from "@synara/shared/desktopIdentity";
+import {
+  resolveSynaraDesktopFlavor,
+  synaraDesktopIdentity,
+  synaraSourceDesktopIdentity,
+} from "@synara/shared/desktopIdentity";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createSourceDesktopEnvironment } from "./source-desktop-launch.mjs";
@@ -26,10 +30,10 @@ const desktopFlavor = resolveSynaraDesktopFlavor({
   isDevelopment: true,
   requestedFlavor: process.env.SYNARA_DESKTOP_FLAVOR,
 });
-const desktopIdentity = synaraDesktopIdentity(desktopFlavor);
+const desktopIdentity = synaraSourceDesktopIdentity(synaraDesktopIdentity(desktopFlavor));
 const APP_DISPLAY_NAME = desktopIdentity.displayName;
 const APP_BUNDLE_ID = desktopIdentity.bundleId;
-const LAUNCHER_VERSION = 8;
+const LAUNCHER_VERSION = 9;
 // Kept in sync with BRAND_ASSET_PATHS.productionMacIconComposer and the macOS
 // icon constants in scripts/lib/desktop-platform-build-config.ts. The packaged
 // build compiles the same asset; this launcher does it for dev and Canary,
@@ -52,6 +56,7 @@ export function configureMacLauncher(electronPath, environment = process.env) {
   const configuration = Object.fromEntries(
     [
       "SYNARA_HOME",
+      "SYNARA_REMOTE_HOME",
       "SYNARA_DESKTOP_FLAVOR",
       "SYNARA_SOURCE_DESKTOP_BUILD_MARKER",
       "VITE_DEV_SERVER_URL",
@@ -178,7 +183,7 @@ function compileGlassAppIcon(appBundlePath, iconComposerPath, scratchDir, runCom
   return true;
 }
 
-function patchMainBundleInfoPlist(appBundlePath, iconPath, localizedInfoPlists, runCommand) {
+function patchMainBundleInfoPlist(appBundlePath, iconPath, runCommand) {
   const infoPlistPath = join(appBundlePath, "Contents", "Info.plist");
   setPlistString(infoPlistPath, "CFBundleDisplayName", APP_DISPLAY_NAME, runCommand);
   setPlistString(infoPlistPath, "CFBundleName", APP_DISPLAY_NAME, runCommand);
@@ -218,11 +223,6 @@ function patchMainBundleInfoPlist(appBundlePath, iconPath, localizedInfoPlists, 
   const resourcesDir = join(appBundlePath, "Contents", "Resources");
   copyFileSync(iconPath, join(resourcesDir, "icon.icns"));
   copyFileSync(iconPath, join(resourcesDir, "electron.icns"));
-  for (const { locale, contents } of localizedInfoPlists) {
-    const localeDir = join(resourcesDir, locale);
-    mkdirSync(localeDir, { recursive: true });
-    writeFileSync(join(localeDir, "InfoPlist.strings"), contents);
-  }
 }
 
 function patchHelperBundleInfoPlists(appBundlePath, runCommand) {
@@ -353,14 +353,6 @@ export function buildMacLauncher(
   const hasIconComposerSource = existsSync(iconComposerPath);
   const metadataPath = join(runtimeDir, "metadata.json");
   const desktopPackage = JSON.parse(readFileSync(join(desktopDirectory, "package.json"), "utf8"));
-  const localizationsDir = join(desktopDirectory, "resources", "localizations");
-  const localizedInfoPlists = readdirSync(localizationsDir)
-    .filter((entry) => entry.endsWith(".lproj"))
-    .sort()
-    .map((locale) => ({
-      locale,
-      contents: readFileSync(join(localizationsDir, locale, "InfoPlist.strings"), "utf8"),
-    }));
 
   mkdirSync(runtimeDir, { recursive: true });
 
@@ -370,9 +362,6 @@ export function buildMacLauncher(
     sourceAppMtimeMs: statSync(sourceAppBundlePath).mtimeMs,
     iconMtimeMs: statSync(iconPath).mtimeMs,
     bootstrapHash: createHash("sha256").update(readFileSync(bootstrapPath)).digest("hex"),
-    localizedInfoPlistsHash: createHash("sha256")
-      .update(JSON.stringify(localizedInfoPlists))
-      .digest("hex"),
     appVersion: desktopPackage.version,
     // Layered artwork lives in several files, so track the newest of them.
     iconComposerMtimeMs: hasIconComposerSource ? latestMtimeMs(iconComposerPath) : null,
@@ -394,7 +383,7 @@ export function buildMacLauncher(
   rmSync(metadataPath, { force: true });
   rmSync(targetAppBundlePath, { recursive: true, force: true });
   copyMacAppBundle(sourceAppBundlePath, targetAppBundlePath, runCommand);
-  patchMainBundleInfoPlist(targetAppBundlePath, iconPath, localizedInfoPlists, runCommand);
+  patchMainBundleInfoPlist(targetAppBundlePath, iconPath, runCommand);
   if (hasIconComposerSource) {
     compileGlassAppIcon(targetAppBundlePath, iconComposerPath, runtimeDir, runCommand);
   }

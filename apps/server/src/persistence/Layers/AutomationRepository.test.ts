@@ -9,7 +9,12 @@ import {
   ThreadId,
   TurnId,
   type AutomationCreateInput,
+  type AutomationRunStatus,
 } from "@synara/contracts";
+import {
+  AUTOMATION_RUN_TRANSITIONS,
+  canTransitionAutomationRun,
+} from "@synara/shared/automationRunLifecycle";
 import { Effect, Layer, Option } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
@@ -1943,6 +1948,149 @@ layer("AutomationRepository", (it) => {
 
       assert.strictEqual(cancelled.status, "succeeded");
       assert.strictEqual(cancelled.finishedAt, "2026-06-16T10:01:00.000Z");
+    }),
+  );
+
+  it.effect("finds active work before a recovery limit even after its definition is archived", () =>
+    Effect.gen(function* () {
+      const repository = yield* AutomationRepository;
+      yield* runMigrations();
+      const automationId = AutomationId.makeUnsafe("automation-desktop-update-admission");
+      const projectId = ProjectId.makeUnsafe("project-desktop-update-admission");
+      yield* repository.createDefinition({
+        id: automationId,
+        input: createInputForProject(projectId),
+        now: "1900-01-01T00:00:00.000Z",
+      });
+      const runs = [];
+      for (const [suffix, at] of [
+        ["older-terminal", "1900-01-01T00:00:00.000Z"],
+        ["active", "1901-01-01T00:00:00.000Z"],
+        ["newer-terminal", "1902-01-01T00:00:00.000Z"],
+      ] as const) {
+        const run = yield* repository.createRun({
+          id: AutomationRunId.makeUnsafe(`run-desktop-update-${suffix}`),
+          automationId,
+          projectId,
+          threadId: null,
+          trigger: { type: "manual" },
+          scheduledFor: at,
+          permissionSnapshot,
+          now: at,
+        });
+        runs.push(run);
+        if (suffix !== "active")
+          yield* repository.markRunSucceeded({
+            id: run.id,
+            turnId: null,
+            result: null,
+            finishedAt: at,
+            accountedAt: at,
+          });
+      }
+      const activeId = runs[1]!.id;
+      yield* repository.markRunStarted({
+        id: activeId,
+        threadId: ThreadId.makeUnsafe("thread-desktop-update-active"),
+        messageId: MessageId.makeUnsafe("message-desktop-update-active"),
+        threadCreateCommandId: null,
+        turnStartCommandId: CommandId.makeUnsafe("command-desktop-update-active"),
+        startedAt: "1901-01-01T00:00:01.000Z",
+      });
+      assert.deepStrictEqual(
+        (yield* repository.listRecoverableRuns({ limit: 1 })).map((run) => run.id),
+        [activeId],
+      );
+      yield* repository.archiveDefinition({
+        id: automationId,
+        archivedAt: "1903-01-01T00:00:00.000Z",
+      });
+      assert.isEmpty((yield* repository.list({ projectId })).runs);
+      assert.deepStrictEqual(
+        (yield* repository.listRecoverableRuns({ limit: 1 })).map((run) => run.id),
+        [activeId],
+      );
+    }),
+  );
+
+  // The SQL guards are the authoritative enforcement of the run state machine. Drive
+  // every helper from every status so a guard that drifts from the shared table fails
+  // here instead of letting a late observer overwrite a settled run.
+  it.effect("moves a run only along the declared lifecycle transitions", () =>
+    Effect.gen(function* () {
+      const repository = yield* AutomationRepository;
+      const sql = yield* SqlClient.SqlClient;
+      yield* runMigrations();
+
+      const automationId = AutomationId.makeUnsafe("automation-lifecycle");
+      const projectId = ProjectId.makeUnsafe("project-lifecycle");
+      yield* repository.createDefinition({
+        id: automationId,
+        input: createInputForProject("project-lifecycle"),
+        now: "2026-06-16T10:00:00.000Z",
+      });
+
+      const at = "2026-06-16T10:30:00.000Z";
+      const helpers = {
+        running: (id, suffix) =>
+          repository.markRunStarted({
+            id,
+            threadId: ThreadId.makeUnsafe(`thread-lifecycle-${suffix}`),
+            messageId: MessageId.makeUnsafe(`message-lifecycle-${suffix}`),
+            threadCreateCommandId: null,
+            turnStartCommandId: CommandId.makeUnsafe(`cmd-lifecycle-${suffix}`),
+            startedAt: at,
+          }),
+        "waiting-for-approval": (id) =>
+          repository.markRunWaitingForApproval({ id, turnId: null, updatedAt: at }),
+        succeeded: (id) =>
+          repository
+            .markRunSucceeded({ id, turnId: null, result: null, finishedAt: at, accountedAt: at })
+            .pipe(Effect.map((result) => result.run)),
+        failed: (id) =>
+          repository
+            .markRunFailed({ id, error: "boom", finishedAt: at })
+            .pipe(Effect.map((result) => result.run)),
+        cancelled: (id) => repository.cancelRun({ runId: id, now: at }),
+        interrupted: (id) => repository.markRunInterrupted({ id, turnId: null, finishedAt: at }),
+        skipped: (id) => repository.markRunSkipped({ id, reason: "missed", finishedAt: at }),
+      } satisfies Partial<
+        Record<
+          AutomationRunStatus,
+          (
+            id: AutomationRunId,
+            suffix: string,
+          ) => Effect.Effect<{ status: AutomationRunStatus }, unknown>
+        >
+      >;
+
+      const statuses = Object.keys(AUTOMATION_RUN_TRANSITIONS) as AutomationRunStatus[];
+      const targets = Object.keys(helpers) as Array<keyof typeof helpers>;
+      for (const from of statuses) {
+        for (const to of targets) {
+          const suffix = `${from}-to-${to}`;
+          const id = AutomationRunId.makeUnsafe(`run-lifecycle-${suffix}`);
+          yield* repository.createRun({
+            id,
+            automationId,
+            projectId,
+            threadId: ThreadId.makeUnsafe(`thread-lifecycle-${suffix}`),
+            trigger: { type: "manual" },
+            scheduledFor: "2026-06-16T10:05:00.000Z",
+            permissionSnapshot,
+            now: "2026-06-16T10:00:00.000Z",
+          });
+          yield* sql`UPDATE automation_runs SET status = ${from} WHERE run_id = ${id}`;
+
+          const after = yield* helpers[to](id, suffix);
+
+          assert.strictEqual(
+            after.status,
+            canTransitionAutomationRun(from, to) ? to : from,
+            `${from} -> ${to}`,
+          );
+        }
+      }
     }),
   );
 });

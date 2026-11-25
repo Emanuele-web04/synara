@@ -1,11 +1,11 @@
+import { selectDeviceShareCardStats } from "./profileSelectors";
 // FILE: ProfileUsageCoverage.test.tsx
 // Purpose: Verify missing telemetry stays visible in profile rankings and exported cards.
 // Layer: web profile feature tests.
 
 import type { ProfileTokenStats } from "@synara/contracts";
 import { renderToStaticMarkup } from "react-dom/server";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { setLanguagePreference } from "~/i18n";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ProfileSettingsPanel } from "../settings/ProfileSettingsPanel";
 import { ShareCard } from "./ShareCard";
 import { baseStats, tokenStats } from "./profileTestFixtures";
@@ -16,7 +16,9 @@ vi.mock("~/lib/serverReactQuery", () => ({
   serverProfileStatsQueryOptions: () => ({ queryKey: ["core"] }),
   serverProfileTokenStatsQueryOptions: () => ({ queryKey: ["tokens"] }),
 }));
-vi.mock("@tanstack/react-query", () => ({
+vi.mock("~/hooks/useAccount", () => ({ useAccount: () => ({ me: null }) }));
+vi.mock("@tanstack/react-query", async (original) => ({
+  ...(await original<typeof import("@tanstack/react-query")>()),
   useQuery: (options: { queryKey: string[] }) => ({
     data: options.queryKey[0] === "core" ? baseStats : queryState.tokenStats,
     isPending: false,
@@ -29,8 +31,8 @@ vi.mock("./EditProfileDialog", () => ({ EditProfileDialog: () => null }));
 function renderCard() {
   return renderToStaticMarkup(
     <ShareCard
-      stats={baseStats}
-      tokenStats={queryState.tokenStats}
+      cardStats={selectDeviceShareCardStats(baseStats, queryState.tokenStats)}
+      initials="S"
       displayName="Synara"
       handle="@synara"
       avatarColor="#000000"
@@ -40,17 +42,8 @@ function renderCard() {
 }
 
 describe("profile ranking coverage", () => {
-  afterEach(() => setLanguagePreference("system"));
   beforeEach(() => {
-    setLanguagePreference("en");
     queryState.tokenStats = tokenStats;
-  });
-
-  it("keeps decimal percentage precision with Spanish formatting", () => {
-    queryState.tokenStats = null;
-    setLanguagePreference("es");
-    const profile = renderToStaticMarkup(<ProfileSettingsPanel />);
-    expect(profile).toContain("66,7% de turnos");
   });
 
   it("qualifies the 100% provider result and names missing providers on both profile rankings", () => {

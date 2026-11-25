@@ -284,6 +284,36 @@ describe("ProviderDiscoveryService provider instances", () => {
     expect(captured).not.toHaveProperty("accountId");
   });
 
+  it("uses host Pi configuration for a legacy discovery request without an instance id", async () => {
+    const observed = vi.fn();
+    await runDiscovery({
+      adapter: {
+        listModels: (input) =>
+          Effect.sync(() => {
+            observed(input);
+            return { models: [] };
+          }),
+      },
+      settings: { providerInstances: { pi: { driver: "pi", enabled: true } } },
+      effect: Effect.gen(function* () {
+        const discovery = yield* ProviderDiscoveryService;
+        yield* discovery.listModels({
+          provider: "pi",
+          binaryPath: "/client/bin/pi",
+          agentDir: "/client/pi-profile",
+          environment: { PATH: "/client/bin" },
+        });
+      }),
+    });
+
+    expect(observed).toHaveBeenCalledOnce();
+    const input = observed.mock.calls[0]?.[0];
+    expect(input).toMatchObject({ provider: "pi", instanceId: "pi" });
+    expect(input).not.toHaveProperty("binaryPath");
+    expect(input).not.toHaveProperty("agentDir");
+    expect(input).not.toHaveProperty("environment");
+  });
+
   it("passes resolved Codex instance options into plugin discovery", async () => {
     let captured: Record<string, unknown> | undefined;
 
@@ -670,6 +700,48 @@ describe("ProviderDiscoveryService.listModels", () => {
     expect(results.first.models).toEqual([{ slug: "project-a", name: "Project Model" }]);
     expect(results.otherCwd.cached).toBe(false);
     expect(adapterCalls).toBe(2);
+  });
+
+  it("rediscovers only the OpenCode account whose explicit config file changed", async () => {
+    const workConfig = path.join(root, "work.jsonc");
+    const personalConfig = path.join(root, "personal.jsonc");
+    await writeFile(workConfig, "{}");
+    await writeFile(personalConfig, "{}");
+    const listModels = vi.fn(() =>
+      Effect.succeed({
+        models: [{ slug: "model", name: "Model" }],
+        source: "opencode",
+        cached: false,
+      }),
+    );
+
+    await runDiscovery({
+      adapter: { listModels },
+      settings: {
+        providerInstances: {
+          opencode_work: {
+            driver: "opencode",
+            environment: [{ name: "OPENCODE_CONFIG", value: workConfig, sensitive: false }],
+          },
+          opencode_personal: {
+            driver: "opencode",
+            environment: [{ name: "OPENCODE_CONFIG", value: personalConfig, sensitive: false }],
+          },
+        },
+      },
+      effect: Effect.gen(function* () {
+        const discovery = yield* ProviderDiscoveryService;
+        const work = { provider: "opencode", instanceId: "opencode_work", cwd } as const;
+        const personal = { ...work, instanceId: "opencode_personal" } as const;
+        yield* discovery.listModels(work);
+        yield* discovery.listModels(personal);
+        expect((yield* discovery.listModels(work)).cached).toBe(true);
+        yield* Effect.promise(() => writeFile(workConfig, '{"model":"fixture/new"}'));
+        expect((yield* discovery.listModels(work)).cached).toBe(false);
+        expect((yield* discovery.listModels(personal)).cached).toBe(true);
+      }),
+    });
+    expect(listModels).toHaveBeenCalledTimes(3);
   });
 
   it("omits malformed model descriptors while preserving valid entries", async () => {

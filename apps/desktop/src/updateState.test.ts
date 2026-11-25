@@ -1,7 +1,9 @@
+// Verifies updater version-lane admission and progress/recovery behavior.
 import { describe, expect, it } from "vitest";
 import type { DesktopUpdateState } from "@synara/contracts";
 
 import {
+  canCheckForDesktopUpdates,
   getCanRetryAfterDownloadFailure,
   getAutoUpdateDisabledReason,
   getDownloadStallTimeoutMessage,
@@ -12,6 +14,8 @@ import {
   nextStatusAfterDownloadFailure,
   shouldCheckForUpdatesOnForeground,
   shouldBroadcastDownloadProgress,
+  shouldAcceptAvailableUpdate,
+  updateFilesMatchRuntimeArch,
 } from "./updateState";
 
 const baseState: DesktopUpdateState = {
@@ -32,6 +36,17 @@ const baseState: DesktopUpdateState = {
   flavor: "production",
   releaseUrl: null,
 };
+
+describe("update check admission", () => {
+  it.each([
+    ["downloaded", true],
+    ["available", true],
+    ["checking", false],
+    ["downloading", false],
+  ] as const)("checks while %s only when no operation owns the updater", (status, allowed) => {
+    expect(canCheckForDesktopUpdates({ ...baseState, status })).toBe(allowed);
+  });
+});
 
 describe("getDownloadStallTimeoutMessage", () => {
   it("formats the no-progress timeout in seconds", () => {
@@ -186,20 +201,30 @@ describe("isUpdateVersionNewer", () => {
 });
 
 describe("isUpdateVersionAllowedForFlavor", () => {
-  it("lets beta installs accept only beta releases", () => {
-    expect(isUpdateVersionAllowedForFlavor("0.8.4-beta.2", "beta")).toBe(true);
-    expect(isUpdateVersionAllowedForFlavor("0.8.4-beta", "beta")).toBe(true);
-    // The GitHub feed falls back to latest-mac.yml when beta-mac.yml is
-    // absent; a stable build must never be offered to a beta install.
-    expect(isUpdateVersionAllowedForFlavor("0.8.4", "beta")).toBe(false);
-    expect(isUpdateVersionAllowedForFlavor("0.9.0", "beta")).toBe(false);
-    expect(isUpdateVersionAllowedForFlavor("0.8.4-alpha.1", "beta")).toBe(false);
-    expect(isUpdateVersionAllowedForFlavor("0.8.4-betamax.1", "beta")).toBe(false);
-  });
+  it.each(["beta", "remote"] as const)(
+    "lets %s installs accept only their own releases",
+    (flavor) => {
+      expect(isUpdateVersionAllowedForFlavor(`0.8.4-${flavor}.2`, flavor)).toBe(true);
+      expect(isUpdateVersionAllowedForFlavor(`0.8.4-${flavor}`, flavor)).toBe(true);
+      expect(
+        isUpdateVersionAllowedForFlavor(
+          `0.8.4-${flavor === "remote" ? "beta" : "remote"}.1`,
+          flavor,
+        ),
+      ).toBe(false);
+      // The GitHub feed falls back to latest-mac.yml when beta-mac.yml is
+      // absent; a stable build must never be offered to a beta install.
+      expect(isUpdateVersionAllowedForFlavor("0.8.4", flavor)).toBe(false);
+      expect(isUpdateVersionAllowedForFlavor("0.9.0", flavor)).toBe(false);
+      expect(isUpdateVersionAllowedForFlavor("0.8.4-alpha.1", flavor)).toBe(false);
+      expect(isUpdateVersionAllowedForFlavor("0.8.4-betamax.1", flavor)).toBe(false);
+    },
+  );
 
   it("lets production installs accept only stable releases", () => {
     expect(isUpdateVersionAllowedForFlavor("0.8.4", "production")).toBe(true);
     expect(isUpdateVersionAllowedForFlavor("0.8.4-beta.1", "production")).toBe(false);
+    expect(isUpdateVersionAllowedForFlavor("0.8.4-remote.1", "production")).toBe(false);
     expect(isUpdateVersionAllowedForFlavor("v0.8.4-alpha.9", "production")).toBe(false);
   });
 
@@ -208,12 +233,16 @@ describe("isUpdateVersionAllowedForFlavor", () => {
     expect(isUpdateVersionAllowedForFlavor("0.8.4", "development")).toBe(true);
   });
 
-  it("fails closed on unparseable versions for beta and production", () => {
-    expect(isUpdateVersionAllowedForFlavor("nightly-build", "beta")).toBe(false);
-    expect(isUpdateVersionAllowedForFlavor("nightly-build", "production")).toBe(false);
-    // Canary keeps the pre-existing "differs means newer" passthrough.
-    expect(isUpdateVersionAllowedForFlavor("nightly-build", "canary")).toBe(true);
-  });
+  it.each(["nightly-build", "0.8.4-remote..1", "0.8.4-remote."])(
+    "fails closed on malformed version %s for packaged release lanes",
+    (version) => {
+      expect(isUpdateVersionAllowedForFlavor(version, "beta")).toBe(false);
+      expect(isUpdateVersionAllowedForFlavor(version, "remote")).toBe(false);
+      expect(isUpdateVersionAllowedForFlavor(version, "production")).toBe(false);
+      // Canary keeps the pre-existing "differs means newer" passthrough.
+      expect(isUpdateVersionAllowedForFlavor("nightly-build", "canary")).toBe(true);
+    },
+  );
 });
 
 describe("getAutoUpdateDisabledReason", () => {
@@ -384,6 +413,100 @@ describe("shouldCheckForUpdatesOnForeground", () => {
         foregroundedAtMs: Date.parse("2026-03-04T00:06:00.000Z"),
         minBackgroundDurationMs: 30_000,
         minIntervalMs: 5 * 60 * 1000,
+      }),
+    ).toBe(true);
+  });
+});
+
+describe("resolved update artifact architecture", () => {
+  const arm64AppImage = "Synara-1.5.2-arm64.AppImage";
+  const intelAppImage = "Synara-1.5.2-x86_64.AppImage";
+  const files = (...urls: string[]) => ({ files: urls.map((url) => ({ url })) });
+
+  it("keeps both Linux architectures on their own payload", () => {
+    expect(updateFilesMatchRuntimeArch(files(arm64AppImage), "linux", "arm64")).toBe(true);
+    expect(updateFilesMatchRuntimeArch(files(intelAppImage), "linux", "arm64")).toBe(false);
+    expect(updateFilesMatchRuntimeArch(files(intelAppImage), "linux", "x64")).toBe(true);
+    expect(updateFilesMatchRuntimeArch(files(arm64AppImage), "linux", "x64")).toBe(false);
+  });
+
+  it("rejects a manifest that mixes architectures", () => {
+    expect(updateFilesMatchRuntimeArch(files(intelAppImage, arm64AppImage), "linux", "arm64")).toBe(
+      false,
+    );
+    expect(updateFilesMatchRuntimeArch(files(intelAppImage, arm64AppImage), "linux", "x64")).toBe(
+      false,
+    );
+  });
+
+  it("inspects the legacy top-level path when files are absent", () => {
+    expect(updateFilesMatchRuntimeArch({ path: arm64AppImage }, "linux", "arm64")).toBe(true);
+    expect(updateFilesMatchRuntimeArch({ path: intelAppImage }, "linux", "arm64")).toBe(false);
+    expect(updateFilesMatchRuntimeArch({ path: intelAppImage }, "linux", "x64")).toBe(true);
+    expect(updateFilesMatchRuntimeArch({ path: arm64AppImage }, "linux", "x64")).toBe(false);
+    expect(updateFilesMatchRuntimeArch({}, "linux", "arm64")).toBe(false);
+  });
+
+  it("reads the payload name from URLs with a directory, query or fragment", () => {
+    const hostedArm64 =
+      "https://github.com/o/r/releases/download/v1.5.2/Synara-1.5.2-arm64.AppImage?token=1";
+    const hostedIntel =
+      "https://github.com/o/r/releases/download/v1.5.2/Synara-1.5.2-x86_64.AppImage#frag";
+    expect(updateFilesMatchRuntimeArch(files(hostedArm64), "linux", "arm64")).toBe(true);
+    expect(updateFilesMatchRuntimeArch(files(hostedIntel), "linux", "x64")).toBe(true);
+    expect(updateFilesMatchRuntimeArch(files(hostedArm64), "linux", "x64")).toBe(false);
+  });
+
+  it("leaves other platforms alone and rejects Linux payloads it cannot name", () => {
+    expect(updateFilesMatchRuntimeArch(files(intelAppImage), "darwin", "arm64")).toBe(true);
+    expect(updateFilesMatchRuntimeArch(files(intelAppImage), "win32", "x64")).toBe(true);
+    expect(
+      updateFilesMatchRuntimeArch(
+        { files: [{ url: undefined }, { url: "Synara-1.5.2.zip" }] },
+        "linux",
+        "arm64",
+      ),
+    ).toBe(false);
+  });
+});
+
+describe("available update admission", () => {
+  const arm64AppImage = "Synara-1.5.2-arm64.AppImage";
+  const intelAppImage = "Synara-1.5.2-x86_64.AppImage";
+  const candidate = (info: { path?: string; files?: ReadonlyArray<{ url?: string }> }) => ({
+    currentVersion: "1.5.1",
+    version: "1.5.2",
+    flavor: "production" as const,
+    info,
+    platform: "linux" as NodeJS.Platform,
+    arch: "arm64",
+  });
+
+  it("composes lane, version and architecture into one decision", () => {
+    expect(shouldAcceptAvailableUpdate(candidate({ files: [{ url: arm64AppImage }] }))).toBe(true);
+    expect(shouldAcceptAvailableUpdate(candidate({ files: [{ url: intelAppImage }] }))).toBe(false);
+    expect(shouldAcceptAvailableUpdate(candidate({ path: intelAppImage }))).toBe(false);
+    expect(shouldAcceptAvailableUpdate(candidate({ path: arm64AppImage }))).toBe(true);
+  });
+
+  it("still rejects an old version and a foreign flavor lane", () => {
+    expect(
+      shouldAcceptAvailableUpdate({
+        ...candidate({ files: [{ url: arm64AppImage }] }),
+        version: "1.5.0",
+      }),
+    ).toBe(false);
+    expect(
+      shouldAcceptAvailableUpdate({
+        ...candidate({ files: [{ url: arm64AppImage }] }),
+        version: "1.5.2-beta.1",
+      }),
+    ).toBe(false);
+    expect(
+      shouldAcceptAvailableUpdate({
+        ...candidate({ files: [{ url: arm64AppImage }] }),
+        version: "1.5.2-beta.1",
+        flavor: "beta",
       }),
     ).toBe(true);
   });

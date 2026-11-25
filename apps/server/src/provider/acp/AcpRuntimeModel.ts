@@ -464,7 +464,6 @@ function makeToolCallState(
   // A subagent's own description ("Explore composer UI") is the row heading; the
   // provider title ("Task: Explore composer UI") is only the fallback.
   const title = subagent?.description ?? (input.title?.trim() || undefined);
-  const command = subagent ? undefined : extractToolCallCommand(input.rawInput, title);
   const textContent = extractTextContentFromToolCallContent(input.content);
   const structuredContent = summarizeToolCallContent(input.content);
   const locationDetail = summarizeToolCallLocations(input.locations);
@@ -484,6 +483,15 @@ function makeToolCallState(
     : imageGeneration
       ? ACP_IMAGE_GENERATION_TOOL_KIND
       : (protocolKind ?? inferToolKindFromProviderTitle(title));
+  // Only execution-like calls carry a command. `extractToolCallCommand` also
+  // scrapes backticked paths out of titles ("Read `/home/x`"), which Grok
+  // emits for kind:"read" — without this gate the transcript rendered every
+  // file read as "Ran <path>" with the terminal icon.
+  const command =
+    subagent ||
+    (kind !== undefined && kind !== "other" && kind !== "execute" && kind !== "terminal")
+      ? undefined
+      : extractToolCallCommand(input.rawInput, title);
   const normalizedTitle =
     title && title.toLowerCase() !== "terminal" && title.toLowerCase() !== "tool call"
       ? title

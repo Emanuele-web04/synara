@@ -254,6 +254,26 @@ describe("applyGroupWorkerRoutingDefaults", () => {
     expect(draft?.providerOptionsForDispatch).toEqual(GROUP_PROVIDER_OPTIONS);
   });
 
+  it("uses the configured healthy account when the provider default is disabled", () => {
+    const modelSelection = { ...GROUP_MODEL, instanceId: "work_claude" } satisfies ModelSelection;
+    useComposerDraftStore
+      .getState()
+      .setModelSelection(THREAD_ID, { provider: "codex", model: "gpt-5.4" });
+    applyGroupWorkerRoutingDefaults({
+      threadId: THREAD_ID,
+      defaults: { modelSelection },
+      providerStatuses: [
+        { ...GROUP_PROVIDER_STATUS, enabled: false, available: false },
+        { ...GROUP_PROVIDER_STATUS, instanceId: "work_claude" },
+        FALLBACK_PROVIDER_STATUS,
+      ],
+    });
+
+    expect(useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.activeProvider).toBe(
+      "work_claude",
+    );
+  });
+
   it("pins the group's model optimistically while provider statuses are still loading", () => {
     applyGroupWorkerRoutingDefaults({
       threadId: THREAD_ID,

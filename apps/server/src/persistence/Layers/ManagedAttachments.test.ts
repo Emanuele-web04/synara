@@ -8,8 +8,11 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import {
   MANAGED_ATTACHMENT_CLEANUP_MAX_ATTEMPTS,
+  MANAGED_ATTACHMENT_TRANSITIONS,
   ManagedAttachmentRepository,
+  canTransitionManagedAttachment,
   type ManagedAttachmentRepositoryShape,
+  type ManagedAttachmentState,
 } from "../Services/ManagedAttachments.ts";
 import { makeManagedAttachmentRepositoryLive } from "./ManagedAttachments.ts";
 import { SqlitePersistenceMemory } from "./Sqlite.ts";
@@ -797,4 +800,184 @@ layer("ManagedAttachmentRepository", (it) => {
       ),
     );
   });
+
+  // The SQL guards are the authoritative enforcement of the attachment state machine.
+  // Drive every state-writing helper from every state so a guard that drifts from the
+  // declared table fails here instead of reviving a deleted blob or deleting a live one.
+  it.effect("moves an attachment only along the declared lifecycle transitions", () =>
+    Effect.gen(function* () {
+      const repository = yield* ManagedAttachmentRepository;
+      const sql = yield* SqlClient.SqlClient;
+      const owner = { ownerThreadId: "thread-1", ownerKind: "principal", ownerId: "principal-1" };
+      const now = "2026-07-14T10:30:00.000Z";
+      const later = "2099-01-01T00:00:00.000Z";
+      const leaseOwner = "lease-lifecycle";
+      const sha = "a".repeat(64);
+      const states = Object.keys(MANAGED_ATTACHMENT_TRANSITIONS) as ManagedAttachmentState[];
+      const helpers: Record<
+        string,
+        {
+          readonly to: ManagedAttachmentState;
+          readonly from: ReadonlyArray<ManagedAttachmentState>;
+          readonly run: (attachmentId: string) => Effect.Effect<unknown, unknown>;
+        }
+      > = {
+        finalizeStaged: {
+          to: "staged",
+          from: ["uploading"],
+          run: (attachmentId) =>
+            repository.finalizeStaged({
+              ...owner,
+              attachmentId,
+              sizeBytes: 2,
+              sha256: sha,
+              stagingExpiresAt: "2026-07-14T11:00:00.000Z",
+              now,
+            }),
+        },
+        claimForAcceptedTurn: {
+          to: "claimed",
+          from: ["staged"],
+          run: (attachmentId) =>
+            repository.claimForAcceptedTurn({
+              ...owner,
+              attachmentIds: [attachmentId],
+              commandId: "command-lifecycle",
+              messageId: "message-lifecycle",
+              now,
+            }),
+        },
+        cancelStaged: {
+          to: "deleting",
+          from: ["uploading", "staged"],
+          run: (attachmentId) =>
+            repository.cancelStaged({
+              attachmentId,
+              ownerKind: owner.ownerKind,
+              ownerId: owner.ownerId,
+              reason: "cancelled",
+              requestedAt: now,
+            }),
+        },
+        markCleanupByIds: {
+          to: "deleting",
+          from: ["uploading", "staged", "claimed"],
+          run: (attachmentId) =>
+            repository.markCleanupByIds({
+              attachmentIds: [attachmentId],
+              ownerThreadId: owner.ownerThreadId,
+              reason: "removed",
+              requestedAt: now,
+            }),
+        },
+        markCleanupByThread: {
+          to: "deleting",
+          from: ["uploading", "staged", "claimed"],
+          run: () =>
+            repository.markCleanupByThread({
+              ownerThreadId: owner.ownerThreadId,
+              reason: "thread-deleted",
+              requestedAt: now,
+            }),
+        },
+        markUnreferencedClaimedForCleanup: {
+          to: "deleting",
+          from: ["claimed"],
+          run: () =>
+            repository.markUnreferencedClaimedForCleanup({
+              ownerThreadId: owner.ownerThreadId,
+              retainedAttachmentIds: [],
+              reason: "unreferenced",
+              requestedAt: now,
+            }),
+        },
+        markExpiredForCleanup: {
+          to: "deleting",
+          from: ["uploading", "staged"],
+          run: () =>
+            repository.markExpiredForCleanup({ now: later, uploadingCutoff: later, limit: 10 }),
+        },
+        completeCleanup: {
+          to: "deleted",
+          from: ["deleting"],
+          run: (attachmentId) =>
+            repository.completeCleanup({
+              attachmentId,
+              expectedLeaseOwner: leaseOwner,
+              disposition: "deleted",
+              completedAt: now,
+            }),
+        },
+      };
+
+      for (const [name, helper] of Object.entries(helpers)) {
+        for (const from of states) {
+          yield* resetSchema;
+          const attachmentId = `attachment-lifecycle-${name}-${from}`;
+          yield* repository.reserve(
+            reserveInput({ attachmentId, relativePath: `attachments/${attachmentId}.txt` }),
+          );
+          // Walk the row to `from` along legal edges (the state-transition trigger rejects
+          // anything else), filling the columns each state requires.
+          if (from !== "uploading") {
+            yield* sql`
+              UPDATE managed_attachment_blobs
+              SET state = 'staged', size_bytes = 2, sha256 = ${sha},
+                  staging_expires_at = '2026-07-14T11:00:00.000Z'
+              WHERE attachment_id = ${attachmentId}
+            `;
+          }
+          if (from === "claimed") {
+            yield* sql`
+              UPDATE managed_attachment_blobs
+              SET state = 'claimed', claim_command_id = 'command-earlier',
+                  claim_message_id = 'message-earlier', claimed_at = ${now}
+              WHERE attachment_id = ${attachmentId}
+            `;
+          }
+          if (from === "deleting" || from === "deleted") {
+            yield* sql`
+              UPDATE managed_attachment_blobs
+              SET state = 'deleting', delete_reason = 'earlier', delete_requested_at = ${now}
+              WHERE attachment_id = ${attachmentId}
+            `;
+          }
+          if (from === "deleted") {
+            yield* sql`
+              UPDATE managed_attachment_blobs SET state = 'deleted', deleted_at = ${now}
+              WHERE attachment_id = ${attachmentId}
+            `;
+          }
+          yield* sql`
+            INSERT INTO managed_attachment_cleanup_jobs (
+              attachment_id, reason, attempt_count, next_attempt_at,
+              lease_owner, lease_expires_at, last_error, created_at, updated_at
+            ) VALUES (${attachmentId}, 'lifecycle', 0, ${now}, ${leaseOwner}, ${later}, NULL, ${now}, ${now})
+          `;
+
+          yield* helper.run(attachmentId);
+
+          const rows = yield* sql<{ readonly state: ManagedAttachmentState }>`
+            SELECT state FROM managed_attachment_blobs WHERE attachment_id = ${attachmentId}
+          `;
+          const acts = helper.from.includes(from);
+          assert.strictEqual(rows[0]?.state, acts ? helper.to : from, `${name}: ${from}`);
+          if (acts) {
+            assert.isTrue(canTransitionManagedAttachment(from, helper.to), `${name}: ${from}`);
+          }
+        }
+      }
+
+      // Every declared edge is realized by a repository helper.
+      for (const from of states) {
+        for (const to of MANAGED_ATTACHMENT_TRANSITIONS[from]) {
+          assert.isTrue(
+            Object.values(helpers).some((helper) => helper.to === to && helper.from.includes(from)),
+            `${from} -> ${to}`,
+          );
+        }
+      }
+      yield* resetSchema;
+    }),
+  );
 });

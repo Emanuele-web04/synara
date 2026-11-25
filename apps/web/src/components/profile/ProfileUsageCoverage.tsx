@@ -3,7 +3,7 @@
 // Layer: web profile feature.
 
 import type { ProviderKind } from "@synara/contracts";
-import { formatProviderLabel } from "./profileFormatting";
+import { formatProviderLabel } from "@synara/profile-ui/formatting";
 import { useTranslation } from "~/i18n";
 
 export function ProfileUsageCoverage({

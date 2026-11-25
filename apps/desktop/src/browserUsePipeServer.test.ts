@@ -63,6 +63,7 @@ async function withPipeServer(
     readonly maxInFlightRequests?: number;
     readonly maxQueuedOutputBytes?: number;
     readonly automationHost?: { executeTool: (request: unknown) => Promise<unknown> };
+    readonly browserSessionReady?: Promise<void>;
   },
   run: (socket: Socket) => Promise<void>,
 ): Promise<void> {
@@ -78,6 +79,7 @@ async function withPipeServer(
       ? {}
       : { maxQueuedOutputBytes: options.maxQueuedOutputBytes }),
     ...(options.automationHost ? { automationHost: options.automationHost as never } : {}),
+    ...(options.browserSessionReady ? { browserSessionReady: options.browserSessionReady } : {}),
   });
   await server.start();
   const socket = await connect(pipePath);
@@ -272,6 +274,45 @@ describe("canonical browser host RPC", () => {
         signal: expect.any(AbortSignal),
       });
     });
+  });
+
+  it("holds browser tools until the browser session is ready", async () => {
+    const executeTool = vi.fn(async () => ({ available: true }));
+    let sessionReady!: () => void;
+    const browserSessionReady = new Promise<void>((resolve) => {
+      sessionReady = resolve;
+    });
+    await withPipeServer(
+      { automationHost: { executeTool }, browserSessionReady },
+      async (socket) => {
+        await expect(
+          request(socket, {
+            jsonrpc: "2.0",
+            id: 1,
+            method: "getInfo",
+            params: { session_id: "session-1", capability: TEST_CAPABILITY },
+          }),
+        ).resolves.toMatchObject({ id: 1, result: { type: "synara-browser-host" } });
+        const response = request(socket, {
+          jsonrpc: "2.0",
+          id: 2,
+          method: "executeTool",
+          params: {
+            session_id: "session-1",
+            provider: "claude",
+            thread_id: "thread-1",
+            name: "browser_status",
+            arguments: {},
+          },
+        });
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        expect(executeTool).not.toHaveBeenCalled();
+
+        sessionReady();
+        await expect(response).resolves.toMatchObject({ id: 2, result: { available: true } });
+        expect(executeTool).toHaveBeenCalledTimes(1);
+      },
+    );
   });
 
   it("rejects a workspace root that is not an absolute bounded host field", async () => {

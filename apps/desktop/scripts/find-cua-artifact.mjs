@@ -1,7 +1,9 @@
 // Only the dedicated successful default-branch producer may supply cross-run
-// binaries. Exact build-key and executable verification still happen on import.
+// release inputs: Cua binaries and the macOS icon catalog. Exact build-key and
+// content verification still happen on import.
 export async function findCuaArtifact(github, repo, key) {
-  if (!/^cua-v1-[a-f0-9]{64}$/.test(key)) throw new Error("Invalid Cua build key.");
+  if (!/^(?:cua|mac-icon)-v1-[a-f0-9]{64}$/.test(key))
+    throw new Error("Invalid release cache key.");
   const { data: repository } = await github.rest.repos.get(repo);
   const { data: workflow } = await github.rest.actions.getWorkflow({
     ...repo,

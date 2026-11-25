@@ -520,6 +520,15 @@ const makeProjectAgentRepository = Effect.gen(function* () {
     `,
   });
 
+  const listAllLinkedIds = SqlSchema.findAll({
+    Request: Schema.Struct({}),
+    Result: Schema.Struct({ projectId: ProjectId, linkedProjectId: ProjectId }),
+    execute: () => sql`
+      SELECT project_id AS "projectId", linked_project_id AS "linkedProjectId"
+      FROM project_agent_linked_projects
+    `,
+  });
+
   const withLinkedIds = (config: ProjectAgentConfig) =>
     listLinkedIds({ projectId: config.projectId }).pipe(
       Effect.map((rows) => ({
@@ -614,7 +623,31 @@ const makeProjectAgentRepository = Effect.gen(function* () {
         Effect.mapError(
           toPersistenceSqlOrDecodeError("ProjectAgentRepository.listConfigs", "config"),
         ),
-        Effect.flatMap((rows) => Effect.forEach(rows, (row) => withLinkedIds(toConfig(row)))),
+        Effect.flatMap((rows) => {
+          if (rows.length === 0) {
+            return Effect.succeed<ReadonlyArray<ProjectAgentConfig>>([]);
+          }
+          return listAllLinkedIds({}).pipe(
+            Effect.mapError(
+              toPersistenceSqlOrDecodeError("ProjectAgentRepository.linkedProjects", "linked"),
+            ),
+            Effect.map((links) => {
+              const linkedByProject = new Map<ProjectId, Array<ProjectId>>();
+              for (const link of links) {
+                const existing = linkedByProject.get(link.projectId);
+                if (existing) {
+                  existing.push(link.linkedProjectId);
+                } else {
+                  linkedByProject.set(link.projectId, [link.linkedProjectId]);
+                }
+              }
+              return rows.map((row) => ({
+                ...toConfig(row),
+                linkedProjectIds: linkedByProject.get(row.projectId) ?? [],
+              }));
+            }),
+          );
+        }),
       ),
     listSummaries: () =>
       Effect.gen(function* () {

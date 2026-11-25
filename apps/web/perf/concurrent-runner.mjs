@@ -1,6 +1,6 @@
 // Usage: node perf/concurrent-runner.mjs <artifact-directory> [baseline|paired|final]
 import { createServer } from "node:http";
-import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join, extname, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
 import { chromium } from "playwright";

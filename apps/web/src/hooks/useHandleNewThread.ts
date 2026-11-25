@@ -5,12 +5,15 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { startTransition, useMemo } from "react";
 import {
   getProviderInstanceOptions,
+  newChatDefaultForProvider,
+  newChatDefaultInstanceIdFor,
   resolveSelectableProviderInstanceId,
   useAppSettings,
 } from "../appSettings";
 import { prefetchModelsForNewThread } from "../lib/providerModelPrefetch";
 import { hasActiveComposerSend } from "../lib/composerSendOwnership";
 import { useProviderStatusesForLocalConfig } from "../hooks/useProviderStatusesForLocalConfig";
+import { useNewChatDefault } from "./useNewChatDefault";
 import {
   hasReconciledServerProviderStatuses,
   serverConfigQueryOptions,
@@ -18,6 +21,7 @@ import {
 import {
   type ComposerThreadDraftState,
   type DraftThreadState,
+  resolveNewThreadRuntimeMode,
   resolvePreferredComposerModelSelection,
   useComposerDraftStore,
 } from "../composerDraftStore";
@@ -27,7 +31,9 @@ import {
 } from "../lib/groupWorkerRouting";
 import {
   findProviderStatus,
+  findUsableProviderStatus,
   isProviderUsable,
+  providerStatusInstanceKey,
   resolveAvailableProviderPreference,
 } from "../lib/providerAvailability";
 import {
@@ -74,6 +80,7 @@ export function useHandleNewThread() {
   const projects = useStore((store) => store.projects);
   const { settings, serverSettings } = useAppSettings();
   const providerInstances = useMemo(() => getProviderInstanceOptions(settings), [settings]);
+  const newChatDefault = useNewChatDefault(settings);
   const resolveProviderForInstanceId = (instanceId: ProviderInstanceId) =>
     providerInstances.find((instance) => instance.instanceId === instanceId)?.provider ?? null;
   const queryClient = useQueryClient();
@@ -117,6 +124,7 @@ export function useHandleNewThread() {
 
       prefetchModelsForNewThread(queryClient, {
         settings,
+        newChatDefault,
         serverSettings: serverSettings ?? null,
         hiddenProviders: settings.hiddenProviders,
         providerOverride: options?.provider ?? null,
@@ -242,14 +250,29 @@ export function useHandleNewThread() {
       }
 
       const fallbackProvider = resolveAvailableProviderPreference({
-        preferredProvider: projectDefaultModelSelection?.provider ?? settings.defaultProvider,
+        preferredProvider: projectDefaultModelSelection?.provider ?? newChatDefault.defaultProvider,
         statuses: providerStatuses,
         providerOrder: settings.providerOrder,
         hiddenProviders: settings.hiddenProviders,
       });
-      if (!isProviderUsable(findProviderStatus(providerStatuses, fallbackProvider))) {
-        return;
-      }
+      const fallbackInstanceId = resolveSelectableProviderInstanceId(
+        settings,
+        fallbackProvider,
+        projectDefaultModelSelection?.provider === fallbackProvider
+          ? projectDefaultModelSelection.instanceId
+          : newChatDefaultInstanceIdFor(
+              newChatDefault,
+              fallbackProvider,
+              projectDefaultModelSelection?.provider,
+            ),
+      );
+      const fallbackStatus = findUsableProviderStatus(
+        providerStatuses,
+        fallbackProvider,
+        fallbackInstanceId,
+        providerInstances,
+      );
+      if (!fallbackStatus) return;
 
       setModelSelection(
         threadId,
@@ -257,12 +280,12 @@ export function useHandleNewThread() {
           draft: draft
             ? {
                 modelSelectionByProvider: draft.modelSelectionByProvider,
-                activeProvider: fallbackProvider,
+                activeProvider: providerStatusInstanceKey(fallbackStatus),
               }
             : null,
           threadModelSelection: null,
           projectModelSelection: projectDefaultModelSelection,
-          defaultProvider: fallbackProvider,
+          newChatDefault: newChatDefaultForProvider(fallbackProvider),
           resolveProviderForInstanceId,
         }),
       );
@@ -277,7 +300,10 @@ export function useHandleNewThread() {
       resolveTerminalThreadCreationState({
         activeDraftThread: activeDraftThreadSnapshot,
         activeThread: activeThreadSnapshot,
-        defaultProvider: options?.provider ?? settings.defaultProvider,
+        // An explicit provider pick starts on that agent's default account.
+        newChatDefault: options?.provider
+          ? newChatDefaultForProvider(options.provider)
+          : newChatDefault,
         draftComposerState:
           useComposerDraftStore.getState().draftsByThreadId[targetThreadId] ?? null,
         draftThread,
@@ -409,6 +435,7 @@ export function useHandleNewThread() {
         entryPoint,
         options,
         defaultEnvMode,
+        defaultRuntimeMode: resolveNewThreadRuntimeMode(),
       });
       const containerDefaults = await resolveGroupContainerThreadDefaults({
         projectId,

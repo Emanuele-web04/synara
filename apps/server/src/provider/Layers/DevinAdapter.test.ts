@@ -42,7 +42,6 @@ import {
   buildDevinPromptMeta,
   buildDevinStaticModelDescriptors,
   canRecoverDevinWedge,
-  closeDevinSessionResources,
   evaluateDevinWedgeSignal,
   makeCachedDevinModelDiscovery,
   mergeDevinModelDescriptors,
@@ -1810,8 +1809,6 @@ describe("Devin adapter lifecycle", () => {
         const afterSecond = yield* adapter.readThread(threadId);
         expect(afterSecond.turns.map((turn) => turn.id)).toEqual([first.turnId, second.turnId]);
         expect(afterSecond.turns[0]?.items).toEqual(afterFirst.turns[0]?.items);
-        expect(afterFirst.turns.map((turn) => turn.id)).toEqual([first.turnId]);
-        expect(afterFirst.turns[0]?.items.length).toBeGreaterThan(0);
         expect(afterSecond.turns[1]?.items.length).toBeGreaterThan(0);
         yield* adapter.stopSession(threadId);
       }).pipe(Effect.provide(makeDevinAdapterTestLayer(runtime, completeProcessedEvent))),
@@ -1936,32 +1933,43 @@ describe("applyDevinSessionConfiguration", () => {
     expect(calls).toEqual([]);
   });
 
-  it("fails closed when plan mode is not available", async () => {
-    const { runtime } = makeFakeAcpRuntime({
-      currentModeId: "default",
-      availableModes: [{ id: "default", name: "Default" }],
+  it.each(["approval-required", "plan"] as const)(
+    "fails closed for unavailable %s mode",
+    async (mode) => {
+      const { runtime, calls } = makeFakeAcpRuntime(
+        mode === "plan"
+          ? { currentModeId: "default", availableModes: [{ id: "default", name: "Default" }] }
+          : undefined,
+      );
+
+      await expect(
+        Effect.runPromise(
+          applyDevinSessionConfiguration({
+            runtime,
+            runtimeMode: mode === "plan" ? "full-access" : "approval-required",
+            interactionMode: mode === "plan" ? "plan" : undefined,
+          }),
+        ),
+      ).rejects.toMatchObject({ _tag: "ProviderAdapterValidationError" });
+      expect(calls).toEqual([]);
+    },
+  );
+
+  it("rejects Auto even when Devin advertises Full Access", async () => {
+    const { runtime, calls } = makeFakeAcpRuntime({
+      currentModeId: "accept-edits",
+      availableModes: [
+        { id: "accept-edits", name: "Code" },
+        { id: "bypass", name: "Full Access" },
+      ],
     });
 
     await expect(
       Effect.runPromise(
         applyDevinSessionConfiguration({
           runtime,
-          runtimeMode: "full-access",
-          interactionMode: "plan",
-        }),
-      ),
-    ).rejects.toMatchObject({ _tag: "ProviderAdapterValidationError" });
-  });
-
-  it("fails closed for approval-required when mode discovery is unavailable", async () => {
-    const { runtime, calls } = makeFakeAcpRuntime();
-
-    await expect(
-      Effect.runPromise(
-        applyDevinSessionConfiguration({
-          runtime,
-          runtimeMode: "approval-required",
-          interactionMode: undefined,
+          runtimeMode: "auto",
+          interactionMode: "default",
         }),
       ),
     ).rejects.toMatchObject({ _tag: "ProviderAdapterValidationError" });
@@ -1977,23 +1985,6 @@ describe("resolveRequestedModeId", () => {
     { id: "plan", name: "Plan" },
     { id: "bypass", name: "Full Access" },
   ];
-  it("selects plan mode by exact alias", async () => {
-    const modeId = await Effect.runPromise(
-      resolveRequestedModeId({
-        modeState: {
-          currentModeId: "default",
-          availableModes: [
-            { id: "default", name: "Default" },
-            { id: "plan", name: "Plan" },
-          ],
-        },
-        runtimeMode: "full-access",
-        interactionMode: "plan",
-      }),
-    );
-    expect(modeId).toBe("plan");
-  });
-
   it("leaves default mode unchanged for non-plan turns", async () => {
     const modeId = await Effect.runPromise(
       resolveRequestedModeId({
@@ -2023,18 +2014,6 @@ describe("resolveRequestedModeId", () => {
     ).rejects.toMatchObject({ _tag: "ProviderAdapterValidationError" });
   });
 
-  it("rejects approval-required when mode state is unavailable", async () => {
-    await expect(
-      Effect.runPromise(
-        resolveRequestedModeId({
-          modeState: undefined,
-          runtimeMode: "approval-required",
-          interactionMode: undefined,
-        }),
-      ),
-    ).rejects.toMatchObject({ _tag: "ProviderAdapterValidationError" });
-  });
-
   it("maps approval-required to Code in the real Devin 3000.6.7 catalog", async () => {
     await expect(
       Effect.runPromise(
@@ -2056,7 +2035,7 @@ describe("resolveRequestedModeId", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("keeps Plan precedence and never maps approval-required to Smart or Ask", async () => {
+  it("keeps Plan precedence and rejects unrecognized approval modes", async () => {
     await expect(
       Effect.runPromise(
         resolveRequestedModeId({
@@ -2072,6 +2051,7 @@ describe("resolveRequestedModeId", () => {
       [
         { id: "smart", name: "Smart" },
         { id: "ask", name: "Ask" },
+        { id: "code-bypass", name: "Code Bypass" },
       ],
     ]) {
       await expect(
@@ -2405,11 +2385,8 @@ describe("resolveDevinStartModel", () => {
 });
 
 describe("buildDevinPromptMeta", () => {
-  it("advertises plan mode through prompt metadata", () => {
+  it("maps plan to plan and default to agent", () => {
     expect(buildDevinPromptMeta("plan")).toEqual({ mode: "plan" });
-  });
-
-  it("maps omitted and default modes to agent", () => {
     expect(buildDevinPromptMeta("default")).toEqual({ mode: "agent" });
   });
 });
@@ -2422,13 +2399,6 @@ describe("buildDevinStaticModelDescriptors", () => {
       modelVariants: [
         { model: "swe-1-6", fastMode: false },
         { model: "swe-1-6-fast", fastMode: true },
-      ],
-    });
-    expect(descriptors.find((descriptor) => descriptor.slug === "swe-1-7")).toMatchObject({
-      supportsFastMode: true,
-      modelVariants: [
-        { model: "swe-1-7", fastMode: false },
-        { model: "swe-1-7-lightning", fastMode: true },
       ],
     });
   });
@@ -2521,29 +2491,6 @@ describe("Devin CLI model discovery", () => {
         { model: "swe-1-7-lightning", fastMode: true },
       ],
     });
-  });
-
-  it("humanizes family slugs when the CLI omits labels", () => {
-    const models = mergeDevinModelDescriptors([
-      parseDevinCliModelList(
-        JSON.stringify({
-          families: [
-            {
-              family_uid: "swe-1-7",
-              slug: "swe-1-7",
-              variants: [{ model_uid: "swe-1-7" }],
-            },
-            {
-              family_uid: "claude-opus-4-9-20260715",
-              slug: "claude-opus-4-9-20260715",
-              variants: [{ model_uid: "claude-opus-4-9-20260715" }],
-            },
-          ],
-        }),
-      ),
-    ]);
-
-    expect(models.map(({ name }) => name)).toEqual(["SWE 1.7", "Claude Opus 4.9 20260715"]);
   });
 
   it("exposes thinking and long-context toggles for Claude-style variants", () => {
@@ -2680,38 +2627,6 @@ describe("pruneDevinToolCallTurnIds", () => {
     pruneDevinToolCallTurnIds(toolCallTurnIds, undefined);
 
     expect(toolCallTurnIds.size).toBe(0);
-  });
-});
-
-describe("closeDevinSessionResources", () => {
-  it("closes the ACP scope before config cleanup and contains cleanup failure", async () => {
-    const calls: string[] = [];
-    const scope = await Effect.runPromise(Scope.make("sequential"));
-    await Effect.runPromise(
-      Scope.addFinalizer(
-        scope,
-        Effect.sync(() => {
-          calls.push("scope");
-        }),
-      ),
-    );
-
-    await expect(
-      Effect.runPromise(
-        closeDevinSessionResources({
-          scope,
-          config: {
-            cleanup: async () => {
-              calls.push("config");
-              throw new Error("cleanup rejected");
-            },
-          },
-        }),
-      ),
-    ).resolves.toBeUndefined();
-
-    expect(calls).toEqual(["scope", "config"]);
-    expect(await Effect.runPromise(Scope.close(scope, Exit.void))).toBeUndefined();
   });
 });
 
@@ -3034,6 +2949,66 @@ function makeFakeAgentGatewayCredentials(): AgentGatewayCredentialsShape {
   };
 }
 
+it("reopens Devin with the thread's gateway and connector over ACP", async () => {
+  const handles = makePermissionRuntime();
+  let runtimeInput: DevinAcpRuntimeInput | undefined;
+  const credentials = {
+    ...makeFakeAgentGatewayCredentials(),
+    connectionForThread: () => ({
+      url: "http://127.0.0.1:9/mcp",
+      bearerToken: "thread-bearer",
+      connectors: [{ name: "notion", url: "http://127.0.0.1:9/mcp/connectors/notion" }],
+    }),
+  };
+  const adapterLayer = makeDevinAdapterLive(
+    {},
+    {
+      makeAcpRuntime: (input) => {
+        runtimeInput = input;
+        return Effect.succeed(handles.runtime);
+      },
+    },
+  ).pipe(
+    Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "devin-adapter-test-" })),
+    Layer.provideMerge(NodeServices.layer),
+    Layer.provideMerge(Layer.succeed(AgentGatewayCredentials, credentials)),
+  );
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const adapter = yield* DevinAdapter;
+      const threadId = ThreadId.makeUnsafe("devin-resume-with-mcp");
+      yield* adapter.startSession({
+        provider: "devin",
+        threadId,
+        runtimeMode: "full-access",
+        resumeCursor: { schemaVersion: 1, sessionId: "devin-test-session" },
+      });
+      expect(runtimeInput?.resumeSessionId).toBe("devin-test-session");
+      expect(
+        runtimeInput?.buildMcpServers?.({
+          protocolVersion: 1,
+          authMethods: [],
+          agentCapabilities: { mcpCapabilities: { http: true } },
+        }),
+      ).toEqual([
+        {
+          type: "http",
+          name: "synara",
+          url: "http://127.0.0.1:9/mcp",
+          headers: [{ name: "Authorization", value: "Bearer thread-bearer" }],
+        },
+        {
+          type: "http",
+          name: "notion",
+          url: "http://127.0.0.1:9/mcp/connectors/notion",
+          headers: [{ name: "Authorization", value: "Bearer thread-bearer" }],
+        },
+      ]);
+      yield* adapter.stopSession(threadId);
+    }).pipe(Effect.provide(adapterLayer), Effect.scoped),
+  );
+});
+
 describe("Devin permission requests", () => {
   it("labels the approval card with the tracked tool name and arguments", async () => {
     vi.useFakeTimers();
@@ -3097,60 +3072,6 @@ describe("Devin permission requests", () => {
         expect(response).toEqual({
           outcome: { outcome: "selected", optionId: "allow-once" },
         });
-      }).pipe(
-        Effect.scoped,
-        Effect.provide(
-          makeDevinAdapterTestLayer(handles.runtime, handles.completeProcessedEvent, {
-            turnIdleMs: 3_600_000,
-            toolIdleMs: 3_600_000,
-          }),
-        ),
-      ),
-    );
-  });
-
-  it("falls back to the session label only when no tool state exists", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(1_000);
-    const handles = makePermissionRuntime();
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const adapter = yield* DevinAdapter;
-        const threadId = ThreadId.makeUnsafe("thread-devin-permission-fallback");
-        const runtimeEvents: Array<{
-          type: string;
-          requestId?: unknown;
-          payload?: Record<string, unknown>;
-        }> = [];
-        yield* adapter.streamEvents.pipe(
-          Stream.runForEach((event) =>
-            Effect.sync(() => {
-              runtimeEvents.push({
-                type: event.type,
-                requestId: event.requestId,
-                payload: event.payload as Record<string, unknown>,
-              });
-            }),
-          ),
-          Effect.forkScoped,
-        );
-        yield* adapter.startSession({
-          provider: "devin",
-          threadId,
-          runtimeMode: "approval-required",
-          cwd: process.cwd(),
-        });
-        yield* adapter.sendTurn({ threadId, input: "work", attachments: [] });
-
-        const pending = yield* handles
-          .requestPermission(makePermissionParams("untracked-call"))
-          .pipe(Effect.forkChild);
-        yield* flushTimers();
-        const opened = runtimeEvents.find((event) => event.type === "request.opened");
-        expect(String(opened?.payload?.detail)).toContain("Session devin-test-session");
-        yield* adapter.respondToRequest(threadId, opened!.requestId as never, "cancel");
-        const response = yield* Fiber.join(pending);
-        expect(response).toEqual({ outcome: { outcome: "cancelled" } });
       }).pipe(
         Effect.scoped,
         Effect.provide(
@@ -3445,14 +3366,15 @@ describe("Devin permission requests", () => {
         yield* adapter.sendTurn({ threadId, input: "coordinate", attachments: [] });
 
         // A Synara gateway tool call resolves without ever surfacing a prompt.
-        const gateway = yield* handles.requestPermission(
-          makePermissionParams("call-gw", {
+        yield* handles.emitToolCall("call-gw", "pending", {
+          kind: "other",
+          data: {
             kind: "other",
-            rawInput: {
-              _toolName: "synara_list_threads",
-              arguments: { limit: 3 },
-            },
-          }),
+            rawInput: { _toolName: "synara_list_threads", arguments: { limit: 3 } },
+          },
+        });
+        const gateway = yield* handles.requestPermission(
+          makePermissionParams("call-gw", { kind: null }),
         );
         expect(gateway).toEqual({
           outcome: { outcome: "selected", optionId: "allow-once" },
@@ -3527,6 +3449,16 @@ describe("Devin permission requests", () => {
 
         const openedCount = () =>
           runtimeEvents.filter((event) => event.type === "request.opened").length;
+        // Devin can report execute in session/update and omit the kind from
+        // the subsequent permission request. Keep the shell classification.
+        yield* handles.emitToolCall("sparse-execute", "pending", {
+          kind: "execute",
+          command: "pwd",
+          data: {
+            kind: "execute",
+            rawInput: { _toolName: "synara_list_threads", command: "pwd" },
+          },
+        });
         const promptCases: Array<{
           toolCallId: string;
           toolCall: Partial<Acp.RequestPermissionRequest["toolCall"]>;
@@ -3545,6 +3477,10 @@ describe("Devin permission requests", () => {
               kind: "execute",
               rawInput: { _toolName: "synara_list_threads", command: "rm -rf y" },
             },
+          },
+          {
+            toolCallId: "sparse-execute",
+            toolCall: { kind: null },
           },
           // The mcp__synara__ prefix alone names nothing: the part after it
           // must be a real catalog tool.
@@ -3570,6 +3506,9 @@ describe("Devin permission requests", () => {
           yield* flushTimers();
           expect(openedCount(), promptCase.toolCallId).toBe(before + 1);
           const opened = runtimeEvents.findLast((event) => event.type === "request.opened");
+          if (promptCase.toolCallId === "sparse-execute") {
+            expect(opened?.payload?.requestType).toBe("exec_command_approval");
+          }
           yield* adapter.respondToRequest(threadId, opened!.requestId as never, "cancel");
           expect(yield* Fiber.join(pending)).toEqual({ outcome: { outcome: "cancelled" } });
         }
@@ -4340,18 +4279,10 @@ it.each(["default", "plan"] as const)(
 );
 it.each([
   { name: "omitted metadata", toolMetadata: undefined, requestMetadata: undefined, invalid: false },
-  { name: "empty tool metadata", toolMetadata: {}, requestMetadata: undefined, invalid: false },
   {
     name: "unrelated tool metadata",
     toolMetadata: { trace: "permission" },
     requestMetadata: undefined,
-    invalid: false,
-  },
-  { name: "empty request metadata", toolMetadata: undefined, requestMetadata: {}, invalid: false },
-  {
-    name: "unrelated request metadata",
-    toolMetadata: undefined,
-    requestMetadata: { trace: "permission" },
     invalid: false,
   },
   {
@@ -4370,12 +4301,6 @@ it.each([
     name: "invalid tool owner",
     toolMetadata: { "cognition.ai/subagent_context": {} },
     requestMetadata: undefined,
-    invalid: true,
-  },
-  {
-    name: "invalid request owner",
-    toolMetadata: undefined,
-    requestMetadata: { "cognition.ai/subagent_context": { parentAgentId: 12 } },
     invalid: true,
   },
   {

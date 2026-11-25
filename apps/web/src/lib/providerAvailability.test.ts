@@ -429,6 +429,32 @@ describe("resolveAvailableProviderPreference", () => {
     ).toBe("antigravity");
   });
 
+  it("keeps the preferred Claude provider when its default account is disabled and a sibling is usable", () => {
+    expect(
+      resolveAvailableProviderPreference({
+        preferredProvider: "claudeAgent",
+        statuses: [
+          { ...READY_STATUS, provider: "codex", driver: "codex", instanceId: "codex" },
+          {
+            ...READY_STATUS,
+            provider: "claudeAgent",
+            driver: "claudeAgent",
+            instanceId: "claudeAgent",
+            enabled: false,
+            available: false,
+          },
+          {
+            ...READY_STATUS,
+            provider: "claudeAgent",
+            driver: "claudeAgent",
+            instanceId: "work_claude",
+          },
+        ],
+        providerOrder: ["codex", "claudeAgent"],
+      }),
+    ).toBe("claudeAgent");
+  });
+
   it("falls back to the first visible authenticated provider in picker order", () => {
     expect(
       resolveAvailableProviderPreference({

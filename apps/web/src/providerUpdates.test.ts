@@ -67,6 +67,7 @@ function serverSettings(overrides: Partial<ServerSettings["providers"]> = {}): S
     sidechatExpiry: "1h",
     sourceControlWritingStyle: "repository",
     sourceControlCustomInstructions: "",
+    gitAttributionEnabled: true,
     textGenerationModelSelection: { provider: "codex", model: "gpt-5.4-mini" },
     providers: {
       codex: {
@@ -102,6 +103,7 @@ function serverSettings(overrides: Partial<ServerSettings["providers"]> = {}): S
     },
     providerInstances: {},
     skills: { disabled: [] },
+    newThreadDefaults: { modelSelectionByProvider: {}, activeProvider: null, runtimeMode: null },
   };
 }
 

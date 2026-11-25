@@ -32,8 +32,9 @@ import {
   buildDevinPairingPatch,
   currentDevinPairing,
   type DevinPairingParts,
+  type DevinPairingSpeed,
   devinPairingLeadEfforts,
-  devinPairingLeadHasFast,
+  devinPairingLeadSpeeds,
   devinPairingSidekicksForLead,
   resolveDevinPairingUid,
 } from "./devinFusionPairing";
@@ -432,11 +433,21 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
   // lead/effort/speed/sidekick combo can be assembled in one pass.
   const pairing = selection.pairing;
   const pairingParts = pairing ? currentDevinPairing(pairing, modelOptions).parts : null;
+  const pairingEfforts =
+    pairing && pairingParts ? devinPairingLeadEfforts(pairing, pairingParts.lead) : [];
+  const pairingSpeeds =
+    pairing && pairingParts ? devinPairingLeadSpeeds(pairing, pairingParts.lead) : [];
   const commitPairing = (part: Partial<DevinPairingParts>) => {
     if (!pairing || !pairingParts) return;
     const uid = resolveDevinPairingUid(pairing, { ...pairingParts, ...part });
     if (uid) commitTraitOptions(buildDevinPairingPatch(uid));
   };
+  const pairingSpeedLabel = (speed: DevinPairingSpeed) =>
+    speed === "ultrafast"
+      ? t("chat:traitsPicker_ultrafast")
+      : speed === "fast"
+        ? t("chat:traitsPicker_fast")
+        : t("chat:standard");
 
   if (!hasVisibleControls && !hasAgentControls) {
     return null;
@@ -452,26 +463,28 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
             options={pairing.leads.map((option) => ({ ...option }))}
             onValueChange={(value) => commitPairing({ lead: value })}
           />
-          <MenuDivider />
-          <TraitRadioSection
-            label={t("chat:traitsPicker_effort")}
-            value={pairingParts.effort}
-            options={devinPairingLeadEfforts(pairing, pairingParts.lead).map((option) => ({
-              ...option,
-            }))}
-            onValueChange={(value) => commitPairing({ effort: value })}
-          />
-          {devinPairingLeadHasFast(pairing, pairingParts.lead) ? (
+          {pairingEfforts.length > 0 ? (
+            <>
+              <MenuDivider />
+              <TraitRadioSection
+                label={t("chat:traitsPicker_effort")}
+                value={pairingParts.effort}
+                options={pairingEfforts.map((option) => ({ ...option }))}
+                onValueChange={(value) => commitPairing({ effort: value })}
+              />
+            </>
+          ) : null}
+          {pairingSpeeds.length > 1 ? (
             <>
               <MenuDivider />
               <TraitRadioSection
                 label={t("chat:traitsPicker_speed")}
-                value={pairingParts.fast ? "on" : "off"}
-                options={[
-                  { value: "off", label: t("chat:standard") },
-                  { value: "on", label: t("chat:traitsPicker_fast") },
-                ]}
-                onValueChange={(value) => commitPairing({ fast: value === "on" })}
+                value={pairingParts.speed}
+                options={pairingSpeeds.map((speed) => ({
+                  value: speed,
+                  label: pairingSpeedLabel(speed),
+                }))}
+                onValueChange={(value) => commitPairing({ speed: value as DevinPairingSpeed })}
               />
             </>
           ) : null}

@@ -9,6 +9,11 @@ import {
 } from "@synara/contracts";
 import { VISIBLE_PROVIDER_DESCRIPTORS } from "./betaFeatures";
 
+import {
+  canSessionFinishBackgroundTasks,
+  foldOutstandingBackgroundTaskIds,
+  isBackgroundTaskActivity,
+} from "@synara/shared/backgroundTasks";
 import { orderedActivities, parseTaskListTasks } from "./workLog";
 
 import type {
@@ -90,8 +95,8 @@ export interface LatestProposedPlanState {
 function formatDuration(durationMs: number): string {
   if (!Number.isFinite(durationMs) || durationMs < 0) return "0ms";
   if (durationMs < 1_000) return `${Math.max(1, Math.round(durationMs))}ms`;
-  if (durationMs < 10_000) return `${(durationMs / 1_000).toFixed(1)}s`;
-  if (durationMs < 60_000) return `${Math.round(durationMs / 1_000)}s`;
+  if (durationMs < 9_950) return `${(durationMs / 1_000).toFixed(1)}s`;
+  if (durationMs < 59_500) return `${Math.round(durationMs / 1_000)}s`;
   // Keep settled-time rounding while sharing larger units with live clocks.
   return formatClockDuration(Math.round(durationMs / 1_000) * 1_000);
 }
@@ -136,6 +141,55 @@ type LatestTurnTiming = Pick<
   "turnId" | "state" | "startedAt" | "completedAt"
 >;
 type SessionActivityState = Pick<ThreadSession, "orchestrationStatus" | "activeTurnId">;
+type LatestTurnState = OrchestrationLatestTurn["state"] | null | undefined;
+
+// "Is this thread live?" is asked with three different member sets. Each has its own
+// name so a caller picks the meaning it needs instead of re-listing statuses:
+//   running            session running, or latest turn running
+//   starting/running   + a session that is still starting (work about to emit events)
+//   open               any session status except idle/stopped, or latest turn running
+
+/** The session reports running, or its latest turn is still marked running. */
+export function isSessionOrLatestTurnRunning(
+  orchestrationStatus: OrchestrationSessionStatus | null | undefined,
+  latestTurnState: LatestTurnState,
+): boolean {
+  return orchestrationStatus === "running" || latestTurnState === "running";
+}
+
+/** {@link isSessionOrLatestTurnRunning}, also counting a session that is still starting. */
+export function isSessionOrLatestTurnStartingOrRunning(
+  orchestrationStatus: OrchestrationSessionStatus | null | undefined,
+  latestTurnState: LatestTurnState,
+): boolean {
+  return (
+    orchestrationStatus === "starting" ||
+    isSessionOrLatestTurnRunning(orchestrationStatus, latestTurnState)
+  );
+}
+
+/**
+ * The session exists and has not gone back to idle or stopped (ready, interrupted, and
+ * error sessions count), or its latest turn is still marked running.
+ */
+export function isSessionOpenOrLatestTurnRunning(
+  orchestrationStatus: OrchestrationSessionStatus | null | undefined,
+  latestTurnState: LatestTurnState,
+): boolean {
+  return (
+    (orchestrationStatus != null &&
+      orchestrationStatus !== "idle" &&
+      orchestrationStatus !== "stopped") ||
+    latestTurnState === "running"
+  );
+}
+
+/** The in-flight turn of a running session; null whenever the session is not running. */
+export function runningSessionActiveTurnId(
+  session: SessionActivityState | null | undefined,
+): TurnId | null {
+  return session?.orchestrationStatus === "running" ? (session.activeTurnId ?? null) : null;
+}
 
 export function isLatestTurnSettled(
   latestTurn: LatestTurnTiming | null,
@@ -226,8 +280,7 @@ export function deriveActiveWorkStartedAt(
   session: SessionActivityState | null,
   sendStartedAt: string | null,
 ): string | null {
-  const runningTurnId =
-    session?.orchestrationStatus === "running" ? (session.activeTurnId ?? null) : null;
+  const runningTurnId = runningSessionActiveTurnId(session);
   if (runningTurnId !== null && runningTurnId === latestTurn?.turnId) {
     return latestTurn?.startedAt ?? sendStartedAt;
   }
@@ -444,55 +497,21 @@ export function derivePendingBackgroundWork(input: {
   return taskIds.length > 0 ? { count: taskIds.length, taskIds } : null;
 }
 
+/**
+ * Activities that can change the background-work count above or below without
+ * a session or turn change: a "Moved to background" notice, a task status patch,
+ * or a task's end. Sidebar summaries refresh on these so a finished background
+ * task stops showing as "In Background".
+ */
+export const isBackgroundWorkActivity = isBackgroundTaskActivity;
+
 // Background tasks still running anywhere in the thread. Unlike
-// derivePendingBackgroundWork this is not scoped to the latest turn: once a
-// finished subagent wakes the agent into a new turn, the subagents launched by
-// the earlier turn are still outstanding. Claude announces backgrounded work
-// with a "Moved to background" notice, so both that notice and an
-// isBackgrounded patch count.
+// derivePendingBackgroundWork this is not scoped to the latest turn. The server
+// folds the same rules into each thread shell's pendingBackgroundTaskCount.
 export function deriveOutstandingBackgroundTaskIds(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
 ): string[] {
-  const outstanding = new Set<string>();
-  for (const activity of orderedActivities(activities)) {
-    const payload =
-      activity.payload && typeof activity.payload === "object"
-        ? (activity.payload as Record<string, unknown>)
-        : null;
-    if (activity.kind === "runtime.warning") {
-      if (payload?.nativeEventType !== "background_tasks_changed") continue;
-      const data =
-        payload.data && typeof payload.data === "object"
-          ? (payload.data as Record<string, unknown>)
-          : null;
-      if (!Array.isArray(data?.tasks)) continue;
-      for (const task of data.tasks) {
-        const taskId =
-          task && typeof task === "object" ? (task as Record<string, unknown>).task_id : null;
-        if (typeof taskId === "string") outstanding.add(taskId);
-      }
-      continue;
-    }
-    const taskId = payload && typeof payload.taskId === "string" ? payload.taskId : null;
-    if (!taskId) continue;
-    if (activity.kind === "task.completed") {
-      outstanding.delete(taskId);
-    } else if (activity.kind === "task.updated") {
-      const status = typeof payload?.status === "string" ? payload.status : undefined;
-      if (
-        status === "completed" ||
-        status === "failed" ||
-        status === "killed" ||
-        status === "paused" ||
-        payload?.isBackgrounded === false
-      ) {
-        outstanding.delete(taskId);
-      } else if (payload?.isBackgrounded === true) {
-        outstanding.add(taskId);
-      }
-    }
-  }
-  return [...outstanding];
+  return foldOutstandingBackgroundTaskIds(orderedActivities(activities));
 }
 
 // Thread-wide count of background tasks still running while their session is
@@ -501,8 +520,7 @@ export function countOutstandingBackgroundWork(input: {
   activities: ReadonlyArray<OrchestrationThreadActivity>;
   session: Pick<ThreadSession, "orchestrationStatus"> | null | undefined;
 }): number {
-  const sessionStatus = input.session?.orchestrationStatus;
-  if (sessionStatus === undefined || sessionStatus === "stopped" || sessionStatus === "error") {
+  if (!canSessionFinishBackgroundTasks(input.session?.orchestrationStatus)) {
     return 0;
   }
   return deriveOutstandingBackgroundTaskIds(input.activities).length;

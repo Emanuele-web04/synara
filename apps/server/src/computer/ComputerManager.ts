@@ -4972,11 +4972,15 @@ export class ComputerManager {
     try {
       return resolve(state.root);
     } catch (error) {
+      let targetError: unknown = error;
       // A tree served from the recent cache can miss a control that only just
       // appeared. Pay for one fresh walk before declaring it absent; on a
       // genuinely-missing target the extra walk is a rare error-path cost.
       // Other failure shapes (ambiguity, bad target) retrying cannot fix.
-      if (error instanceof ComputerTargetError && error.code === "computer_target_not_found") {
+      if (
+        targetError instanceof ComputerTargetError &&
+        targetError.code === "computer_target_not_found"
+      ) {
         state = await this.backend.getState({
           includeTree: true,
           ...(target.windowId ? { windowId: target.windowId } : {}),
@@ -4985,24 +4989,24 @@ export class ComputerManager {
           if (state.root) return resolve(state.root);
         } catch (freshError) {
           // The miss is confirmed against fresh state; report its candidates.
-          if (freshError instanceof ComputerTargetError) error = freshError;
+          if (freshError instanceof ComputerTargetError) targetError = freshError;
         }
       }
       // A truncated tree may simply not contain the control: name the narrow
       // query so the miss is recoverable instead of a dead end.
       if (
-        error instanceof ComputerTargetError &&
-        error.code === "computer_target_not_found" &&
+        targetError instanceof ComputerTargetError &&
+        targetError.code === "computer_target_not_found" &&
         state.root?.truncated === true
       ) {
         throw new ComputerTargetError({
-          code: error.code,
-          message: `${error.message} The accessibility tree was truncated; use computer_get_state with label_contains to narrow the list and check whether the control is present.`,
-          candidates: error.candidates,
+          code: targetError.code,
+          message: `${targetError.message} The accessibility tree was truncated; use computer_get_state with label_contains to narrow the list and check whether the control is present.`,
+          candidates: targetError.candidates,
           notFound: true,
         });
       }
-      throw error;
+      throw targetError;
     }
   }
 

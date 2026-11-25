@@ -6,6 +6,7 @@
 //   BRAND_GLYPH_TILE_CLASS_NAME
 
 import type { IconType } from "react-icons";
+import paperAppIcon from "~/assets/brands/paper.png";
 import {
   SiAtlassian,
   SiCanva,
@@ -33,6 +34,7 @@ import {
 export type BrandArtwork = {
   color: string;
   icon: IconType;
+  appIcon?: boolean;
 };
 
 // Simple Icons glyph from a raw 24×24 path, for marks react-icons does not ship.
@@ -94,6 +96,11 @@ const SlackColorIcon: IconType = ({ className, style, title }) => (
   </svg>
 );
 
+// Official app artwork: https://paper.design/logos/app-icons/Paper%20App%20Icon%20512.png
+const PaperAppIcon: IconType = ({ className, style, title }) => (
+  <img src={paperAppIcon} alt={title ?? ""} className={className} style={style} />
+);
+
 /** Keyed by {@link normalizeBrandKey} of the brand or product name. */
 export const KNOWN_BRAND_ARTWORK: Record<string, BrandArtwork> = {
   atlassian: { icon: SiAtlassian, color: "#0052CC" },
@@ -111,6 +118,7 @@ export const KNOWN_BRAND_ARTWORK: Record<string, BrandArtwork> = {
   neon: { icon: SiNeon, color: "#34D59A" },
   netlify: { icon: SiNetlify, color: "#00C7B7" },
   notion: { icon: SiNotion, color: "#111111" },
+  paper: { icon: PaperAppIcon, color: "#86ACEA", appIcon: true },
   posthog: { icon: SiPosthog, color: "#111111" },
   prisma: { icon: SiPrisma, color: "#2D3748" },
   railway: { icon: SiRailway, color: "#0B0D0E" },

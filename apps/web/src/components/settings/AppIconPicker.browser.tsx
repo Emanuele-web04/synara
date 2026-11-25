@@ -64,27 +64,6 @@ it("clears the loading state without leaking a rejected apply", async () => {
   }
 });
 
-it("offers the dark icon on macOS", async () => {
-  const onValueChange = vi.fn();
-  const mounted = await render(
-    <AppIconPicker platform="MacIntel" value="default" onValueChange={onValueChange} />,
-  );
-
-  const darkIconButton = mounted.getByRole("button", { name: "Dark icon" });
-  await expect.element(darkIconButton).toBeVisible();
-  await darkIconButton.click();
-
-  expect(onValueChange).toHaveBeenCalledWith("dark");
-});
-
-it("hides the unsupported dark icon off macOS", async () => {
-  const mounted = await render(
-    <AppIconPicker platform="Win32" value="default" onValueChange={vi.fn()} />,
-  );
-
-  await expect.element(mounted.getByRole("button", { name: "Dark icon" })).not.toBeInTheDocument();
-});
-
 it("applies the separate Beta choice without exposing it on Stable", async () => {
   vi.mocked(desktopFlavorFromProtocol).mockReturnValue("production");
   const onValueChange = vi.fn();

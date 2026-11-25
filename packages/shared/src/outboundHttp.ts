@@ -53,8 +53,8 @@ export interface OutboundHttpPolicy {
   readonly maxConcurrent: number;
   readonly maxQueued: number;
   readonly requirePublicAddress?: boolean;
-  /** Permits HTTP only for localhost, 127.0.0.1, or ::1. */
-  readonly allowLoopbackHttp?: boolean;
+  /** Permits loopback HTTP; "ipv4-subnet" additionally permits all of 127.0.0.0/8. */
+  readonly allowLoopbackHttp?: boolean | "ipv4-subnet";
   /**
    * Permits the RFC 2544 benchmarking range 198.18.0.0/15, which fake-ip DNS
    * modes (Clash/Mihomo, Surge) hand out for the hosts they proxy.
@@ -287,7 +287,7 @@ interface PinnedAddress {
 async function resolvePinnedAddresses(
   url: URL,
   requirePublicAddress: boolean,
-  allowLoopbackHttp: boolean,
+  allowLoopbackHttp: boolean | "ipv4-subnet",
   allowBenchmarkAddressRange: boolean,
   signal: AbortSignal,
 ): Promise<ReadonlyArray<PinnedAddress>> {
@@ -298,7 +298,8 @@ async function resolvePinnedAddresses(
       : url.hostname;
   const requireLoopbackAddress = allowLoopbackHttp && url.protocol === "http:";
   const assertAddressAllowed = (address: string) => {
-    if (requireLoopbackAddress) assertExactLoopbackIpAddress(address);
+    if (requireLoopbackAddress)
+      assertExactLoopbackIpAddress(address, allowLoopbackHttp === "ipv4-subnet");
     else if (requirePublicAddress) {
       if (allowBenchmarkAddressRange && isBenchmarkIpAddress(address)) return;
       assertPublicIpAddress(address);
@@ -375,7 +376,7 @@ async function requestHop(input: {
   readonly body?: Uint8Array;
   readonly maxResponseBytes: number;
   readonly requirePublicAddress: boolean;
-  readonly allowLoopbackHttp: boolean;
+  readonly allowLoopbackHttp: boolean | "ipv4-subnet";
   readonly allowBenchmarkAddressRange: boolean;
   readonly signal: AbortSignal;
   readonly stopReadingAfter?: (chunk: Uint8Array, headers: Headers) => boolean;
@@ -517,8 +518,8 @@ function isRedirectStatus(status: number): boolean {
 export class OutboundHttpClient {
   async request(input: OutboundHttpRequest): Promise<OutboundHttpResponse> {
     const policy = input.policy;
-    const allowLoopbackHttp = policy.allowLoopbackHttp === true;
-    const originOptions = allowLoopbackHttp ? { allowLoopbackHttp: true } : {};
+    const allowLoopbackHttp = policy.allowLoopbackHttp ?? false;
+    const originOptions = { allowLoopbackHttp };
     const allowedOrigins = policy.allowedOrigins.map((origin) =>
       normalizeOutboundOrigin(origin, originOptions),
     );

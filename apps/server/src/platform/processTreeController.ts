@@ -2,9 +2,10 @@
 // Purpose: Captures, inspects, and signals owned process trees across platforms.
 // Layer: Server platform runtime
 
+import { resolveWindowsTaskkillExecutable } from "@synara/shared/platformEnvironment";
 import { execProcessFile, spawnProcessSync } from "@synara/shared/processRuntime";
 
-import { captureWindowsProcessChildrenMap } from "./windowsProcessSnapshot";
+import { captureWindowsProcessChildrenMap } from "./windowsProcessSnapshot.ts";
 
 const PROCESS_TREE_SCAN_TIMEOUT_MS = 1_000;
 const PROCESS_TREE_CAPTURE_ATTEMPTS = 2;
@@ -227,7 +228,7 @@ function signalWindowsProcessTree(
 ): void {
   try {
     execProcessFile(
-      "taskkill",
+      resolveWindowsTaskkillExecutable(),
       ["/pid", String(rootPid), "/T", "/F"],
       { encoding: "utf8" },
       (error) => callback(error),

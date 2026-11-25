@@ -561,27 +561,6 @@ describe("ProviderModelPicker", () => {
     }
   });
 
-  it("shows models directly when the provider is locked mid-thread", async () => {
-    const mounted = await mountPicker({
-      provider: "claudeAgent",
-      model: "claude-opus-4-6",
-      lockedProvider: "claudeAgent",
-    });
-
-    try {
-      await page.getByRole("button").click();
-
-      await vi.waitFor(() => {
-        const text = document.body.textContent ?? "";
-        expect(text).toContain("Claude Sonnet 4.6");
-        expect(text).toContain("Claude Haiku 4.5");
-        expect(text).not.toContain("Codex");
-      });
-    } finally {
-      await mounted.cleanup();
-    }
-  });
-
   it("dispatches the canonical slug when a model is selected", async () => {
     const mounted = await mountPicker({
       provider: "claudeAgent",
@@ -591,6 +570,10 @@ describe("ProviderModelPicker", () => {
 
     try {
       await page.getByRole("button").click();
+      await expect
+        .element(page.getByRole("menuitemradio", { name: "Claude Haiku 4.5" }))
+        .toBeVisible();
+      expect(document.body.textContent).not.toContain("Codex");
       await page.getByRole("menuitemradio", { name: "Claude Sonnet 4.6" }).click();
 
       expect(mounted.onProviderModelChange).toHaveBeenCalledWith(

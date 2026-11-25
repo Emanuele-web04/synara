@@ -109,6 +109,59 @@ describe("ACP elicitation mapping", () => {
     });
   });
 
+  it("round-trips an Antigravity ask_question as one question with native choice IDs", () => {
+    const mapping = { otherAnswerConvention: "antigravity" } as const;
+    const antigravityRequest = {
+      mode: "form" as const,
+      sessionId: "session-1",
+      message: "The agent has a question.",
+      requestedSchema: {
+        type: "object" as const,
+        properties: {
+          q1: {
+            type: "string" as const,
+            title: "Which fruit should I use?",
+            oneOf: [
+              { const: "1", title: "Apple" },
+              { const: "2", title: "Pear" },
+            ],
+          },
+          q1_other: {
+            type: "string" as const,
+            title: "Other",
+            description: "Optional free-form answer to: Which fruit should I use?",
+          },
+        },
+      },
+    };
+
+    expect(elicitationQuestionsFromRequest(antigravityRequest, mapping)).toEqual([
+      {
+        id: "q1",
+        customAnswerId: "q1_other",
+        header: "Which fruit should I use?",
+        question: "Which fruit should I use?",
+        options: [
+          { value: "1", label: "Apple", description: "Apple" },
+          { value: "2", label: "Pear", description: "Pear" },
+        ],
+        multiSelect: false,
+      },
+    ]);
+    expect(elicitationResponseFromAnswers(antigravityRequest, { q1: "2" }, mapping)).toEqual({
+      action: "accept",
+      content: { q1: "2" },
+    });
+    expect(elicitationResponseFromAnswers(antigravityRequest, { q1: "Peach" }, mapping)).toEqual({
+      action: "accept",
+      content: { q1_other: "Peach" },
+    });
+    expect(elicitationResponseFromAnswers(antigravityRequest, { q1_other: "2" }, mapping)).toEqual({
+      action: "accept",
+      content: { q1_other: "2" },
+    });
+  });
+
   it("folds other-answer companion fields into their real questions", () => {
     const questions = elicitationQuestionsFromRequest(droidRequest, droidMapping);
     expect(questions.map(({ id }) => id)).toEqual(["single", "multiple"]);

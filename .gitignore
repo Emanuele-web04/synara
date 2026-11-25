@@ -5,6 +5,7 @@ node_modules
 *.log
 *.tsbuildinfo
 apps/*/dist
+apps/api/ui/dist
 .astro
 packages/*/dist
 .env
@@ -18,7 +19,6 @@ release/
 /.synara-*/
 /apps/server/.synara-*/
 /.synara/
-/.synara-*/
 .idea/
 apps/web/.playwright
 apps/web/playwright-report
@@ -40,6 +40,7 @@ __screenshots__/
 /browser-sidebar-comment-preload.js.map
 /preload.js.map
 /bootstrap.js.map
+.vercel/
 
 # Generated ASAR smoke fixture (bundled from scripts/betterwright-smoke.ts)
 .smoke/
@@ -51,3 +52,6 @@ __screenshots__/
 
 # Local implementation plans.
 /plans/
+
+# Local Cloudflare deployment bundles and source maps.
+.wrangler/

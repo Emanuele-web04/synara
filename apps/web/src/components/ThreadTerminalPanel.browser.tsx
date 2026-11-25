@@ -203,8 +203,6 @@ it.each(["chat-panel", "dock-terminal:chat-panel"])(
     await expect.poll(() => api.terminal.write.mock.calls.length).toBeGreaterThan(0);
     const bounds = document.querySelector('aside[aria-label="Terminal"]')!.getBoundingClientRect();
     expect(bounds.height).toBe(420);
-    if (scope === "chat-panel")
-      await page.screenshot({ path: "../../../../output/playwright/single-terminal-panel.png" });
     await expect(closeTerminalSurface(threadId, false)).resolves.toBe(true);
     expect(useTerminalStateStore.getState().terminalStateByThreadId[threadId]?.terminalOpen).toBe(
       false,
@@ -394,7 +392,6 @@ it("opens independent shells through the plus menu and keeps siblings interactiv
         terminalId: sessions[2],
       });
     expect(api.terminal.open.mock.calls).toHaveLength(3);
-    await page.screenshot({ path: "../../../../output/playwright/multiple-dock-terminals.png" });
     await tabs.nth(0).click();
     api.terminal.onEvent.mock.lastCall![0]({
       type: "exited",

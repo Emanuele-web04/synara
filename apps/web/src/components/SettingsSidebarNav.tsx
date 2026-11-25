@@ -12,6 +12,7 @@ import { cn } from "~/lib/utils";
 import { Badge } from "./ui/badge";
 import { SearchInput } from "./ui/search-input";
 import { SidebarLeadingIcon } from "./SidebarLeadingIcon";
+import { useKeepAwakeState } from "../hooks/useKeepAwakeState";
 import {
   SETTINGS_NAV_GROUPS,
   SETTINGS_NAV_ITEMS,
@@ -20,6 +21,7 @@ import {
 import {
   rankSettingsSearchEntries,
   settingsSearchEntryTarget,
+  settingsSearchEntryTitle,
   settingsSectionLabel,
   type SettingsSearchContext,
   type SettingsSearchEntry,
@@ -52,7 +54,6 @@ function SettingsSearchResultRow(props: {
   entry: SettingsSearchEntry;
   onSelect: (entry: SettingsSearchEntry) => void;
 }) {
-  const { t } = useTranslation();
   const { entry, onSelect } = props;
   const icon = SETTINGS_SECTION_ICON_BY_ID.get(entry.section) ?? "settings-gear-4";
   // Mirrors the project header + nested thread layout: the section reuses the nav row
@@ -81,7 +82,7 @@ function SettingsSearchResultRow(props: {
         )}
         onClick={() => onSelect(entry)}
       >
-        <span className="min-w-0 truncate">{t(entry.title)}</span>
+        <span className="min-w-0 truncate">{settingsSearchEntryTitle(entry)}</span>
       </button>
     </li>
   );
@@ -90,25 +91,21 @@ function SettingsSearchResultRow(props: {
 export function SettingsSidebarNav(props: {
   activeSection: SettingsSectionId;
   onSelectSection: (section: SettingsSectionId, options?: { target?: string }) => void;
-  /**
-   * Which conditionally-rendered rows exist on this machine, so the search
-   * cannot offer a row the panel does not draw. Passed in rather than read here:
-   * this component is a pure nav, and the one fact it needs is owned by a
-   * surface that already has it.
-   */
   searchContext?: SettingsSearchContext | undefined;
+  /** Accounts that are enabled but not signed in; badges the pinned Accounts row. */
+  accountsNeedingSignIn?: number | undefined;
 }) {
   const { t } = useTranslation();
+  const keepAwakeAvailable = useKeepAwakeState()?.available === true;
 
   const { onSelectSection } = props;
   const [query, setQuery] = useState("");
   const trimmedQuery = query.trim();
   const isSearching = trimmedQuery.length > 0;
-  const results = rankSettingsSearchEntries(
-    trimmedQuery,
-    SETTINGS_SEARCH_RESULTS_LIMIT,
-    props.searchContext,
-  );
+  const results = rankSettingsSearchEntries(trimmedQuery, SETTINGS_SEARCH_RESULTS_LIMIT, {
+    ...props.searchContext,
+    keepAwakeAvailable,
+  });
 
   const handleSelectResult = (entry: SettingsSearchEntry) => {
     const target = settingsSearchEntryTarget(entry);
@@ -178,13 +175,17 @@ export function SettingsSidebarNav(props: {
               >
                 <h2
                   id={`settings-nav-${group.id}`}
-                  className={SETTINGS_SIDEBAR_SECTION_LABEL_CLASS_NAME}
+                  className={
+                    group.hideLabel ? "sr-only" : SETTINGS_SIDEBAR_SECTION_LABEL_CLASS_NAME
+                  }
                 >
                   {t(group.label)}
                 </h2>
                 <ul className={cn("flex flex-col", SETTINGS_SIDEBAR_LIST_GAP_CLASS_NAME)}>
                   {items.map((item) => {
                     const isActive = item.id === props.activeSection;
+                    const signInCount =
+                      item.id === "accounts" ? (props.accountsNeedingSignIn ?? 0) : 0;
                     return (
                       <li key={item.id}>
                         <button
@@ -214,6 +215,19 @@ export function SettingsSidebarNav(props: {
                               className="ml-auto rounded-full px-1.5 font-normal text-muted-foreground"
                             >
                               {t(item.badge)}
+                            </Badge>
+                          ) : null}
+                          {signInCount > 0 ? (
+                            <Badge
+                              variant="warning"
+                              size="sm"
+                              className="ml-auto rounded-full px-1.5 font-normal tabular-nums"
+                              title={t("settings:accounts_needSignIn", { count: signInCount })}
+                              aria-label={t("settings:accounts_needSignIn", {
+                                count: signInCount,
+                              })}
+                            >
+                              {signInCount}
                             </Badge>
                           ) : null}
                         </button>

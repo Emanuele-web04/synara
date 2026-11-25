@@ -5,6 +5,10 @@
 
 import { WS_STREAM_LIMITS, type ThreadId } from "@synara/contracts";
 import { useSyncExternalStore } from "react";
+import {
+  isSessionOpenOrLatestTurnRunning,
+  isSessionOrLatestTurnStartingOrRunning,
+} from "./session-logic";
 import { useStore } from "./store";
 import type { AppState } from "./storeState";
 
@@ -65,16 +69,12 @@ function isThreadDetailEvictionUnsafe(threadId: ThreadId): boolean {
       return true;
     }
 
-    const orchestrationStatus = sidebarThread.session?.orchestrationStatus;
     if (
-      orchestrationStatus &&
-      orchestrationStatus !== "idle" &&
-      orchestrationStatus !== "stopped"
+      isSessionOpenOrLatestTurnRunning(
+        sidebarThread.session?.orchestrationStatus,
+        sidebarThread.latestTurn?.state,
+      )
     ) {
-      return true;
-    }
-
-    if (sidebarThread.latestTurn?.state === "running") {
       return true;
     }
   }
@@ -88,22 +88,40 @@ function isThreadDetailEvictionUnsafe(threadId: ThreadId): boolean {
     const hiddenSession = state.threadSessionById?.[threadId];
     const hiddenTurnState = state.threadTurnStateById?.[threadId];
     return (
-      hiddenSession?.orchestrationStatus === "starting" ||
-      hiddenSession?.orchestrationStatus === "running" ||
-      hiddenTurnState?.latestTurn?.state === "running" ||
-      hiddenTurnState?.pendingSourceProposedPlan !== undefined
+      isSessionOrLatestTurnStartingOrRunning(
+        hiddenSession?.orchestrationStatus,
+        hiddenTurnState?.latestTurn?.state,
+      ) || hiddenTurnState?.pendingSourceProposedPlan !== undefined
     );
   }
 
   const session = state.threadSessionById?.[threadId];
   const turnState = state.threadTurnStateById?.[threadId];
-  const orchestrationStatus = session?.orchestrationStatus;
   return (
-    Boolean(
-      orchestrationStatus && orchestrationStatus !== "idle" && orchestrationStatus !== "stopped",
-    ) ||
-    turnState?.latestTurn?.state === "running" ||
+    isSessionOpenOrLatestTurnRunning(session?.orchestrationStatus, turnState?.latestTurn?.state) ||
     turnState?.pendingSourceProposedPlan !== undefined
+  );
+}
+
+/**
+ * Narrower than the eviction predicate: work that is still producing thread
+ * events. An idle "ready" session emits nothing, but a running turn or the
+ * background tasks behind an "In Background" row will. A thread here that loses
+ * its lease keeps deriving that status from frozen detail and never sees the
+ * tasks end, so it leases ahead of threads that are merely alive.
+ */
+function isThreadWorkInFlight(threadId: ThreadId): boolean {
+  const state = useStore.getState();
+  const sidebarThread = state.sidebarThreadSummaryById[threadId];
+  if ((sidebarThread?.pendingBackgroundWorkCount ?? 0) > 0) {
+    return true;
+  }
+  const orchestrationStatus = state.threadSessionById?.[threadId]?.orchestrationStatus;
+  return (
+    orchestrationStatus === "starting" ||
+    orchestrationStatus === "running" ||
+    sidebarThread?.latestTurn?.state === "running" ||
+    state.threadTurnStateById?.[threadId]?.latestTurn?.state === "running"
   );
 }
 
@@ -342,8 +360,10 @@ export function resolveThreadDetailSubscriptionLeaseIds(input: {
     (threadId) =>
       !input.retentionExcludedThreadIds?.has(threadId) && input.serverThreadIds.has(threadId),
   );
-  // Same predicate that shields detail from eviction: live or actionable work.
+  // Work still producing events first, then the predicate that shields detail
+  // from eviction (live or actionable work), then the rest.
   for (const threadId of [
+    ...leasableRetainedThreadIds.filter((threadId) => isThreadWorkInFlight(threadId)),
     ...leasableRetainedThreadIds.filter((threadId) => isThreadDetailEvictionUnsafe(threadId)),
     ...leasableRetainedThreadIds,
   ]) {

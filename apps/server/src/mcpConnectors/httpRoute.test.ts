@@ -18,7 +18,7 @@ import { McpConnectors, type McpConnectorsShape } from "./Services/McpConnectors
 const VALID_TOKEN = "sagw_session_connector_route_test";
 
 async function withConnectorServer(
-  options: { readonly enabled: boolean },
+  options: { readonly enabled: boolean; readonly cleanupFailed?: boolean },
   run: (input: {
     readonly origin: string;
     readonly forwarded: ReadonlyArray<{ connectorId: string; request: McpConnectorForwardRequest }>;
@@ -48,6 +48,10 @@ async function withConnectorServer(
     const connectors: McpConnectorsShape = {
       enabled: options.enabled,
       list: () => Effect.succeed([]),
+      listProposals: () => Effect.succeed([]),
+      proposeAdd: () => Effect.die("unused"),
+      proposeRemove: () => Effect.die("unused"),
+      resolveProposal: () => Effect.die("unused"),
       connect: () => Effect.die("unused"),
       disconnect: () => Effect.succeed(false),
       setup: () => Effect.succeed({ redirectUrl: "http://127.0.0.1/oauth/mcp/callback" }),
@@ -61,6 +65,22 @@ async function withConnectorServer(
       },
       forward: (connectorId, request) => {
         forwarded.push({ connectorId, request });
+        if (request.method === "DELETE") {
+          return Effect.succeed({
+            status: 200,
+            sessionId: null,
+            body: options.cleanupFailed
+              ? {
+                  kind: "json" as const,
+                  value: {
+                    jsonrpc: "2.0",
+                    id: null,
+                    error: { code: -32603, message: "Cleanup failed." },
+                  },
+                }
+              : { kind: "empty" as const },
+          });
+        }
         return Effect.succeed({
           status: 200,
           sessionId: "upstream-session",
@@ -150,6 +170,7 @@ describe("mcpConnectorsRouteLayer", () => {
           connectorId: "mcp_conn_1",
           request: {
             method: "POST",
+            ownerToken: VALID_TOKEN,
             body: call,
             sessionId: "client-session",
             protocolVersion: "2025-06-18",
@@ -188,6 +209,16 @@ describe("mcpConnectorsRouteLayer", () => {
       });
       expect(deleted.status).toBe(204);
       expect(forwarded.map((entry) => entry.request.method)).toEqual(["DELETE"]);
+    });
+  });
+
+  it("does not report process cleanup failure as a successful session close", async () => {
+    await withConnectorServer({ enabled: true, cleanupFailed: true }, async ({ origin }) => {
+      const response = await fetch(`${origin}/mcp/connectors/mcp_conn_1`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${VALID_TOKEN}`, "Mcp-Session-Id": "client-session" },
+      });
+      expect(response.status).toBe(502);
     });
   });
 

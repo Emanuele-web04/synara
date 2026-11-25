@@ -1,3 +1,5 @@
+import { requestCreateProjectDialog } from "../../lib/hosts/workspaceFrame";
+import { readExecutionContext } from "../../lib/hosts/executionContext";
 // FILE: ProjectPicker.tsx
 // Purpose: Folder selector beneath the new-chat composer for registered projects, home folders,
 //          and the current draft's selected workspace. Other tasks' worktrees stay with those tasks.
@@ -463,6 +465,14 @@ export const ProjectPicker = memo(function ProjectPicker({
       }
       setErrorMessage(t("workspace:choosingAFolderNeedsTheDesktopApp"));
     };
+    if (
+      onCreateProjectFromPath &&
+      readExecutionContext()?.controller.capabilities.remoteConnections === true
+    ) {
+      setOpen(false);
+      requestCreateProjectDialog();
+      return;
+    }
     const api = readNativeApi();
     if (!api) {
       setErrorMessage(t("chat:projectPicker_connecting"));

@@ -23,6 +23,7 @@ export const StarredModelSchema = Schema.Struct({
   model: Schema.String,
   effort: Schema.NullOr(Schema.String),
   fastMode: Schema.NullOr(Schema.Boolean),
+  serviceTier: Schema.optional(Schema.Literal("ultrafast")),
   thinking: Schema.NullOr(Schema.Boolean),
   // Devin pairing families (Fusion) pin a concrete variant UID instead of
   // effort/speed traits; `variantLabel` keeps its display text for preset rows.
@@ -38,6 +39,7 @@ export interface StarredModel {
   readonly model: string;
   readonly effort: string | null;
   readonly fastMode: boolean | null;
+  readonly serviceTier?: "ultrafast" | undefined;
   readonly thinking: boolean | null;
   readonly modelVariant?: string | null | undefined;
   readonly variantLabel?: string | null | undefined;
@@ -55,7 +57,14 @@ export function starredModelInstanceId(
 export function starredModelKey(
   entry: Pick<
     StoredStarredModel,
-    "provider" | "instanceId" | "model" | "effort" | "fastMode" | "thinking" | "modelVariant"
+    | "provider"
+    | "instanceId"
+    | "model"
+    | "effort"
+    | "fastMode"
+    | "serviceTier"
+    | "thinking"
+    | "modelVariant"
   >,
 ): string {
   // JSON keeps the key unambiguous: model slugs may contain any separator character.
@@ -64,7 +73,7 @@ export function starredModelKey(
     starredModelInstanceId(entry),
     entry.model,
     entry.effort ?? "",
-    entry.fastMode === null ? "" : String(entry.fastMode),
+    entry.serviceTier ?? (entry.fastMode === null ? "" : String(entry.fastMode)),
     entry.thinking === null ? "" : String(entry.thinking),
     entry.modelVariant ?? "",
   ]);

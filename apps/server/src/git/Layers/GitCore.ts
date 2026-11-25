@@ -153,6 +153,13 @@ const MOVE_AWARE_WORKING_TREE_STATUS_TIMEOUT_MS = 15_000;
 const AUTO_DETACHED_WORKTREE_DIRNAME = "synara";
 const WORKTREE_OWNERSHIP_MARKER = "synara-agent-gateway-owner.json";
 const WORKTREE_TRANSFER_MAX_OUTPUT_BYTES = 64 * 1024 * 1024;
+// Copying a checkout's changes into a new worktree walks every file in it, so it
+// scales with checkout size and disk speed (an external drive can take minutes).
+// Bound the captured patch, not the time; caller interruption still kills Git.
+const WORKTREE_TRANSFER_READ_OPTIONS = {
+  timeoutMs: null,
+  maxOutputBytes: WORKTREE_TRANSFER_MAX_OUTPUT_BYTES,
+} as const;
 const NON_REPOSITORY_STATUS_DETAILS = Object.freeze({
   isRepo: false,
   hasOriginRemote: false,
@@ -1707,9 +1714,6 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         const parsedStatus = parseGitStatusPorcelain(statusStdout);
         const branch = parsedStatus.branch;
         const upstreamRef = parsedStatus.upstreamRef;
-        let upstreamBranch: string | null = null;
-        let aheadCount = parsedStatus.aheadCount;
-        let behindCount = parsedStatus.behindCount;
         const {
           hasWorkingTreeChanges,
           hasTrackedDeletion,
@@ -1718,52 +1722,99 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           untrackedFilesWithoutNumstat,
         } = parsedStatus;
 
-        if (branch && upstreamRef) {
-          upstreamBranch = yield* runGitStdout(
-            "GitCore.statusDetails.upstreamMergeBranch",
-            cwd,
-            ["config", "--get", `branch.${branch}.merge`],
-            true,
-          ).pipe(
-            Effect.map(normalizeConfiguredMergeBranch),
-            Effect.catch(() => Effect.succeed(null)),
-          );
-        }
+        const needsMoveAwareCheck =
+          hasWorkingTreeChanges &&
+          untrackedFilesWithoutNumstat.size > 0 &&
+          (hasTrackedDeletion || hasUntrackedDirectory);
 
-        const configuredPrBaseBranch = branch
-          ? yield* runGitStdout(
-              "GitCore.statusDetails.configuredPrBaseBranch",
-              cwd,
-              ["config", "--get", `branch.${branch}.gh-merge-base`],
-              true,
-            ).pipe(
-              Effect.map((stdout) => stdout.trim()),
-              Effect.map((trimmed) => (trimmed.length > 0 ? trimmed : null)),
+        // Run branch config, ahead-count, remote metadata, and working-tree diff
+        // stats concurrently instead of serially to minimize git subprocess latency.
+        const [
+          upstreamBranch,
+          configuredPrBaseBranch,
+          aheadBehind,
+          remoteMeta,
+          moveAwareWorkingTree,
+          preloadedNumstatOutputs,
+        ] = yield* Effect.all(
+          [
+            branch && upstreamRef
+              ? runGitStdout(
+                  "GitCore.statusDetails.upstreamMergeBranch",
+                  cwd,
+                  ["config", "--get", `branch.${branch}.merge`],
+                  true,
+                ).pipe(
+                  Effect.map(normalizeConfiguredMergeBranch),
+                  Effect.catch(() => Effect.succeed(null)),
+                )
+              : Effect.succeed(null),
+            branch
+              ? runGitStdout(
+                  "GitCore.statusDetails.configuredPrBaseBranch",
+                  cwd,
+                  ["config", "--get", `branch.${branch}.gh-merge-base`],
+                  true,
+                ).pipe(
+                  Effect.map((stdout) => stdout.trim()),
+                  Effect.map((trimmed) => (trimmed.length > 0 ? trimmed : null)),
+                  Effect.catch(() => Effect.succeed(null)),
+                )
+              : Effect.succeed(null),
+            !upstreamRef && branch
+              ? computeAheadCountAgainstBase(cwd, branch).pipe(
+                  Effect.map((aheadCount) => ({ aheadCount, behindCount: 0 })),
+                  Effect.catch(() => Effect.succeed({ aheadCount: 0, behindCount: 0 })),
+                )
+              : Effect.succeed({
+                  aheadCount: parsedStatus.aheadCount,
+                  behindCount: parsedStatus.behindCount,
+                }),
+            resolvePrimaryRemoteName(cwd).pipe(
               Effect.catch(() => Effect.succeed(null)),
-            )
-          : null;
-
-        if (!upstreamRef && branch) {
-          aheadCount = yield* computeAheadCountAgainstBase(cwd, branch).pipe(
-            Effect.catch(() => Effect.succeed(0)),
-          );
-          behindCount = 0;
-        }
-
-        // Repo-level metadata for the status panel: whether an `origin` remote is configured
-        // and whether the current branch is the repo's default branch. Resolved from the same
-        // helpers `listGitBranches` uses so the two stay consistent; each lookup degrades to a
-        // safe default on failure so it never breaks the status read. `resolvePrimaryRemoteName`
-        // returns "origin" only when that remote exists, so it doubles as the origin check.
-        const primaryRemoteName = yield* resolvePrimaryRemoteName(cwd).pipe(
-          Effect.catch(() => Effect.succeed(null)),
+              Effect.flatMap(
+                (
+                  primaryRemoteName,
+                ): Effect.Effect<{
+                  readonly primaryRemoteName: string | null;
+                  readonly defaultBranchName: string | null;
+                }> =>
+                  primaryRemoteName === null
+                    ? Effect.succeed({ primaryRemoteName: null, defaultBranchName: null })
+                    : resolveDefaultBranchName(cwd, primaryRemoteName).pipe(
+                        Effect.catch(() => Effect.succeed(null)),
+                        Effect.map((defaultBranchName) => ({
+                          primaryRemoteName,
+                          defaultBranchName,
+                        })),
+                      ),
+              ),
+            ),
+            needsMoveAwareCheck ? readMoveAwareWorkingTreeSummary(cwd) : Effect.succeed(null),
+            hasWorkingTreeChanges && !needsMoveAwareCheck
+              ? Effect.all(
+                  [
+                    runGitNulMetadata("GitCore.statusDetails.unstagedNumstat", cwd, [
+                      "diff",
+                      "--numstat",
+                      "-z",
+                    ]),
+                    runGitNulMetadata("GitCore.statusDetails.stagedNumstat", cwd, [
+                      "diff",
+                      "--cached",
+                      "--numstat",
+                      "-z",
+                    ]),
+                  ],
+                  { concurrency: "unbounded" },
+                ).pipe(Effect.catchIf(isMissingGitCwdError, () => Effect.succeed(null)))
+              : Effect.succeed(undefined),
+          ],
+          { concurrency: "unbounded" },
         );
-        const defaultBranchName =
-          primaryRemoteName === null
-            ? null
-            : yield* resolveDefaultBranchName(cwd, primaryRemoteName).pipe(
-                Effect.catch(() => Effect.succeed(null)),
-              );
+
+        const { aheadCount, behindCount } = aheadBehind;
+        const { primaryRemoteName, defaultBranchName } = remoteMeta;
         const repoMetadata = {
           isRepo: true,
           hasOriginRemote: primaryRemoteName === "origin",
@@ -1771,12 +1822,6 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
             branch !== null && defaultBranchName !== null && branch === defaultBranchName,
         } as const;
 
-        const moveAwareWorkingTree =
-          hasWorkingTreeChanges &&
-          untrackedFilesWithoutNumstat.size > 0 &&
-          (hasTrackedDeletion || hasUntrackedDirectory)
-            ? yield* readMoveAwareWorkingTreeSummary(cwd)
-            : null;
         if (moveAwareWorkingTree) {
           return {
             ...repoMetadata,
@@ -1792,22 +1837,44 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           };
         }
 
-        const numstatOutputs = yield* Effect.all(
-          [
-            runGitNulMetadata("GitCore.statusDetails.unstagedNumstat", cwd, [
-              "diff",
-              "--numstat",
-              "-z",
-            ]),
-            runGitNulMetadata("GitCore.statusDetails.stagedNumstat", cwd, [
-              "diff",
-              "--cached",
-              "--numstat",
-              "-z",
-            ]),
-          ],
-          { concurrency: "unbounded" },
-        ).pipe(Effect.catchIf(isMissingGitCwdError, () => Effect.succeed(null)));
+        if (!hasWorkingTreeChanges) {
+          return {
+            ...repoMetadata,
+            branch,
+            upstreamRef,
+            upstreamBranch,
+            configuredPrBaseBranch,
+            hasWorkingTreeChanges: false,
+            workingTree: {
+              files: [],
+              insertions: 0,
+              deletions: 0,
+            },
+            hasUpstream: upstreamRef !== null,
+            aheadCount,
+            behindCount,
+          };
+        }
+
+        const numstatOutputs =
+          preloadedNumstatOutputs !== undefined
+            ? preloadedNumstatOutputs
+            : yield* Effect.all(
+                [
+                  runGitNulMetadata("GitCore.statusDetails.unstagedNumstat", cwd, [
+                    "diff",
+                    "--numstat",
+                    "-z",
+                  ]),
+                  runGitNulMetadata("GitCore.statusDetails.stagedNumstat", cwd, [
+                    "diff",
+                    "--cached",
+                    "--numstat",
+                    "-z",
+                  ]),
+                ],
+                { concurrency: "unbounded" },
+              ).pipe(Effect.catchIf(isMissingGitCwdError, () => Effect.succeed(null)));
         if (numstatOutputs === null) {
           return NON_REPOSITORY_STATUS_DETAILS;
         }
@@ -3410,6 +3477,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           : ["worktree", "add", worktreePath, input.branch];
 
         yield* executeGit("GitCore.createWorktree", input.cwd, args, {
+          ...GIT_MUTATION_OPTIONS,
           fallbackErrorMessage: "git worktree add failed",
         });
 
@@ -3442,13 +3510,16 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
       }
     };
 
-    const listWorktreeTransferPaths = (cwd: string) =>
+    const listWorktreeTransferPaths = (
+      cwd: string,
+      readOptions: ExecuteGitOptions = { maxOutputBytes: WORKTREE_TRANSFER_MAX_OUTPUT_BYTES },
+    ) =>
       Effect.gen(function* () {
         const untracked = yield* executeGit(
           "GitCore.listWorktreeTransferPaths.untracked",
           cwd,
           ["ls-files", "--others", "--exclude-standard", "-z"],
-          { maxOutputBytes: WORKTREE_TRANSFER_MAX_OUTPUT_BYTES },
+          readOptions,
         ).pipe(Effect.map((result) => parseNullSeparatedPaths(result.stdout)));
         const includeFile = nodePath.join(cwd, ".worktreeinclude");
         const hasIncludeFile = yield* Effect.tryPromise({
@@ -3474,7 +3545,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
               "GitCore.listWorktreeTransferPaths.included",
               cwd,
               ["ls-files", "--others", "--ignored", "--exclude-from=.worktreeinclude", "-z"],
-              { maxOutputBytes: WORKTREE_TRANSFER_MAX_OUTPUT_BYTES },
+              readOptions,
             ).pipe(Effect.map((result) => parseNullSeparatedPaths(result.stdout)))
           : [];
         return [...new Set([...untracked, ...included])].sort();
@@ -3559,13 +3630,17 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
                 "HEAD",
                 "--",
               ],
-              { maxOutputBytes: WORKTREE_TRANSFER_MAX_OUTPUT_BYTES },
+              WORKTREE_TRANSFER_READ_OPTIONS,
             ).pipe(Effect.map((result) => result.stdout)),
-            listWorktreeTransferPaths(sourceCwd),
+            listWorktreeTransferPaths(sourceCwd, WORKTREE_TRANSFER_READ_OPTIONS),
           ],
           { concurrency: "unbounded" },
         );
         const transferPaths = listedTransferPaths.filter((relativePath) => {
+          // Without --directory, Git lists ordinary untracked files individually.
+          // A trailing slash marks an opaque nested repository or linked worktree.
+          if (relativePath.endsWith("/")) return false;
+
           const relativeToTarget = nodePath.relative(
             worktreePath,
             nodePath.join(sourceCwd, relativePath),
@@ -3608,7 +3683,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
                   "GitCore.copyCheckoutChanges.apply",
                   worktreePath,
                   ["apply", "--whitespace=nowarn", patchPath],
-                  { timeoutMs: 30_000 },
+                  GIT_MUTATION_OPTIONS,
                 );
               }),
             (temporaryDirectory) =>
@@ -3621,16 +3696,18 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         yield* Effect.forEach(
           transferPaths,
           (relativePath) =>
+            // A started filesystem copy cannot be canceled. Wait for it before
+            // rollback so it cannot recreate paths after Git removes the checkout.
             Effect.tryPromise({
               try: async () => {
                 const sourcePath = nodePath.join(sourceCwd, relativePath);
                 const targetPath = nodePath.join(worktreePath, relativePath);
                 await nodeFs.mkdir(nodePath.dirname(targetPath), { recursive: true });
                 await nodeFs.cp(sourcePath, targetPath, {
-                  recursive: true,
                   force: false,
                   errorOnExist: true,
                   preserveTimestamps: true,
+                  verbatimSymlinks: true,
                 });
               },
               catch: (cause) =>
@@ -3641,7 +3718,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
                   `could not copy ${relativePath} into the detached worktree.`,
                   cause,
                 ),
-            }),
+            }).pipe(Effect.uninterruptible),
           { discard: true, concurrency: 4 },
         );
       });
@@ -3888,10 +3965,24 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
       Effect.gen(function* () {
         const onPhase = options?.onPhase ?? (() => Effect.void);
         const newBranch = input.newBranch ?? null;
-        const refResult = yield* executeGit(
-          "GitCore.createDetachedWorktree.resolveRef",
-          input.cwd,
-          ["rev-parse", "--verify", "--end-of-options", `${input.ref}^{commit}`],
+        // Parallel checkout (one worker per core) cuts `worktree add` time on large
+        // repositories, but a user who configured `checkout.workers` keeps their
+        // value. The lookup runs alongside ref resolution so it adds no wall time;
+        // an unreadable config keeps git's default rather than overriding it.
+        const [refResult, useParallelCheckout] = yield* Effect.all(
+          [
+            executeGit("GitCore.createDetachedWorktree.resolveRef", input.cwd, [
+              "rev-parse",
+              "--verify",
+              "--end-of-options",
+              `${input.ref}^{commit}`,
+            ]),
+            readConfigValue(input.cwd, "checkout.workers").pipe(
+              Effect.map((configured) => configured === null),
+              Effect.catch(() => Effect.succeed(false)),
+            ),
+          ],
+          { concurrency: "unbounded" },
         );
         const resolvedRef = refResult.stdout.trim();
         if (input.copyChangesFrom) {
@@ -3936,12 +4027,18 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           ]);
         }
         yield* onPhase("worktree");
+        // Checkout time scales with repository size and disk speed, so the
+        // 30s default would fail slow (e.g. external) drives mid-checkout.
         const addWorktree = executeGit(
           "GitCore.createDetachedWorktree",
           input.cwd,
-          newBranch
-            ? ["worktree", "add", worktreePath, newBranch]
-            : ["worktree", "add", "--detach", worktreePath, resolvedRef],
+          [
+            ...(useParallelCheckout ? ["-c", "checkout.workers=0"] : []),
+            ...(newBranch
+              ? ["worktree", "add", worktreePath, newBranch]
+              : ["worktree", "add", "--detach", worktreePath, resolvedRef]),
+          ],
+          GIT_MUTATION_OPTIONS,
         );
         yield* newBranch
           ? addWorktree.pipe(
@@ -4566,12 +4663,14 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           { allowNonZeroExit: true },
         ).pipe(Effect.map((result) => result.code === 0));
 
+        // Match each path literally so a name like `[id].tsx` is not a glob.
+        const pathspecs = paths.map((path) => `:(literal)${path}`);
         yield* runGit(
           "GitCore.unstageFiles",
           cwd,
           headExists
-            ? ["reset", "-q", "HEAD", "--", ...paths]
-            : ["rm", "--cached", "-q", "--", ...paths],
+            ? ["reset", "-q", "HEAD", "--", ...pathspecs]
+            : ["rm", "--cached", "-q", "--", ...pathspecs],
         );
       });
 

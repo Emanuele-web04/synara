@@ -1,5 +1,6 @@
 import type { IpcMain, IpcMainInvokeEvent } from "electron";
 import { describe, expect, it, vi } from "vitest";
+import type { BrowserCookieImport } from "./browserAutomation/browserCookieImport";
 import type { BrowserVault } from "./browserAutomation/browserVault";
 import type { DesktopBrowserManager } from "./browserManager";
 import { registerBrowserVaultIpc } from "./browserVaultIpc";
@@ -69,7 +70,7 @@ describe("browser vault IPC", () => {
     expect(vault.reveal).not.toHaveBeenCalled();
     expect(vault.setupMaster).not.toHaveBeenCalled();
     expect(vault.unlock).not.toHaveBeenCalled();
-    await expect(get(trusted)).resolves.toEqual({ logins: [] });
+    await expect(get(trusted)).resolves.toEqual({ logins: [], cookieImportAvailable: false });
     await expect(
       handlers.get(BROWSER_IPC_CHANNELS.vault.configure)!(trusted, { agentUse: "yes" }),
     ).rejects.toThrow("could not be completed");
@@ -79,5 +80,64 @@ describe("browser vault IPC", () => {
     expect(String(error)).not.toContain("synthetic-private-secret");
     dispose();
     expect(handlers.size).toBe(0);
+  });
+
+  it("hides import and denies the trusted renderer's cookie requests on Windows", async () => {
+    type Handler = (event: IpcMainInvokeEvent, input?: unknown) => Promise<unknown>;
+    const handlers = new Map<string, Handler>();
+    const ipc = {
+      handle: (name: string, handler: Handler) => handlers.set(name, handler),
+      removeHandler: (name: string) => handlers.delete(name),
+    } as unknown as IpcMain;
+    const manager = { isTrustedRenderer: () => true } as unknown as DesktopBrowserManager;
+    const vault = {
+      snapshot: async () => ({ logins: [] }),
+      onChanged: () => () => {},
+    } as unknown as BrowserVault;
+    const cookies = { sources: vi.fn(), profiles: vi.fn(), import: vi.fn() };
+    const mainFrame = {};
+    const trusted = {
+      sender: { id: 1, mainFrame },
+      senderFrame: mainFrame,
+    } as unknown as IpcMainInvokeEvent;
+    vi.stubGlobal("process", { ...process, platform: "win32" });
+    try {
+      registerBrowserVaultIpc(
+        ipc,
+        manager,
+        vault,
+        vi.fn(),
+        cookies as unknown as BrowserCookieImport,
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    const channels = BROWSER_IPC_CHANNELS.vault;
+    await expect(handlers.get(channels.snapshot)!(trusted)).resolves.toEqual({
+      logins: [],
+      cookieImportAvailable: false,
+    });
+    for (const [channel, input] of [
+      [channels.cookieSources, undefined],
+      [channels.cookieProfiles, "chrome"],
+      [
+        channels.importCookies,
+        {
+          browser: "chrome",
+          profile: "Default",
+          threadId: "thread",
+          tabId: "tab",
+          scope: "profile",
+          confirmed: true,
+        },
+      ],
+    ] as const) {
+      await expect(handlers.get(channel)!(trusted, input)).rejects.toThrow(
+        "could not be completed",
+      );
+    }
+    expect(cookies.sources).not.toHaveBeenCalled();
+    expect(cookies.profiles).not.toHaveBeenCalled();
+    expect(cookies.import).not.toHaveBeenCalled();
   });
 });

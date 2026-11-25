@@ -1,7 +1,7 @@
 import "../../index.css";
 
 import { useState } from "react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { page } from "vitest/browser";
 import { render } from "vitest-browser-react";
 
@@ -25,35 +25,15 @@ function Chat({ label }: { label: string }) {
 // Two surfaces with unrelated element structures around the slot, like the single chat
 // surface and the split view.
 function Harness({
+  surface = "single",
   splitThreadId = "thread-a",
-  parkBetween = false,
 }: {
+  surface?: "single" | "split" | "parked";
   splitThreadId?: string;
-  parkBetween?: boolean;
 }) {
-  const [split, setSplit] = useState(false);
-  const [parked, setParked] = useState(false);
   return (
     <ChatPaneKeepAliveProvider>
-      <button
-        type="button"
-        onClick={() => {
-          if (!parkBetween) {
-            setSplit((current) => !current);
-            return;
-          }
-          setParked(true);
-          requestAnimationFrame(() =>
-            requestAnimationFrame(() => {
-              setSplit((current) => !current);
-              setParked(false);
-            }),
-          );
-        }}
-      >
-        Toggle
-      </button>
-      {parked ? null : split ? (
+      {surface === "parked" ? null : surface === "split" ? (
         <section>
           <div>
             <KeptChatPane slotKey="pane-1" threadId={splitThreadId}>
@@ -72,6 +52,40 @@ function Harness({
 
 const chat = () => page.getByLabelText("chat").element() as HTMLElement;
 
+const handoffMethods = ["moveBefore", "append"] as const;
+type HandoffMethod = (typeof handoffMethods)[number];
+
+function configureHandoff(move: HandoffMethod) {
+  const originalMoveBefore = Element.prototype.moveBefore;
+  onTestFinished(() => {
+    Element.prototype.moveBefore = originalMoveBefore;
+    vi.useRealTimers();
+  });
+
+  if (move === "append") {
+    Element.prototype.moveBefore = undefined as never;
+  } else {
+    // Keep real frames for Chromium's inert focus update while holding the pane's expiry.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  }
+}
+
+async function handoff(
+  screen: Awaited<ReturnType<typeof render>>,
+  surface: "split" | "single",
+  move: HandoffMethod,
+) {
+  if (move === "moveBefore") {
+    await screen.rerender(<Harness surface="parked" />);
+    // Give Chromium a paint to apply inert before adoption. Vitest's polling
+    // matchers advance fake timers, so wait for these real frames directly.
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+    });
+  }
+  await screen.rerender(<Harness surface={surface} />);
+}
+
 describe("chat pane keep-alive", () => {
   it("hands a pane to the slot that replaces it when both show the same thread", async () => {
     const screen = await render(<Harness />);
@@ -81,8 +95,8 @@ describe("chat pane keep-alive", () => {
       draft.value = "half typed";
       before.scrollTop = 200;
 
-      for (const label of ["split", "single"]) {
-        await page.getByRole("button", { name: "Toggle" }).click();
+      for (const label of ["split", "single"] as const) {
+        await screen.rerender(<Harness surface={label} />);
         await expect.element(page.getByText(label)).toBeInTheDocument();
         expect(chat()).toBe(before);
         expect((page.getByLabelText("draft").element() as HTMLInputElement).value).toBe(
@@ -96,45 +110,37 @@ describe("chat pane keep-alive", () => {
     }
   });
 
-  it.each(["moveBefore", "append"])(
-    "retains focus and selection across %s handoffs",
-    async (move) => {
-      const originalMoveBefore = Element.prototype.moveBefore;
-      if (move === "append") Element.prototype.moveBefore = undefined as never;
-      const screen = await render(<Harness parkBetween={move === "moveBefore"} />);
-      try {
-        const draft = page.getByLabelText("draft").element() as HTMLInputElement;
-        draft.value = "half typed";
-        draft.focus();
-        draft.setSelectionRange(2, 6);
-        for (const label of ["split", "single"]) {
-          // A shortcut/programmatic surface change leaves the composer focused before
-          // the handoff; a pointer click on the toggle would focus the button instead.
-          (page.getByRole("button", { name: "Toggle" }).element() as HTMLButtonElement).click();
-          await expect.element(page.getByText(label)).toBeInTheDocument();
-          await expect.poll(() => document.activeElement).toBe(draft);
-          expect([draft.selectionStart, draft.selectionEnd]).toEqual([2, 6]);
-        }
-      } finally {
-        await screen.unmount();
-        Element.prototype.moveBefore = originalMoveBefore;
+  it.each(handoffMethods)("retains focus and selection across %s handoffs", async (move) => {
+    configureHandoff(move);
+    const screen = await render(<Harness />);
+    try {
+      const draft = page.getByLabelText("draft").element() as HTMLInputElement;
+      draft.value = "half typed";
+      draft.focus();
+      draft.setSelectionRange(2, 6);
+      for (const label of ["split", "single"] as const) {
+        await handoff(screen, label, move);
+        await expect.element(page.getByText(label)).toBeInTheDocument();
+        await expect.poll(() => document.activeElement).toBe(draft);
+        expect([draft.selectionStart, draft.selectionEnd]).toEqual([2, 6]);
       }
-    },
-  );
+    } finally {
+      await screen.unmount();
+    }
+  });
 
-  it.each(["moveBefore", "append"])(
+  it.each(handoffMethods)(
     "retains an editable composer selection across %s handoffs",
     async (move) => {
-      const originalMoveBefore = Element.prototype.moveBefore;
-      if (move === "append") Element.prototype.moveBefore = undefined as never;
-      const screen = await render(<Harness parkBetween={move === "moveBefore"} />);
+      configureHandoff(move);
+      const screen = await render(<Harness />);
       try {
         const editor = page.getByLabelText("composer").element() as HTMLElement;
         const text = editor.firstChild!;
         editor.focus();
         document.getSelection()!.setBaseAndExtent(text, 6, text, 2);
-        for (const label of ["split", "single"]) {
-          (page.getByRole("button", { name: "Toggle" }).element() as HTMLButtonElement).click();
+        for (const label of ["split", "single"] as const) {
+          await handoff(screen, label, move);
           await expect.element(page.getByText(label)).toBeInTheDocument();
           await expect.poll(() => document.activeElement).toBe(editor);
           const selection = document.getSelection()!;
@@ -147,16 +153,15 @@ describe("chat pane keep-alive", () => {
         }
       } finally {
         await screen.unmount();
-        Element.prototype.moveBefore = originalMoveBefore;
       }
     },
   );
 
   it("mounts a fresh pane when the replacing slot shows another thread", async () => {
-    const screen = await render(<Harness splitThreadId="thread-b" />);
+    const screen = await render(<Harness />);
     try {
       const before = chat().dataset.mount;
-      await page.getByRole("button", { name: "Toggle" }).click();
+      await screen.rerender(<Harness surface="split" splitThreadId="thread-b" />);
       await expect.element(page.getByText("split")).toBeInTheDocument();
       // The released pane waits out its grace period, then is unmounted.
       await expect.poll(() => page.getByLabelText("chat").all().length).toBe(1);

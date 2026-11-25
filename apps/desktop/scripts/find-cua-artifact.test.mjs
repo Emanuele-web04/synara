@@ -101,6 +101,14 @@ describe("trusted persistent Cua artifact lookup", () => {
       .mockResolvedValueOnce({ data: { artifacts: [artifact()] } });
     expect(await findCuaArtifact(github, repo, key)).toEqual({ artifactId: 42, runId: 123 });
   });
+  it("applies the same trust to exact macOS icon catalog keys and rejects other names", async () => {
+    const iconKey = `mac-icon-v1-${"e".repeat(64)}`;
+    const github = api([{ ...artifact(), name: iconKey }]);
+    expect(await findCuaArtifact(github, repo, iconKey)).toEqual({ artifactId: 42, runId: 123 });
+    expect(await findCuaArtifact(api([artifact()]), repo, iconKey)).toBeUndefined();
+    for (const invalid of [`mac-icon-v2-${"e".repeat(64)}`, `icon-v1-${"e".repeat(64)}`, "cua-v1"])
+      await expect(findCuaArtifact(api(), repo, invalid)).rejects.toThrow("Invalid");
+  });
   it("never treats unavailable trust metadata as permission to reuse", async () => {
     const github = api();
     github.rest.actions.getWorkflowRun.mockRejectedValue(new Error("API unavailable"));

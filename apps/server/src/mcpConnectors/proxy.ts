@@ -185,6 +185,7 @@ function proxyPolicy(url: string): OutboundHttpPolicy {
     maxConcurrent: 8,
     maxQueued: 64,
     requirePublicAddress: true,
+    allowLoopbackHttp: "ipv4-subnet",
   };
 }
 
@@ -317,7 +318,7 @@ export async function probeMcpConnector(
       policy: {
         ...proxyPolicy(url),
         service: "mcp-connector-probe",
-        timeoutMs: 20_000,
+        timeoutMs: new URL(url).protocol === "http:" ? 2_000 : 20_000,
         maxResponseBytes: 1024 * 1024,
       },
       url,

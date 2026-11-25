@@ -103,6 +103,50 @@ export function SettingsSection({
 }
 
 /**
+ * A titled block of on/off options inside a settings card, laid out two to a line. For a
+ * family of small switches that all say "show X here" (the Environment panel's sections),
+ * where a full row each would bury the card. Separators come from the parent card.
+ */
+export function SettingsToggleGroup({ title, children }: { title: string; children: ReactNode }) {
+  const { t } = useTranslation();
+  return (
+    <div className={SETTINGS_CARD_ROW_CLASS_NAME} data-slot="settings-toggle-group">
+      <h3 className="text-ui-sm text-muted-foreground">{t(title)}</h3>
+      <div className="mt-2 grid gap-x-6 gap-y-1 sm:grid-cols-2">{children}</div>
+    </div>
+  );
+}
+
+/**
+ * One option in a {@link SettingsToggleGroup}: its name and switch on one line. The
+ * description stays available as the hover hint; `id` keeps search deep links working.
+ */
+export function SettingsToggleItem({
+  id,
+  title,
+  description,
+  control,
+}: {
+  id: string;
+  title: string;
+  description: string;
+  control: ReactNode;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div
+      id={id}
+      title={t(description)}
+      className="flex min-h-8 scroll-mt-24 items-center justify-between gap-3"
+      data-slot="settings-toggle"
+    >
+      <span className="min-w-0 truncate text-ui text-foreground">{t(title)}</span>
+      {control}
+    </div>
+  );
+}
+
+/**
  * Dashed placeholder block for "nothing here yet" / "nothing matched" / status copy.
  * `layout` picks the two shapes in use: a one-line left-aligned status strip, or a
  * taller centered empty block. `tone` switches to the destructive treatment for
@@ -172,12 +216,15 @@ export function SettingsListRow({
   title,
   description,
   actions,
+  leading,
   align: alignProp,
   onContextMenu,
 }: {
   title: ReactNode;
   description?: ReactNode;
   actions?: ReactNode;
+  /** Glyph before the text block (a device or platform icon). */
+  leading?: ReactNode;
   align?: "center" | "start";
   onContextMenu?: ComponentProps<"div">["onContextMenu"];
 }) {
@@ -194,11 +241,18 @@ export function SettingsListRow({
           align === "start" ? "sm:items-start" : "sm:items-center",
         )}
       >
-        <div className="min-w-0 flex-1 space-y-0.5">
-          <div className={cn(SETTINGS_CARD_ROW_TITLE_CLASS_NAME, "truncate")}>{title}</div>
-          {description != null ? (
-            <div className={SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME}>{description}</div>
+        <div className="flex min-w-0 flex-1 items-center gap-3">
+          {leading != null ? (
+            <span className="flex size-8 shrink-0 items-center justify-center text-muted-foreground">
+              {leading}
+            </span>
           ) : null}
+          <div className="min-w-0 flex-1 space-y-0.5">
+            <div className={cn(SETTINGS_CARD_ROW_TITLE_CLASS_NAME, "truncate")}>{title}</div>
+            {description != null ? (
+              <div className={SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME}>{description}</div>
+            ) : null}
+          </div>
         </div>
         {actions != null ? (
           <div className="flex w-full shrink-0 items-center gap-2 sm:w-auto sm:justify-end">
@@ -246,7 +300,7 @@ export function SettingsRow({
       >
         <div className="min-w-0 flex-1 space-y-0.5">
           <div className="flex min-h-5 items-center gap-1.5">
-            <h3 className={SETTINGS_CARD_ROW_TITLE_CLASS_NAME}>
+            <h3 id={id ? `${id}-title` : undefined} className={SETTINGS_CARD_ROW_TITLE_CLASS_NAME}>
               {typeof title === "string" ? t(title) : title}
             </h3>
             <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center">

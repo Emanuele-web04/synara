@@ -27,7 +27,8 @@ import {
   writeJsonFileAtomic,
   type OAuthRefreshResult,
 } from "../credentials";
-import { fetchJson, isAuthFailureStatus } from "../http";
+import { fetchJson, isAuthFailureStatus, isEdgeBlockedResponse } from "../http";
+import { createRefreshLock } from "./refreshLock";
 import {
   asFiniteNumber,
   asRecord,
@@ -199,19 +200,7 @@ function codexAuthNeedsRefresh(state: CodexOAuthState, nowMs: number): boolean {
 
 // Serializes refresh attempts per auth.json path within this process, so concurrent usage
 // fetches can't race each other into redeeming the same single-use refresh token twice.
-const refreshLocks = new Map<string, Promise<unknown>>();
-function withRefreshLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
-  const prev = refreshLocks.get(key) ?? Promise.resolve();
-  const run = prev.then(fn, fn);
-  refreshLocks.set(
-    key,
-    run.then(
-      () => undefined,
-      () => undefined,
-    ),
-  );
-  return run;
-}
+const withRefreshLock = createRefreshLock();
 
 /** Apply a token-endpoint rotation to the in-memory state and persist it back to auth.json.
  * Persistence failures are logged loudly but don't fail the fetch: the refreshed token still
@@ -467,7 +456,7 @@ export const codexUsageFetcher: ProviderUsageFetcher = {
 
     try {
       let result = await fetchCodexUsage(state);
-      if (isAuthFailureStatus(result.status)) {
+      if (!isEdgeBlockedResponse(result) && isAuthFailureStatus(result.status)) {
         // The stored expiry can lag reality (revocation, clock skew): refresh/re-read and retry
         // once with a genuinely different token.
         const outcome = await refreshCodexAuth(ctx, state, { allowRedeem });
@@ -475,6 +464,17 @@ export const codexUsageFetcher: ProviderUsageFetcher = {
           state = outcome.state;
           result = await fetchCodexUsage(state);
         }
+      }
+      if (isEdgeBlockedResponse(result)) {
+        // Not a token problem: refreshing would only rotate the refresh token for nothing. An error
+        // snapshot lets the usage cache keep the last healthy values and retry on the short TTL.
+        log.warn("codex usage request blocked by Cloudflare edge", { status: result.status });
+        return errorSnapshot(
+          "codex",
+          ctx.nowMs,
+          SOURCE,
+          "OpenAI's network edge temporarily blocked the usage check (HTTP 403). Your Codex login is fine; retrying shortly.",
+        );
       }
       if (isAuthFailureStatus(result.status)) {
         log.warn("codex usage request unauthorized after refresh", { status: result.status });

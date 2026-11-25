@@ -7,6 +7,7 @@ import type {
   ModelSelection,
   NativeApi,
   ProviderStartOptions,
+  ThreadId,
 } from "@synara/contracts";
 import { mutationOptions, queryOptions, type QueryClient } from "@tanstack/react-query";
 import { ensureNativeApi } from "../nativeApi";
@@ -873,6 +874,8 @@ export function gitRunStackedActionMutationOptions(input: {
       prBody?: string;
       prDraft?: boolean;
       allowDirtyWorkingTree?: boolean;
+      /** Thread the action runs for; the server links the PR it creates or pushes to. */
+      threadId?: ThreadId;
     },
     Awaited<ReturnType<NativeApi["git"]["runStackedAction"]>>
   >({
@@ -895,12 +898,14 @@ export function gitRunStackedActionMutationOptions(input: {
         prBody,
         prDraft,
         allowDirtyWorkingTree,
+        threadId,
       },
     ) =>
       api.git.runStackedAction({
         actionId,
         cwd,
         action,
+        ...(threadId ? { threadId } : {}),
         ...(commitMessage ? { commitMessage } : {}),
         ...(featureBranch ? { featureBranch } : {}),
         ...(filePaths ? { filePaths } : {}),
@@ -957,8 +962,11 @@ export function gitCreateDetachedWorktreeMutationOptions(input: { queryClient: Q
       });
     },
     mutationKey: ["git", "mutation", "create-detached-worktree"] as const,
-    onSettled: async () => {
-      await invalidateGitQueries(input.queryClient);
+    // The result already identifies the new worktree, and the first send links the
+    // thread to it before starting the turn. Like `awaitInvalidation: false` above,
+    // that must not wait for status/PR refreshes in every cached project and worktree.
+    onSettled: () => {
+      void invalidateGitQueries(input.queryClient).catch(() => undefined);
     },
   });
 }

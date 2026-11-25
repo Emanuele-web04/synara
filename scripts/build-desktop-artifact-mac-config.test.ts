@@ -36,16 +36,35 @@ it("loads the desktop artifact CLI with native Node before packaging", () => {
 });
 
 describe("createDesktopPlatformBuildConfig", () => {
-  it("keeps app-authored Chinese permission descriptions out of Stable bundles", () => {
-    for (const flavor of SYNARA_PACKAGED_DESKTOP_FLAVORS) {
-      const config = createDesktopPlatformBuildConfig({ platform: "mac", target: "dir", flavor });
-      const folders = config.extraFiles?.map((entry) => entry.to);
-      assert.ok(folders?.includes("Resources/en.lproj"));
-      assert.ok(folders?.includes("Resources/es.lproj"));
-      assert.equal(folders?.includes("Resources/zh-Hans.lproj"), flavor !== "production");
-    }
+  it("isolates Remote's Windows installer registration and Linux executable", () => {
+    const remote = createDesktopPlatformBuildConfig({
+      platform: "win",
+      target: "nsis",
+      flavor: "remote",
+    });
+    const beta = createDesktopPlatformBuildConfig({
+      platform: "win",
+      target: "nsis",
+      flavor: "beta",
+    });
+    assert.match(String(remote.nsis?.guid), /^[0-9a-f-]{36}$/);
+    assert.notEqual(remote.nsis?.guid, WINDOWS_INSTALLER_GUID);
+    assert.notEqual(remote.nsis?.guid, beta.nsis?.guid);
+    const linux = createDesktopPlatformBuildConfig({
+      platform: "linux",
+      target: "AppImage",
+      flavor: "remote",
+    });
+    assert.equal(linux.linux?.executableName, "synara-remote");
+    assert.deepStrictEqual(linux.linux?.desktop, { entry: { StartupWMClass: "synara-remote" } });
   });
 
+  it("prunes unused Electron locales to the supported UI locales", () => {
+    for (const flavor of SYNARA_PACKAGED_DESKTOP_FLAVORS) {
+      const config = createDesktopPlatformBuildConfig({ platform: "mac", target: "dir", flavor });
+      assert.deepStrictEqual(config.electronLanguages, ["en-US", "en-GB", "en_GB"]);
+    }
+  });
   it("retains TypeScript runtime libraries on every desktop platform", () => {
     const require = createRequire(import.meta.url);
     for (const platform of ["mac", "linux", "win"] as const) {
@@ -107,15 +126,47 @@ describe("createDesktopPlatformBuildConfig", () => {
     assert.equal(dmg.writeUpdateInfo, false);
     assert.equal(mac.entitlements, MAC_ENTITLEMENTS_PATH);
     assert.equal(mac.entitlementsInherit, MAC_INHERITED_ENTITLEMENTS_PATH);
+    // Only Chromium's `.pak` data files skip their own signature; the
+    // framework's signature still seals them. No code may ever match.
+    assert.deepStrictEqual(mac.signIgnore, ["\\.pak$"]);
+    const skipsOwnSignature = (file: string) =>
+      (mac.signIgnore as string[]).some((pattern) => new RegExp(pattern).test(file));
+    const framework =
+      "/stage/Synara.app/Contents/Frameworks/Electron Framework.framework/Versions/A";
+    for (const data of [
+      `${framework}/Resources/am.lproj/locale.pak`,
+      `${framework}/Resources/resources.pak`,
+      "/stage/Synara.app/Contents/Frameworks/Electron Framework.framework/Resources/chrome_200_percent.pak",
+    ])
+      assert.equal(skipsOwnSignature(data), true, data);
+    for (const code of [
+      "/stage/Synara.app",
+      "/stage/Synara.app/Contents/MacOS/Synara",
+      "/stage/Synara.app/Contents/Frameworks/Electron Framework.framework",
+      `${framework}/Electron Framework`,
+      `${framework}/Libraries/libffmpeg.dylib`,
+      `${framework}/Helpers/chrome_crashpad_handler`,
+      "/stage/Synara.app/Contents/Frameworks/Synara Helper (Renderer).app",
+      "/stage/Synara.app/Contents/Frameworks/synara-window-material.node",
+      "/stage/Synara.app/Contents/Helpers/synara-appsnap-helper",
+      "/stage/Synara.app/Contents/Resources/cua-driver/cua-driver",
+      "/stage/Synara.app/Contents/Resources/cloudflared/cloudflared",
+      "/stage/Synara.app/Contents/Resources/app.asar",
+      "/stage/Synara.app/Contents/Resources/app.asar.unpacked/node_modules/node-pty/build/Release/pty.node",
+      "/stage/Synara.app/Contents/Resources/app.asar.unpacked/node_modules/@anthropic-ai/claude-agent-sdk-darwin-arm64/claude",
+      "/stage/Synara.app/Contents/Resources/tool.pak/helper",
+    ])
+      assert.equal(skipsOwnSignature(code), false, code);
     assert.equal(MAC_APPSNAP_HELPER_BUNDLE_PATH, "Contents/Helpers/synara-appsnap-helper");
     assert.deepStrictEqual(mac.binaries, [
       "Contents/Helpers/synara-appsnap-helper",
       "Contents/Frameworks/synara-window-material.node",
       "Contents/Resources/cua-driver/cua-driver",
+      "Contents/Resources/cloudflared/cloudflared",
     ]);
     assert.equal(
       mac.x64ArchFiles,
-      "Contents/{Helpers/synara-appsnap-helper,Frameworks/synara-window-material.node,Resources/cua-driver/cua-driver}",
+      "Contents/{Helpers/synara-appsnap-helper,Frameworks/synara-window-material.node,Resources/cua-driver/cua-driver,Resources/cloudflared/cloudflared}",
     );
     assert.equal(
       MAC_APPSNAP_HELPER_STAGE_PATH,
@@ -126,6 +177,7 @@ describe("createDesktopPlatformBuildConfig", () => {
     assert.ok(config.files?.includes(MAC_APPSNAP_HELPER_ASAR_EXCLUSION));
     assert.ok(config.files?.includes(MAC_WINDOW_MATERIAL_ADDON_ASAR_EXCLUSION));
     assert.ok(config.files?.includes("!apps/desktop/resources/cua-driver/**"));
+    assert.ok(config.files?.includes("!apps/desktop/prod-resources/cua-driver/**"));
     assert.deepStrictEqual(config.extraFiles, [
       {
         from: "apps/desktop/resources/cua-driver",
@@ -147,8 +199,6 @@ describe("createDesktopPlatformBuildConfig", () => {
         from: MAC_ICON_ASSETS_CAR_STAGE_PATH,
         to: MAC_ICON_ASSETS_CAR_BUNDLE_PATH,
       },
-      { from: "apps/desktop/resources/localizations/en.lproj", to: "Resources/en.lproj" },
-      { from: "apps/desktop/resources/localizations/es.lproj", to: "Resources/es.lproj" },
     ]);
     assert.equal(MAC_ICON_ASSETS_CAR_STAGE_PATH, "apps/desktop/resources/Assets.car");
     assert.equal(MAC_ICON_ASSETS_CAR_BUNDLE_PATH, "Resources/Assets.car");
@@ -237,6 +287,7 @@ describe("createDesktopPlatformBuildConfig", () => {
     assert.equal(linux.mac, undefined);
     assert.equal(linux.extraFiles, undefined);
     assert.deepStrictEqual(linux.extraResources, [
+      { from: "apps/desktop/resources/cloudflared", to: "cloudflared" },
       { from: "apps/desktop/resources/cua-driver", to: "cua-driver" },
     ]);
     assert.ok(linux.files?.includes("!apps/desktop/resources/cua-driver/**"));
@@ -256,7 +307,9 @@ describe("createDesktopPlatformBuildConfig", () => {
 
     assert.equal(win.mac, undefined);
     assert.equal(win.extraFiles, undefined);
-    assert.equal(win.extraResources, undefined);
+    assert.deepStrictEqual(win.extraResources, [
+      { from: "apps/desktop/resources/cloudflared", to: "cloudflared" },
+    ]);
     assert.deepStrictEqual(win.asarUnpack, ["node_modules/node-pty/**"]);
     assert.equal(WINDOWS_INSTALLER_GUID, "368107a8-afe6-5db5-ab3b-d4f331684868");
     assert.deepStrictEqual(win.nsis, {

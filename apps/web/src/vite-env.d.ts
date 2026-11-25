@@ -5,6 +5,7 @@ import type { NativeApi, DesktopBridge } from "@synara/contracts";
 interface ImportMetaEnv {
   readonly APP_VERSION: string;
   readonly VITE_FEEDBACK_ENDPOINT?: string;
+  readonly VITE_PROFILES_PUBLIC_ORIGIN?: string;
 }
 
 interface ImportMeta {

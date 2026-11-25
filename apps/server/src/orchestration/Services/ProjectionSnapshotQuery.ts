@@ -129,6 +129,20 @@ export interface ProjectionManagedWorktreeThread {
   readonly associatedWorktreePath: string | null;
 }
 
+/** Opt-in extras for thread shell reads; internal callers leave both off. */
+export interface ProjectionThreadShellReadOptions {
+  /**
+   * Runtime reconciliation uses the latest projected message timestamp as its activity clock
+   * without changing the persisted sidebar shell.
+   */
+  readonly includeLatestMessageActivity?: boolean;
+  /**
+   * Shells sent to clients carry `latestReplyPreview`, which reads the newest settled assistant
+   * reply of each thread.
+   */
+  readonly includeLatestReplyPreview?: boolean;
+}
+
 /**
  * ProjectionSnapshotQueryShape - Service API for read-model snapshots.
  */
@@ -205,10 +219,11 @@ export interface ProjectionSnapshotQueryShape {
    * Returns only project rows plus thread shell summaries so clients can
    * bootstrap navigation state without hydrating every thread body.
    */
-  readonly getShellSnapshot: () => Effect.Effect<
-    OrchestrationShellSnapshot,
-    ProjectionRepositoryError
-  >;
+  readonly getShellSnapshot: (options?: {
+    readonly verifyEmptyThreads?: boolean;
+    /** Client-facing snapshots: see ProjectionThreadShellReadOptions. */
+    readonly includeLatestReplyPreview?: boolean;
+  }) => Effect.Effect<OrchestrationShellSnapshot, ProjectionRepositoryError>;
 
   /**
    * Read the active project for an exact workspace root match.
@@ -283,14 +298,10 @@ export interface ProjectionSnapshotQueryShape {
     toTurnCount: number,
   ) => Effect.Effect<Option.Option<ProjectionFullThreadDiffContext>, ProjectionRepositoryError>;
 
-  /**
-   * Read a single active thread shell row by id.
-   * Runtime reconciliation can opt into the latest projected message timestamp
-   * as its activity clock without changing the persisted sidebar shell.
-   */
+  /** Read a single active thread shell row by id. */
   readonly getThreadShellById: (
     threadId: ThreadId,
-    options?: { readonly includeLatestMessageActivity?: boolean },
+    options?: ProjectionThreadShellReadOptions,
   ) => Effect.Effect<Option.Option<OrchestrationThreadShell>, ProjectionRepositoryError>;
 
   /**
@@ -300,7 +311,7 @@ export interface ProjectionSnapshotQueryShape {
    */
   readonly getThreadShellsByIds: (
     threadIds: ReadonlyArray<ThreadId>,
-    options?: { readonly includeLatestMessageActivity?: boolean },
+    options?: ProjectionThreadShellReadOptions,
   ) => Effect.Effect<ReadonlyArray<OrchestrationThreadShell>, ProjectionRepositoryError>;
 
   /**

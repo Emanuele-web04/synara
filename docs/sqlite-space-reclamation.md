@@ -36,24 +36,65 @@ time is inferred from temporary-fixture tests.
 SQLite documents the [mode-conversion requirement](https://www.sqlite.org/pragma.html#pragma_auto_vacuum)
 and [VACUUM scratch-space requirement](https://www.sqlite.org/lang_vacuum.html).
 
+## Interrupted upgrades
+
+Synara retries an interrupted migration up to twice using the original backup.
+When a newer build resumes it, the recovery marker records the new target before
+replay. If the database still carries a divergent imported history, approval
+must match the new target and the current tracker. The completed record is
+written only after the tracker reaches the target, so downgrade recovery can
+still identify the original compatible snapshot.
+
+The server leaves a pending migration targeting a newer schema untouched,
+including after the retry budget is spent. Open the same app channel on a build
+that supports the target to continue recovery. That build can resume replay if
+attempts remain. The local server log reports the target and the schema supported
+by the current build. Desktop can stop before starting the server when attempts
+are exhausted. If you choose to restore there, Synara verifies the backup before
+replacing the database. A restore selected from completed provenance refuses to
+replace a different pending recovery. If a restore already installed its
+verified snapshot, retry can finish recording it and remove the marker without
+swapping the database again or replacing the original failed copy. If an
+interruption split the original database from its WAL/SHM during the move,
+retry resumes the same recorded bundle so its committed writes stay together.
+
 ## Explicit offline compaction
 
 When shutdown maintenance keeps deferring a large legacy database, close every
-Synara process and every other client of that database, then run the installed
-CLI maintenance command with its absolute path:
+Synara process and every other client of that database. With the CLI distribution
+installed, run its maintenance command with the absolute database path:
 
 ```sh
 synara-compact-database "$HOME/.synara/userdata/state.sqlite"
 ```
 
 For Beta, explicitly select `$HOME/.synara-beta/userdata/state.sqlite` instead.
+For Synara Remote, explicitly select `$HOME/.synara-remote/userdata/state.sqlite`.
 Custom homes and development databases require their own actual path. The command
 does not discover homes, open another channel's database, start the server, or
 change retention. On Windows, pass a quoted absolute path, for example
 `synara-compact-database "$env:USERPROFILE\.synara\userdata\state.sqlite"`
 in PowerShell. A source checkout can run the built entry with
 `node apps/server/dist/compactDatabase.mjs <absolute-database-path>` using a Node
-version supported by `apps/server/package.json`.
+version supported by `apps/server/package.json`. Bun is not supported and is
+refused before the target database is inspected or locked.
+
+A desktop installer does not add this global CLI command to `PATH`. It includes
+`apps/server/dist/compactDatabase.mjs` inside `resources/app.asar`; use the
+installation's own runtime in Node mode and the explicit database path. For the
+default macOS Synara Remote installation, after quitting the app and all other
+clients:
+
+```sh
+ELECTRON_RUN_AS_NODE=1 \
+  "/Applications/Synara Remote.app/Contents/MacOS/Synara Remote" \
+  "/Applications/Synara Remote.app/Contents/Resources/app.asar/apps/server/dist/compactDatabase.mjs" \
+  "$HOME/.synara-remote/userdata/state.sqlite"
+```
+
+Adjust both application paths for a different installation location and select
+the actual database explicitly for a custom home. This invocation does not start
+the app or discover another channel's database.
 
 The command holds the existing database lifecycle lock and refuses pending
 migration recovery, including malformed recovery markers. It asks SQLite to

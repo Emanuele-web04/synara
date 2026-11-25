@@ -79,11 +79,15 @@ const ReadFromSequenceRequestSchema = Schema.Struct({
   eventTypes: Schema.Array(Schema.String),
   activityKinds: Schema.Array(Schema.String),
 });
-const ReadThreadFromSequenceRequestSchema = Schema.Struct({
+const threadEventRangeFields = {
   threadId: Schema.String,
   sequenceExclusive: NonNegativeInt,
   throughSequenceInclusive: NonNegativeInt,
   limit: Schema.Number,
+};
+const ThreadEventRangeRequestSchema = Schema.Struct(threadEventRangeFields);
+const ReadThreadFromSequenceRequestSchema = Schema.Struct({
+  ...threadEventRangeFields,
   eventTypes: Schema.Array(Schema.String),
 });
 const ReadThreadEventsRequestSchema = Schema.Struct({
@@ -431,9 +435,13 @@ const makeEventStore = Effect.gen(function* () {
       Effect.flatMap((settings) => decodePersistedEventRow(operation, row, settings)),
     );
 
+  const AppendSequenceRowSchema = Schema.Struct({
+    sequence: NonNegativeInt,
+  });
+
   const appendEventRow = SqlSchema.findOne({
     Request: AppendEventRequestSchema,
-    Result: RawPersistedEventRowSchema,
+    Result: AppendSequenceRowSchema,
     execute: (request) =>
       sql`
         INSERT INTO orchestration_events (
@@ -474,18 +482,7 @@ const makeEventStore = Effect.gen(function* () {
           ${request.payloadJson},
           ${request.metadataJson}
         )
-        RETURNING
-          sequence,
-          event_id AS "eventId",
-          event_type AS "type",
-          aggregate_kind AS "aggregateKind",
-          stream_id AS "aggregateId",
-          occurred_at AS "occurredAt",
-          command_id AS "commandId",
-          causation_event_id AS "causationEventId",
-          correlation_id AS "correlationId",
-          payload_json AS "payloadJson",
-          metadata_json AS "metadataJson"
+        RETURNING sequence
       `,
   });
 
@@ -494,6 +491,14 @@ const makeEventStore = Effect.gen(function* () {
     Result: RawPersistedEventRowSchema,
     execute: (request) => buildReadEventRowsFromSequenceQuery(sql, request),
   });
+
+  const threadEventRange = (request: typeof ThreadEventRangeRequestSchema.Type) => sql`
+      FROM orchestration_events
+      WHERE aggregate_kind = 'thread'
+        AND stream_id = ${request.threadId}
+        AND sequence > ${request.sequenceExclusive}
+        AND sequence <= ${request.throughSequenceInclusive}
+  `;
 
   const readThreadEventRowsFromSequence = SqlSchema.findAll({
     Request: ReadThreadFromSequenceRequestSchema,
@@ -516,16 +521,32 @@ const makeEventStore = Effect.gen(function* () {
           correlation_id AS "correlationId",
           payload_json AS "payloadJson",
           metadata_json AS "metadataJson"
-        FROM orchestration_events
-        WHERE aggregate_kind = 'thread'
-          AND stream_id = ${request.threadId}
-          AND sequence > ${request.sequenceExclusive}
-          AND sequence <= ${request.throughSequenceInclusive}
-          ${typeFilter}
+        ${threadEventRange(request)}
+        ${typeFilter}
         ORDER BY sequence ASC
         LIMIT ${request.limit}
       `;
     },
+  });
+
+  const readThreadReplayAdmission = SqlSchema.findOne({
+    Request: ThreadEventRangeRequestSchema,
+    Result: Schema.Struct({ canReplay: Schema.Literals([0, 1]) }),
+    // A purged ID can be recreated after the replay fence was captured. Check
+    // current creation independently, then cap all rows scanned in the fence.
+    execute: (request) => sql`
+      SELECT CASE WHEN EXISTS (
+        SELECT 1 FROM orchestration_events
+        WHERE aggregate_kind = 'thread'
+          AND stream_id = ${request.threadId}
+          AND stream_version = 0
+          AND event_type = 'thread.created'
+          AND sequence > ${request.sequenceExclusive}
+      ) THEN 0 ELSE NOT EXISTS (
+        SELECT 1 ${threadEventRange(request)}
+        LIMIT 1 OFFSET ${request.limit}
+      ) END AS "canReplay"
+    `,
   });
 
   const readHighWaterSequenceRow = SqlSchema.findOne({
@@ -649,15 +670,53 @@ const makeEventStore = Effect.gen(function* () {
           "OrchestrationEventStore.append:decodeRow",
         ),
       ),
-      Effect.flatMap((row) =>
-        decodeRowWithSettings("OrchestrationEventStore.append:rowToEvent", row).pipe(
-          // Durable JSON is sanitized above, while the just-committed in-memory
-          // event keeps transient launch credentials for internal runtime consumers.
-          Effect.map((savedEvent) =>
+      Effect.flatMap((row) => {
+        // Durable JSON was already sanitized before insert; attach the assigned
+        // sequence directly to the in-memory event instead of reading back and
+        // re-parsing JSON from SQLite. For high-frequency streaming events
+        // (`thread.message-sent` and `thread.activity-appended`) apply the
+        // known schema defaults directly without re-running the 40-branch union
+        // decoder on every token delta.
+        if (sanitizedEvent.type === "thread.message-sent") {
+          const messagePayload = sanitizedEvent.payload as Extract<
+            OrchestrationEvent,
+            { readonly type: "thread.message-sent" }
+          >["payload"];
+          const payload =
+            messagePayload.source === undefined
+              ? { ...messagePayload, source: "native" as const }
+              : messagePayload;
+          const savedEvent = {
+            ...sanitizedEvent,
+            sequence: row.sequence,
+            payload,
+          } as OrchestrationEvent;
+          return Effect.succeed(
             restoreTransientOrchestrationEventProviderOptions(savedEvent, event),
+          );
+        }
+        if (sanitizedEvent.type === "thread.activity-appended") {
+          const savedEvent = {
+            ...sanitizedEvent,
+            sequence: row.sequence,
+          } as OrchestrationEvent;
+          return Effect.succeed(
+            restoreTransientOrchestrationEventProviderOptions(savedEvent, event),
+          );
+        }
+        return decodeEvent({
+          ...sanitizedEvent,
+          sequence: row.sequence,
+        }).pipe(
+          Effect.map((savedEvent) =>
+            restoreTransientOrchestrationEventProviderOptions(
+              sanitizeOrchestrationEventProviderOptions(savedEvent),
+              event,
+            ),
           ),
-        ),
-      ),
+          Effect.mapError(toPersistenceDecodeError("OrchestrationEventStore.append:rowToEvent")),
+        );
+      }),
     );
   };
 
@@ -785,6 +844,18 @@ const makeEventStore = Effect.gen(function* () {
       Effect.map((row) => row.highWaterSequence),
     );
 
+  const canReplayThreadEventsInRange: OrchestrationEventStoreShape["canReplayThreadEventsInRange"] =
+    (input) =>
+      readThreadReplayAdmission(input).pipe(
+        Effect.mapError(
+          toPersistenceSqlOrDecodeError(
+            "OrchestrationEventStore.canReplayThreadEventsInRange:query",
+            "OrchestrationEventStore.canReplayThreadEventsInRange:decodeRow",
+          ),
+        ),
+        Effect.map((row) => row.canReplay === 1),
+      );
+
   const getThreadHighWaterSequence: OrchestrationEventStoreShape["getThreadHighWaterSequence"] = (
     threadId,
   ) =>
@@ -860,6 +931,7 @@ const makeEventStore = Effect.gen(function* () {
     getThreadTitleHighWaterSequence,
     readThreadEvents,
     readThreadEventsFromSequence,
+    canReplayThreadEventsInRange,
     readFromSequence,
     readAll: () => readFromSequence(0, Number.MAX_SAFE_INTEGER),
   } satisfies OrchestrationEventStoreShape;

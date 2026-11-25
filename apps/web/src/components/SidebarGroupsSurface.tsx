@@ -62,6 +62,7 @@ import {
   SIDEBAR_NESTED_LIST_OFFSET_CLASS_NAME,
   SIDEBAR_PROJECT_NAME_CLASS_NAME,
   SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME,
+  SIDEBAR_EMPTY_STATE_CLASS_NAME,
 } from "../sidebarRowStyles";
 import { useTranslation } from "~/i18n";
 
@@ -86,6 +87,7 @@ export function resetStudioAdoptionDispatchedIdsForTests(): void {
 
 export function SidebarGroupsSurface({
   groupProjects,
+  remoteProjects,
   projectSidebarDataById,
   threadsHydrated,
   visualActiveThreadId,
@@ -98,6 +100,7 @@ export function SidebarGroupsSurface({
   onProjectContextMenu,
 }: {
   readonly groupProjects: readonly Project[];
+  readonly remoteProjects?: readonly ReactNode[];
   readonly projectSidebarDataById: ReadonlyMap<ProjectId, SidebarDerivedProjectData>;
   readonly threadsHydrated: boolean;
   readonly visualActiveThreadId: ThreadId | null;
@@ -486,11 +489,12 @@ export function SidebarGroupsSurface({
                 </SidebarMenuItem>
               );
             })
-          ) : (
-            <div className="px-2 pt-4 text-center text-ui text-muted-foreground/58">
+          ) : !remoteProjects?.length ? (
+            <div className={SIDEBAR_EMPTY_STATE_CLASS_NAME}>
               {emptyState === "loading" ? t("workspace:loadingHubs") : t("common:noHubsYet")}
             </div>
-          )}
+          ) : null}
+          {remoteProjects}
         </SidebarMenu>
         {archivedGroups.length > 0 ? (
           <SidebarCollapsibleSection

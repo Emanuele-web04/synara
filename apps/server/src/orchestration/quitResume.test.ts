@@ -1,6 +1,7 @@
+import { ProviderCommandReactor } from "./Services/ProviderCommandReactor.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { ProjectId, ThreadId, TurnId, type OrchestrationCommand } from "@synara/contracts";
-import { Duration, Effect, FileSystem, Layer, Option } from "effect";
+import { Deferred, Duration, Effect, FileSystem, Layer, Option } from "effect";
 import { describe, expect, it } from "vitest";
 
 import { ServerConfig } from "../config";
@@ -21,6 +22,7 @@ import {
 import { OrchestrationEngineService } from "./Services/OrchestrationEngine.ts";
 import { ProjectionPendingInteractionRepository } from "../persistence/Services/ProjectionPendingInteractions.ts";
 import { ProjectionSnapshotQuery } from "./Services/ProjectionSnapshotQuery.ts";
+import { ProjectionTurnRepository } from "../persistence/Services/ProjectionTurns.ts";
 
 const RECORD_ID = "record-1";
 const RECORDED_AT = "2026-06-14T10:00:00.000Z";
@@ -125,6 +127,12 @@ describe("crash recovery", () => {
     ];
     const record = await Effect.runPromise(
       captureCrashResumeRecord.pipe(
+        Effect.provideService(ProviderCommandReactor, {
+          withRestartOrphanedThread: (_threadId, effect) => effect.pipe(Effect.map(Option.some)),
+        } as Pick<
+          (typeof ProviderCommandReactor)["Service"],
+          "withRestartOrphanedThread"
+        > as never),
         Effect.provideService(OrchestrationEngineService, {
           getReadModel: () =>
             Effect.succeed({
@@ -134,6 +142,9 @@ describe("crash recovery", () => {
         } as never),
         Effect.provideService(ProjectionPendingInteractionRepository, {
           listUnsettled: () => Effect.succeed([{ threadId: threadId("durable-callback") }]),
+        } as never),
+        Effect.provideService(ProjectionTurnRepository, {
+          getByTurnId: () => Effect.succeed(Option.none()),
         } as never),
         Effect.provideService(ProjectionSnapshotQuery, {
           getThreadDetailSnapshotById: (id: string) =>
@@ -186,19 +197,28 @@ describe("crash recovery", () => {
     });
     expect(plan.commands).toHaveLength(1);
     expect(plan.commands[0]).toMatchObject({
+      type: "thread.turn.resume",
       threadId: "running",
-      dispatchOrigin: "automation",
       resumePrecondition: { recordedTurnId: "running-turn" },
     });
   });
   it("does not guess that human callbacks are absent when their durable read fails", async () => {
     const captured = await Effect.runPromise(
       captureCrashResumeRecord.pipe(
+        Effect.provideService(ProviderCommandReactor, {
+          withRestartOrphanedThread: (_threadId, effect) => effect.pipe(Effect.map(Option.some)),
+        } as Pick<
+          (typeof ProviderCommandReactor)["Service"],
+          "withRestartOrphanedThread"
+        > as never),
         Effect.provideService(OrchestrationEngineService, {
           getReadModel: () => Effect.succeed({ threads: [makeRunningThread("running")] }),
         } as never),
         Effect.provideService(ProjectionPendingInteractionRepository, {
           listUnsettled: () => Effect.fail(new Error("unavailable")),
+        } as never),
+        Effect.provideService(ProjectionTurnRepository, {
+          getByTurnId: () => Effect.succeed(Option.none()),
         } as never),
         Effect.provideService(ProjectionSnapshotQuery, {} as never),
       ),
@@ -282,7 +302,7 @@ describe("buildQuitInterruptCommand", () => {
 });
 
 describe("planQuitResumeTurns", () => {
-  it("queues an automatic continuation using each unchanged thread's runtime settings", () => {
+  it("plans a hidden continuation for each unchanged thread", () => {
     const plan = planQuitResumeTurns({
       record: makeRecord([{ threadId: "a", turnId: "a-turn" }]),
       threads: [makeThread("a", { runtimeMode: "approval-required", interactionMode: "plan" })],
@@ -293,26 +313,16 @@ describe("planQuitResumeTurns", () => {
     expect(plan.skipped).toEqual([]);
     expect(plan.commands).toEqual([
       {
-        type: "thread.turn.start",
+        // A hidden continuation: the prompt reaches the provider, not the chat.
+        type: "thread.turn.resume",
         commandId: `quit-resume:${RECORD_ID}:a`,
         threadId: threadId("a"),
-        message: {
-          messageId: `quit-resume:${RECORD_ID}:a`,
-          role: "user",
-          text: PROMPT,
-          attachments: [],
-        },
-        dispatchMode: "queue",
-        dispatchOrigin: "automation",
-        runtimeMode: "approval-required",
-        interactionMode: "plan",
+        continuationPrompt: PROMPT,
         // Re-checked by the decider inside the serialized dispatch.
         resumePrecondition: { recordedTurnId: turnId("a-turn"), recordedAt: RECORDED_AT },
         createdAt: NOW,
       },
     ]);
-    // Model selection is intentionally omitted so the thread's current selection is used.
-    expect(plan.commands[0]).not.toHaveProperty("modelSelection");
   });
 
   it("resumes turns that ended as interrupted or error, not ones that completed on their own", () => {
@@ -365,7 +375,9 @@ describe("planQuitResumeTurns", () => {
           latestTurn: makeLatestTurn("follow-up-old", "completed", BEFORE_RECORD),
         }),
         // The pending turn started after the record and was interrupted by the quit.
-        makeThread("started-then-stopped", { latestTurn: makeLatestTurn("started-turn") }),
+        makeThread("started-then-stopped", {
+          latestTurn: { ...makeLatestTurn("started-turn"), startedAt: AFTER_RECORD },
+        }),
         // A turn finished on its own after the record: nothing left to continue.
         makeThread("answered", {
           latestTurn: makeLatestTurn("answered-turn", "completed", AFTER_RECORD),
@@ -573,39 +585,48 @@ describe("quit resume record file", () => {
   });
 
   it("acknowledges the durable record without waiting for best-effort interrupts", async () => {
-    let timeout: ReturnType<typeof setTimeout> | undefined;
-    try {
-      const result = await Promise.race([
-        run(
-          Effect.gen(function* () {
-            const config = yield* ServerConfig;
-            const prepared = yield* prepareQuitResume({
-              request: {
-                threadIds: [threadId("a")],
-                continuationPrompt: PROMPT,
-              },
-              recordPath: config.quitResumeStatePath,
-              getReadModel: () => Effect.succeed({ threads: [makeRunningThread("a")] }),
-              dispatch: () => Effect.never,
-              abandonAfter: Duration.hours(1),
-            });
-            const persisted = yield* readQuitResumeRecord(config.quitResumeStatePath);
-            yield* clearQuitResumeRecord(config.quitResumeStatePath);
-            return { prepared, persisted };
-          }),
-        ),
-        new Promise<never>((_, reject) => {
-          timeout = setTimeout(
-            () => reject(new Error("prepareQuitResume waited for an interrupt")),
-            250,
-          );
-        }),
-      ]);
+    const result = await run(
+      Effect.gen(function* () {
+        const config = yield* ServerConfig;
+        const interruptStarted = yield* Deferred.make<void>();
+        const releaseInterrupt = yield* Deferred.make<void>();
+        const interruptFinished = yield* Deferred.make<void>();
+        return yield* Effect.gen(function* () {
+          const prepared = yield* prepareQuitResume({
+            request: {
+              threadIds: [threadId("a")],
+              continuationPrompt: PROMPT,
+            },
+            recordPath: config.quitResumeStatePath,
+            getReadModel: () => Effect.succeed({ threads: [makeRunningThread("a")] }),
+            dispatch: () =>
+              Deferred.succeed(interruptStarted, undefined).pipe(
+                Effect.andThen(Deferred.await(releaseInterrupt)),
+                Effect.andThen(Deferred.succeed(interruptFinished, undefined)),
+              ),
+            abandonAfter: Duration.hours(1),
+          });
+          yield* Deferred.await(interruptStarted);
+          const persisted = yield* readQuitResumeRecord(config.quitResumeStatePath);
+          // The acknowledgement and durable record must exist while dispatch is still blocked.
+          const interruptPending = !(yield* Deferred.isDone(interruptFinished));
+          yield* Deferred.succeed(releaseInterrupt, undefined);
+          yield* Deferred.await(interruptFinished);
+          yield* clearQuitResumeRecord(config.quitResumeStatePath);
+          return { prepared, persisted, interruptPending };
+        }).pipe(Effect.ensuring(Deferred.succeed(releaseInterrupt, undefined)));
+      }),
+    );
 
-      expect(result.prepared.recordedThreadIds).toEqual([threadId("a")]);
-      expect(result.persisted.kind).toBe("record");
-    } finally {
-      clearTimeout(timeout);
+    expect(result.prepared.recordedThreadIds).toEqual([threadId("a")]);
+    expect(result.persisted.kind).toBe("record");
+    if (result.persisted.kind === "record") {
+      expect(result.persisted.record.threads).toEqual([
+        { threadId: threadId("a"), turnId: turnId("a-turn") },
+      ]);
+      expect(result.persisted.record.continuationPrompt).toBe(PROMPT);
+      expect(result.persisted.record.recordedAt).toBe(result.prepared.recordedAt);
     }
+    expect(result.interruptPending).toBe(true);
   });
 });

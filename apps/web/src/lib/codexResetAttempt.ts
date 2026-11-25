@@ -1,3 +1,4 @@
+import { executionStorage } from "./hosts/executionStorage";
 import type { ServerConsumeCodexResetCreditInput } from "@synara/contracts";
 
 const storageKey = (accountId: string) => `synara:codex-reset-attempt:${accountId}`;
@@ -6,7 +7,7 @@ const storageKey = (accountId: string) => `synara:codex-reset-attempt:${accountI
 export function readCodexResetAttempt(
   accountId: string,
 ): ServerConsumeCodexResetCreditInput | null {
-  const value = localStorage.getItem(storageKey(accountId));
+  const value = executionStorage.getItem(storageKey(accountId));
   if (value === null) return null;
   const attempt: unknown = JSON.parse(value);
   if (
@@ -41,12 +42,12 @@ export function prepareCodexResetAttempt(
     ...(creditId ? { creditId } : {}),
   };
   // Persist before submitting. If storage is unavailable, fail before spending a credit.
-  localStorage.setItem(storageKey(accountId), JSON.stringify(attempt));
+  executionStorage.setItem(storageKey(accountId), JSON.stringify(attempt));
   return attempt;
 }
 
 export function finishCodexResetAttempt(attempt: ServerConsumeCodexResetCreditInput): void {
   if (readCodexResetAttempt(attempt.accountId)?.idempotencyKey === attempt.idempotencyKey) {
-    localStorage.removeItem(storageKey(attempt.accountId));
+    executionStorage.removeItem(storageKey(attempt.accountId));
   }
 }

@@ -18,12 +18,11 @@ import { Button } from "../ui/button";
 import { toastManager } from "../ui/toast";
 import type { CodeEditHistoryControls, CodeEditHistoryState } from "./codeEditHistory";
 import { reloadEditorAfterSave } from "./editorRecovery";
-import { loadLocalizedEditorSurface } from "./editorLocalization";
 import { useCodeEditorSaveKeyDownHandler } from "./editorSaveShortcut";
 
 export { useCodeEditorSaveKeyDownHandler };
 
-const EditorSurface = lazy(loadLocalizedEditorSurface);
+const EditorSurface = lazy(() => import("./MonacoEditorSurface"));
 export type EditorSurfaceComponent = typeof EditorSurface;
 // The alternative engine stays lazy when native editing is enabled.
 const PierreFilePane = lazy(() =>

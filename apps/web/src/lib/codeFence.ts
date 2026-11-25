@@ -6,8 +6,8 @@
 // Depends on: @pierre/diffs filename→language map (shared with the diff renderer)
 //             and the shared path basename helper (file-icons).
 
-import { getFiletypeFromFileName } from "@pierre/diffs";
 import { basenameOfPath } from "../file-icons";
+import { resolveLanguageFromFileName } from "./fileLanguageMap";
 
 export interface CodeFenceInfo {
   /** Highlighter language id (a valid Shiki language/alias, falling back to "text"). */
@@ -33,9 +33,9 @@ function directoryFromPath(filePath: string, fileName: string): string | null {
 function fileReferenceInfo(filePath: string, lineRange: string | null): CodeFenceInfo {
   const fileName = basenameOfPath(filePath);
   return {
-    // Reuse the diff renderer's filename→language map so chat code references and
-    // diff views resolve languages identically; unknown extensions yield "text".
-    language: getFiletypeFromFileName(fileName),
+    // Same filename→language map as the diff renderer, so chat code references
+    // and diff views resolve languages identically; unknown extensions yield "text".
+    language: resolveLanguageFromFileName(fileName),
     isFileReference: true,
     filePath,
     fileName,

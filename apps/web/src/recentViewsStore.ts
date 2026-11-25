@@ -1,3 +1,4 @@
+import { executionStorage } from "./lib/hosts/executionStorage";
 // FILE: recentViewsStore.ts
 // Purpose: Persist the Ctrl+Tab recent primary views MRU used by the chat shell.
 // Layer: UI state store
@@ -82,29 +83,25 @@ function recentViewsEqual(left: readonly RecentView[], right: readonly RecentVie
 
 export const useRecentViewsStore = create<RecentViewsStoreState>()(
   persist(
-    (set) => ({
+    (set, get) => ({
       recentViews: [],
       recordRecentView: (view) => {
-        set((state) => {
-          const nextRecentViews = upsertRecentView(state.recentViews, view);
-          return recentViewsEqual(state.recentViews, nextRecentViews)
-            ? state
-            : { recentViews: nextRecentViews };
-        });
+        const current = get().recentViews;
+        const nextRecentViews = upsertRecentView(current, view);
+        if (recentViewsEqual(current, nextRecentViews)) return;
+        set({ recentViews: nextRecentViews });
       },
       pruneRecentViews: (availability) => {
-        set((state) => {
-          const nextRecentViews = pruneRecentViews(state.recentViews, availability);
-          return recentViewsEqual(state.recentViews, nextRecentViews)
-            ? state
-            : { recentViews: nextRecentViews };
-        });
+        const current = get().recentViews;
+        const nextRecentViews = pruneRecentViews(current, availability);
+        if (recentViewsEqual(current, nextRecentViews)) return;
+        set({ recentViews: nextRecentViews });
       },
     }),
     {
       name: RECENT_VIEWS_STORAGE_KEY,
       storage: createJSONStorage(() =>
-        typeof localStorage === "undefined" ? createMemoryStorage() : localStorage,
+        typeof localStorage === "undefined" ? createMemoryStorage() : executionStorage,
       ),
       partialize: (state) => ({
         recentViews: normalizeRecentViews(state.recentViews),

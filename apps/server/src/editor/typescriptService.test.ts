@@ -1,5 +1,8 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
+import ts from "typescript";
+import { isPathInside } from "@synara/shared/pathContainment";
 import os from "node:os";
 import path from "node:path";
 import type { EditorIntelligenceInput } from "@synara/contracts";
@@ -47,6 +50,52 @@ afterEach(async () => {
 });
 
 describe("real TypeScript project intelligence", () => {
+  it("loads canonical library aliases without admitting workspace symlink escapes", async () => {
+    const installedLibraryRoot = path.dirname(
+      createRequire(import.meta.url).resolve("typescript/lib/lib.d.ts"),
+    );
+    const canonicalLibraryRoot = path.join(temporary, "canonical-libraries");
+    await symlink(
+      installedLibraryRoot,
+      canonicalLibraryRoot,
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    const originalRealpath = ts.sys.realpath!;
+    // Model Windows short/long paths: both spellings reach the same library files,
+    // while TypeScript canonicalizes them differently from require.resolve().
+    const realpath = vi.spyOn(ts.sys, "realpath").mockImplementation((file) => {
+      const real = originalRealpath(file);
+      return isPathInside(installedLibraryRoot, real)
+        ? path.join(canonicalLibraryRoot, path.relative(installedLibraryRoot, real))
+        : real;
+    });
+    try {
+      compiler.dispose();
+      compiler = createTypeScriptService(root);
+      const code = 'export const result = [1, 2].map(value => value.toFixed(1)).join(",");\n';
+      documents = [{ relativePath: "main.ts", contents: code, version: 1 }];
+      expect(
+        request("diagnostics", { offset: 0 }).diagnostics?.filter(
+          (item) => item.severity === "error",
+        ),
+      ).toEqual([]);
+
+      const outside = path.join(temporary, "outside");
+      await mkdir(outside);
+      await writeFile(path.join(outside, "outside.ts"), "export const outside = 1;\n");
+      await symlink(
+        outside,
+        path.join(root, "linked"),
+        process.platform === "win32" ? "junction" : "dir",
+      );
+      expect(() =>
+        request("diagnostics", { relativePath: "linked/outside.ts", offset: 0 }),
+      ).toThrow("escaped its workspace");
+    } finally {
+      realpath.mockRestore();
+    }
+  });
+
   it.each(["class", "return", "null", "true", "let", "yield", "await", "123 invalid", "bad-name"])(
     "rejects renaming a variable binding to %s without changing disk",
     async (newName) => {

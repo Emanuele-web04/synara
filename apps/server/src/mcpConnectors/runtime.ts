@@ -6,6 +6,7 @@
 //   encodeConnectorsDocument
 
 import { randomBytes, randomUUID } from "node:crypto";
+import { Schema } from "effect";
 
 import type { OAuthDiscoveryState } from "@modelcontextprotocol/sdk/client/auth.js";
 import type {
@@ -14,7 +15,11 @@ import type {
 } from "@modelcontextprotocol/sdk/shared/auth.js";
 import {
   MCP_CONNECTOR_CLIENT_REQUIRED_ERROR_CODE,
-  type McpConnector,
+  McpConnectorProposal,
+  McpConnectorConnectInput as ConnectInputSchema,
+  type McpConnectorResolveProposalInput,
+  type McpConnectorResolveProposalResult,
+  McpConnector,
   type McpConnectorConnectInput,
   type McpConnectorConnectResult,
 } from "@synara/contracts";
@@ -29,6 +34,8 @@ import {
 } from "@synara/shared/mcpConnectors";
 
 import type { AgentGatewayConnectorRegistration } from "../agentGateway/Services/AgentGatewayCredentials.ts";
+import { normalizeConnectorInput } from "./config.ts";
+import { StdioConnectorSessions } from "./stdio.ts";
 import {
   type ConnectorAuthorizationState,
   connectorOAuthFetch,
@@ -87,15 +94,25 @@ interface StoredConnector {
   readonly url: string;
   readonly serverName: string;
   readonly authKind: "oauth" | "none";
-  readonly status: "connected" | "needs-auth";
+  readonly status: "connected" | "unreachable" | "needs-auth";
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly oauth: StoredConnectorOAuth | null;
 }
 
+type StoredStdioConnector = Extract<McpConnector, { transport: "stdio" }> & {
+  readonly env?: Readonly<Record<string, string>> | undefined;
+};
+interface StoredProposal {
+  readonly proposal: McpConnectorProposal;
+  readonly input?: McpConnectorConnectInput | undefined;
+}
+
 interface ConnectorsDocument {
   readonly version: 1;
   readonly connectors: ReadonlyArray<StoredConnector>;
+  readonly stdio: ReadonlyArray<StoredStdioConnector>;
+  readonly proposals: ReadonlyArray<StoredProposal>;
   /** Saved entries this build cannot read; written back untouched. */
   readonly unreadable: ReadonlyArray<unknown>;
 }
@@ -134,11 +151,13 @@ function decodeConnector(value: unknown): StoredConnector | undefined {
   const oauth = decodeOAuth(value.oauth ?? null);
   const authKind = value.authKind === "oauth" || value.authKind === "none" ? value.authKind : null;
   const status =
-    value.status === "connected" || value.status === "needs-auth" ? value.status : null;
+    value.status === "connected" || value.status === "needs-auth" || value.status === "unreachable"
+      ? value.status
+      : null;
   if (
     !text("connectorId") ||
     !text("name") ||
-    !text("url") ||
+    !normalizeMcpConnectorUrl(text("url")).ok ||
     !text("serverName") ||
     !text("createdAt") ||
     !text("updatedAt") ||
@@ -163,7 +182,13 @@ function decodeConnector(value: unknown): StoredConnector | undefined {
   };
 }
 
-const EMPTY_DOCUMENT: ConnectorsDocument = { version: 1, connectors: [], unreadable: [] };
+const EMPTY_DOCUMENT: ConnectorsDocument = {
+  version: 1,
+  connectors: [],
+  stdio: [],
+  proposals: [],
+  unreadable: [],
+};
 
 /**
  * Reads the stored document. Entries this build cannot read are kept aside
@@ -176,19 +201,46 @@ export function decodeConnectorsDocument(raw: string | null): ConnectorsDocument
     throw new Error("Unrecognized connectors document.");
   }
   const connectors: StoredConnector[] = [];
+  const stdio: StoredStdioConnector[] = [];
   const unreadable: unknown[] = [];
   for (const entry of parsed.connectors) {
+    if (isRecord(entry) && entry.transport === "stdio") {
+      try {
+        const input = normalizeConnectorInput({
+          name: entry.name,
+          command: entry.command,
+          args: entry.args,
+          ...(entry.cwd ? { cwd: entry.cwd } : {}),
+          ...(entry.env ? { env: entry.env } : {}),
+        });
+        const publicEntry = Schema.decodeUnknownSync(McpConnector)(entry);
+        if (publicEntry.transport === "stdio" && "command" in input)
+          stdio.push({ ...publicEntry, ...(input.env ? { env: input.env } : {}) });
+      } catch {
+        unreadable.push(entry);
+      }
+      continue;
+    }
     const connector = decodeConnector(entry);
     if (connector) connectors.push(connector);
     else unreadable.push(entry);
   }
-  return { version: 1, connectors, unreadable };
+  const proposals = Schema.decodeUnknownSync(
+    Schema.Array(
+      Schema.Struct({
+        proposal: McpConnectorProposal,
+        input: Schema.optional(ConnectInputSchema),
+      }),
+    ),
+  )(parsed.proposals ?? []);
+  return { version: 1, connectors, stdio, proposals, unreadable };
 }
 
 export function encodeConnectorsDocument(document: ConnectorsDocument): string {
   return JSON.stringify({
     version: document.version,
-    connectors: [...document.connectors, ...document.unreadable],
+    connectors: [...document.connectors, ...document.stdio, ...document.unreadable],
+    proposals: document.proposals,
   });
 }
 
@@ -198,6 +250,7 @@ function toContract(connector: StoredConnector): McpConnector {
     presetId: connector.presetId,
     name: connector.name,
     url: connector.url,
+    transport: new URL(connector.url).protocol === "http:" ? "local-http" : "remote-http",
     serverName: connector.serverName,
     authKind: connector.authKind,
     usesOwnOAuthApp: connector.oauth?.userClient === true,
@@ -205,6 +258,11 @@ function toContract(connector: StoredConnector): McpConnector {
     createdAt: connector.createdAt,
     updatedAt: connector.updatedAt,
   };
+}
+
+function publicStdio(connector: StoredStdioConnector): McpConnector {
+  const { env: _env, ...safe } = connector;
+  return safe;
 }
 
 interface ConnectorTarget {
@@ -229,6 +287,8 @@ export type McpConnectorCallbackOutcome =
   | { readonly ok: false; readonly title: string; readonly message: string };
 
 export interface McpConnectorForwardRequest {
+  /** Authenticated by the HTTP route, never accepted from JSON-RPC arguments. */
+  readonly ownerToken?: string;
   readonly method: "POST" | "DELETE";
   readonly body?: unknown;
   readonly sessionId?: string | undefined;
@@ -237,6 +297,7 @@ export interface McpConnectorForwardRequest {
 }
 
 export interface McpConnectorRuntimeDeps {
+  readonly ownerActive?: (token: string) => boolean;
   /** Raw stored document, or null when none was saved yet. */
   readonly load: () => Promise<string | null>;
   readonly save: (document: string) => Promise<void>;
@@ -289,6 +350,10 @@ function describeSignInStartError(name: string, error: unknown): McpConnectorFai
 }
 
 export class McpConnectorRuntime {
+  private readonly stdio: StdioConnectorSessions;
+  private readonly resolving = new Set<string>();
+  private lastProbe = 0;
+  private healthCheck: Promise<void> | undefined;
   private document: ConnectorsDocument = EMPTY_DOCUMENT;
   /** Set when the saved document could not be read: saving would erase it. */
   private loadFailed = false;
@@ -299,41 +364,78 @@ export class McpConnectorRuntime {
 
   constructor(private readonly deps: McpConnectorRuntimeDeps) {
     this.now = deps.now ?? Date.now;
+    this.stdio = new StdioConnectorSessions(deps.ownerActive ?? (() => false), (id, available) =>
+      this.updateStdioStatus(id, available),
+    );
   }
 
   async init(): Promise<void> {
     try {
       this.document = decodeConnectorsDocument(await this.deps.load());
-    } catch (error) {
+    } catch {
       // Start empty rather than fail the server, but never save over the
       // document: it may be a newer version or a transient read failure.
       this.loadFailed = true;
-      this.deps.logWarning("Could not read saved connectors; starting with none.", {
-        error: error instanceof Error ? error.message : String(error),
-      });
+      // Decoder errors may include private environment values from the document.
+      this.deps.logWarning("Could not read saved connectors; starting with none.");
     }
+    // A saved connected status is not evidence that a local server survived restart.
+    this.document = {
+      ...this.document,
+      connectors: this.document.connectors.map((entry) =>
+        entry.url.startsWith("http:") && entry.status === "connected"
+          ? { ...entry, status: "unreachable" }
+          : entry,
+      ),
+      stdio: this.document.stdio.map((entry) => ({ ...entry, status: "unreachable" })),
+    };
     this.publish();
   }
 
   list(): McpConnector[] {
-    return this.document.connectors.map(toContract);
+    return [...this.document.connectors.map(toContract), ...this.document.stdio.map(publicStdio)];
   }
 
   async connect(input: McpConnectorConnectInput): Promise<McpConnectorConnectResult> {
+    try {
+      input = normalizeConnectorInput(input);
+    } catch (error) {
+      throw new McpConnectorFailure(
+        error instanceof Error ? error.message : "Invalid connector configuration.",
+      );
+    }
+    if ("command" in input) return this.connectStdio(input);
     const target = this.resolveTarget(input);
     const existing = this.document.connectors.find((entry) => entry.url === target.url);
-    if (!existing && this.document.connectors.length >= MCP_CONNECTORS_MAX_COUNT) {
+    if (!existing && this.list().length >= MCP_CONNECTORS_MAX_COUNT) {
       throw new McpConnectorFailure(
         `You can connect up to ${MCP_CONNECTORS_MAX_COUNT} connectors.`,
       );
     }
 
     const probe = await probeMcpConnector(target.url, target.name, this.deps.clientVersion);
-    if (probe.kind === "unavailable") throw new McpConnectorFailure(probe.message);
-    if (probe.kind === "open" && !existing?.oauth) {
+    const local = new URL(target.url).protocol === "http:";
+    if (probe.kind === "unavailable" && !local) throw new McpConnectorFailure(probe.message);
+    if (probe.kind === "unavailable" && existing?.oauth) {
+      await this.commit(() => ({
+        ...this.document,
+        connectors: this.document.connectors.map((entry) =>
+          entry === existing ? { ...entry, status: "unreachable" } : entry,
+        ),
+      }));
+      return {
+        authorizationUrl: null,
+        connector: toContract({ ...existing, status: "unreachable" }),
+      };
+    }
+    if ((probe.kind === "open" || probe.kind === "unavailable") && !existing?.oauth) {
       let connector!: StoredConnector;
       await this.commit(() => {
-        const upsert = this.withUpserted(target, null);
+        const upsert = this.withUpserted(
+          target,
+          null,
+          probe.kind === "unavailable" ? "unreachable" : "connected",
+        );
         connector = upsert.connector;
         return upsert.document;
       });
@@ -359,15 +461,25 @@ export class McpConnectorRuntime {
       ...(ownClient ? { clientInformation: ownClient } : {}),
     };
     const { auth } = await loadMcpAuth();
+    // Vercel issues a refresh token only with offline_access. Preserve its
+    // requested scopes so a saved connection can renew after the desktop restarts.
+    const requestedScope = probe.kind === "oauth" ? probe.scope : undefined;
+    const authorizationScope =
+      new URL(target.url).origin === "https://mcp.vercel.com"
+        ? [
+            ...new Set([...(requestedScope?.trim() || "openid").split(/\s+/), "offline_access"]),
+          ].join(" ")
+        : requestedScope;
     let result: Awaited<ReturnType<typeof auth>>;
     try {
       result = await auth(makeConnectorOAuthProvider(authorization), {
         serverUrl: target.url,
-        ...(probe.kind === "oauth" && probe.scope ? { scope: probe.scope } : {}),
+        ...(authorizationScope ? { scope: authorizationScope } : {}),
         ...(probe.kind === "oauth" && probe.resourceMetadataUrl
           ? { resourceMetadataUrl: new URL(probe.resourceMetadataUrl) }
           : {}),
-        fetchFn: connectorOAuthFetch,
+        fetchFn: (url, init) =>
+          connectorOAuthFetch(url, init, local ? new URL(target.url).origin : undefined),
       });
     } catch (error) {
       this.deps.logWarning("Connector sign-in could not start.", {
@@ -380,7 +492,10 @@ export class McpConnectorRuntime {
       throw new McpConnectorFailure(`${target.name} did not offer a sign-in page.`);
     }
     const authorizationUrl = authorization.authorizationUrl;
-    if (authorizationUrl.protocol !== "https:") {
+    if (
+      authorizationUrl.protocol !== "https:" &&
+      !(local && authorizationUrl.origin === new URL(target.url).origin)
+    ) {
       throw new McpConnectorFailure(`${target.name} offered a sign-in page that is not HTTPS.`);
     }
     if (existing && this.find(existing.connectorId) === undefined) {
@@ -436,7 +551,12 @@ export class McpConnectorRuntime {
         await mcpAuth.auth(provider, {
           serverUrl: target.url,
           authorizationCode: query.code,
-          fetchFn: connectorOAuthFetch,
+          fetchFn: (url, init) =>
+            connectorOAuthFetch(
+              url,
+              init,
+              new URL(target.url).protocol === "http:" ? new URL(target.url).origin : undefined,
+            ),
         });
       } catch (error) {
         this.deps.logWarning("Connector token exchange failed.", {
@@ -459,7 +579,7 @@ export class McpConnectorRuntime {
       }
       // Concurrent sign-ins each passed the limit when they started.
       const isNew = !this.document.connectors.some((entry) => entry.url === target.url);
-      if (isNew && this.document.connectors.length >= MCP_CONNECTORS_MAX_COUNT) {
+      if (isNew && this.list().length >= MCP_CONNECTORS_MAX_COUNT) {
         return {
           ok: false,
           title: `${target.name} was not connected`,
@@ -501,6 +621,15 @@ export class McpConnectorRuntime {
   }
 
   async disconnect(connectorId: string): Promise<boolean> {
+    if (this.document.stdio.some((entry) => entry.connectorId === connectorId)) {
+      // Stop owned processes before reporting removal; failed teardown remains retryable.
+      await this.stdio.disconnect(connectorId);
+      await this.commit(() => ({
+        ...this.document,
+        stdio: this.document.stdio.filter((entry) => entry.connectorId !== connectorId),
+      }));
+      return true;
+    }
     const connector = this.find(connectorId);
     if (!connector) return false;
     for (const [state, pending] of this.pending) {
@@ -526,6 +655,8 @@ export class McpConnectorRuntime {
     connectorId: string,
     request: McpConnectorForwardRequest,
   ): Promise<McpConnectorProxyResult> {
+    const local = this.document.stdio.find((entry) => entry.connectorId === connectorId);
+    if (local) return this.stdio.forward(connectorId, { ...local, env: local.env ?? {} }, request);
     const connector = this.find(connectorId);
     if (!connector) {
       return jsonRpcErrorResult(
@@ -600,15 +731,15 @@ export class McpConnectorRuntime {
   }
 
   private resolveTarget(input: McpConnectorConnectInput): ConnectorTarget {
-    if (input.presetId !== undefined && input.url !== undefined) {
+    if ("presetId" in input && "url" in input) {
       throw new McpConnectorFailure("Choose a connector or enter a URL, not both.");
     }
-    if (input.presetId !== undefined) {
+    if ("presetId" in input) {
       const preset = findMcpConnectorPreset(input.presetId);
       if (!preset) throw new McpConnectorFailure("This connector is not available.");
       return presetTarget(preset);
     }
-    if (input.url === undefined) {
+    if (!("url" in input)) {
       throw new McpConnectorFailure("Choose a connector or enter a URL.");
     }
     const normalized = normalizeMcpConnectorUrl(input.url);
@@ -626,7 +757,7 @@ export class McpConnectorRuntime {
   }
 
   private uniqueServerName(slug: string): string {
-    const taken = new Set(this.document.connectors.map((entry) => entry.serverName));
+    const taken = new Set(this.list().map((entry) => entry.serverName));
     let candidate = mcpConnectorServerName(slug);
     for (let suffix = 2; taken.has(candidate); suffix += 1) {
       candidate = mcpConnectorServerName(`${slug}_${suffix}`);
@@ -638,12 +769,13 @@ export class McpConnectorRuntime {
   private withUpserted(
     target: ConnectorTarget,
     oauth: StoredConnectorOAuth | null,
+    status: StoredConnector["status"] = "connected",
   ): { readonly document: ConnectorsDocument; readonly connector: StoredConnector } {
     const timestamp = new Date(this.now()).toISOString();
     const existing = this.document.connectors.find((entry) => entry.url === target.url);
     // A concurrent OAuth reconnect may have committed while the open probe ran.
     if (!oauth && existing?.oauth) return { document: this.document, connector: existing };
-    if (!existing && this.document.connectors.length >= MCP_CONNECTORS_MAX_COUNT) {
+    if (!existing && this.list().length >= MCP_CONNECTORS_MAX_COUNT) {
       throw new McpConnectorFailure(
         `You can connect up to ${MCP_CONNECTORS_MAX_COUNT} connectors.`,
       );
@@ -655,7 +787,7 @@ export class McpConnectorRuntime {
       url: target.url,
       serverName: existing?.serverName ?? this.uniqueServerName(target.slug),
       authKind: oauth ? "oauth" : "none",
-      status: "connected",
+      status,
       createdAt: existing?.createdAt ?? timestamp,
       updatedAt: timestamp,
       oauth,
@@ -774,7 +906,12 @@ export class McpConnectorRuntime {
         clientInformation: oauth.clientInformation,
         refreshToken,
         ...(oauth.resource ? { resource: new URL(oauth.resource) } : {}),
-        fetchFn: connectorOAuthFetch,
+        fetchFn: (url, init) =>
+          connectorOAuthFetch(
+            url,
+            init,
+            this.find(connectorId)?.url ? new URL(this.find(connectorId)!.url).origin : undefined,
+          ),
       });
     } catch (error) {
       if (isOAuthGrantFailure(error)) {
@@ -827,9 +964,239 @@ export class McpConnectorRuntime {
 
   private publish(): void {
     this.deps.publish(
-      this.document.connectors
+      [...this.document.connectors, ...this.document.stdio]
         .filter((entry) => entry.status === "connected")
         .map((entry) => ({ name: entry.serverName, connectorId: entry.connectorId })),
     );
+  }
+
+  async refreshLocalStatus(): Promise<void> {
+    if (this.healthCheck) return this.healthCheck;
+    if (this.now() - this.lastProbe < 10_000) return;
+    this.lastProbe = this.now();
+    this.healthCheck = (async () => {
+      const checks: Array<() => Promise<void>> = [];
+      for (const connector of this.document.connectors) {
+        if (!connector.url.startsWith("http:")) continue;
+        checks.push(async () => {
+          const result = await probeMcpConnector(
+            connector.url,
+            connector.name,
+            this.deps.clientVersion,
+          );
+          const status =
+            result.kind === "unavailable"
+              ? "unreachable"
+              : connector.status === "needs-auth"
+                ? "needs-auth"
+                : result.kind === "open" || connector.oauth
+                  ? "connected"
+                  : "needs-auth";
+          if (status === connector.status) return;
+          await this.commit(
+            () => ({
+              ...this.document,
+              connectors: this.document.connectors.map((entry) =>
+                entry === connector ? { ...entry, status } : entry,
+              ),
+            }),
+            true,
+          );
+        });
+      }
+      for (const connector of this.document.stdio) {
+        if (connector.status !== "unreachable") continue;
+        checks.push(async () => {
+          const available = await this.stdio.probe(
+            { ...connector, env: connector.env ?? {} },
+            connector.connectorId,
+          );
+          await this.updateStdioStatus(connector.connectorId, available);
+        });
+      }
+      // Bound simultaneous process launches and DNS probes, without serial startup delays.
+      for (let offset = 0; offset < checks.length; offset += 4) {
+        const outcomes = await Promise.allSettled(
+          checks.slice(offset, offset + 4).map((check) => check()),
+        );
+        if (outcomes.some((outcome) => outcome.status === "rejected"))
+          this.deps.logWarning("Could not check or clean up a local connector.");
+      }
+      this.publish();
+    })().finally(() => {
+      this.healthCheck = undefined;
+    });
+    return this.healthCheck;
+  }
+
+  private async updateStdioStatus(connectorId: string, available: boolean): Promise<void> {
+    const status = available ? "connected" : "unreachable";
+    await this.commit(() => {
+      if (
+        !this.document.stdio.some(
+          (entry) => entry.connectorId === connectorId && entry.status !== status,
+        )
+      )
+        return;
+      return {
+        ...this.document,
+        stdio: this.document.stdio.map((entry) =>
+          entry.connectorId === connectorId ? { ...entry, status } : entry,
+        ),
+      };
+    }, true).catch(() => this.deps.logWarning("Could not save local connector status."));
+    this.publish();
+  }
+
+  private async connectStdio(
+    input: Extract<McpConnectorConnectInput, { command: string }>,
+  ): Promise<McpConnectorConnectResult> {
+    const status = (await this.stdio.probe({ transport: "stdio", ...input }))
+      ? "connected"
+      : "unreachable";
+    let saved!: StoredStdioConnector;
+    await this.commit(() => {
+      const existing = this.document.stdio.find(
+        (entry) =>
+          entry.command === input.command &&
+          entry.cwd === input.cwd &&
+          JSON.stringify(entry.args) === JSON.stringify(input.args),
+      );
+      if (!existing && this.list().length >= MCP_CONNECTORS_MAX_COUNT)
+        throw new McpConnectorFailure("Too many connectors.");
+      const now = new Date(this.now()).toISOString();
+      saved = {
+        ...input,
+        transport: "stdio",
+        connectorId: existing?.connectorId ?? `mcp_conn_${randomUUID()}`,
+        presetId: null,
+        serverName: existing?.serverName ?? this.uniqueServerName(mcpConnectorSlug(input.name)),
+        authKind: "none",
+        status,
+        envKeys: Object.keys(input.env ?? {}).sort(),
+        createdAt: existing?.createdAt ?? now,
+        updatedAt: now,
+      };
+      return {
+        ...this.document,
+        stdio: [...this.document.stdio.filter((entry) => entry !== existing), saved],
+      };
+    });
+    return { authorizationUrl: null, connector: publicStdio(saved) };
+  }
+
+  listProposals(): McpConnectorProposal[] {
+    return this.document.proposals.map((entry) => entry.proposal);
+  }
+
+  async proposeAdd(
+    raw: unknown,
+    threadId: string,
+    cwd?: string,
+    source?: string,
+  ): Promise<McpConnectorProposal> {
+    const input = normalizeConnectorInput(raw, cwd);
+    const now = new Date(this.now()).toISOString();
+    const common = {
+      connectorId: `proposal_${randomUUID()}`,
+      presetId: null,
+      name: input.name ?? "Connector",
+      serverName: "pending_connector",
+      authKind: "none" as const,
+      status: "unreachable" as const,
+      createdAt: now,
+      updatedAt: now,
+    };
+    let connector: McpConnector;
+    if ("command" in input) {
+      const { env: _env, ...safe } = input;
+      connector = {
+        ...common,
+        ...safe,
+        transport: "stdio",
+        envKeys: Object.keys(input.env ?? {}).sort(),
+      };
+    } else {
+      const target = this.resolveTarget(input);
+      connector = {
+        ...common,
+        name: target.name,
+        presetId: target.presetId,
+        url: target.url,
+        transport: new URL(target.url).protocol === "http:" ? "local-http" : "remote-http",
+      };
+    }
+    return this.saveProposal({
+      proposal: {
+        proposalId: randomUUID(),
+        threadId,
+        action: "add",
+        state: "pending",
+        connector,
+        ...(source ? { source } : {}),
+      },
+      input,
+    });
+  }
+
+  async proposeRemove(connectorId: string, threadId: string): Promise<McpConnectorProposal> {
+    const connector = this.list().find((entry) => entry.connectorId === connectorId);
+    if (!connector) throw new McpConnectorFailure("Connector not found.");
+    return this.saveProposal({
+      proposal: {
+        proposalId: randomUUID(),
+        threadId,
+        action: "remove",
+        state: "pending",
+        connector,
+      },
+    });
+  }
+
+  private async saveProposal(entry: StoredProposal): Promise<McpConnectorProposal> {
+    await this.commit(() => {
+      if (this.document.proposals.filter((item) => item.proposal.state === "pending").length >= 100)
+        throw new McpConnectorFailure("Dismiss pending connector proposals before adding more.");
+      return { ...this.document, proposals: [...this.document.proposals, entry] };
+    });
+    return entry.proposal;
+  }
+
+  async resolveProposal(
+    input: McpConnectorResolveProposalInput,
+  ): Promise<McpConnectorResolveProposalResult> {
+    const entry = this.document.proposals.find(
+      (item) => item.proposal.proposalId === input.proposalId,
+    );
+    if (!entry) throw new McpConnectorFailure("Proposal not found.");
+    if (entry.proposal.state !== "pending")
+      return { proposal: entry.proposal, authorizationUrl: null };
+    if (this.resolving.has(input.proposalId))
+      throw new McpConnectorFailure("This proposal is already being applied.");
+    this.resolving.add(input.proposalId);
+    try {
+      let authorizationUrl: string | null = null;
+      if (input.resolution === "accepted") {
+        if (entry.proposal.action === "remove")
+          await this.disconnect(entry.proposal.connector.connectorId);
+        else if (entry.input) authorizationUrl = (await this.connect(entry.input)).authorizationUrl;
+        else throw new McpConnectorFailure("This proposal cannot be applied.");
+      }
+      const proposal = { ...entry.proposal, state: input.resolution };
+      await this.commit(() => ({
+        ...this.document,
+        proposals: this.document.proposals.map((item) => (item === entry ? { proposal } : item)),
+      }));
+      return { proposal, authorizationUrl };
+    } finally {
+      this.resolving.delete(input.proposalId);
+    }
+  }
+
+  sweepStdio(ownerActive: (token: string) => boolean): Promise<void> {
+    return this.stdio.sweep(ownerActive);
+  }
+  dispose(): Promise<void> {
+    return this.stdio.dispose();
   }
 }

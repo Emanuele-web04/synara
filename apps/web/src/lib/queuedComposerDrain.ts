@@ -22,6 +22,7 @@ import { useStore, type AppState } from "../store";
 import { getThreadFromState } from "../threadDerivation";
 import type { SessionPhase, Thread } from "../types";
 import { addWsTransportStateListener, readLatestWsTransportState } from "../wsTransportEvents";
+import { useThreadDispatchStore } from "./chatDispatchStore";
 import { dispatchQueuedComposerTurnHeadless } from "./queuedComposerDispatch";
 import { deriveQueuedComposerPause } from "./queuedComposerPause";
 import { newMessageId } from "./utils";
@@ -82,12 +83,16 @@ type QueuedComposerDispatchFn = (input: {
   dispatchMode: "queue" | "steer";
   assistantDeliveryMode: AssistantDeliveryMode;
   messageId?: MessageId;
+  onReconciledMessage?: (messageId: MessageId) => void;
 }) => Promise<boolean>;
 
 const claimedThreadIds = new Set<ThreadId>();
 const autoDispatchLocks = new Set<ThreadId>();
 const steerGatesByThreadId = new Map<ThreadId, QueuedSteerGate>();
-const awaitingTurnStartsByThreadId = new Map<ThreadId, LocalDispatchSnapshot>();
+const awaitingTurnStartsByThreadId = new Map<
+  ThreadId,
+  { snapshot: LocalDispatchSnapshot; fromChatView: boolean }
+>();
 
 interface QueuedComposerRetryState {
   readonly queuedTurnId: string;
@@ -201,9 +206,26 @@ export function claimQueuedComposerAutoDispatch(threadId: ThreadId): void {
   claimedThreadIds.add(threadId);
 }
 
+// Preserve the departing view's send before allowing the next queued turn.
 export function releaseQueuedComposerAutoDispatch(threadId: ThreadId): void {
   claimedThreadIds.delete(threadId);
+  const snapshot = useThreadDispatchStore.getState().threads[threadId]?.localDispatch;
+  if (snapshot && !awaitingTurnStartsByThreadId.has(threadId)) {
+    awaitingTurnStartsByThreadId.set(threadId, { snapshot, fromChatView: true });
+  }
   requestQueuedComposerDrainPass();
+}
+
+// A known-unsent worktree cancellation can release its queued successor early.
+export function cancelQueuedComposerWorktreeHandoff(
+  threadId: ThreadId,
+  messageId: MessageId,
+): void {
+  const waiting = awaitingTurnStartsByThreadId.get(threadId);
+  if (waiting?.fromChatView && waiting.snapshot.expectedUserMessageId === messageId) {
+    awaitingTurnStartsByThreadId.delete(threadId);
+    requestQueuedComposerDrainPass();
+  }
 }
 
 export function setQueuedComposerDrainAssistantDeliveryMode(nextMode: AssistantDeliveryMode): void {
@@ -240,12 +262,24 @@ export function startQueuedComposerDrainWatcher(options?: {
       resetRetriesForRelevantThreadChanges(current, previous);
       requestQueuedComposerDrainPass();
     });
+    const unsubscribeChatDispatch = useThreadDispatchStore.subscribe((current, previous) => {
+      for (const [threadId, waiting] of awaitingTurnStartsByThreadId) {
+        if (
+          waiting.fromChatView &&
+          current.threads[threadId]?.localDispatch !== previous.threads[threadId]?.localDispatch
+        ) {
+          requestQueuedComposerDrainPass();
+          break;
+        }
+      }
+    });
     const unsubscribeTransport = addWsTransportStateListener(() => {
       requestQueuedComposerDrainPass();
     });
     stopDrainSubscriptions = () => {
       unsubscribeDrafts();
       unsubscribeStore();
+      unsubscribeChatDispatch();
       unsubscribeTransport();
     };
     requestQueuedComposerDrainPass();
@@ -473,7 +507,22 @@ function readQueuedComposerAutoDispatchGates(threadId: ThreadId): QueuedComposer
 function advanceAwaitingTurnStarts(): number | null {
   let earliestExpiryMs: number | null = null;
   const now = nowMs();
-  for (const [threadId, localDispatch] of awaitingTurnStartsByThreadId) {
+  const chatDispatches = useThreadDispatchStore.getState().threads;
+  for (const [threadId, waiting] of awaitingTurnStartsByThreadId) {
+    if (waiting.fromChatView) {
+      const current = chatDispatches[threadId]?.localDispatch;
+      if (current) {
+        waiting.snapshot = current;
+      } else if (waiting.snapshot.worktreeSetup) {
+        // Clearing a composer marker does not confirm the provider turn has started.
+        waiting.snapshot = {
+          ...waiting.snapshot,
+          worktreeSetup: null,
+          startedAt: new Date(now).toISOString(),
+        };
+      }
+    }
+    const localDispatch = waiting.snapshot;
     const thread = getThreadFromState(useStore.getState(), threadId);
     const pendingApprovals = derivePendingApprovals(
       thread?.activities ?? [],
@@ -505,6 +554,10 @@ function advanceAwaitingTurnStarts(): number | null {
       })
     ) {
       awaitingTurnStartsByThreadId.delete(threadId);
+      continue;
+    }
+    // Setup is driven by lifecycle events and can legitimately outlast the deadline.
+    if (localDispatch.worktreeSetup) {
       continue;
     }
     const startedAtMs = Date.parse(localDispatch.startedAt);
@@ -646,17 +699,24 @@ function runQueuedComposerDrainPass(): void {
     void runLockedQueuedComposerAutoDispatch({
       threadId,
       run: async () => {
+        let acknowledgedMessageId = messageId;
         const succeeded = await dispatchQueuedTurn({
           threadId,
           queuedTurn: nextQueuedTurn,
           dispatchMode: "queue",
           assistantDeliveryMode,
           messageId,
+          onReconciledMessage: (id) => {
+            acknowledgedMessageId = id;
+          },
         });
         const acceptedReview = getThreadFromState(useStore.getState(), threadId)?.claudeCacheReview;
         if (succeeded || acceptedReview?.messageId === messageId) {
           retryStateByThreadId.delete(threadId);
-          awaitingTurnStartsByThreadId.set(threadId, localDispatch);
+          awaitingTurnStartsByThreadId.set(threadId, {
+            snapshot: { ...localDispatch, expectedUserMessageId: acknowledgedMessageId },
+            fromChatView: false,
+          });
           useComposerDraftStore.getState().removeQueuedTurn(threadId, nextQueuedTurn.id);
           return;
         }

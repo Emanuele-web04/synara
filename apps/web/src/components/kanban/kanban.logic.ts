@@ -13,7 +13,6 @@ import type {
 } from "@synara/contracts";
 import { buildPromptThreadTitleFallback } from "@synara/shared/chatThreads";
 import {
-  KANBAN_COLUMN_V2_LABELS,
   deriveKanbanAttention as deriveKanbanAttentionShared,
   deriveKanbanColumnV2 as deriveKanbanColumnV2Shared,
   hasKanbanLiveWork as hasKanbanLiveWorkShared,

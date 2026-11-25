@@ -1,7 +1,7 @@
 // FILE: toolCallGroup.logic.ts
 // Purpose: Summarizes a settled run of tool-call work entries into one compact
-//          verb label ("Read 2 files, ran 3 commands") plus a failed count for
-//          the collapsed tool-group disclosure in the transcript.
+//          verb label ("Read 2 files, ran 3 commands") plus failed and running
+//          counts for the collapsed tool-group disclosure in the transcript.
 // Layer: Web chat presentation helpers
 // Exports: MIN_COLLAPSIBLE_TOOL_GROUP_SIZE, workEntryRowCount,
 //          multiFileEditLabel, ToolCallSummaryCategory,
@@ -42,9 +42,11 @@ export type ToolCallSummaryCategory =
   | "read"
   | "edit"
   | "search"
+  | "web-search"
   | "command"
   | "fetch"
   | "agent"
+  | "background"
   | "tool"
   | "other";
 
@@ -60,9 +62,11 @@ export interface ToolCallGroupSummary {
   // Calls that failed; the row appends `failedLabel` in the error tone.
   failedCount: number;
   failedLabel: string | null;
+  // Calls still in flight; the row appends `runningLabel` so a folded group
+  // with live work never reads as settled.
+  runningCount: number;
+  runningLabel: string | null;
   entryCount: number;
-  // A group with in-flight work must never present itself as settled.
-  hasRunningEntry: boolean;
   // The one kind every summarized call shares, or "mixed": the collapsed row
   // wears that kind's glyph instead of borrowing an arbitrary entry's.
   iconCategory: ToolCallSummaryCategory | "mixed";
@@ -71,9 +75,10 @@ export interface ToolCallGroupSummary {
   iconEntry: WorkLogEntry;
 }
 
-// Rich rows (subagent strips, automation cards, thread-creation recaps,
-// background tasks) and non-tool tones (errors, approvals, info) must stay
-// individually visible, so they never fold into a summary group.
+// Rich rows (subagent strips, automation cards, thread-creation recaps) and
+// non-tool tones (errors, approvals, info) must stay individually visible, so
+// they never fold into a summary group. Background task launches fold like any
+// command: their live state lives in the Environment panel, not the transcript.
 export function isSummarizableToolCallEntry(entry: WorkLogEntry): boolean {
   return (
     (entry.tone === "tool" ||
@@ -83,8 +88,8 @@ export function isSummarizableToolCallEntry(entry: WorkLogEntry): boolean {
     !(entry.toolCallId && isReasoningUpdateWorkEntry(entry)) &&
     !entry.synaraThreadCreation &&
     !entry.automation &&
+    !entry.connectorProposalId &&
     !entry.subagentAction &&
-    !entry.backgroundTask &&
     (entry.subagents?.length ?? 0) === 0
   );
 }
@@ -92,12 +97,40 @@ export function isSummarizableToolCallEntry(entry: WorkLogEntry): boolean {
 const READ_VERBS = new Set(["Read", "Reading"]);
 const SEARCH_VERBS = new Set(["Searched", "Searching", "Found", "Finding"]);
 // Provider tools that only read or search, named the way Claude and ACP agents
-// report them (`Read`, `Grep`, `Glob`, `WebSearch`).
-const READ_TOOL_NAMES = new Set(["read", "readfile", "viewfile"]);
-const SEARCH_TOOL_NAMES = new Set(["grep", "glob", "websearch", "findfiles", "searchfiles"]);
+// report them (`Read`, `read_file`, `view`, `Grep`, `Glob`, `search`, `find`).
+// Keep in sync with the icon matchers in TimelineWorkEntryRow.tsx.
+const READ_TOOL_NAMES = new Set([
+  "read",
+  "reading",
+  "readfile",
+  "readfiles",
+  "readtextfile",
+  "view",
+  "viewfile",
+  "viewtextfile",
+  "hashlineread",
+]);
+const SEARCH_TOOL_NAMES = new Set([
+  "grep",
+  "glob",
+  "search",
+  "searching",
+  "searched",
+  "find",
+  "finding",
+  "found",
+  "findfiles",
+  "searchfiles",
+  "searchtool",
+  "hashlinegrep",
+]);
 
 function normalizedToolName(entry: WorkLogEntry): string {
-  return (entry.toolName ?? "").toLowerCase().replace(/[^a-z]/g, "");
+  // toolName wins; the title's first word is the fallback for ACP calls that
+  // arrive with only a `kind` and no native name ("Read /home/x").
+  const title = entry.command || entry.rawCommand ? undefined : entry.toolTitle;
+  const name = entry.toolName ?? title?.trim().split(/\s+/, 1)[0] ?? "";
+  return name.toLowerCase().replace(/[^a-z]/g, "");
 }
 
 function classifyCommandVerb(verb: string): ToolCallSummaryCategory {
@@ -107,12 +140,23 @@ function classifyCommandVerb(verb: string): ToolCallSummaryCategory {
 }
 
 export function classifyToolCallSummaryCategory(entry: WorkLogEntry): ToolCallSummaryCategory {
+  if (entry.backgroundTask) {
+    return "background";
+  }
   if (isFileChangeWorkLogEntry(entry)) {
     return "edit";
   }
   const toolName = normalizedToolName(entry);
   if (entry.requestKind === "file-read" || READ_TOOL_NAMES.has(toolName)) {
     return "read";
+  }
+  // Web searches read differently from code searches. Some agents report their
+  // native grep/find as a web_search item, so a code-search name wins.
+  if (
+    toolName === "websearch" ||
+    (entry.itemType === "web_search" && !SEARCH_TOOL_NAMES.has(toolName))
+  ) {
+    return "web-search";
   }
   if (entry.itemType === "web_search" || SEARCH_TOOL_NAMES.has(toolName)) {
     return "search";
@@ -181,10 +225,11 @@ function entryFileKeys(entry: WorkLogEntry): ReadonlyArray<string> {
   return [];
 }
 
-// Most groups name two or three kinds; past that the tail folds into one
-// "N other actions" part so the line stays readable.
-const MAX_NAMED_SUMMARY_PARTS = 3;
-const NAMED_PARTS_BEFORE_OVERFLOW = 2;
+// Every kind is named so the line says exactly what happened. Only a run of
+// more than five kinds folds its tail into one "N other actions" part, keeping
+// the line to five phrases.
+const MAX_NAMED_SUMMARY_PARTS = 5;
+const NAMED_PARTS_BEFORE_OVERFLOW = 4;
 
 function countPhrase(count: number, noun: string): string {
   return `${count} ${pluralize(count, noun)}`;
@@ -194,6 +239,12 @@ function searchPhrase(count: number, translate: typeof t): string {
   if (count === 1) return translate("chat:searchedOnce");
   if (count === 2) return translate("chat:searchedTwice");
   return translate("chat:searchedTimes", { value0: count });
+}
+
+function webSearchPhrase(count: number, translate: typeof t): string {
+  if (count === 1) return translate("chat:searchedTheWebOnce");
+  if (count === 2) return translate("chat:searchedTheWebTwice");
+  return translate("chat:searchedTheWebTimes", { value0: count });
 }
 
 // Lowercase verb phrase; the label capitalizes only its first part.
@@ -210,6 +261,8 @@ function summaryPartPhrase(
       return translate("chat:edited", { value0: countPhrase(count, "file") });
     case "search":
       return searchPhrase(count, translate);
+    case "web-search":
+      return webSearchPhrase(count, translate);
     case "command":
       return translate("chat:ran2", { value0: countPhrase(count, "command") });
     case "fetch":
@@ -219,6 +272,8 @@ function summaryPartPhrase(
         value0: count,
         value1: pluralize(count, "task"),
       });
+    case "background":
+      return translate("chat:inBackground", { count });
     case "tool":
       return translate("chat:used", { value0: countPhrase(count, "tool") });
     case "other":
@@ -273,14 +328,14 @@ export function summarizeToolCallGroup(
   // agent did the work.
   const countByCategory = new Map<ToolCallSummaryCategory, number>();
   const distinctFilesByCategory = new Map<ToolCallSummaryCategory, Set<string>>();
-  let hasRunningEntry = false;
+  let runningCount = 0;
   let failedCount = 0;
 
   for (const entry of summarizable) {
     if (entry.toolStatus === "running") {
-      hasRunningEntry = true;
+      runningCount += 1;
     }
-    if (entry.toolStatus === "failed") {
+    if (entry.toolStatus === "failed" || entry.backgroundTask?.status === "failed") {
       failedCount += 1;
     }
     const category = classifyToolCallSummaryCategory(entry);
@@ -321,8 +376,12 @@ export function summarizeToolCallGroup(
       failedCount > 0
         ? translate("chat:failed", { value0: failedCount, count: failedCount })
         : null,
+    runningCount,
+    runningLabel:
+      runningCount > 0
+        ? translate("chat:toolsRunning", { value0: runningCount, count: runningCount })
+        : null,
     entryCount: summarizable.length,
-    hasRunningEntry,
     iconCategory: parts.length === 1 ? parts[0]!.category : "mixed",
     iconEntry: summarizable[0]!,
   };

@@ -1,4 +1,6 @@
+import { remoteConnectionsUnavailableReason } from "./remoteFeaturePolicy";
 import { ProjectionPendingInteractionRepositoryLive } from "./persistence/Layers/ProjectionPendingInteractions";
+import { ProjectionTurnRepositoryLive } from "./persistence/Layers/ProjectionTurns";
 import { ProviderSessionRuntimeRepositoryLive } from "./persistence/Layers/ProviderSessionRuntime";
 import http from "node:http";
 
@@ -36,6 +38,7 @@ import {
   type OrchestrationReactorShape,
 } from "./orchestration/Services/OrchestrationReactor";
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery";
+import { ProviderCommandReactor } from "./orchestration/Services/ProviderCommandReactor";
 import { ProjectionPendingInteractionRepository } from "./persistence/Services/ProjectionPendingInteractions";
 import { ThreadDeletionReactor } from "./orchestration/Services/ThreadDeletionReactor";
 import { ThreadSnoozeReactor } from "./orchestration/Services/ThreadSnoozeReactor";
@@ -62,6 +65,8 @@ import { makeBoundedNodeHttpServer } from "./nodeHttpServer";
 import { websocketRpcRouteLayer } from "./wsRpc";
 import { recoverGitHandoffOperations } from "./gitHandoffOperations";
 import { externalMcpRouteLayer } from "./externalMcp/httpRoute";
+import { hostRemoteWebSocketRouteLayer } from "./remoteSessions";
+import { hostConnectionRouteLayer } from "./hostConnections/httpRoute";
 import { ExternalMcpGateway } from "./externalMcp/Services/ExternalMcpGateway";
 import { ExternalMcpService } from "./externalMcp/Services/ExternalMcpService";
 import { mcpConnectorsRouteLayer } from "./mcpConnectors/httpRoute";
@@ -91,6 +96,7 @@ export interface ServerShape {
     | OrchestrationReactor
     | ProjectionPendingInteractionRepository
     | ProjectionSnapshotQuery
+    | ProviderCommandReactor
     | ProviderSessionReaper
     | ProviderRuntimeReconciler
     | ProviderService
@@ -235,6 +241,9 @@ export const createEffectServer = Effect.fn(function* (
     websocketRpcRouteLayer,
     agentGatewayRouteLayer,
     externalMcpRouteLayer,
+    ...(remoteConnectionsUnavailableReason(config.stateDir)
+      ? []
+      : [hostRemoteWebSocketRouteLayer, hostConnectionRouteLayer]),
     mcpConnectorsRouteLayer,
   );
   const httpApp = yield* HttpRouter.toHttpEffect(routesLayer);
@@ -295,6 +304,7 @@ export const createEffectServer = Effect.fn(function* (
       yield* reconcileRestartStuckTurns;
     }).pipe(
       Effect.provide(ProjectionPendingInteractionRepositoryLive),
+      Effect.provide(ProjectionTurnRepositoryLive),
       Effect.provide(ProviderSessionRuntimeRepositoryLive),
     ),
     reactors: [

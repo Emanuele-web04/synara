@@ -4,28 +4,8 @@
 // Layer: Shared runtime utility
 // Exports: command-name constants and normalization helpers.
 
-import { COMPUTER_USE_SLASH_COMMAND } from "./computerInvocation";
-
-export const BUILT_IN_COMPOSER_SLASH_COMMANDS = [
-  "clear",
-  "compact",
-  "model",
-  "plan",
-  "debug",
-  "default",
-  "review",
-  "fork",
-  "side",
-  "status",
-  "subagents",
-  COMPUTER_USE_SLASH_COMMAND,
-  "fast",
-  "export",
-  "goal",
-  "rename",
-  "feedback",
-  "automation",
-] as const;
+import { BUILT_IN_COMPOSER_SLASH_COMMANDS } from "@synara/contracts/composerSlashCommands";
+export { BUILT_IN_COMPOSER_SLASH_COMMANDS };
 
 export type BuiltInComposerSlashCommand = (typeof BUILT_IN_COMPOSER_SLASH_COMMANDS)[number];
 

@@ -4,7 +4,7 @@ import { RiApps2Line } from "react-icons/ri";
 import { SiGithub } from "react-icons/si";
 import { VscMcp } from "react-icons/vsc";
 import { cn } from "./utils";
-import { CentralIcon, type CentralIconVariant } from "./central-icons";
+import { CentralIcon, getCentralIconUrl, type CentralIconVariant } from "./central-icons";
 import {
   IconAlertCircle,
   IconAlertOctagon,
@@ -42,6 +42,7 @@ import {
   IconListCheck,
   IconListDetails,
   IconLoader2,
+  IconMail,
   IconMaximize,
   IconMinimize,
   IconMinus,
@@ -183,8 +184,10 @@ export const FlaskConicalIcon = adaptIcon(IconFlask2);
 export const GitCommitIcon: LucideIcon = centralIconWrapper("commits");
 export const GitMergeIcon: LucideIcon = centralIconWrapper("merged");
 export const PushIcon: LucideIcon = centralIconWrapper("cloud-simple-upload");
+// react-icons marks its brand glyphs role="img"; beside a visible label that is an unnamed
+// picture, so the glyph is hidden from the accessibility tree like the other icons here.
 export const GitHubIcon: LucideIcon = (props) => (
-  <SiGithub className={props.className} style={props.style} />
+  <SiGithub className={props.className} style={props.style} aria-hidden />
 );
 // Issue state glyphs, GitHub's shapes from the same Central outline set: a ring with a dot
 // (open), a checked ring (closed as completed), and a struck ring (closed as not planned).
@@ -202,8 +205,14 @@ export const UsersIcon: LucideIcon = centralIconWrapper("user-group");
 // local servers): the Central glyph, so it matches the other work-row icons.
 export const GlobeIcon: LucideIcon = centralIconWrapper("globe");
 export const WebSearchIcon: LucideIcon = GlobeIcon;
+// Hosts — the machines an account can reach. A rack rather than a
+// laptop: a host is as often a VPS as it is someone's desk.
+export const ServerIcon: LucideIcon = centralIconWrapper("server");
 // Handset glyph for the iOS Simulator dock pane.
 export const DeviceMobileIcon: LucideIcon = centralIconWrapper("phone");
+// Connections device rows: a paired iPad, and any paired computer.
+export const DeviceTabletIcon: LucideIcon = centralIconWrapper("tablet");
+export const DeviceComputerIcon: LucideIcon = centralIconWrapper("macbook");
 // Hardware-button glyphs for the simulator's control rail.
 export const DeviceHomeIcon: LucideIcon = centralIconWrapper("home");
 export const DeviceShutterIcon: LucideIcon = centralIconWrapper("camera-1");
@@ -236,6 +245,7 @@ export const ListTodoIcon = adaptIcon(IconListDetails);
 export const Loader2Icon = adaptIcon(IconLoader2);
 export const LoaderCircleIcon = adaptIcon(IconLoader2);
 export const LoaderIcon = adaptIcon(IconLoader2);
+export const MailIcon = adaptIcon(IconMail);
 export const Maximize2 = adaptIcon(IconMaximize);
 export const Minimize2 = adaptIcon(IconMinimize);
 export const MessageCircleIcon = adaptIcon(IconMessageCircle);
@@ -312,6 +322,28 @@ export const FastModeIcon: LucideIcon = centralIconWrapper("zap", "fill");
 // Outline twin of FastModeIcon (Central reversed set) for the inactive toggle state.
 export const FastModeOutlineIcon: LucideIcon = centralIconWrapper("zap");
 
+const fastModeZapMask = `url("${getCentralIconUrl("zap", "fill")}")`;
+const ultrafastEchoMask: CSSProperties = {
+  maskImage: `${fastModeZapMask}, ${fastModeZapMask}`,
+  maskSize: "0.875rem 0.875rem",
+  maskPosition: "0.25rem center, 0.1rem center",
+  maskRepeat: "no-repeat",
+  // Cut a shifted copy of the foreground out of the rear bolt, leaving a clear gap.
+  maskComposite: "subtract",
+};
+
+export function UltrafastModeIcon(props: { className?: string | undefined }) {
+  return (
+    <span
+      aria-hidden="true"
+      className={cn("relative inline-block h-4 w-[1.125rem] shrink-0", props.className)}
+    >
+      <span className="absolute inset-0 bg-current" style={ultrafastEchoMask} />
+      <FastModeIcon className="absolute top-1/2 left-0 size-3.5 -translate-y-1/2" />
+    </span>
+  );
+}
+
 // Sidebar and panel toggles, expand/collapse, top-bar add, handoff, Hubs, the rail's update
 // button, the one closed / one open folder every project and path row shares, add-folder, and the
 // stacked-folders glyph used as the single representation of a file tree / explorer surface
@@ -334,6 +366,7 @@ export {
   DashboardCircleIcon as HubIcon,
   Download01Icon as UpdateDownloadIcon,
   ExpandIcon as PanelExpandIcon,
+  EraserIcon as ClearReadIcon,
   Folder02Icon as FolderOpenIcon,
   FolderAddIcon,
   FolderClosedIcon as FolderIcon,
@@ -359,6 +392,8 @@ export {
   InboxIcon,
   Camera01Icon,
   CornerDownRightIcon as SteerIcon,
+  // Agent-created child threads nested under their creator.
+  CornerDownRightIcon as ChildThreadsIcon,
   Key01Icon,
   MoreHorizontalIcon,
   LinkSquare02Icon as ExternalLinkIcon,

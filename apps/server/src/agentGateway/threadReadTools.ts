@@ -1,6 +1,8 @@
 import {
   SYNARA_GATEWAY_MAX_THREADS_PER_OPERATION,
+  SYNARA_GATEWAY_MAX_THREADS_PER_TURN,
   ThreadId,
+  ProjectId,
   TurnId,
   type OrchestrationThreadShell,
   type ProviderKind,
@@ -118,8 +120,22 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
     requiredCapability: "thread:read",
     definition: {
       name: "synara_capabilities",
-      description: `List canonical Synara provider/model targets, exact provider option keys, examples, and gateway limits used to validate thread creation. ${AGENT_GATEWAY_TARGET_OPTIONS_DESCRIPTION}`,
-      inputSchema: { type: "object", properties: {}, additionalProperties: false },
+      description: `List canonical Synara provider/model targets and delegation constraints. Use instanceId to look up the catalog and exact options for a particular account. ${AGENT_GATEWAY_TARGET_OPTIONS_DESCRIPTION}`,
+      inputSchema: {
+        type: "object",
+        properties: {
+          projectId: {
+            type: "string",
+            description: "Project for provider discovery; required on another computer.",
+          },
+          instanceId: {
+            type: "string",
+            description:
+              "Exact account ID from providers[].instances[].instanceId. Omit for the default catalogs.",
+          },
+        },
+        additionalProperties: false,
+      },
       annotations: {
         title: "Synara capabilities",
         readOnlyHint: true,
@@ -128,21 +144,41 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
         openWorldHint: false,
       },
     },
-    handler: (_args, context) =>
+    handler: (args, context) =>
       Effect.gen(function* () {
-        const caller = yield* requireThreadShell(context.callerThreadId);
-        const project = yield* snapshotQuery.getProjectShellById(caller.projectId).pipe(
+        const projectArg = readStringArg(args, "projectId", { required: !!context.remoteCaller });
+        const instanceId = readStringArg(args, "instanceId");
+        const localCaller = context.remoteCaller
+          ? undefined
+          : yield* requireThreadShell(context.callerThreadId);
+        const callerMode = context.remoteCaller?.runtimeMode ?? localCaller?.runtimeMode;
+        const projectId = ProjectId.makeUnsafe((projectArg ?? localCaller?.projectId)!);
+        const project = yield* snapshotQuery.getProjectShellById(projectId).pipe(
           Effect.mapError((error) => new ToolInputError(errorText(error))),
           Effect.flatMap(
             Option.match({
               onNone: () =>
-                Effect.fail(new ToolInputError(`Project "${caller.projectId}" was not found.`)),
+                Effect.fail(new ToolInputError(`Project "${projectId}" was not found.`)),
               onSome: Effect.succeed,
             }),
           ),
         );
         const availabilities = yield* loadProviderAvailabilities;
-        const providers = yield* Effect.forEach(PROVIDER_KINDS, (provider) =>
+        const providerKinds = instanceId
+          ? PROVIDER_KINDS.filter((provider) =>
+              availabilities
+                .get(provider)
+                ?.instances?.some((instance) => instance.instanceId === instanceId),
+            )
+          : PROVIDER_KINDS;
+        if (providerKinds.length === 0) {
+          return yield* Effect.fail(
+            new ToolInputError(
+              `Unknown provider instance "${instanceId}". Use an ID from synara_capabilities.`,
+            ),
+          );
+        }
+        const providers = yield* Effect.forEach(providerKinds, (provider) =>
           loadAgentGatewayProviderCatalog({
             provider,
             discovery: providerDiscovery,
@@ -150,6 +186,8 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
               ? { availability: availabilities.get(provider)! }
               : {}),
             cwd: project.workspaceRoot,
+            ...(callerMode ? { callerMode } : {}),
+            ...(instanceId ? { instanceId } : {}),
           }),
         );
         const targetConstruction = Object.fromEntries(
@@ -167,7 +205,8 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
           limits: {
             maxThreadsPerOperation: SYNARA_GATEWAY_MAX_THREADS_PER_OPERATION,
             maxWaitMs: 60_000,
-            oneCreationPlanPerActiveTurn: true,
+            oneCreationPlanPerActiveTurn: false,
+            maxThreadsPerActiveTurn: SYNARA_GATEWAY_MAX_THREADS_PER_TURN,
           },
         });
       }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
@@ -334,7 +373,7 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
       },
       annotations: { title: "Read a Synara thread", ...READ_ONLY_TOOL_ANNOTATIONS },
     },
-    handler: (args, context) =>
+    handler: (args, _context) =>
       Effect.gen(function* () {
         const threadId = readStringArg(args, "threadId", { required: true })!;
         const cursor = readStringArg(args, "cursor");

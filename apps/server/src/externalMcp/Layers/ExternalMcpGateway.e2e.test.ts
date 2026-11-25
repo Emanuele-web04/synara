@@ -522,6 +522,8 @@ describe("external MCP gateway stdio flow", () => {
           displayName: "Work Codex",
           isDefault: false,
           enabled: true,
+          available: true,
+          authStatus: "authenticated",
         });
 
         const prompt = "Implement the external MCP end-to-end proof.";

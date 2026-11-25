@@ -14,7 +14,7 @@ import {
   type ProjectColor,
 } from "~/lib/projectAppearance";
 import { cn } from "~/lib/utils";
-import { resolveWsHttpUrl } from "~/lib/wsHttpUrl";
+import { resolveExecutionResource } from "~/lib/wsHttpUrl";
 import { FolderIcon, FolderOpenIcon } from "~/lib/icons";
 import { DisclosureChevron } from "./ui/DisclosureChevron";
 
@@ -39,8 +39,7 @@ function recordFaviconLoad(src: string, loads: boolean) {
 
 /** The project's favicon URL once it has loaded; null while probing or when there is none. */
 function useProjectFavicon(cwd: string): string | null {
-  const params = new URLSearchParams({ cwd, fallback: "none" });
-  const src = resolveWsHttpUrl(`/api/project-favicon?${params.toString()}`);
+  const src = resolveExecutionResource({ kind: "project-favicon", cwd });
   const loads = useSyncExternalStore(subscribeToFaviconLoads, () => faviconLoads.get(src) === true);
 
   // Probe with Image() so Electron/file-origin behaves like the visible <img>. Probing again on
@@ -66,10 +65,9 @@ function colorStyle(color: ProjectColor | null): CSSProperties | undefined {
   return color ? { color: projectColorValue(color) } : undefined;
 }
 
-// A hairline halo in the text color keeps a black logo visible on the dark theme and a white
-// one on the light theme; it barely shows on logos that already contrast.
-const LOGO_HALO_CLASS_NAME =
-  "drop-shadow-[0_0_1px_color-mix(in_srgb,var(--foreground)_60%,transparent)]";
+// A plain hairline border frames the logo, so a black logo stays visible on the dark theme and
+// a white one on the light theme. The ring sits outside the box, so the logo keeps its size.
+const LOGO_FRAME_CLASS_NAME = "rounded-[3px] ring-1 ring-foreground/15";
 
 /**
  * An emoji drawn as SVG text, so it scales with the same `size-*` box as the line icons
@@ -137,7 +135,7 @@ function ProjectLogo({
       src={favicon}
       alt=""
       aria-hidden="true"
-      className={cn(className, "rounded-[2px] object-contain", LOGO_HALO_CLASS_NAME)}
+      className={cn(className, "object-contain", LOGO_FRAME_CLASS_NAME)}
       onError={() => recordFaviconLoad(favicon, false)}
     />
   );

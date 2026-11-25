@@ -1,3 +1,4 @@
+import { executionKey } from "./hosts/executionContext";
 // FILE: appSnapIconStore.ts
 // Purpose: Deduplicates native AppSnap icons outside localStorage.
 // Layer: Browser storage adapter
@@ -49,7 +50,7 @@ function normalizeIconDataUrl(value: unknown): string | null {
 
 function openAppSnapIconDatabase(): Promise<IDBDatabase> {
   return openIndexedDbDatabase({
-    name: DATABASE_NAME,
+    name: executionKey(DATABASE_NAME),
     version: DATABASE_VERSION,
     storeName: ICON_STORE_NAME,
     keyPath: "bundleIdentifier",

@@ -5,17 +5,18 @@
 
 import { fileURLToPath } from "node:url";
 
+import { UI_LOCALES } from "@synara/contracts/uiLocale";
 import {
   SYNARA_BETA_WINDOWS_INSTALLER_GUID,
   SYNARA_STABLE_WINDOWS_INSTALLER_GUID,
 } from "@synara/shared/betaChannel";
 import type { SynaraPackagedDesktopFlavor } from "@synara/shared/desktopIdentity";
-import { availableUiLocales } from "@synara/shared/uiLocale";
 
 import {
   createDesktopBundleFilePatterns,
   preserveDependencyDiagnostics,
 } from "./desktop-bundle-files.ts";
+import { MAC_ICON_ASSET_NAME, MAC_ICON_COMPOSER_DEPLOYMENT_TARGET } from "./mac-icon-catalog.ts";
 
 export const MICROPHONE_USAGE_DESCRIPTION =
   "Synara needs microphone access so you can record voice notes and transcribe them into the chat composer, and, if you turn it on, to move the chat message trail with your voice.";
@@ -40,15 +41,24 @@ export const MAC_WINDOW_MATERIAL_ADDON_BUNDLE_PATH =
 export const MAC_DEVICE_HELPER_STAGE_PATH = "apps/server/dist/device-helper";
 export const MAC_DEVICE_HELPER_RESOURCE_PATH = "Resources/device-helper";
 export const WINDOWS_INSTALLER_GUID = SYNARA_STABLE_WINDOWS_INSTALLER_GUID;
-// Asset catalog name of the compiled Icon Composer icon. macOS 26 reads
-// CFBundleIconName out of Assets.car and renders that layered icon with the
-// Liquid Glass material; older releases ignore it and keep using the ICNS.
-export const MAC_ICON_ASSET_NAME = "Synara";
-export const MAC_ICON_COMPOSER_DEPLOYMENT_TARGET = "26.0";
+// Remote must install alongside Stable and Beta without owning their uninstaller.
+const REMOTE_WINDOWS_INSTALLER_GUID = "7639a24e-c753-4f4c-b4e3-37b259bdc793";
+// Asset catalog name and deployment target of the compiled Icon Composer icon,
+// shared with the dependency-free release catalog fingerprint.
+export { MAC_ICON_ASSET_NAME, MAC_ICON_COMPOSER_DEPLOYMENT_TARGET };
 export const MAC_ICON_ASSETS_CAR_STAGE_PATH = "apps/desktop/resources/Assets.car";
 export const MAC_ICON_ASSETS_CAR_BUNDLE_PATH = "Resources/Assets.car";
 export { SYNARA_BETA_WINDOWS_INSTALLER_GUID };
 const MAC_DMG_ICON_PATH = "icon.icns";
+// electron-builder signs every file it classifies as binary, one `codesign`
+// call at a time, each with its own request to Apple's timestamp server. The
+// walk follows Electron Framework's `Versions/Current` and top-level symlinks,
+// so the 223 Chromium `.pak` data files alone accounted for 669 of about 724
+// calls. A `.pak` is a resource, not code: the signature of the enclosing
+// framework seals its hash, so its own signature added nothing that
+// `codesign --verify --deep --strict`, Gatekeeper or notarization check.
+// Every Mach-O file, helper app and framework is still signed.
+export const MAC_SIGN_IGNORE_PATTERNS = ["\\.pak$"] as const;
 const NODE_PTY_ASAR_UNPACK_GLOBS = ["node_modules/node-pty/**"] as const;
 
 export interface DesktopPlatformBuildConfig {
@@ -57,6 +67,7 @@ export interface DesktopPlatformBuildConfig {
   readonly onNodeModuleFile?: string;
   readonly asarUnpack?: ReadonlyArray<string>;
   readonly dmg?: Record<string, unknown>;
+  readonly electronLanguages?: ReadonlyArray<string>;
   readonly extraFiles?: ReadonlyArray<Record<string, string>>;
   readonly extraResources?: ReadonlyArray<Record<string, string>>;
   readonly files?: ReadonlyArray<string>;
@@ -64,6 +75,14 @@ export interface DesktopPlatformBuildConfig {
   readonly mac?: Record<string, unknown>;
   readonly nsis?: Record<string, unknown>;
   readonly win?: Record<string, unknown>;
+}
+
+const ELECTRON_LOCALE_CODES: Readonly<Record<string, ReadonlyArray<string>>> = {
+  en: ["en-US", "en-GB", "en_GB"],
+};
+
+export function electronLanguagesForFlavor(): string[] {
+  return UI_LOCALES.flatMap((locale) => ELECTRON_LOCALE_CODES[locale] ?? [locale]);
 }
 
 export interface CreateDesktopPlatformBuildConfigInput {
@@ -115,9 +134,12 @@ export function createDesktopPlatformBuildConfig(
     diagnostics: preserveDependencyDiagnostics(process.env),
     linuxGlibc: typeof report?.header?.glibcVersionRuntime === "string",
   });
+  const connectorResources = { from: "apps/desktop/resources/cloudflared", to: "cloudflared" };
   const nativePackaging = {
     asarUnpack: [...NODE_PTY_ASAR_UNPACK_GLOBS],
+    electronLanguages: electronLanguagesForFlavor(),
     files,
+    extraResources: [connectorResources],
     // TypeScript reads these declarations at runtime in the intelligence worker.
     // electron-builder otherwise removes every dependency .d.ts file.
     onNodeModuleFile: fileURLToPath(new URL("./desktop-runtime-files.cjs", import.meta.url)),
@@ -146,15 +168,17 @@ export function createDesktopPlatformBuildConfig(
         : {}),
       entitlements: MAC_ENTITLEMENTS_PATH,
       entitlementsInherit: MAC_INHERITED_ENTITLEMENTS_PATH,
+      signIgnore: [...MAC_SIGN_IGNORE_PATTERNS],
       binaries: [
         MAC_APPSNAP_HELPER_BUNDLE_PATH,
         MAC_WINDOW_MATERIAL_ADDON_BUNDLE_PATH,
         "Contents/Resources/cua-driver/cua-driver",
+        "Contents/Resources/cloudflared/cloudflared",
       ],
       // The universal build stages the same pre-lipo'd helper and addon in both app trees.
       // @electron/universal needs this pattern to preserve those existing fat binaries.
       x64ArchFiles:
-        "Contents/{Helpers/synara-appsnap-helper,Frameworks/synara-window-material.node,Resources/cua-driver/cua-driver}",
+        "Contents/{Helpers/synara-appsnap-helper,Frameworks/synara-window-material.node,Resources/cua-driver/cua-driver,Resources/cloudflared/cloudflared}",
       extendInfo: {
         NSMicrophoneUsageDescription: MICROPHONE_USAGE_DESCRIPTION,
         NSAudioCaptureUsageDescription: AUDIO_CAPTURE_USAGE_DESCRIPTION,
@@ -196,6 +220,7 @@ export function createDesktopPlatformBuildConfig(
         MAC_APPSNAP_HELPER_ASAR_EXCLUSION,
         MAC_WINDOW_MATERIAL_ADDON_ASAR_EXCLUSION,
         "!apps/desktop/resources/cua-driver/**",
+        "!apps/desktop/prod-resources/cua-driver/**",
       ],
       extraFiles: [
         { from: "apps/desktop/resources/cua-driver", to: "Resources/cua-driver" },
@@ -217,14 +242,6 @@ export function createDesktopPlatformBuildConfig(
           from: MAC_ICON_ASSETS_CAR_STAGE_PATH,
           to: MAC_ICON_ASSETS_CAR_BUNDLE_PATH,
         },
-        // macOS reads permission explanations from the bundle's language folders.
-        ...availableUiLocales(input.flavor ?? "production").map((locale) => {
-          const directory = `${locale === "zh-CN" ? "zh-Hans" : locale}.lproj`;
-          return {
-            from: `apps/desktop/resources/localizations/${directory}`,
-            to: `Resources/${directory}`,
-          };
-        }),
       ],
       mac,
     };
@@ -241,15 +258,18 @@ export function createDesktopPlatformBuildConfig(
         "!apps/desktop/resources/cua-driver/**",
         "!apps/desktop/prod-resources/cua-driver/**",
       ],
-      extraResources: [{ from: "apps/desktop/resources/cua-driver", to: "cua-driver" }],
+      extraResources: [
+        connectorResources,
+        { from: "apps/desktop/resources/cua-driver", to: "cua-driver" },
+      ],
       linux: {
         target: [input.target],
-        executableName: "synara",
+        executableName: input.flavor === "remote" ? "synara-remote" : "synara",
         icon: "icon.png",
         category: "Development",
         desktop: {
           entry: {
-            StartupWMClass: "synara",
+            StartupWMClass: input.flavor === "remote" ? "synara-remote" : "synara",
           },
         },
       },
@@ -261,7 +281,12 @@ export function createDesktopPlatformBuildConfig(
     // Keep the Windows product registration stable while the public app ID changes.
     // This lets NSIS updates replace the existing installation and own its uninstaller.
     nsis: {
-      guid: input.flavor === "beta" ? SYNARA_BETA_WINDOWS_INSTALLER_GUID : WINDOWS_INSTALLER_GUID,
+      guid:
+        input.flavor === "remote"
+          ? REMOTE_WINDOWS_INSTALLER_GUID
+          : input.flavor === "beta"
+            ? SYNARA_BETA_WINDOWS_INSTALLER_GUID
+            : WINDOWS_INSTALLER_GUID,
     },
     win: {
       target: [input.target],

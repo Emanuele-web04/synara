@@ -6,21 +6,13 @@
 import "server-only";
 
 import { unstable_cache } from "next/cache";
+import { countInstallerDownloads } from "@synara/shared/installerDownloads";
+
+export { countInstallerDownloads } from "@synara/shared/installerDownloads";
 
 import storedInstallerDownloads from "@/data/installer-downloads.json";
 
 const RELEASES_API_URL = "https://api.github.com/repos/Emanuele-web04/synara/releases?per_page=100";
-
-const INSTALLER_FILE_PATTERN = /\.(dmg|exe|AppImage)$/i;
-
-type GitHubReleaseAsset = {
-  download_count?: number;
-  name?: string;
-};
-
-type GitHubRelease = {
-  assets?: GitHubReleaseAsset[];
-};
 
 // The count the deterministic browser fixture (VISUAL_TEST=1) renders. The
 // visual baselines were captured with this value, and it must not follow the
@@ -30,22 +22,6 @@ const VISUAL_TEST_INSTALLER_COUNT = 11_990;
 export function getStoredInstallerCount(): number | null {
   if (process.env.VISUAL_TEST === "1") return VISUAL_TEST_INSTALLER_COUNT;
   return storedInstallerDownloads.count > 0 ? storedInstallerDownloads.count : null;
-}
-
-// Counts only actual installer artifacts so updater metadata and blockmaps do not inflate totals.
-export function countInstallerDownloads(releases: GitHubRelease[]): number {
-  return releases.reduce((total, release) => {
-    const releaseTotal =
-      release.assets?.reduce((assetTotal, asset) => {
-        if (!asset.name || !INSTALLER_FILE_PATTERN.test(asset.name)) {
-          return assetTotal;
-        }
-
-        return assetTotal + (asset.download_count ?? 0);
-      }, 0) ?? 0;
-
-    return total + releaseTotal;
-  }, 0);
 }
 
 // Once a day is plenty for a marketing counter; the stored snapshot is refreshed
@@ -76,7 +52,7 @@ async function fetchLiveInstallerCount(): Promise<number> {
     throw new Error(`GitHub releases request failed with status ${response.status}`);
   }
 
-  const releases = (await response.json()) as GitHubRelease[];
+  const releases: unknown = await response.json();
   const count = countInstallerDownloads(releases);
 
   // New releases can briefly report zero while assets/download counts settle.

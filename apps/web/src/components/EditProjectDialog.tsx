@@ -1,13 +1,18 @@
 // FILE: EditProjectDialog.tsx
-// Purpose: Edit a project's local name and its look (emoji, or icon and color) in one place.
+// Purpose: Edit a project's local name, its look (emoji, or icon and color), and the extra
+//          source folders of an ordinary project in one place.
 // Layer: UI component
 // Exports: EditProjectDialog, EditProjectValue
 
 import { useEffect, useId, useRef, useState } from "react";
 
+import { isElectron } from "~/env";
+import { useAdditionalProjectFolders } from "~/hooks/useAdditionalProjectFolders";
 import type { ProjectAppearance } from "~/lib/projectAppearance";
+import { readNativeApi } from "~/nativeApi";
 import { PROJECT_DIALOG_FIELD_CONTROL_CLASS_NAME } from "./CreateGitHubProjectFields";
 import { ProjectAppearancePicker } from "./ProjectAppearancePicker";
+import { ProjectFolderAddRow, ProjectFolderList } from "./ProjectFolderList";
 import { ProjectSidebarIcon } from "./ProjectSidebarIcon";
 import { Button } from "./ui/button";
 import {
@@ -26,6 +31,8 @@ export interface EditProjectValue {
   /** Empty clears the local name, so the project shows its folder name again. */
   readonly name: string;
   readonly appearance: ProjectAppearance | null;
+  /** Extra source folders after the primary one; present only when the dialog edits them. */
+  readonly additionalFolders?: ReadonlyArray<string>;
 }
 
 export interface EditProjectDialogProps {
@@ -34,8 +41,14 @@ export interface EditProjectDialogProps {
   /** Placeholder for the name field: what the project is called with no local name. */
   folderName: string;
   initialValue: EditProjectValue;
+  /**
+   * Shows the source folders (primary first, then `initialValue.additionalFolders`) so
+   * folders can be added or removed. Only ordinary projects span several folders.
+   */
+  editFolders?: boolean;
   onOpenChange: (open: boolean) => void;
-  onSave: (value: EditProjectValue) => void;
+  /** A rejected save keeps the dialog open and shows the error. */
+  onSave: (value: EditProjectValue) => void | Promise<void>;
 }
 
 export function EditProjectDialog({
@@ -43,6 +56,7 @@ export function EditProjectDialog({
   cwd,
   folderName,
   initialValue,
+  editFolders = false,
   onOpenChange,
   onSave,
 }: EditProjectDialogProps) {
@@ -60,6 +74,7 @@ export function EditProjectDialog({
           cwd={cwd}
           folderName={folderName}
           initialValue={initialValue}
+          editFolders={editFolders}
           onOpenChange={onOpenChange}
           onSave={onSave}
         />
@@ -72,6 +87,7 @@ function EditProjectForm({
   cwd,
   folderName,
   initialValue,
+  editFolders,
   onOpenChange,
   onSave,
 }: Omit<EditProjectDialogProps, "open">) {
@@ -80,6 +96,15 @@ function EditProjectForm({
   const [name, setName] = useState(initialValue.name);
   const [appearance, setAppearance] = useState(initialValue.appearance);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [isPickingFolder, setIsPickingFolder] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+  // The primary folder stays fixed here (Change project path moves it); extra ones come and go.
+  const { additionalFolders, addFolder, removeFolder } = useAdditionalProjectFolders({
+    primary: cwd,
+    initial: initialValue.additionalFolders ?? [],
+    onProblem: setFormError,
+  });
   const nameInputId = useId();
   const searchInputRef = useRef<HTMLInputElement>(null);
 
@@ -95,8 +120,42 @@ function EditProjectForm({
     return () => window.cancelAnimationFrame(frame);
   }, [nameInputId]);
 
-  const save = () => {
-    onSave({ name: name.trim(), appearance });
+  const browseFolder = async () => {
+    const api = readNativeApi();
+    if (!api || isPickingFolder || saving) return;
+    setIsPickingFolder(true);
+    // No try/finally: the React Compiler skips optimizing components that use it.
+    try {
+      const picked = await api.dialogs.pickFolder();
+      if (picked) addFolder(picked);
+    } catch (error) {
+      setFormError(
+        error instanceof Error
+          ? error.message
+          : t("workspace:projectPicker_unableToOpenFolderPicker"),
+      );
+    }
+    setIsPickingFolder(false);
+  };
+
+  const save = async () => {
+    if (saving) return;
+    // Built outside the try: a conditional spread inside it makes the React Compiler bail out.
+    const value: EditProjectValue = {
+      name: name.trim(),
+      appearance,
+      ...(editFolders ? { additionalFolders } : {}),
+    };
+    setSaving(true);
+    setFormError(null);
+    try {
+      await onSave(value);
+    } catch (error) {
+      setFormError(error instanceof Error ? error.message : t("workspace:anUnknownErrorOccurred"));
+      setSaving(false);
+      return;
+    }
+    setSaving(false);
     onOpenChange(false);
   };
 
@@ -111,7 +170,7 @@ function EditProjectForm({
           <form
             onSubmit={(event) => {
               event.preventDefault();
-              save();
+              void save();
             }}
           >
             {/* Same field as Add project's folder path: the glyph sits in a leading cell,
@@ -160,12 +219,36 @@ function EditProjectForm({
             />
           </PopoverPopup>
         </Popover>
+        {editFolders ? (
+          <ProjectFolderList
+            className="mt-4"
+            folders={[cwd, ...additionalFolders]}
+            disabled={saving || isPickingFolder}
+            primaryLocked
+            onRemove={removeFolder}
+            addRow={
+              <ProjectFolderAddRow
+                picker={isElectron}
+                disabled={saving || isPickingFolder}
+                picking={isPickingFolder}
+                onBrowse={() => void browseFolder()}
+                onAdd={addFolder}
+                onInputChange={() => setFormError(null)}
+              />
+            }
+          />
+        ) : null}
+        {formError ? (
+          <p role="alert" className="mt-3 text-ui-xs text-destructive">
+            {formError}
+          </p>
+        ) : null}
       </DialogPanel>
       <DialogFooter>
-        <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>
+        <Button variant="outline" size="sm" disabled={saving} onClick={() => onOpenChange(false)}>
           {t("common:form_cancel")}
         </Button>
-        <Button size="sm" onClick={save}>
+        <Button size="sm" disabled={saving} onClick={() => void save()}>
           {t("computer:form_save")}
         </Button>
       </DialogFooter>

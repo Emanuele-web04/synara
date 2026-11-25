@@ -111,6 +111,7 @@ function toThreadShell(thread: Thread): ThreadShell {
     sidechatLastActivityAt: thread.sidechatLastActivityAt ?? null,
     sidechatExpiredAt: thread.sidechatExpiredAt ?? null,
     lastKnownPr: thread.lastKnownPr ?? null,
+    pullRequests: thread.pullRequests ?? [],
     handoff: thread.handoff ?? null,
     ...(thread.isProjectImport ? { isProjectImport: true } : {}),
     usageLimitRecovery: thread.usageLimitRecovery ?? null,
@@ -142,6 +143,12 @@ function toThreadShell(thread: Thread): ThreadShell {
       : {}),
     ...(thread.hasActionableProposedPlan !== undefined
       ? { hasActionableProposedPlan: thread.hasActionableProposedPlan }
+      : {}),
+    ...(thread.pendingBackgroundTaskCount !== undefined
+      ? { pendingBackgroundTaskCount: thread.pendingBackgroundTaskCount }
+      : {}),
+    ...(thread.latestReplyPreview !== undefined
+      ? { latestReplyPreview: thread.latestReplyPreview }
       : {}),
     ...(thread.pendingInteractions !== undefined
       ? { pendingInteractions: thread.pendingInteractions }
@@ -384,7 +391,9 @@ function sidebarThreadSummariesEqual(
     (left.sidechatLastActivityAt ?? null) === (right.sidechatLastActivityAt ?? null) &&
     (left.sidechatExpiredAt ?? null) === (right.sidechatExpiredAt ?? null) &&
     deepEqualJson(left.lastKnownPr ?? null, right.lastKnownPr ?? null) &&
-    (left.handoff ?? null) === (right.handoff ?? null)
+    deepEqualJson(left.pullRequests ?? [], right.pullRequests ?? []) &&
+    (left.handoff ?? null) === (right.handoff ?? null) &&
+    left.latestReplyPreview === right.latestReplyPreview
   );
 }
 
@@ -435,7 +444,11 @@ function buildSidebarThreadSummary(
     sidechatLastActivityAt: thread.sidechatLastActivityAt ?? null,
     sidechatExpiredAt: thread.sidechatExpiredAt ?? null,
     lastKnownPr: thread.lastKnownPr ?? null,
+    pullRequests: thread.pullRequests ?? [],
     handoff: thread.handoff ?? null,
+    ...(thread.latestReplyPreview !== undefined
+      ? { latestReplyPreview: thread.latestReplyPreview }
+      : {}),
   };
   if (previous && sidebarThreadSummariesEqual(previous, nextSummary)) {
     return previous;
@@ -986,18 +999,23 @@ export function evictThreadDetailFromClientState(state: AppState, threadId: Thre
   const { [threadId]: _removedDiffs, ...turnDiffSummaryByThreadId } =
     state.turnDiffSummaryByThreadId ?? EMPTY_TURN_DIFF_BY_THREAD;
 
-  return clearThreadDetailSyncState(
-    {
-      ...state,
-      messageIdsByThreadId,
-      messageByThreadId,
-      activityIdsByThreadId,
-      activityByThreadId,
-      proposedPlanIdsByThreadId,
-      proposedPlanByThreadId,
-      turnDiffIdsByThreadId,
-      turnDiffSummaryByThreadId,
-    },
+  // Summary fields derived from the wiped detail (background work, live tail)
+  // would otherwise keep their last value until an unrelated shell event lands.
+  return commitThreadProjection(
+    clearThreadDetailSyncState(
+      {
+        ...state,
+        messageIdsByThreadId,
+        messageByThreadId,
+        activityIdsByThreadId,
+        activityByThreadId,
+        proposedPlanIdsByThreadId,
+        proposedPlanByThreadId,
+        turnDiffIdsByThreadId,
+        turnDiffSummaryByThreadId,
+      },
+      threadId,
+    ),
     threadId,
   );
 }

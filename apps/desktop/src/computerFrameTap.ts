@@ -42,6 +42,7 @@ interface ActiveTap {
   task: CuaComputerTask;
   key: string;
   windowId: number;
+  failed: boolean;
   exited: boolean;
   retiring: boolean;
 }
@@ -144,7 +145,10 @@ export class ComputerFrameTap implements ComputerFrameTapHost {
     for (;;) {
       const current = this.active;
       const target = this.streamTarget();
-      if (current && (!target || current.exited || current.key !== tapTargetKey(target))) {
+      if (
+        current &&
+        (!target || current.failed || current.exited || current.key !== tapTargetKey(target))
+      ) {
         try {
           await this.retire(current);
           if (this.active === current) this.active = undefined;
@@ -206,7 +210,7 @@ export class ComputerFrameTap implements ComputerFrameTapHost {
       else socket.destroy();
     });
     server.on("error", (error) => {
-      if (state) this.kill(state, error);
+      if (state) this.fail(state, error);
       else this.options.onError(error);
     });
     try {
@@ -248,15 +252,21 @@ export class ComputerFrameTap implements ComputerFrameTapHost {
       task: target.task,
       key: tapTargetKey(target),
       windowId: target.windowId,
+      failed: false,
       exited: false,
       retiring: false,
     };
     const tap = state;
-    child.on("error", (error) => this.kill(tap, error));
-    // Helper exit ends the tap no matter the cause: the protocol has no
-    // graceful-stop event, so every exit is terminal for this target.
-    child.once("exit", () => this.kill(tap, undefined));
-    child.once("close", () => lines.close());
+    child.on("error", (error) => this.fail(tap, error));
+    child.once("exit", () => {
+      tap.exited = true;
+      this.fail(tap, undefined);
+    });
+    child.once("close", () => {
+      // Also covers spawn failure, which has no `exit` event.
+      tap.exited = true;
+      lines.close();
+    });
     child.stderr?.resume();
     lines.on("line", (line) => this.helperLine(tap, line));
     // Claim the slot before returning: a helper connect racing the caller's
@@ -266,7 +276,7 @@ export class ComputerFrameTap implements ComputerFrameTapHost {
   }
 
   private attach(state: ActiveTap, socket: Socket): void {
-    if (state.connection || state.retiring || this.active !== state) {
+    if (state.connection || state.failed || state.retiring || this.active !== state) {
       socket.destroy();
       return;
     }
@@ -274,13 +284,14 @@ export class ComputerFrameTap implements ComputerFrameTapHost {
     socket.on("error", () => undefined);
     const pending = new ByteAccumulator();
     socket.on("data", (chunk: Buffer) => {
+      if (state.failed || state.retiring) return;
       if (pending.byteLength === 0) {
         // Preserve the complete-frame zero-copy path; buffer only an unfinished tail.
         let offset = 0;
         while (chunk.length - offset >= 4) {
           const length = chunk.readUInt32LE(offset);
           if (length === 0 || length > FRAME_TAP_MAX_FRAME_BYTES) {
-            this.kill(state, new Error("Computer frame tap sent a malformed frame."));
+            this.fail(state, new Error("Computer frame tap sent a malformed frame."));
             return;
           }
           if (chunk.length - offset < 4 + length) break;
@@ -297,7 +308,7 @@ export class ComputerFrameTap implements ComputerFrameTapHost {
         const length = pending.readUInt32LE(0);
         if (length === 0 || length > FRAME_TAP_MAX_FRAME_BYTES) {
           pending.clear();
-          this.kill(state, new Error("Computer frame tap sent a malformed frame."));
+          this.fail(state, new Error("Computer frame tap sent a malformed frame."));
           return;
         }
         if (pending.byteLength < 4 + length) return;
@@ -312,7 +323,7 @@ export class ComputerFrameTap implements ComputerFrameTapHost {
   }
 
   private deliver(state: ActiveTap, jpeg: Uint8Array): void {
-    if (this.active !== state || state.retiring || state.exited) return;
+    if (this.active !== state || state.retiring || state.failed) return;
     this.sequence += 1;
     try {
       this.options.send(COMPUTER_PREVIEW_FRAME_CHANNEL, {
@@ -330,19 +341,18 @@ export class ComputerFrameTap implements ComputerFrameTapHost {
     try {
       const message = JSON.parse(line) as { type?: string; code?: string };
       if (message.type === "error") {
-        this.kill(state, new Error(`Computer frame tap: ${message.code ?? "capture failed"}`));
+        this.fail(state, new Error(`Computer frame tap: ${message.code ?? "capture failed"}`));
       }
     } catch {
       /* Only protocol lines emitted by the owned helper are consumed. */
     }
   }
 
-  /** Unexpected helper death poisons only this target; retire() kills are exempt. */
-  private kill(state: ActiveTap, error: unknown): void {
-    const wasExited = state.exited;
-    state.exited = true;
+  /** Fence the failed target immediately. Only process exit makes retirement complete. */
+  private fail(state: ActiveTap, error: unknown): void {
     if (error !== undefined) this.options.onError(error);
-    if (this.active !== state || state.retiring || wasExited) return;
+    if (this.active !== state || state.retiring || state.failed) return;
+    state.failed = true;
     this.rememberDead(state.key);
     if (this.desired && tapTargetKey(this.desired) === state.key) {
       this.desired = undefined;
@@ -359,11 +369,13 @@ export class ComputerFrameTap implements ComputerFrameTapHost {
 
   private async retire(state: ActiveTap): Promise<void> {
     state.retiring = true;
-    state.connection?.destroy();
-    state.connection = undefined;
     try {
+      // Drain the socket while native capture stops so an ordinary stop does
+      // not turn into a failed frame write in the helper.
       await stopNativeHelper(state.child, () => state.exited);
     } finally {
+      state.connection?.destroy();
+      state.connection = undefined;
       state.lines.close();
       if (state.server.listening) {
         await new Promise<void>((resolve) => state.server.close(() => resolve()));

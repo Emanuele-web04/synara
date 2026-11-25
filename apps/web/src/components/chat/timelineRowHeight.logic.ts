@@ -41,10 +41,11 @@ const CHANGED_FILES_CARD_PX = 50;
 const CHANGED_FILE_ROW_PX = 42;
 const MAX_ESTIMATED_CHANGED_FILE_ROWS = 8;
 const ATTACHMENT_STRIP_PX = 140;
+// A 24px work row plus its 14px row padding; each further row adds 24px + 14px gap.
 const WORK_ROW_PX = 38;
-const WORK_ENTRY_PX = 24;
+const WORK_ENTRY_PX = 38;
 const MAX_ESTIMATED_WORK_ENTRIES = 4;
-const MESSAGE_SEGMENT_CHROME_PX = 16;
+const MESSAGE_SEGMENT_CHROME_PX = 22;
 const PROPOSED_PLAN_CHROME_PX = 96;
 const USER_INPUT_ROW_PX = 72;
 const USER_INPUT_EXCHANGE_PX = 56;

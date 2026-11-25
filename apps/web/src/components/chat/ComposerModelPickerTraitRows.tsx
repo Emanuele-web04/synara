@@ -19,13 +19,15 @@ import { type ProviderOptions } from "../../providerModelOptions";
 import { MenuRadioGroup, MenuRadioItem, MenuSub, MenuSubTrigger } from "../ui/menu";
 import { ComposerEffortSliderCard } from "./ComposerEffortSliderCard";
 import { ComposerPickerMenuSubPopup } from "./ComposerPickerMenuPopup";
+import { ComposerUltrafastMenu } from "./ComposerUltrafastMenu";
 import { COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME } from "./composerPickerStyles";
 import {
   buildDevinPairingPatch,
   currentDevinPairing,
   type DevinPairingParts,
+  type DevinPairingSpeed,
   devinPairingLeadEfforts,
-  devinPairingLeadHasFast,
+  devinPairingLeadSpeeds,
   devinPairingSidekicksForLead,
   resolveDevinPairingUid,
 } from "./devinFusionPairing";
@@ -95,8 +97,7 @@ export function ComposerModelPickerTraitRows(props: {
   modelOptions: ProviderOptions | undefined;
   prompt: string;
   onPromptChange: (prompt: string) => void;
-  // "slider" swaps the Effort and Speed rows for the stepped slider card, which owns
-  // both. Models without an effort ladder always keep the rows.
+  // "slider" uses the stepped effort card and its binary Fast toggle.
   effortControl: ComposerEffortControl;
   fastModeNotice?: FastModeNotice | null | undefined;
 }) {
@@ -140,7 +141,14 @@ export function ComposerModelPickerTraitRows(props: {
   const rows: ReactNode[] = [];
   if (pairing && pairingParts) {
     const leadEfforts = devinPairingLeadEfforts(pairing, pairingParts.lead);
+    const leadSpeeds = devinPairingLeadSpeeds(pairing, pairingParts.lead);
     const sidekickOptions = devinPairingSidekicksForLead(pairing, pairingParts.lead);
+    const speedLabel = (speed: DevinPairingSpeed) =>
+      speed === "ultrafast"
+        ? t("chat:traitsPicker_ultrafast")
+        : speed === "fast"
+          ? t("chat:traitsPicker_fast")
+          : t("chat:standard");
     rows.push(
       <TraitRow
         key="lead"
@@ -153,30 +161,31 @@ export function ComposerModelPickerTraitRows(props: {
         options={pairing.leads.map((option) => ({ ...option }))}
         onValueChange={(value) => commitPairing({ lead: value })}
       />,
-      <TraitRow
-        key="lead-effort"
-        label={t("chat:traitsPicker_effort")}
-        value={pairingParts.effort}
-        valueLabel={
-          leadEfforts.find((option) => option.value === pairingParts.effort)?.label ??
-          pairingParts.effort
-        }
-        options={leadEfforts.map((option) => ({ ...option }))}
-        onValueChange={(value) => commitPairing({ effort: value })}
-      />,
     );
-    if (devinPairingLeadHasFast(pairing, pairingParts.lead)) {
+    if (leadEfforts.length > 0) {
+      rows.push(
+        <TraitRow
+          key="lead-effort"
+          label={t("chat:traitsPicker_effort")}
+          value={pairingParts.effort}
+          valueLabel={
+            leadEfforts.find((option) => option.value === pairingParts.effort)?.label ??
+            pairingParts.effort
+          }
+          options={leadEfforts.map((option) => ({ ...option }))}
+          onValueChange={(value) => commitPairing({ effort: value })}
+        />,
+      );
+    }
+    if (leadSpeeds.length > 1) {
       rows.push(
         <TraitRow
           key="speed"
           label={t("chat:traitsPicker_speed")}
-          value={pairingParts.fast ? "on" : "off"}
-          valueLabel={pairingParts.fast ? t("chat:traitsPicker_fast") : t("chat:standard")}
-          options={[
-            { value: "off", label: t("chat:standard") },
-            { value: "on", label: t("chat:traitsPicker_fast") },
-          ]}
-          onValueChange={(value) => commitPairing({ fast: value === "on" })}
+          value={pairingParts.speed}
+          valueLabel={speedLabel(pairingParts.speed)}
+          options={leadSpeeds.map((speed) => ({ value: speed, label: speedLabel(speed) }))}
+          onValueChange={(value) => commitPairing({ speed: value as DevinPairingSpeed })}
         />,
       );
     }
@@ -260,7 +269,16 @@ export function ComposerModelPickerTraitRows(props: {
       />,
     );
   }
-  if (!pairing && supportsComposerFastModeControl(selection) && !usesEffortSlider) {
+  if (!pairing && selection.supportsUltrafastMode && !usesEffortSlider) {
+    rows.push(
+      <ComposerUltrafastMenu
+        key="speed"
+        selection={selection}
+        runtimeModel={props.runtimeModel}
+        onChange={commitTrait}
+      />,
+    );
+  } else if (!pairing && supportsComposerFastModeControl(selection) && !usesEffortSlider) {
     rows.push(
       <TraitRow
         key="speed"

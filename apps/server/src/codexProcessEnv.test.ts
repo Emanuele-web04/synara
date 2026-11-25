@@ -2,6 +2,7 @@ import {
   copyFileSync,
   existsSync,
   lstatSync,
+  linkSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -12,6 +13,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
+import * as fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { parse as parseToml } from "smol-toml";
@@ -35,6 +37,10 @@ import {
 import { isProviderCredentialKey } from "./providerChildEnvironment.ts";
 import { buildCodexMcpConfigToml } from "./agentGateway/mcpInjection.ts";
 import { resolveActiveCodexHomeWritePath } from "./codexHomePaths.ts";
+
+vi.mock("node:fs/promises", async (importOriginal) => ({
+  ...(await importOriginal<typeof fs>()),
+}));
 
 describe("hydrateCodexProviderCredentialEnvironment", () => {
   it("hydrates only missing provider credentials without trusting shell PATH", () => {
@@ -70,6 +76,25 @@ describe("hydrateCodexProviderCredentialEnvironment", () => {
 });
 
 describe("writeCodexOverlayConfigAtomically", () => {
+  it("leaves an unchanged private config in place across repeated preparations", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "synara-codex-config-stable-"));
+    const targetPath = path.join(root, "config.toml");
+    const contents = 'model = "same"\n';
+    try {
+      await writeCodexOverlayConfigAtomically(targetPath, contents);
+      const original = lstatSync(targetPath, { bigint: true });
+      for (let attempt = 0; attempt < 3; attempt++) {
+        await writeCodexOverlayConfigAtomically(targetPath, contents);
+        const current = lstatSync(targetPath, { bigint: true });
+        expect(current.ino).toBe(original.ino);
+        expect(current.mtimeNs).toBe(original.mtimeNs);
+      }
+      expect(readFileSync(targetPath, "utf8")).toBe(contents);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("keeps the old complete config when publication is interrupted", async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "synara-codex-config-publish-"));
     const targetPath = path.join(root, "config.toml");
@@ -99,11 +124,35 @@ describe("writeCodexOverlayConfigAtomically", () => {
       expect(readFileSync(targetPath, "utf8")).toBe('model = "new"\n');
       if (process.platform !== "win32") {
         expect(lstatSync(targetPath).mode & 0o777).toBe(0o600);
+        chmodSync(targetPath, 0o644);
+        await writeCodexOverlayConfigAtomically(targetPath, 'model = "new"\n');
+        expect(lstatSync(targetPath).mode & 0o777).toBe(0o600);
       }
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it.each(process.platform === "win32" ? ["hardlink"] : ["hardlink", "symlink"])(
+    "replaces a config %s even when its contents match",
+    async (linkType) => {
+      const root = mkdtempSync(path.join(os.tmpdir(), "synara-codex-config-link-"));
+      const sourcePath = path.join(root, "source.toml");
+      const targetPath = path.join(root, "config.toml");
+      const contents = 'model = "same"\n';
+      try {
+        writeFileSync(sourcePath, contents, { mode: 0o600 });
+        (linkType === "hardlink" ? linkSync : symlinkSync)(sourcePath, targetPath);
+        await writeCodexOverlayConfigAtomically(targetPath, contents);
+        expect(lstatSync(targetPath).isSymbolicLink()).toBe(false);
+        expect(lstatSync(targetPath).nlink).toBe(1);
+        expect(readFileSync(targetPath, "utf8")).toBe(contents);
+        expect(readFileSync(sourcePath, "utf8")).toBe(contents);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("preserves both publication and cleanup errors", async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "synara-codex-config-cleanup-"));
@@ -1044,36 +1093,61 @@ describe("buildCodexProcessEnv account overlays", () => {
     }
   });
 
-  it("preserves legacy-only continuation state and requires an explicit migration", async () => {
-    const fixture = makeAccountFixture();
-    writeFileSync(path.join(fixture.shadowHomePath, "auth.json"), '{"account":"work"}', "utf8");
-    const overlayHomePath = resolveActiveCodexHomeWritePath({
-      env: fixture.env,
-      homePath: fixture.homePath,
-      shadowHomePath: fixture.shadowHomePath,
-      accountId: "work",
-    });
-    mkdirSync(path.join(overlayHomePath, "sessions"), { recursive: true });
-    writeFileSync(path.join(overlayHomePath, "sessions", "legacy.jsonl"), "legacy", "utf8");
+  it.each([false, true])(
+    "preserves legacy-only state and reports the migration error (release fails: %s)",
+    async (releaseFails) => {
+      const fixture = makeAccountFixture();
+      writeFileSync(path.join(fixture.shadowHomePath, "auth.json"), '{"account":"work"}', "utf8");
+      const overlayHomePath = resolveActiveCodexHomeWritePath({
+        env: fixture.env,
+        homePath: fixture.homePath,
+        shadowHomePath: fixture.shadowHomePath,
+        accountId: "work",
+      });
+      mkdirSync(path.join(overlayHomePath, "sessions"), { recursive: true });
+      writeFileSync(path.join(overlayHomePath, "sessions", "legacy.jsonl"), "legacy", "utf8");
 
-    try {
-      await expect(
-        buildCodexProcessEnv({
+      const rename = fs.rename;
+      const release = releaseFails
+        ? vi.spyOn(fs, "rename").mockImplementation((from, to) => {
+            if (
+              String(from) === path.join(fixture.homePath, ".synara-shared-continuation-v1.lock")
+            ) {
+              return Promise.reject(new Error("Fixture lock release denied"));
+            }
+            return rename(from, to);
+          })
+        : undefined;
+      try {
+        const preparation = buildCodexProcessEnv({
           env: fixture.env,
           homePath: fixture.homePath,
           shadowHomePath: fixture.shadowHomePath,
           accountId: "work",
           platform: "win32",
-        }),
-      ).rejects.toThrow(/refusing to migrate legacy state automatically/);
-      expect(readFileSync(path.join(overlayHomePath, "sessions", "legacy.jsonl"), "utf8")).toBe(
-        "legacy",
-      );
-      expect(() => lstatSync(path.join(fixture.homePath, "sessions"))).toThrow();
-    } finally {
-      rmSync(fixture.root, { recursive: true, force: true });
-    }
-  });
+        });
+        if (releaseFails) {
+          await expect(preparation).rejects.toMatchObject({
+            message: expect.stringContaining("Fixture lock release denied"),
+            cause: {
+              message: expect.stringContaining("refusing to migrate legacy state automatically"),
+            },
+          });
+        } else {
+          await expect(preparation).rejects.toThrow(
+            /refusing to migrate legacy state automatically/,
+          );
+        }
+        expect(readFileSync(path.join(overlayHomePath, "sessions", "legacy.jsonl"), "utf8")).toBe(
+          "legacy",
+        );
+        expect(() => lstatSync(path.join(fixture.homePath, "sessions"))).toThrow();
+      } finally {
+        release?.mockRestore();
+        rmSync(fixture.root, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("links account-private auth from the shadow home instead of the shared home", async () => {
     const fixture = makeAccountFixture();

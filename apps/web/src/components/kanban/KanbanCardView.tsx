@@ -180,6 +180,7 @@ function KanbanCardViewComponent({
           branch: card.thread.branch,
           hasDedicatedWorktree: card.thread.worktreePath !== null,
           lastKnownPr: card.thread.lastKnownPr ?? null,
+          pullRequests: card.thread.pullRequests,
         })
     : null;
   const activeWorkElapsed =

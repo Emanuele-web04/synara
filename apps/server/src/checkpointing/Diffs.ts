@@ -3,18 +3,11 @@
 // Layer: Server checkpointing helper
 // Exports: checkpoint file parser used by capture and provider live-diff ingestion
 
+import { parsePatchFiles } from "@pierre/diffs";
 import type { OrchestrationCheckpointFile } from "@synara/contracts";
 import { Effect } from "effect";
 
-import { lazyModule } from "../lazyModule.ts";
-
-type PierreDiffsModule = typeof import("@pierre/diffs");
-type ParsedPatches = ReturnType<PierreDiffsModule["parsePatchFiles"]>;
-
-// `@pierre/diffs` pulls in Shiki's grammar and theme tables, which costs ~38ms
-// on every server boot — including the many boots that never parse a diff. Load
-// it on first parse instead; later parses reuse the same module namespace.
-const loadPierreDiffs: () => Promise<PierreDiffsModule> = lazyModule(() => import("@pierre/diffs"));
+type ParsedPatches = ReturnType<typeof parsePatchFiles>;
 
 function checkpointKindFromParsedFile(
   type: ParsedPatches[number]["files"][number]["type"],
@@ -54,20 +47,18 @@ function summarizeParsedPatches(parsedPatches: ParsedPatches): OrchestrationChec
 }
 
 /**
- * Effectful because the diff parser is imported lazily. A malformed patch still
- * surfaces as a defect, exactly as it did when the parser was a static import.
+ * Parses unified diffs into checkpoint file summaries. `parsePatchFiles` is
+ * bundled and tree-shaken into the server output so Shiki grammars/themes do
+ * not ship in server or desktop runtime dependencies.
  */
 export function parseCheckpointFilesFromUnifiedDiff(
   diff: string,
 ): Effect.Effect<OrchestrationCheckpointFile[]> {
-  return Effect.suspend(() => {
+  return Effect.sync(() => {
     const normalized = diff.replace(/\r\n/g, "\n").trim();
     if (normalized.length === 0) {
-      return Effect.succeed<OrchestrationCheckpointFile[]>([]);
+      return [];
     }
-    return Effect.map(
-      Effect.promise(() => loadPierreDiffs()),
-      ({ parsePatchFiles }) => summarizeParsedPatches(parsePatchFiles(normalized)),
-    );
+    return summarizeParsedPatches(parsePatchFiles(normalized));
   });
 }

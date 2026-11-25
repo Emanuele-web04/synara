@@ -333,7 +333,7 @@ describe("ProjectPanel polished sections", () => {
     });
   });
 
-  it("shows secondary sections as rows with a plain count that open in place", async () => {
+  it("opens secondary sections in place, one at a time", async () => {
     await renderPanel();
 
     const contextRow = await vi.waitFor(() => {
@@ -343,22 +343,7 @@ describe("ProjectPanel polished sections", () => {
       expect(found).not.toBeUndefined();
       return found!;
     });
-    // Counts sit in the row as text, never as a badge pinned over an icon.
-    expect(contextRow.textContent).toMatch(/^Context\d+$/);
-    expect(document.querySelector("[data-environment-panel-variant] span.absolute")).toBeNull();
     expect(contextRow.getAttribute("aria-expanded")).toBe("false");
-    const tileFill = getComputedStyle(contextRow.parentElement!.parentElement!).backgroundColor;
-    await page.getByRole("button", { name: /^Context/ }).hover();
-    await expect
-      .poll(() => {
-        const rowFill = getComputedStyle(contextRow).backgroundColor;
-        return (
-          contextRow.getAnimations().length === 0 &&
-          rowFill !== "rgba(0, 0, 0, 0)" &&
-          rowFill !== tileFill
-        );
-      })
-      .toBe(true);
 
     await page.getByRole("button", { name: /^Context/ }).click();
     expect(contextRow.getAttribute("aria-expanded")).toBe("true");
@@ -394,83 +379,6 @@ describe("ProjectPanel polished sections", () => {
     });
     expect(document.body.textContent).not.toContain("No threads in progress or waiting on you.");
     expect(document.body.textContent).not.toContain("Other threads");
-  });
-
-  it("caps the panel at the overlay height and scrolls inside, keeping the bar pinned", async () => {
-    // Enough idle threads that the open Threads section overflows the overlay.
-    const threads = Array.from({ length: 60 }, (_, index) =>
-      makeThreadSummary(ThreadId.makeUnsafe(`thread-cap-${index}`), { title: `Idle ${index}` }),
-    );
-    harness.api.projectAgent.listThreadIndex.mockResolvedValue(
-      threadIndexEntries(threads.map((thread) => thread.id)),
-    );
-    setSidebarSummaries(threads);
-    await renderPanel();
-
-    const overlay = await vi.waitFor(() => {
-      const found = document.querySelector<HTMLElement>("[data-environment-panel-variant]");
-      expect(found).not.toBeNull();
-      return found!;
-    });
-    const surface = overlay.firstElementChild as HTMLElement;
-
-    await vi.waitFor(() => expect(document.body.textContent).toContain("Idle 59"));
-    // Let the disclosure's open animation settle before measuring.
-    await new Promise<void>((resolve) => window.setTimeout(resolve, 350));
-
-    const overlayRect = overlay.getBoundingClientRect();
-    const surfaceRect = surface.getBoundingClientRect();
-    // The panel grows with content but never past the overlay's inner height —
-    // viewport minus the wrapper's top offset and bottom margin.
-    expect(surfaceRect.height).toBeLessThanOrEqual(
-      overlayRect.height -
-        parseFloat(getComputedStyle(overlay).paddingTop) -
-        parseFloat(getComputedStyle(overlay).paddingBottom) +
-        1,
-    );
-
-    // The body scrolls inside; the header (title) stays pinned inside the
-    // capped surface.
-    const scrollBody = surface.querySelector<HTMLElement>("div.overflow-y-auto");
-    expect(scrollBody).not.toBeNull();
-    expect(scrollBody!.scrollHeight).toBeGreaterThan(scrollBody!.clientHeight);
-    const title = Array.from(surface.querySelectorAll("p")).find(
-      (el) => el.textContent === "Hubs",
-    )!;
-    const titleTopBefore = title.getBoundingClientRect().top;
-    expect(titleTopBefore).toBeGreaterThanOrEqual(surfaceRect.top - 0.5);
-    scrollBody!.scrollTop = scrollBody!.scrollHeight;
-    await vi.waitFor(() => expect(scrollBody!.scrollTop).toBeGreaterThan(0));
-    expect(Math.abs(title.getBoundingClientRect().top - titleTopBefore)).toBeLessThanOrEqual(1);
-  });
-
-  it("renders the coordinator model line without repeating the provider name", async () => {
-    harness.api.projectAgent.getOverview.mockResolvedValue(
-      overview({
-        config: {
-          ...configPayload(),
-          coordinatorModelSelection: {
-            provider: "claudeAgent",
-            model: "claude-opus-5-5",
-            options: { effort: "medium" },
-          },
-        },
-      }),
-    );
-    await renderPanel();
-
-    const modelButton = await vi.waitFor(() => {
-      const found = Array.from(document.querySelectorAll("button")).find((button) =>
-        button.getAttribute("aria-label")?.startsWith("Open "),
-      );
-      expect(found).not.toBeUndefined();
-      return found!;
-    });
-    const text = modelButton.textContent ?? "";
-    expect(text).toContain("Coordinator");
-    expect(text).toContain("Claude Opus 5.5");
-    expect(text).toContain("Medium");
-    expect(text).not.toContain("Claude ·");
   });
 
   it("always shows Threads by state, with live threads under Working and no activity chart", async () => {

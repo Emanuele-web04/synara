@@ -112,6 +112,10 @@ export interface CheckpointStoreShape {
   /**
    * Compute patch diff between two checkpoint refs.
    *
+   * Paths whose change only comes from HEAD moving onto history that existed
+   * before the "from" checkpoint (merge, pull, rebase, checkout, reset) are left
+   * out; edits, conflict resolutions and commits made in range stay.
+   *
    * Can optionally treat missing "from" ref as `HEAD`.
    */
   readonly diffCheckpoints: (
@@ -120,6 +124,9 @@ export interface CheckpointStoreShape {
 
   /**
    * Reverse only the changes between two checkpoints onto the current workspace.
+   *
+   * Uses the same history filtering as `diffCheckpoints`, so Undo never reverts
+   * a merged or checked-out branch it did not show.
    */
   readonly reverseCheckpointDiff: (
     input: ReverseCheckpointDiffInput,

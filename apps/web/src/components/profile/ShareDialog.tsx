@@ -7,10 +7,14 @@
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { SiReddit, SiX } from "react-icons/si";
 import { FaLinkedinIn } from "react-icons/fa6";
-import type { ProfileStats, ProfileTokenStats } from "@synara/contracts";
+import type { AccountProfile } from "@synara/contracts";
 import { Dialog, DialogPopup, DialogTitle } from "~/components/ui/dialog";
-import { CopyIcon, DownloadIcon } from "~/lib/icons";
+import { CopyIcon, DownloadIcon, LinkIcon } from "~/lib/icons";
+import { profileShareUrl, publicProfileDisplayUrl } from "~/lib/accountLogic";
+import { copyTextToClipboard } from "~/hooks/useCopyToClipboard";
+import { localDayKey } from "~/lib/accountUsageAdapter";
 import { cn } from "~/lib/utils";
+import type { ShareCardStats } from "./profileSelectors";
 import { SHARE_CARD_HEIGHT, SHARE_CARD_WIDTH, ShareCard } from "./ShareCard";
 import {
   copyImageToClipboard,
@@ -19,6 +23,7 @@ import {
   renderNodeToPngBlob,
   type ShareTarget,
   shareIntentUrl,
+  shareLinkUrl,
 } from "./shareCardExport";
 import { useTranslation, t } from "~/i18n";
 
@@ -27,27 +32,34 @@ const CARD_EXPORT_SIZE = { width: SHARE_CARD_WIDTH, height: SHARE_CARD_HEIGHT } 
 type CopyResult = "copied" | "render-failed" | "clipboard-unavailable";
 
 interface ShareDialogProps {
-  readonly stats: ProfileStats;
-  readonly tokenStats: ProfileTokenStats | null;
+  /** The selected scope's card numbers (device or account) — see profileSelectors. */
+  readonly cardStats: ShareCardStats;
+  readonly initials: string;
   readonly displayName: string;
   readonly handle: string;
   readonly avatarColor: string;
   readonly avatarImage: string | null;
+  /** Shares link to the account page only when publication and availability are confirmed. */
+  readonly accountProfile: Pick<AccountProfile, "handle" | "public"> | null;
+  readonly publicProfileAvailable: boolean | undefined;
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
 }
 
 export function ShareDialog({
-  stats,
-  tokenStats,
+  cardStats,
+  initials,
   displayName,
   handle,
   avatarColor,
   avatarImage,
+  accountProfile,
+  publicProfileAvailable,
   open,
   onOpenChange,
 }: ShareDialogProps) {
   const { t } = useTranslation();
+  const publicUrl = profileShareUrl(accountProfile, publicProfileAvailable);
 
   const cardRef = useRef<HTMLDivElement>(null);
   const previewRef = useRef<HTMLDivElement>(null);
@@ -115,7 +127,7 @@ export function ShareDialog({
     setStatus(null);
     return copyCardToClipboard()
       .then((copyResult) => {
-        openExternalUrl(shareIntentUrl(target));
+        openExternalUrl(shareIntentUrl(target, shareLinkUrl(publicUrl)));
         setStatus(shareStatusMessage(copyResult));
       })
       .finally(() => {
@@ -133,7 +145,7 @@ export function ShareDialog({
     return renderNodeToPngBlob(node, CARD_EXPORT_SIZE)
       .then((blob) => {
         if (blob) {
-          downloadBlob(blob, `synara-stats-${stats.timezone.today}.png`);
+          downloadBlob(blob, `synara-stats-${localDayKey()}.png`);
           setStatus("Saved PNG to your downloads.");
         } else {
           setStatus("Could not render the image.");
@@ -141,6 +153,17 @@ export function ShareDialog({
       })
       .finally(() => {
         setBusy(null);
+      });
+  };
+
+  const handleCopyProfileLink = (url: string) => {
+    setStatus(null);
+    return copyTextToClipboard(url)
+      .then(() => {
+        setStatus("Profile link copied to clipboard.");
+      })
+      .catch(() => {
+        setStatus("Could not copy the profile link.");
       });
   };
 
@@ -166,8 +189,8 @@ export function ShareDialog({
             >
               <ShareCard
                 ref={cardRef}
-                stats={stats}
-                tokenStats={tokenStats}
+                cardStats={cardStats}
+                initials={initials}
                 displayName={displayName}
                 handle={handle}
                 avatarColor={avatarColor}
@@ -221,7 +244,23 @@ export function ShareDialog({
             </ShareButton>
           </div>
 
-          <p className="min-h-4 text-center text-ui leading-snug text-muted-foreground">
+          {accountProfile &&
+            (publicUrl ? (
+              <button
+                type="button"
+                onClick={() => void handleCopyProfileLink(publicUrl)}
+                className="flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-ui-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              >
+                <LinkIcon className="size-3.5" />
+                {publicProfileDisplayUrl(accountProfile.handle)}
+              </button>
+            ) : (
+              <p className="text-center text-ui-xs leading-snug text-muted-foreground">
+                Your profile is private. Make it public in Edit profile to share a link to it.
+              </p>
+            ))}
+
+          <p className="min-h-4 text-center text-ui-xs leading-snug text-muted-foreground">
             {status ?? ""}
           </p>
         </div>

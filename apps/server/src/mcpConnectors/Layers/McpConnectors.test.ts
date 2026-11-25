@@ -31,8 +31,20 @@ it("restores and publishes saved connectors on the Stable server by default", as
   };
   const stored = new TextEncoder().encode(JSON.stringify({ version: 1, connectors: [connector] }));
   const setConnectorServers = vi.fn();
-  const service = await Effect.runPromise(
-    makeMcpConnectors().pipe(
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const service = yield* makeMcpConnectors();
+      expect(service.enabled).toBe(true);
+      expect(yield* service.list()).toMatchObject([
+        { connectorId: "saved-connector", status: "connected" },
+      ]);
+      expect(setConnectorServers).toHaveBeenCalledWith([
+        { connectorId: "saved-connector", name: "saved_service_connector" },
+      ]);
+      expect(yield* service.setup()).toEqual({
+        redirectUrl: "http://127.0.0.1:3773/oauth/mcp/callback",
+      });
+    }).pipe(
       Effect.provideService(ServerSecretStore, {
         get: () => Effect.succeed(stored),
         set: () => Effect.die("Unexpected write during restore"),
@@ -43,16 +55,7 @@ it("restores and publishes saved connectors on the Stable server by default", as
         mcpEndpointUrl: "http://127.0.0.1:3773/mcp",
         setConnectorServers,
       } as unknown as AgentGatewayCredentialsShape),
+      Effect.scoped,
     ),
   );
-  expect(service.enabled).toBe(true);
-  expect(await Effect.runPromise(service.list())).toMatchObject([
-    { connectorId: "saved-connector", status: "connected" },
-  ]);
-  expect(setConnectorServers).toHaveBeenCalledWith([
-    { connectorId: "saved-connector", name: "saved_service_connector" },
-  ]);
-  expect(await Effect.runPromise(service.setup())).toEqual({
-    redirectUrl: "http://127.0.0.1:3773/oauth/mcp/callback",
-  });
 });

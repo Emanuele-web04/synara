@@ -40,6 +40,8 @@ import {
   buildProviderChildEnvironment,
   registerProviderCredentialKey,
 } from "./providerChildEnvironment.ts";
+import { decodeJwtClaims } from "./jwtClaims.ts";
+import { isCodexApiKeyAuthRecord } from "./provider/codexAccountIdentity.ts";
 
 const CODEX_PROCESS_SHELL_ENV_NAMES = ["PATH", "SSH_AUTH_SOCK"] as const;
 const CODEX_SQLITE_HOME_ENV_NAME = "CODEX_SQLITE_HOME";
@@ -220,6 +222,30 @@ export async function writeCodexOverlayConfigAtomically(
   contents: string,
   hooks: CodexOverlayConfigPublicationHooks = {},
 ): Promise<void> {
+  // Replacing identical config still emits filesystem change notifications. Keep
+  // a private regular file stable, but repair links and loose permissions.
+  try {
+    const before = await fs.lstat(targetPath, { bigint: true });
+    if (
+      before.isFile() &&
+      before.nlink === 1n &&
+      (process.platform === "win32" || (before.mode & 0o7777n) === 0o600n) &&
+      (await fs.readFile(targetPath, "utf8")) === contents
+    ) {
+      const after = await fs.lstat(targetPath, { bigint: true });
+      if (
+        after.dev === before.dev &&
+        after.ino === before.ino &&
+        after.mode === before.mode &&
+        after.mtimeNs === before.mtimeNs &&
+        after.ctimeNs === before.ctimeNs
+      ) {
+        return;
+      }
+    }
+  } catch {
+    // A missing or unreadable existing file still follows atomic publication.
+  }
   const temporaryPath = `${targetPath}.${process.pid}.${randomUUID()}.tmp`;
   try {
     await fs.writeFile(temporaryPath, contents, {
@@ -634,17 +660,6 @@ function codexAuthSecretSafeHash(value: string): string {
   return `sha256:${createHash("sha256").update(value).digest("hex")}`;
 }
 
-function readCodexAuthJwtClaims(value: unknown): Record<string, unknown> | undefined {
-  const token = codexAuthNonEmptyString(value);
-  const payload = token?.split(".")[1];
-  if (!payload) return undefined;
-  try {
-    return asRecord(JSON.parse(Buffer.from(payload, "base64url").toString("utf8")));
-  } catch {
-    return undefined;
-  }
-}
-
 function firstCodexAuthString(
   records: readonly (Record<string, unknown> | undefined)[],
   keys: readonly string[],
@@ -677,12 +692,14 @@ function readCodexPreparedAuthIdentity(content: Buffer | undefined): CodexPrepar
       return { state: "present", authMode: "unknown", identity: contentIdentity, fallback: true };
     }
     const tokens = asRecord(auth.tokens);
-    const idTokenClaims = readCodexAuthJwtClaims(tokens?.id_token ?? tokens?.idToken);
+    const idTokenClaims = decodeJwtClaims(
+      codexAuthNonEmptyString(tokens?.id_token ?? tokens?.idToken),
+    );
     const rawMode = codexAuthNonEmptyString(auth.auth_mode ?? auth.authMode)?.toLowerCase();
     const apiKey = codexAuthNonEmptyString(
       auth.OPENAI_API_KEY ?? auth.openai_api_key ?? auth.apiKey,
     );
-    if (rawMode === "apikey" || rawMode === "api-key" || (apiKey && !tokens)) {
+    if (isCodexApiKeyAuthRecord(auth)) {
       return {
         state: "present",
         authMode: "api-key",
@@ -1450,9 +1467,7 @@ async function withSharedContinuationLock<T>(
     await sleep(SYNARA_SHARED_CONTINUATION_LOCK_POLL_MS);
   }
 
-  try {
-    return await operation();
-  } finally {
+  const release = async () => {
     const observed = await readSharedContinuationLock(lockPath);
     if (!observed || !sameSharedContinuationLock(ownership, observed)) {
       throw new Error(
@@ -1464,7 +1479,25 @@ async function withSharedContinuationLock<T>(
         `Lost ownership of Codex continuation lock ${lockPath} during release; no successor was removed.`,
       );
     }
+  };
+
+  let result: T;
+  try {
+    result = await operation();
+  } catch (operationError) {
+    try {
+      await release();
+    } catch (releaseError) {
+      throw new AggregateError(
+        [operationError, releaseError],
+        `${String(operationError)}\nCould not release the Codex continuation lock: ${String(releaseError)}`,
+        { cause: operationError },
+      );
+    }
+    throw operationError;
   }
+  await release();
+  return result;
 }
 
 function isSharedContinuationEntry(entryName: string): boolean {

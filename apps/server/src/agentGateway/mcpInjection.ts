@@ -8,20 +8,21 @@
  * - Codex: a shared endpoint-only TOML block plus per-thread HTTP authorization,
  *   or the legacy `bearer_token_env_var` transport for environment-based callers.
  * - Claude Agent SDK: `mcpServers` record with an HTTP entry.
- * - ACP agents (cursor/grok/droid): `mcpServers` session entries; HTTP when
+ * - ACP agents (cursor/grok/droid/antigravity): `mcpServers` session entries; HTTP when
  *   the agent advertises `mcpCapabilities.http`, otherwise a stdio proxy that
  *   forwards to the HTTP endpoint.
  *
  * @module agentGateway/mcpInjection
  */
 import type * as Acp from "@agentclientprotocol/sdk";
+import { SYNARA_MCP_SERVER_NAME } from "@synara/shared/mcpConnectors";
+export { SYNARA_MCP_SERVER_NAME } from "@synara/shared/mcpConnectors";
 
 import type {
   AgentGatewayMcpConnection,
   AgentGatewayStdioProxySpawn,
 } from "./Services/AgentGatewayCredentials.ts";
 
-export const SYNARA_MCP_SERVER_NAME = "synara";
 export const SYNARA_AGENT_GATEWAY_TOKEN_ENV = "SYNARA_AGENT_GATEWAY_TOKEN";
 export const SYNARA_AGENT_GATEWAY_BOOTSTRAP_TOKEN_ENV = "SYNARA_AGENT_GATEWAY_BOOTSTRAP_TOKEN";
 export const SYNARA_AGENT_GATEWAY_URL_ENV = "SYNARA_AGENT_GATEWAY_URL";
@@ -241,50 +242,6 @@ export function buildClaudeMcpServers(
 
 export type AcpStdioProxySpawn = AgentGatewayStdioProxySpawn;
 
-export interface AntigravityMcpPluginConfig {
-  readonly mcpServers: Record<
-    string,
-    {
-      readonly command: string;
-      readonly args: ReadonlyArray<string>;
-      readonly env: Record<string, string>;
-      readonly disabled: false;
-      readonly disabledTools: ReadonlyArray<string>;
-    }
-  >;
-}
-
-/**
- * Build the secret-free MCP fragment installed with Synara's Antigravity
- * plugin. Antigravity expands the endpoint plus a one-shot bootstrap value
- * from each `agy` process. The stdio proxy consumes that value during MCP
- * initialization and keeps the exchanged session bearer in its own memory,
- * so `run_command` descendants never inherit the bearer.
- *
- * `ELECTRON_RUN_AS_NODE` keeps the generated proxy runnable when a packaged
- * desktop uses its Electron executable as `process.execPath`; it is harmless
- * for regular Node and Bun executables.
- */
-export function buildAntigravityMcpPluginConfig(
-  stdioProxy: AcpStdioProxySpawn,
-): AntigravityMcpPluginConfig {
-  return {
-    mcpServers: {
-      [SYNARA_MCP_SERVER_NAME]: {
-        command: stdioProxy.command,
-        args: [...stdioProxy.args],
-        env: {
-          [SYNARA_AGENT_GATEWAY_URL_ENV]: `$${SYNARA_AGENT_GATEWAY_URL_ENV}`,
-          [SYNARA_AGENT_GATEWAY_BOOTSTRAP_TOKEN_ENV]: `$${SYNARA_AGENT_GATEWAY_BOOTSTRAP_TOKEN_ENV}`,
-          ELECTRON_RUN_AS_NODE: "1",
-        },
-        disabled: false,
-        disabledTools: [],
-      },
-    },
-  };
-}
-
 // Structural view of an ACP initialize response so callers with untyped
 // (raw JSON) responses can reuse the same transport negotiation.
 export interface AcpInitializeCapabilitiesView {
@@ -311,8 +268,6 @@ export function buildAcpSynaraMcpServers(input: {
     const headers = [{ name: "Authorization", value: authorizationHeader(input.connection) }];
     return [
       { type: "http", name: SYNARA_MCP_SERVER_NAME, url: input.connection.url, headers },
-      // Connectors need Streamable HTTP sessions, which the stdio proxy below
-      // does not carry, so stdio-only agents run without them.
       ...(input.connection.connectors ?? []).map(
         (connector): Acp.McpServer => ({
           type: "http",
@@ -335,5 +290,15 @@ export function buildAcpSynaraMcpServers(input: {
         { name: "ELECTRON_RUN_AS_NODE", value: "1" },
       ],
     },
+    ...(input.connection.connectors ?? []).map((connector) => ({
+      name: connector.name,
+      command: input.stdioProxy.command,
+      args: [...input.stdioProxy.args],
+      env: [
+        { name: SYNARA_AGENT_GATEWAY_URL_ENV, value: connector.url },
+        { name: SYNARA_AGENT_GATEWAY_TOKEN_ENV, value: input.connection.bearerToken },
+        { name: "ELECTRON_RUN_AS_NODE", value: "1" },
+      ],
+    })),
   ];
 }

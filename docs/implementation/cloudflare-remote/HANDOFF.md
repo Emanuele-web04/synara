@@ -1,0 +1,895 @@
+# Remote connections — punto di ripartenza
+
+## Delivered — Remote .29 and TestFlight 0.1 (153) — 2026-10-23
+
+- Published [Synara Remote 1.0.6-remote.29](https://github.com/Emanuele-web04/synara/releases/tag/v1.0.6-remote.29)
+  for Mac Apple Silicon, Windows x64 and Linux x64. The immutable release source is
+  `b975d335426befde70be2c1c10c0a5df9fadc3e5`. All **11 public assets**, three Remote
+  update feeds and platform provenance records were checked against that source,
+  the release lockfile and public payload hashes. Stable Latest remains unchanged.
+- Universal iPhone/iPad TestFlight **0.1 (153)** is now **Testing** in both existing
+  tester groups, from native source `207feef4c7389409909e3ba0c1233a8593dfbe45`.
+  The native availability handoff is recorded in `f4140d71` of its own repository.
+- Includes all 21 upstream commits through `29b11e10`, including the chat and
+  Environment actions, trailing new-tab control and continuous landing pattern
+  beneath the composer's surface. Remote retains its separate identity and feeds,
+  retained-process update admission and controller-backed frame presentation.
+  Native background-task replay corrects only provisional stops; completed or
+  failed outcomes cannot be reopened by ordinary late events.
+- Verification: **66 selected browser integration cases**, **352 native Core tests
+  / 38 suites** and **87 wire-contract checks** passed. The
+  [exact-tag release CI](https://github.com/Emanuele-web04/synara/actions/runs/39981445955)
+  finished green on attempt 2, including quality, the complete server suite and
+  packaged startup on all three desktop platforms. The earlier three local test
+  failures were repaired in tests only; both affected files pass **350 tests**,
+  preserving data and task-outcome assertions without changing production migrations,
+  adding skips or increasing timeouts.
+- The first Windows runner stalled during packaged startup and was cancelled only
+  after direct user approval. Its exact stalled subphase was not established.
+  A fresh run of the same immutable tag passed; no tag moved or qualification gate
+  was weakened. Mac signing/notarization passed. Windows remains explicitly
+  unsigned for this release; its version-scoped exception was restored to the
+  prior repository value `1.0.9-beta.1`. Fresh Defender evidence matches the public
+  Windows installer.
+- Limits: this pass did not exercise a real Devin/new-provider turn, a physical
+  iPhone, or a manual upgrade of the real Mac apps, and does not qualify every Linux
+  compositor. It did not install or restart the user's Mac apps, modify their data,
+  generate keys or change signing configuration. Earlier entries below are the
+  historical preparation timeline, including their then-current build counts.
+
+## Main integration and next release preparation — 2026-10-23
+
+- Integrated the 21 upstream commits through `29b11e10` with ordinary merges,
+  preserving the published Remote history and separate app identity. This includes
+  provider stop/recovery, Devin background work, Hub routing, captured turn diffs,
+  persisted Activity grouping, terminal reuse, window behavior and Stable 1.0.8
+  documentation, verified download references and the continuous landing pattern
+  beneath the composer's own surface. The source branch keeps its Remote versions; release assembly
+  assigns the next Remote version separately.
+- Remote software-update admission now also checks retained provider sessions.
+  Failed process cleanup or a failed retained-session read keeps restart blocked;
+  filtering a session out of the live routing list is not evidence of cleanup.
+- Remote workspace frames inherit only the controller's display backing metadata.
+  Existing Mac controllers retain their prior presentation when the new getter is
+  absent; an explicit opaque result remains authoritative. No native operation or
+  new permission is exposed to the frame.
+- Companion iOS source reconciles only explicit provider corrections of provisional
+  stops. Ordinary late events cannot reopen genuinely completed or failed tasks;
+  sparse updates retain launch details. This does not add a native captured-turn
+  diff viewer or prove live provider/process behavior on every platform.
+- Local checks include the complete server run and focused repairs of its three
+  test failures: Node 24 reused pre-ALTER `SELECT *` metadata in two historical
+  fixtures, and a Claude test waited for a stale event intentionally suppressed by
+  Remote. Fresh canonical-column assertions and an observable live-task barrier
+  retain the data/outcome checks; both complete files pass **350 tests**. No
+  production migration, skipped test or increased timeout was needed.
+- Native Core passes **352 tests / 38 suites**. Release qualification is still in
+  progress; the last confirmed published builds remain Remote **.28** and universal
+  TestFlight **0.1 (152)** until their successors are independently verified.
+- All **60 selected browser integration cases** pass. Two apparent tab-control
+  failures came from desktop fixtures extending beyond the mobile-sized test
+  viewport; explicit desktop bounds and viewport restoration retain every original
+  geometry and click assertion without changing production UI.
+
+## Recupero dopo il vecchio rifiuto — 17 ottobre 2026
+
+- Remote .14 ha accesso pubblico alle funzionalità Remote, senza pagamento o
+  abilitazione manuale degli account. Verifica live ripetuta con un account fuori
+  dalla vecchia lista: grant, creazione codice QR e autorizzazione host riusciti;
+  invito temporaneo annullato senza abbinare dispositivi.
+- Riprodotto un ulteriore bug desktop: il rifiuto di enrollment veniva trattato
+  come revoca permanente dell'host, fermando i controlli e revocando i device
+  locali. Il sorgente ora sospende subito l'accesso e continua i controlli per
+  quella risposta specifica, conservando la fiducia. Revoche vere e account
+  diversi restano bloccati. Questo fix richiede una futura release desktop;
+  non ripristina automaticamente fiducia già revocata dalle vecchie versioni.
+- L'E2E ha trovato anche un crash presente nella .14: entrando nella home remota
+  con chat già esistenti, `/` diventava un ID chat vuoto. Corretto il controllo
+  della selezione, senza cambiare layout o controlli. Aggiornato l'E2E del QR ai
+  dialog attuali e all'approvazione tramite grant del proprietario, verificando
+  la chiave esatta del dispositivo registrato.
+- Per chi è rimasto sul vecchio rifiuto nella .14: uscita completa dall'app e
+  riapertura, poi codice nuovo. Se la fiducia era già stata revocata, normale
+  nuovo abbinamento. Reinstallare la stessa .14 non corregge il crash né ripara
+  la fiducia revocata; non cancellare i dati locali. I due fix desktop restano
+  da includere in una release successiva; nessuna nuova build iOS necessaria.
+- Verifica finale: E2E completo 18/18 sulla build corretta, con PostgreSQL
+  temporaneo e due home isolate; 16/16 test autorizzazione/ingress/connectivity;
+  web 5.669 passati / 3 saltati. Build, formatting, lint e typecheck passano.
+  Suite repository dopo il fix enrollment: 18.278 passati / 278 saltati; il
+  successivo controllo della home remota è coperto dalla web suite e dall'E2E
+  finali. API live verificata separatamente; Cloudflare/WorkOS/provider nell'E2E
+  sono fixture. Nessun dato delle app installate modificato.
+
+## Accesso beta pubblico e aggiornamento main — 16 ottobre 2026
+
+- Integrati i 7 commit di main fino a `7cfd65d`, inclusa la preparazione Stable
+  1.0.6. Fix Codex: turni vivi e recupero,
+  handoff senza replay, metadati moderazione fuori dalla chat, cache modelli
+  degradata temporanea. Entrambi i gruppi del conflitto nei test sono conservati.
+- Autorizzata la beta per tutti gli account: aggiunta l'impostazione backend
+  `REMOTE_BETA_ACCESS_ENABLED`, senza togliere ownership, prova device e pairing.
+  Passano 18.276 test workspace e tutti i 374 test API su PostgreSQL temporaneo.
+- **Accesso beta verificato live:** il rollout gestito Cloudflare
+  `53328200-c9e9-4b42-9a9c-f44dd102e792` ha aggiornato il container alla versione
+  23 mantenendo immagine e risorse. L'account di test esterno alla vecchia lista
+  ora ottiene un grant reale (200); richieste anonime (401) e device non registrati
+  (403) restano rifiutati. Nessuna migrazione o modifica agli account dei Mac.
+  Chi ha già Remote .14 non deve riscaricare l'app: riprovare la connessione.
+  Nessuna nuova build iOS/iPadOS necessaria per questo cambio backend.
+
+## Login GitHub Production — 16 ottobre 2026
+
+- Provider GitHub configurato, abilitato e validato in WorkOS Production. Callback
+  Supabase e segreto precedenti conservati; aggiunto il callback esatto WorkOS e
+  salvato il nuovo segreto solo in WorkOS. Nessun permesso repository o pagamento.
+- Ripristinato nel sorgente il pulsante GitHub esistente, sul percorso SSO comune
+  a Google e Apple. Passano 7 test browser, formattazione, lint, typecheck e build
+  desktop. Le warning lint preesistenti restano.
+- La copia con dati temporanei arriva al consenso GitHub; consenso finale e
+  ritorno nell'app ancora da verificare. Account dei Mac e dati esistenti intatti.
+  Nessuna nuova release: la .14 pubblicata continua a mostrare Google/Apple/email.
+
+## Remote .14 e stato TestFlight — 16 ottobre 2026
+
+- Pubblicata [Remote 1.0.6-remote.14](https://github.com/Emanuele-web04/synara/releases/tag/v1.0.6-remote.14),
+  commit `55ded6c1543a98679f8ac503c447d19cfb3906e9`: Mac Apple Silicon,
+  Windows x64 e Linux x64. CI completa verde, hash/provenienza dei download e
+  firma/notarizzazione Mac verificati. Windows usa la policy unsigned della sola
+  versione .14. Stable Latest e feed storici invariati.
+- Corretti il default API mancante nelle installazioni pulite e l'opt-in shell
+  superfluo della sincronizzazione profilo Remote. Restano validi gli override
+  espliciti, l'opt-out e l'issuer degli account salvati. Nel login Remote compaiono
+  Google, Apple ed email; GitHub resta disponibile nei build generici configurati.
+- TestFlight universale **0.1 (136)** compatibile: ora **in attesa di revisione
+  Apple** per gli esterni. Aggiornato il link desktop nelle istruzioni dei tester.
+  Invito TestFlight e abilitazione dell'account alle connessioni restano distinti.
+- Analytics Cloudflare verificati senza leggere contenuti: default off;
+  copertura nativa provider/token/turni completati ancora incompleta. Non usare
+  gli eventi client come conteggio globale univoco o contatore di fatturazione.
+- Prova visiva della .14 scaricata, con dati temporanei e senza override API:
+  Google/Apple/email corretti; invio reale del codice riuscito e schermata
+  **Check your email** raggiunta. Codice non consumato e copia temporanea chiusa.
+  Nessun nuovo login completato, aggiornamento delle app installate, intervento
+  sul telefono fisico o servizio a pagamento in questa consegna.
+
+Dettagli e limiti: [checkpoint di consegna](STATUS.md#remote-14-delivery--2026-10-16)
+e [audit analytics](PRODUCT-ANALYTICS-AUDIT.md).
+
+## Main 1.0.5 / 1.0.6 Beta — 15 ottobre 2026
+
+Integrato main `34a6aef` nel branch pubblico con un merge, senza riscrivere i
+commit già condivisi. Backup precedente:
+`codex/backup-remote-before-main-20261015` (`c7f4aec`).
+
+- Conservati composer/capsule, permessi Claude, deduplicazione utilizzo Claude,
+  conteggio cache, recupero provider e correzioni di focus/streaming di main.
+- Sidebar remota adattata alle sole chat principali; selezionare un subagent
+  evidenzia la chat radice senza segnare come letta una chat diversa. Paging e
+  scorciatoie usano la stessa lista, anche tra computer con ID chat uguali.
+- Activity usa lo stato pubblicato dal computer proprietario anche per Priority.
+- Il conteggio profilo mantiene l'attribuzione per sessione/model/effort del
+  branch e aggiunge i cache-read delta di main, inclusi nel totale.
+- Connector MCP Beta registrati nel server/RPC. Elenco e disconnessione seguono
+  il computer proprietario; configurazione e login OAuth restano locali al
+  computer che riceve il callback loopback. Nessun fallback al controller.
+- Inline visuals seguono la promozione Stable di main. Connessioni remote,
+  profilo cloud e Inbox account mantengono i gate del branch.
+- iPhone/iPad: contratto cache token e data dell'ultimo messaggio umano,
+  descrizioni dei permessi specifiche per provider, sidebar senza subagent e
+  Priority stabile finché si cambia vista/filtro o si svuotano le righe lette.
+  Le correzioni del runtime provider si eseguono sul Mac aggiornato.
+
+Verifiche desktop: suite workspace eseguita per tutti i pacchetti. Il server è
+stato completato con rilanci mirati dopo esaurimento dello spazio temporaneo:
+630 file di test passati, 3 già saltati. Corretto il segnale di avvio del processo
+fittizio nel test Claude (scrittura atomica del PID); le verifiche di terminazione
+restano invariate. I test API che richiedono PostgreSQL (217) restano saltati in
+questa esecuzione; 148 test API passati. I 28 test browser Activity passano.
+Formatting, lint (zero errori), typecheck (12 pacchetti), controllo Windows e
+lineage migrazioni (103 tag pubblicati) passati. Nessuna migrazione rinumerata.
+
+Nel controllo mobile sono emerse tre regex ICU invalide per i conteggi `+/-`
+e alias legacy di provider duplicati nel picker: corretti su iPhone/iPad, senza
+unire istanze/account diversi. Allineate fixture obsolete ai contratti di
+identità e ordinamento già in uso; nessuna rimozione delle protezioni anti-replay.
+
+Nessun deploy, modifica a credenziali, account o database applicativi; nessuna
+installazione sull'iPhone fisico. Provider reali, login, APNs e Windows
+confezionato non sono stati nuovamente provati in questo aggiornamento. Le build
+del simulatore sono artefatti di sviluppo, non release firmate/TestFlight.
+
+## Rebase main — 12 ottobre 2026
+
+Aggiornato a main `d450964` preservando la struttura dei merge e verificando il
+tree completo contro il merge a tre vie del backup
+`codex/backup-remote-before-rebase-20261012` (`c0f6c4a`).
+
+- Integrati recupero dei transcript semplificato, protezione dal replay dei
+  comandi provider orfani, autorizzazioni Hub e compatibilità Claude Auto.
+- Hub e Library seguono la promozione Stable di main. Connessioni remote,
+  sincronizzazione profilo e Inbox account mantengono i rispettivi gate Beta.
+  Il principal remoto e il blocco del controllo nativo da remoto restano invariati.
+- iPhone/iPad: rimosso il rifiuto locale degli Hub basato sul canale Stable;
+  disponibilità e autorizzazioni restano verificate dal computer proprietario.
+  Il client già richiede snapshot completi, sostituisce le righe confermate e
+  richiede un nuovo snapshot sui rollback. Non usa le finestre di cronologia
+  eliminate da main e non attiva i replay batch.
+- Nessuna modifica a database delle app, configurazioni di produzione o credenziali.
+
+Verifica: 17.426 test passati nei sei pacchetti interessati, 38 già saltati.
+Nei 261 test browser selezionati, 258 passano al primo giro; due fallimenti non
+si riproducono senza le build concorrenti, e il test delle dodici righe viene
+corretto per misurare il paragrafo anziché il wrapper. Tutti e tre passano nella
+verifica isolata finale, mantenendo le soglie originali. Typecheck, lint,
+formatting, Windows boundary e migration-lineage verificati. Mobile: 254 test core,
+19 test e build passati su ciascun simulatore, con un test a due desktop saltato
+per assenza delle fixture. Nessun test su telefono fisico o pacchetto Windows.
+
+## Claude e recupero runtime — 11 ottobre 2026, aggiornamento successivo
+
+Integrato main `7003742` dopo il rebase precedente. Il runtime desktop usa Claude
+Agent SDK `0.3.296`; la conferma di ripresa è disattivata di default. Se abilitata,
+si applica alle sessioni grandi inattive, senza bloccare invii di agenti/automazioni.
+Incluse anche la riconciliazione degli avvii fermi e la ripresa del socket senza
+ripetere le mutazioni. Le connessioni remote rinegoziano la propria attachment.
+
+I client iPhone/iPad conservano `claudeCacheReview` negli snapshot e mostrano una
+scelta nativa nell'area di recupero del composer: riassunto, sessione completa,
+non chiedere più, annullamento. Il comando risponde al review del Mac proprietario:
+non crea un secondo turno. Una richiesta in attesa non scade come startup fallita;
+il composer e la coda attendono che venga risolta. Gli stati incerti non offrono
+un nuovo invio. La preferenza «non chiedere più» aggiorna soltanto Claude sul Mac
+proprietario. Le nuove versioni desktop e mobile vanno installate insieme per
+avere sia i fix del runtime sia la gestione della conferma sul telefono.
+
+Verifica: 17.397 test passati nei sei pacchetti interessati (server, web,
+shared, contracts, desktop, scripts), con 38 test già saltati; 29 test browser
+per conferma Claude e sidebar; formatting, lint, typecheck e controllo boundary
+Windows passati. Mobile: 254 test core; 19 test app su ciascun simulatore,
+con un test di integrazione a due desktop saltato per assenza delle fixture.
+Build finali iPhone/iPad passate. Non verificati una sessione Claude reale dopo
+70 minuti di inattività o un pacchetto Windows eseguito su Windows.
+
+## Integrazione main e parità mobile — 11 ottobre 2026
+
+Branch aggiornato tramite rebase a `ec8c940e` di main. Il backup completo precedente
+è `codex/backup-remote-apns-before-main-20261011` (`5172390`), inclusi gli aggiornamenti
+APNs. Il confronto a tre vie usa il tree completo del backup: conserva anche le
+risoluzioni presenti nei vecchi merge, che il semplice replay lineare non ricrea.
+
+- Hub: le richieste remote mantengono il principal verificato; non diventano thread
+  locali e non aggirano la proprietà dei worker o la revoca delle connessioni.
+- Stop: mantenuto il completamento immediato quando il runtime è terminato, con
+  confronto della sessione per non interrompere un turno sostitutivo.
+- SQLite: main 1–134 invariato; migrazioni private spostate a 135–139. Riconosciuta
+  anche la precedente lineage privata 132–136. Upgrade verificati su database
+  temporanei con dati sentinella per account, pairing, fiducia e revoche.
+- iOS e iPadOS: i contatori di orchestrazione non vengono usati come sequenze del
+  provider; i fork conservano `dispatchOrigin`; la durata dei turni può essere
+  ricostruita dai checkpoint quando le attività storiche non sono più disponibili.
+  La cronologia completa resta compatibile: il client non richiede finestre parziali.
+- Nessuna migrazione dei database delle app, deploy API o modifica a Supabase
+  eseguita per questo aggiornamento. Nessuna modifica alle scelte dei modelli.
+
+Verifiche finali: fmt, lint (zero errori), typecheck, migration-lineage e Windows
+runtime boundary passati. Suite workspace completata per pacchetti: 8.641 test
+server, 5.581 web, 1.414 desktop; API 362/362 su PostgreSQL temporaneo, più contratti,
+shared, script, profili e analytics. I primi tentativi avevano incontrato il limite
+del sandbox sui listener e poi spazio disco esaurito durante le build; gli artefatti
+temporanei creati nel passaggio sono stati rimossi e i controlli interessati ripetuti.
+Il singolo timeout sotto carico passa anche isolatamente. Test browser mirati: 45/45.
+Mobile: 252 test core e 9 test transcript su ciascun simulatore, iPhone e iPad,
+passati. Nessuna nuova prova di provider reali, Windows confezionato o consegna APNs.
+
+## Integrazione main e parità mobile — 8 ottobre 2026
+
+Integrato `origin/main` fino a `587dd3c` nella PR #1412 tramite merge, senza
+riscrivere i commit condivisi o modificare il worktree con cambi locali alla
+pagina profilo. Risolti 20 file in conflitto conservando le connessioni per
+computer, i frame remoti, il pairing e la lineage delle migrazioni 131–136.
+La patch Effect combina la gestione errori NodeSink di main con il cleanup
+NodeRuntime già presente nel branch; lockfile aggiornato dalla reinstallazione.
+
+- Tema Synara aggiornato con superfici e accenti Light/Dark di main. Il frame
+  remoto continua a usare la presentazione del controller e non mostra onboarding.
+- Create project unisce selezione computer/nome e cartelle aggiuntive di main:
+  trasmette `additionalFolders` anche al proprietario remoto, mantiene il campo
+  principale stabile e ignora i risultati browse di un computer precedente.
+- Ricerca messaggi persistiti locale integrata; un risultato locale non può
+  comparire su una chat remota con lo stesso ID. La ricerca remota conserva
+  titolo/progetto/computer: non interroga ancora lo storico messaggi remoto.
+- Busy status e finalizzazione RPC convivono con analytics e controllo generazione.
+  Mantenute anche correzioni provider, streaming/recovery, keep-awake e priorità
+  processi di main; nessuna modifica alle scelte provider dell'operatore.
+- iPhone PR #1 allinea i token tema (senza azzerare preferenze), conserva i nuovi
+  campi progetto e usa keepalive 5 s / silenzio 180 s con attività server monotona.
+  Overflow stream: otto retry con backoff prima del recupero supervisor esistente.
+  iPad PR #2 integra la base iPhone aggiornata conservando sidebar/split adattivo.
+  UI mobile multi-folder e retry manuale per-stream desktop non sono dichiarati.
+
+Verifica con Node 24.21.0: 16.884 test workspace passati, 254 saltati, più 54 test
+browser su creazione progetto, ricerca e sidebar. I task dei pacchetti sono stati
+completati in due passaggi: una vecchia aspettativa del colore profilo è stata
+corretta per il nuovo tema e web/server sono stati rieseguiti interamente.
+fmt:check, lint (950 warning, zero errori), typecheck, migrations:check e
+windows-runtime:check passati. I 203 test API con database non configurato restano
+saltati; il check Windows non qualifica un pacchetto Windows installato.
+
+Per ciascun branch mobile: 249 test SwiftPM, 82 fixture contro i contratti desktop,
+build Debug app/widget per simulatore riusciti. Avvio con fixture isolate osservato
+su iPhone 18 Pro e iPad Pro 11 (tema e layout compatto/split); rilanciati poi senza
+argomenti di test. Nessun XCTest, telefono fisico, nuovo login/pairing/provider live,
+deploy cloud, merge delle PR o release firmata. CI GitHub mobile bloccata dal limite
+billing/spesa dell'account: non è dichiarata verde sulla base dei controlli locali.
+
+## Presentazione locale e remota — 7 ottobre 2026
+
+La connessione conserva l'esecuzione nel frame del computer proprietario, ma
+la presentazione appartiene alla finestra del controller. Il frame remoto
+saltava il contenitore rail della vista locale: mancavano fascia superiore,
+margini, bordi e stato degli angoli della sidebar. Inoltre l'assenza del preload
+Electron lo faceva classificare come browser per tema e controlli visivi.
+
+Le due viste ora riusano `ChatShell`; lo stato della sidebar del controller
+pilota gli stessi stili. `isDesktopPresentation` distingue l'aspetto desktop
+dalla disponibilità di `nativeApi`/`desktopBridge`, che restano isolati. Le query
+responsive JavaScript leggono il viewport del controller, non la larghezza del
+solo riquadro remoto. Il frame trasparente evita di ridipingere sopra il
+rivestimento della finestra. Nessuna modifica a provider, pairing o API remote.
+
+Verifica: 5.101 test web passati, 3 saltati; 8 test browser su contenitore,
+controlli della sidebar e traslucenza. Le nuove regressioni falliscono usando
+il contenitore remoto precedente e il rilevamento limitato al singolo frame.
+fmt/lint/typecheck passati (928 warning lint preesistenti, zero errori).
+
+MacBook: app Dev ricostruita e riaperta nella stessa home. Confronto visivo
+locale/remoto sulla chat già completata `RUN ON MINI OK`: cornice, margini e
+fascia superiore coerenti; sidebar remota chiusa e riaperta correttamente,
+poi ripristinata allo stato iniziale. Mini ancora connesso e presente in Run on.
+Nessun nuovo turno provider necessario per questa verifica grafica. Il test
+non qualifica ogni dimensione della finestra o lo zoom personalizzato.
+
+## Run on dopo il riavvio — 7 ottobre 2026
+
+Riprodotto nell'app nativa MacBook: Settings mostrava il Mini connesso su
+Cloudflare e le RPC autenticate funzionavano, ma Run on elencava solo This
+computer. Il selettore leggeva le sessioni renderer, ripristinate soltanto da
+sessionStorage; le connessioni persistenti del backend non le ripopolavano in
+una nuova finestra. Aprire prima il Mini da Settings mascherava il difetto.
+
+WorkspacePanels ora riusa le query account/connessioni per recuperare i frame
+mancanti dalle connessioni verificate, incluse quelle idle. Servono pairing
+confermato per host/environment e corrispondenza di account, organizzazione e
+authority. Il controller locale e gli stati terminali vengono esclusi. Nessuna
+fusione per hostname, attivazione automatica di una chat o sostituzione dei
+frame esistenti durante il polling; una risposta di un account precedente non
+può riaggiungere workspace. Il recupero riusa il registro condiviso da Run on,
+progetti e sidebar, senza introdurre un secondo elenco di computer.
+
+Verifica reale nella stessa app/home del MacBook dopo quit e avvio a freddo,
+senza aprire Settings o una chat remota: Mini presente una sola volta e
+selezionabile in Run on. La selezione crea la bozza remota
+`a9728f98-c7a2-47b4-a387-80256d891fe6`; risposta provider reale `RUN ON MINI OK`,
+proprietario e turno completato confermati da RPC autenticata. Bozza locale,
+modello, account e pairing preservati. Build nativa e controlli locali riusciti.
+Le regressioni del registro verificano recupero a finestra vuota, polling senza
+duplicati e rifiuto delle identità non verificate/di un altro account; fallivano
+senza il recupero. Revoca, cambio account e offline non sono stati riprovati
+live in questa specifica verifica; non è una qualificazione del pacchetto firmato.
+
+Verifiche del delta: fmt/lint/typecheck e 9 test del registro passati; suite
+completa con 16.255 test passati, 251 saltati e 11/11 task riusciti (7m34s).
+
+## New thread sul computer remoto — 7 ottobre 2026
+
+Riprodotto nell'app MacBook: il pulsante globale New thread apriva Create project
+mentre era selezionata una chat del Mini. Il suo handler cercava soltanto nei
+progetti locali; il pulsante del progetto remoto e la scorciatoia nel frame
+usavano invece il proprietario corretto.
+
+`6142e4817` instrada l'azione globale, compresi Activity e palette, alla sessione
+remota selezionata e al suo progetto attivo, riusando `navigation.newChat` e
+`openWorkspacePath`. Se il computer è offline mostra un errore e non crea una
+chat locale per ripiego. Il comportamento locale rimane invariato. Passano 36
+test esistenti su ownership, scelta progetto e conservazione delle bozze,
+fmt/lint/typecheck. La regressione del pulsante è riprodotta nell'app reale;
+questi test unitari da soli non coprono il wiring completo della sidebar.
+
+Verifica dopo il fix nella vera app MacBook ricostruita: New thread globale
+apre la bozza in Demo iPhone sul Mini senza Create project, conserva il modello
+selezionato e avvia una nuova chat distinta (`d9f696bf-8fa4-4f79-9b94-c7a37d546041`).
+Ricevuta la risposta reale `GLOBAL CHAT OK`. La precedente prova tramite il
+pulsante del progetto aveva già ricevuto `CHAT START OK` in un’altra chat.
+Account, pairing e bozze conservati; nessun file del progetto modificato dai
+turni di prova. Il normale caso locale senza progetti conserva Create project.
+
+## Codice rifiutato alla creazione — 7 ottobre 2026
+
+Sul MacBook la normale creazione del codice falliva prima di mostrare il QR,
+con “The pairing code is invalid, used, or expired”. Identità, account,
+workspace e host coincidevano. Pubblicare lo stesso tipo di invito con 30
+secondi in meno di durata riusciva: il client usava esattamente il limite API
+di dieci minuti, senza margine per piccoli scarti d'orologio.
+
+`1b80cbc7a` riduce a nove minuti la scadenza dell'invito persistito e pubblicato.
+Il limite e le verifiche dell'API rimangono invariati. Il dialogo riutilizza il
+pulsante esistente per offrire Try again quando la creazione iniziale fallisce.
+Le due regressioni falliscono prima della correzione; dopo passano 12 test
+server con SQLite reale e 8 test browser. fmt/lint/typecheck passati (928 warning
+lint, zero errori), build desktop/CLI/web completata. Nessuna migrazione o
+modifica delle credenziali.
+
+Mini aggiornato nella stessa home: generazione del codice sull'API reale
+riuscita. Un nuovo invito consegnato al simulatore iPhone tramite deep link
+arriva a “Connected to Macmini-di-Emanuele”; il server conferma l'abbinamento
+della chiave del simulatore già autorizzata. Nessun telefono fisico usato.
+La prova copre creazione, riscatto e pairing; non è una prova di scansione
+ottica della fotocamera o di un nuovo turno provider.
+
+MacBook aggiornato: Add mostra QR e codice nella normale UI, Cancel revoca
+solo l’invito di prova e non restano inviti inutilizzati. I 20 test mirati e
+i controlli di build/formato/lint/tipi passano anche sul MacBook.
+
+## Directory e computer abbinati — 7 ottobre 2026
+
+La lista “Computers you can control” usava l'intera directory account: vecchie
+installazioni con lo stesso hostname comparivano come duplicati e proponevano
+Connect senza pairing locale. Il MacBook corrente era già escluso; l'altra
+riga era una vecchia installazione. Ora `hosts.listConnections` espone gli ID
+dei pairing confermati nello scope controller/account/workspace, separati
+dalle connessioni attive e da quelle da riconnettere automaticamente. La UI
+incrocia host ID e environment ID, esclude il controller e conserva i pairing
+disconnessi. Nessuna fusione per hostname, cancellazione account o migrazione.
+Client nuovi con server precedenti chiedono l'aggiornamento invece di mostrare
+la directory come se fosse già abbinata. Add continua a usare il codice.
+
+Verifica iniziale: regressione browser riprodotta prima del fix (due righe
+Mini), poi 7 test browser e 13 test server passati; fmt/lint/typecheck passati
+(928 warning lint preesistenti, zero errori). Il test SQLite verifica tutti i
+confini dello scope, pending/revoked, disconnect e forget. Suite completa:
+16.252 test passati, 251 saltati, 11/11 task riusciti. Build CLI/web/contratti
+riuscita su entrambi i Mac.
+
+MacBook: patch applicata alla vera Synara (Dev), account e pairing conservati;
+RPC espone solo il Mini corrente e la UI mostra una sola riga anche offline.
+Durante l'auto-rebuild del desktop Mini il backend si era fermato e il tunnel
+rispondeva 530. Dopo lo sblocco, l'avviso ha identificato un digest delle
+migrazioni incorporato dal vecchio watcher non allineato al checkout: il
+controllo ha fermato l'avvio **prima di aprire il database**. Arrestato il vecchio
+runner, eseguito `bun run build:desktop` (4/4 task riusciti) e riavviato
+`bun run dev:desktop --home-dir ./.synara/phone-playground`, dopo dry-run e
+verifica delle porte. Home, account e pairing conservati, nessun bypass o reset.
+
+Verifica conclusa nelle app native: Mini startupReady con proiezioni sane;
+MacBook health remoto 200, un solo Mini connesso via Cloudflare e Open apre
+la chat demo con la risposta storica `MACBOOK TO MINI OK`. Nessun nuovo turno
+provider né login. App lasciate aperte. Screenshot MacBook nella cartella
+`~/.local/share/synara-tests/remote-macbook-mvp-20261007/operator/`:
+`paired-hosts-list-offline.jpg` e `paired-hosts-list-connected.jpg`.
+
+## Account nella rail — 7 ottobre 2026
+
+Ripristinato `AccountFooterControl`, rimasto importato ma non montato dopo il
+passaggio alla rail. Sostituisce l'ingranaggio fisso con l'avatar del profilo
+autenticato (foto o iniziali); da disconnessi mostra Sign in. Il menu esistente
+conserva profilo, Connections, Settings e Sign out, e aggiunge Usage. Riutilizza
+ProfileAvatar, SidebarIconButton e i menu condivisi, senza un secondo flusso
+di autenticazione. Passati 11 test browser account/login, 28 test account e
+tipografia, fmt/lint/typecheck; nessun logout delle sessioni reali per provarlo.
+
+## App desktop MacBook — 7 ottobre 2026
+
+- Avviata la vera app Electron Synara (Dev) dal checkout isolato MacBook,
+  con asset compilati e backend gestito dal desktop. Home di test conservata
+  e copiata in un backup privato prima del passaggio; Stable e Canary intatte.
+- Trovato un difetto non visibile nel test web: la negoziazione del bridge
+  remoto rispondeva 200 senza header CORS, impedendo al renderer `synara://app`
+  di leggerla. La route remota ora riflette soltanto le origin già ammesse
+  dalla policy esistente, come la negoziazione locale. Autenticazione e ruolo
+  owner restano obbligatori secondo la configurazione; nessuna wildcard.
+- Regressione sulla route HTTP reale: fallisce prima del fix per header assente,
+  passa dopo. Verifica anche origin estranee, client non-owner, autenticazione
+  mancante e risposte 426/503. Sul Mini passano 55 test mirati in 7 file,
+  fmt, lint (928 warning, zero errori) e typecheck (12 package).
+- Prova live sul MacBook: riapertura da Finder, account e pairing conservati;
+  Connections apre il workspace Mini e carica progetti e chat. È una build
+  locale di sviluppo, non un nuovo rilascio firmato o un aggiornamento Stable.
+
+## Verifica live aggiuntiva — 7 ottobre 2026
+
+- Mini: l'app Dev corrente conserva la home `.synara/phone-playground/dev`;
+  Connections mostra una sessione iOS attiva via Cloudflare. Non è la vecchia
+  istanza temporanea sulla porta 4775.
+- Un nuovo turno reale Codex nella chat demo restituisce `MINI MVP CHECK OK`;
+  il simulatore iPhone legge la stessa risposta e aggiorna il recap a 3 prompt.
+  Nessun telefono fisico usato. La cartella demo vuota è stata inizializzata come
+  repository Git indipendente: prima i checkpoint risalivano alla repo Synara
+  esterna e fallivano sul percorso ignorato `.synara`. Il nuovo turno non produce
+  quell'errore. È una correzione dell'ambiente demo, non del codice distribuito.
+- MacBook: vecchio checkout e home `/private/tmp/synara-remote-macbook-20260929`
+  assenti; nessun listener su 4776. I vecchi endpoint restituiscono 530 e non
+  rappresentano il Mini corrente. Stable e Canary lasciate intatte.
+- Ricreato un checkout isolato sul MacBook al commit `89b261503`, con home
+  persistente dedicata e server Node 24 su 4778. Build web/CLI/contratti riuscita
+  in 52 secondi. Configurata l'API trial esistente dopo aver rilevato che il
+  default puntava al vecchio servizio account. Login Google e lettura directory
+  riusciti; sessione conservata dopo riavvio del server isolato. Il Mini corrente
+  risponde 200 con TLS verificato e DNS normale. Checkout MacBook:
+  `/Users/emanueledipietro/.codex/worktrees/remote-macbook-mvp-20261007/synara`;
+  home `/Users/emanueledipietro/.local/share/synara-tests/remote-macbook-mvp-20261007`.
+- Nuovo pairing MacBook autorizzato e completato con la nuova identità della
+  home isolata: il Mini mostra il MacBook fra i dispositivi autorizzati.
+  Da Dia sul MacBook il workspace remoto si apre via Cloudflare; un turno reale
+  nella chat demo del Mini restituisce `MACBOOK TO MINI OK`.
+  Dopo ricostruzione del runtime senza diagnostica temporanea, riavvio del solo
+  server isolato MacBook e reload di Dia, il Mini si riconnette e la risposta
+  ricompare senza un nuovo pairing. Stable e Canary restano intatte.
+- Individuata e corretta la doppia creazione del codice all'apertura di Add a
+  device sotto React StrictMode: la seconda richiesta revocava il primo invito,
+  ma la UI poteva mostrare proprio il codice revocato. La creazione iniziale
+  avviene ora una sola volta per apertura; chiudere e riaprire genera un nuovo
+  codice. Il test browser esistente riproduce il difetto prima del fix (2
+  richieste invece di 1) e passa dopo; nessun bypass delle verifiche di pairing.
+  La prova live usa un invito unico generato dall'RPC ufficiale del Mini.
+- Verifiche mirate del fix: 7 test browser e 17 test ConnectionsRows passati;
+  fmt, lint (928 warning, zero errori) e typecheck (12 package) passati. La suite
+  completa documentata sotto precede questo fix UI e non è stata ripetuta.
+- **Non ancora qualificato:** direzione Mini → nuova istanza MacBook, revoca
+  live, sleep/wake e interruzioni di rete prolungate. Le approvazioni del vecchio test non sono
+  state ereditate. Nessun telefono fisico usato.
+
+## MVP backend e simulatori — 7 ottobre 2026
+
+Checkpoint verificato sul desktop `b85257f6e`, iPhone `ee91d12` e iPad `8e8d1d1`.
+Sostituisce le vecchie note che indicavano Inbox cloud non pubblicata.
+
+- Supabase: applicate le migrazioni API 0016–0017, con hash/timestamp originali
+  nel journal Drizzle. `inbox_recaps` appartiene al ruolo account dedicato,
+  RLS attiva, nessun SELECT per `anon`/`authenticated`; tabelle sponsor intatte.
+- API Cloudflare: Worker `b5c6be3a-1d49-48f6-9fc6-41bb58e38cf7`, immagine
+  `synara-account-api-trial:mvp-20261007`, digest registry
+  `sha256:2fe75916125ebd4adf20a7ab92c124cff2913865922c053378688a9d245d85f1`.
+  Health/instance 200, Inbox senza sessione 401 (prima 404), profilo API/pagina 200.
+  Binding e segreti precedenti conservati. Il rollback del container è il digest
+  precedente `sha256:cc29bdc4ac33d31dc64b5f093d13b6a1de0f8e9fb6775d8fda5ea3fdffe079d4`;
+  le migrazioni additive possono restare, senza cancellare lo storico.
+- Salvataggio automatico verificato: tre recap reali del Mini, 5–7 ottobre,
+  arrivati senza premere Save now. Letti da entrambi i simulatori; iPad appena
+  autenticato li recupera senza una connessione attiva al Mac. Nessun seed
+  manuale o accesso diretto al database dal client.
+- Migrazione desktop: conservata la 131 ProjectSourceFolders già rilasciata,
+  spostate le cinque migrazioni private a 132–136. Riconosciuta esplicitamente
+  la vecchia sequenza privata 131–135, usando backup e recovery esistenti.
+  Test verificano watermark, identità, pairing, revoche e connessioni disabilitate.
+- Container: installer Bun eseguito nativamente su Apple Silicon; dipendenze
+  limitate al runtime API (40 pacchetti). Layer node_modules da circa 3,21 GB
+  a 85 MB. Avvio arm64 contro PostgreSQL usa la stessa ricetta e passa;
+  amd64 verificato su Cloudflare, poiché Bun sotto QEMU locale va in SIGSEGV.
+
+Verifiche: fmt/lint/typecheck passati (928 warning lint, zero errori); lineage
+compatibile con 96 tag rilasciati. Suite workspace finale a concorrenza 2:
+**16.462 passati, 39 saltati, 11 package riusciti**, con PostgreSQL isolato.
+La prima suite e un rerun CUA hanno mostrato errori sensibili al timing;
+nessuna assertion rimossa, rerun completo verde. Restano warning Swift 6/header
+nelle build Debug iPhone e iPad, entrambe avviate su iOS/iPadOS 27.
+
+Performance preliminari: 15 campioni a riposo nel simulatore iPhone Debug,
+RSS 222,6–224,8 MiB, CPU media 0,98%, picco 7,3%. Cinque richieste calde per
+endpoint dal Mini: mediana health 128 ms, instance 125,8 ms, rifiuto Inbox senza
+sessione 122,9 ms. Questi numeri non misurano query Inbox autenticata, cold start,
+FPS, batteria o prestazioni di un iPhone reale.
+
+Limiti: telefono fisico mai usato. Nessuna prova 5G/reinstallazione reale,
+nuovo pairing iPad o revoca live in questo checkpoint. Il vecchio pairing iPad
+richiede ancora approvazione; la cronologia cloud è indipendente. Login reale
+email-code e ripristino sessione iPhone verificati, ma WorkOS resta Staging.
+Nessun passaggio a produzione WorkOS, pagamento, merge o TestFlight.
+
+## Analytics in this monorepo — 5 October 2026
+
+Dashboard, Worker, D1 migrations, legacy forwarder and tests now live in
+[`apps/analytics`](../../../apps/analytics/README.md) on this branch/PR. The
+separate repository PR #3 is historical; it is no longer a release dependency.
+Source imported from `synara-beta-diagnostics` commit `c2fe29c`, including all
+four Product sections. Existing Cloudflare resources and client URLs are retained.
+Use the workspace commands for future builds and deployments.
+
+Deploy dalla repo Synara (`67f9dec`) verificato: versione Worker
+`29cd18af-d988-4d93-9a71-d31b91d0f0e6`, `/healthz` 200, API senza login 401,
+dashboard autenticata funzionante. PR backend #3 chiusa come sostituita.
+Suite finale a concorrenza 2: **16.102 passati, 251 saltati, 11 package riusciti**;
+i salti includono 200 test PostgreSQL senza database isolato. Formatting, lint
+(con warning), typecheck, CI contracts, build e dry-run Worker, install frozen
+e lineage migrazioni passati. Due errori AppSnap di cleanup/timeout nel primo
+giro parallelo non si ripetono nei 52 test isolati né nella suite finale.
+
+Sender Swift reali dei due branch nativi verificati contro Worker/D1 locale:
+5 eventi sintetici iOS e 5 iPadOS, filtri separati, consenso inizialmente spento,
+coda svuotata e opt-out corretti. Nessuna nuova prova UI/simulatore o raccolta
+globale dei completamenti nativi. Recap mobile aggiornati e pushati.
+
+Aggiornato il **5 ottobre 2026**. I checkpoint datati sostituiscono gli stati precedenti solo per le superfici espressamente verificate. L'ultimo passaggio implementa le analytics di prodotto su desktop, iPhone/iPad e backend Cloudflare; i checkpoint precedenti restano storici.
+
+## Contatori turni e provider — 5 ottobre 2026
+
+Dashboard Product estesa con richieste accettate separate dai turni terminali
+osservati, andamento giornaliero dei turni, riusciti/falliti/annullati e tabella
+provider con token disponibili e numero di campioni. Mancanti restano sconosciuti,
+zero dichiarati restano zero. Nessuna nuova migrazione o raccolta di nomi modello.
+Corretto il server: il provider viene conservato su tutti i completamenti, invece
+che sul solo Claude. La regressione Codex/Pi falliva prima e passa dopo il fix.
+
+Passati 146 test projection/ingestion, formato/lint/typecheck workspace (warning
+preesistenti, zero errori), 119 test Worker, typecheck e build backend. Verifica
+Wrangler/D1 e browser locale con quattro turni sintetici: due riusciti, uno fallito,
+uno annullato; richieste separate, provider e campioni token corretti.
+Riutilizzati Stat, TableWrap, EChart e le tabelle/eventi esistenti.
+Dashboard pubblicata: Worker `481d06ef-2370-4825-8323-c848e3004d78`, verificato
+anche con cf CLI. Health 200, API senza sessione 401 e nuova vista autenticata
+controllati online; nessun nuovo dato sintetico inserito in produzione.
+
+Restano osservazioni desktop: manca una fonte unica sul computer che esegue il
+turno per contare indipendentemente dai client e deduplicare tra dispositivi. Non
+presentare i nuovi contatori come consumo globale completo. La correzione del
+provider richiede la nuova build server/desktop; nessuna nuova build mobile qui.
+
+## Implementazione analytics opt-in — 5 ottobre 2026
+
+Implementati contratto, sender desktop, consenso locale in Settings → General → Privacy,
+osservatori di navigazione/trasporto e parità nativa nei due branch mobili esistenti.
+Il nuovo flusso è **spento per impostazione predefinita** in Stable/Beta e indipendente
+sia dalle diagnostiche crash Beta sia dalle statistiche account/Inbox. Dettagli e limiti:
+[contratto operativo](PRODUCT-ANALYTICS-AUDIT.md), [privacy](../../diagnostics.md#product-analytics).
+Riutilizzati SettingsRow/SettingsSection/Switch, trasporto esistente e componenti nativi;
+nuovi sender separati perché la diagnostica Beta non può diventare la raccolta Stable.
+
+Backend nella [PR draft #3](https://github.com/Emanuele-web04/synara-beta-diagnostics/pull/3),
+commit `fd9b3ce` con correzione di compatibilità `7f14dd0`: endpoint `/v1/product-events`, tabella D1 separata, dashboard Product
+privata, deduplica UUID e cleanup limitato dei dati oltre 30 giorni. Allineati account
+e ID D1 ai binding della versione live `cb10fe76`; conservata la verifica del segreto
+per l'IP inoltrato sulle route diagnostiche legacy. Il confronto remoto conferma che
+era pendente soltanto `0005_product_events.sql`. **Deploy completato con autorizzazione il 5 ottobre 2026**:
+migrazione applicata in Synara Orgs e Worker live alla versione
+`bd556f7d-088e-4d4c-adbf-b0d02d4ad4e3` (4 ottobre, 23:48 UTC).
+Verificati health 200, dashboard API senza sessione 401, JSON malformato 400,
+content type errato 415; un evento sintetico accettato, retry duplicato accettato zero,
+evento visibile nella dashboard autenticata con durata 42 ms. Rimosso esclusivamente
+il campione di prova e verificato zero righe residue. Segreti e binding esistenti
+conservati; cron giornaliero installato (esecuzione temporizzata non ancora osservata).
+Versione precedente per rollback Worker: `cb10fe76-56c7-4e00-ae25-0fe5f36a3167`;
+la tabella additiva può restare. Questo deploy riguarda analytics, non le migrazioni Inbox.
+
+Verifiche di implementazione:
+
+- Formato, lint e typecheck desktop/workspace passati; warning preesistenti di lint.
+- Suite workspace: 16.020 passati, 251 saltati, un errore nel recupero concorrente
+  di un lock credenziali. Corretta la race `ENOENT` nella rilettura sotto guardia;
+  i 10 test mirati di lock/account passano. La suite completa non è stata ripetuta
+  dopo questa correzione circoscritta. I salti includono 200 test API senza PostgreSQL.
+- 8 test sender/IPC e 86 test web/trasporto passati; test browser dello switch e del
+  fallimento di salvataggio passato. Screenshot: `apps/web/src/components/settings/__screenshots__/product-analytics-consent.png` (generato, ignorato da Git).
+- Sender desktop reale → Worker Wrangler locale → D1: tutti gli 8 tipi accettati,
+  duplicati accettati zero, default-off e opt-out dopo riavvio senza invii,
+  campi privati estranei esclusi. Nessun dato utente usato nel test.
+- Worker: 118 test, typecheck, build e dry-run del deploy passati; HTTP locale controllato con auth,
+  input malformati, duplicati, token parziali e cleanup di 10.001 righe sintetiche.
+- iPhone/iPad: 197 test SwiftPM per branch e build iOS complete senza firma passati.
+  Simulatore non disponibile in questa sessione: nuova UI mobile non provata dal vivo.
+
+Limiti intenzionali: le completion sono osservazioni desktop live, non un totale globale
+multi-client; native non inventa completamenti dall'ack di invio. Token assenti restano
+sconosciuti, nomi di modelli non vengono raccolti. Gli attuali build nativi sono etichettati
+`stable`, non avendo un selettore di flavor dedicato. Servono nuovi build client per usare
+lo switch: questo checkpoint non è un rilascio firmato né TestFlight.
+
+## Integrazione di main e audit analytics — 5 ottobre 2026
+
+Integrati i quattro nuovi commit di `origin/main`, fino a `f2069a6f316e61601be23281c9ebab86982b4252`, preservando la cronologia condivisa con un merge. Backup: `codex/remote-before-main-20261005`, a `db9aa8f0eae03b128dad0b28e7b2d1e5cf422d22`. Unico conflitto testuale in `BETA.md`: conservati sia i gate remote/account sia la nuova descrizione Auto-fix CI. Nessuna nuova migrazione o modifica al protocollo remoto; il nuovo bridge di diagnostica resta opzionale e Beta-only.
+
+La base aggiornata comprende contesto diagnostico limitato e campioni memoria, correzioni del teardown browser/Devin, del toggle sidebar e dell'overflow dei pannelli. Revisione semantica del wrapper RPC: nessun nuovo bypass dei permessi o cambiamento dell'host di esecuzione individuato. Le breadcrumb sono contesto per errori/crash, non metriche complete di adozione o di completamento del turno.
+
+Passati `bun run fmt:check`, `bun run lint` (896 warning, zero errori), `bun run typecheck` e 12 test browser su sidebar, overlay e transcript. La suite workspace ha eseguito **16.007 test passati, 251 saltati e 2 falliti**: timeout nella selezione PR di GitManager e mancata icona nella fixture Windows Store. Rieseguiti separatamente i due file, **64 test passati senza modifiche a codice o assertion**. Questo non trasforma la prima esecuzione completa in una run verde; resta una segnalazione di instabilità sotto suite. Il primo tentativo in sandbox era stato bloccato sulle porte locali e non è evidenza di regressione dell'app. Nessun nuovo test live tra Mac, build mobile o deploy in questo passaggio.
+
+Tre subagent GPT-6 Luna High hanno confrontato il progetto upstream, la raccolta Synara e l'integrazione. Il confronto usa un checkout fresco del progetto upstream e del Worker Cloudflare. Risultato e piano implementativo in [PRODUCT-ANALYTICS-AUDIT.md](PRODUCT-ANALYTICS-AUDIT.md): scelta richiesta **Cloudflare, Beta e Stable, controllo nelle impostazioni**. Product analytics, consenso, dashboard dedicata ed eventi nativi **non sono ancora implementati**; nessun servizio PostHog aggiunto. Lo stato dei deploy account/Inbox non cambia.
+
+## Integrazione desktop e mobile — 4 ottobre 2026
+
+Base desktop integrata: `212dd3bc8f0b19ad62033b32f7ed9ae1a1dbf85e`, dopo 271 commit di main dal checkpoint `4f204aef`. È un merge che conserva i commit e le PR condivise, senza riscrivere la cronologia. Backup pre-integrazione: `codex/remote-before-main-20261004` (`b46c3f6`). Continuare sulle PR esistenti: [desktop/API #1412](https://github.com/Emanuele-web04/synara/pull/1412), [iPhone #1](https://github.com/Emanuele-web04/SynaraIOS/pull/1) e [iPad #2](https://github.com/Emanuele-web04/SynaraIOS/pull/2). La PR iPad rimane basata sul branch iPhone. Questo aggiornamento non è un merge delle PR né un rilascio.
+
+Il controllo ha coperto il delta di main, i contratti RPC e gli incroci con connessioni/account/Inbox, oltre ai conflitti testuali:
+
+| Area                    | Stato dopo l'integrazione                                                                                                                                                                                                                                                                                   |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Database locale         | Main conserva 127–130; le quattro migrazioni account/remote diventano 131–134. La recovery riconosce anche la precedente lineage privata fino a 130, con backup e replay idempotente; conserva identità, cursori, trust, revoche e preferenze. Non modifica le home reali durante i test.                   |
+| Gateway e Hub           | Integrata la coda durevole Hub di main. Un chiamante remoto non eredita l'identità o i privilegi di un coordinatore locale. Le nuove route restano vincolate al computer di esecuzione.                                                                                                                     |
+| Sidebar e Activity      | Conservate liste unificate multi-computer, identità qualificate e selezione per task insieme a rail, snooze, draft e navigazione recenti di main. Le azioni locali non ricadono sul computer sbagliato.                                                                                                     |
+| Creazione progetto      | Resta la scelta del computer e della cartella remota; il controllo cartella adotta la presentazione compatta e la nuova icona di main.                                                                                                                                                                      |
+| Sync account            | Un'importazione tardiva di vecchie chat riapre il relativo intervallo di statistiche/recap già sincronizzato. Checkpoint durevole distinto per identità; retry e restart non perdono il recupero. Restano batch limitati, gate esistenti e tombstone dei recap eliminati.                                   |
+| Mobile: dati e recovery | Snooze e provenienza delle chat importate, paginazione della cronologia importata, stato del lavoro in background, avanzamento della coda Hub e quote per provider instance. Gli invii con esito incerto verificano la ricevuta originale quando il server negozia la capability, senza duplicare il turno. |
+| Mobile: viste           | Nuove icone desktop tramite il resolver condiviso; Connections conserva il globo Central. Tasks con stati/board adattiva, Send as Goal e Tasks del giorno in Inbox. Controlli ed azioni mantengono il computer proprietario.                                                                                |
+
+Riutilizzati `SynaraIcon`, picker modello/account, trasporto, outbox e viste native esistenti. Le nuove strutture mobili per pagine importate e lifecycle delle attività rappresentano contratti senza un proprietario equivalente nel codice precedente. Nessun framework alternativo di sincronizzazione.
+
+### Verifiche di questo checkpoint
+
+Formato, lint (warning presenti, zero errori), typecheck, lineage di 91 release e controllo statico Windows passati. Corretto anche il gate CI di branding: record upstream rinominato, formulazioni neutrali e una sola attribuzione esatta consentita nel suo documento; 13 test del guard passati, inclusa la nuova regressione riprodotta prima del fix. Passati 26 test browser su cinque superfici: Activity, creazione progetto, Inbox, storico Inbox e task Inbox. I due nuovi test per importazioni tardive falliscono sul codice precedente e passano dopo il fix; passati 39 test mirati di reporter e policy. Avvio reale su loopback con home temporanea: health, startup, subscription e proiezioni sane; server arrestato e porta liberata. Corretti i due harness browser rimasti obsoleti: il mock SignIn conserva gli export correnti e il test della Space seleziona il campo Name esatto, distinto da Project name. Passati tutti gli 8 scenari browser interessati; nessuna assertion rimossa.
+
+Suite workspace finale: **15,999 test passati, 251 saltati, 10 package riusciti**. I salti comprendono 200 test API PostgreSQL senza database di test configurato. Build Debug complete e avvio riusciti su simulatori iPhone 18 Pro e iPad Pro 11, iOS 27; 197 test SwiftPM e 79 fixture condivise contro il desktop passati. Le verifiche visive usano due computer in cache offline, non un nuovo test live. Per inventario mobile, screenshot e limiti vedere il [recap mobile](https://github.com/Emanuele-web04/SynaraIOS/blob/codex/ios-remote-connections/Docs/REMOTE-CONNECTIONS-HANDOFF.md).
+
+### Limiti e ripartenza
+
+- Le prove di questo giro non ripetono il pairing live Mac ↔ Mac o iPhone ↔ Mac, né un rilascio firmato Windows/Linux/TestFlight. Il controllo Windows è statico.
+- I test API PostgreSQL sono esclusi dalla suite di questo giro perché non è configurato un database di test isolato. Non utilizzare Supabase di produzione per sostituirlo. Le precedenti prove PostgreSQL sotto sono storiche.
+- **Saved Inbox richiede ancora il deploy autorizzato** delle migrazioni API `0016_private_inbox_recaps.sql` e `0017_inbox_automatic_sync.sql` e dell'API. Nessuna operazione di produzione eseguita qui. Persistenza: Supabase/PostgreSQL attraverso l'API Cloudflare; non Cloudflare Analytics. Il sync dei totali del profilo conserva `SYNARA_ACCOUNT_PROFILE_SYNC=1`.
+- L'allineamento mobile non promette tutte le funzioni desktop: handoff provider nella stessa chat, gestione amministrativa Hub, interazioni avanzate Tasks e PR auto-fix UI restano esplicitamente elencati nel recap mobile. Menu Electron, shortcut e audio/window chrome sono specifici del desktop.
+
+## Checkpoint storici
+
+Le sezioni successive riportano le verifiche e gli stati delle date indicate. Numeri di migrazione, SHA, stato dei worktree e frasi come “nessuna PR” non descrivono il checkpoint corrente.
+
+## Inbox privata e MVP mobile — 1 ottobre 2026
+
+Aggiunto lo storico privato dei recap, distinto dal profilo pubblico. Desktop e mobile riutilizzano `StatsGetRecapResult`. Il server del computer con account collegato salva automaticamente il giorno corrente ogni minuto, senza aprire Inbox o usare il telefono; recupera anche lo storico locale, quattro giorni per ciclo, con cursore persistente distinto per account, computer e fuso. Include nomi dei progetti, metriche per modello, token e attività degli agenti. **Save privately / Save now** rimane un aggiornamento immediato facoltativo. Le quote live non vengono congelate nello storico. I dati già pubblicati sul profilo restano gestiti dal loro percorso esistente.
+
+L’API `/api/v1/inbox/recaps` consente salvataggio idempotente, lettura paginata, dettaglio ed eliminazione. Il proprietario è l’utente nel workspace autenticato; la rimozione del computer non elimina i recap. Membership verificata, risposte private/no-store, payload limitato e RLS senza accesso diretto per `anon`/`authenticated`. Migrazioni PostgreSQL `0016_private_inbox_recaps.sql` e `0017_inbox_automatic_sync.sql`; nessuna modifica ai database di produzione durante lo sviluppo.
+
+Il salvataggio avviene in **Supabase/PostgreSQL**, non in Cloudflare Analytics. Il servizio API gira su Cloudflare. `/api/v1/inbox/recaps/sync` accetta solo il proprietario del computer; il worker verifica anche l’identità dopo il rinnovo della sessione. Nessuna sincronizzazione su Stable o da sessioni disconnesse. Dopo un errore ritenta senza avanzare il cursore. Eliminare un recap cancella payload e nome del computer e conserva soltanto la chiave account/computer/giorno: la sincronizzazione non lo ricrea; un Save esplicito può ripristinarlo. I cambi di account/authority sono verificati prima di usare il token. Il sync dei totali del profilo rimane separato e conserva il gate `SYNARA_ACCOUNT_PROFILE_SYNC=1`.
+
+Su iPhone/iPad: Inbox nativa con metriche e fasce orarie, cronologia account leggibile senza computer online, Hubs/Tasks aggiornati mentre visibili e Tasks → Start with Agent tramite il picker modelli esistente. Il primo turno passa dalla coda persistente soltanto dopo il collegamento condizionale della task. Corretto anche un crash mobile di reconnect: le copie in cache mantengono gli ID qualificati per computer quando il cursore viene invalidato.
+
+Verifiche desktop del delta: formato, lint, tipi e lineage passati; suite completa **15.470 test passati, 38 saltati, 10 package riusciti**, inclusi 338 test API su PostgreSQL isolato. Tre test browser mirati passati per gate Stable, salvataggio esplicito e cambio account. Probe SQL isolato: `anon` e `authenticated` non leggono/modificano/eliminano record e non possono inserirli, anche con permessi tabella concessi.
+
+Verifica successiva del sync automatico: formato/lint/tipi/lineage passati (lint con warning preesistenti). Suite workspace: **15.475 passati, 2 falliti, 38 saltati**; le due failure riguardano cleanup Antigravity, fuori da questo delta, e il rerun mirato del file è passato. Verifica finale: **165 test server passati** (reporter, account identity, recap e Antigravity), **30 test account client passati**, **339 test API passati** su PostgreSQL isolato e **1 test browser Inbox passato**. Inclusi retry HTTP 503/ack inattesa, ripartenza col cursore, rollover 04:00, timer senza UI, gate Stable, logout, account cambiato e cancellazioni non ricreate. Le precedenti failure CI della PR su branding e browser SignInDialog/ChatView non sono state corrette da questa modifica; non dichiarare la PR pronta al merge sulla sola verifica locale. Nessuna nuova build mobile per il solo cambiamento delle etichette: i test simulatori sopra restano quelli del passaggio precedente.
+
+**Deploy ancora da eseguire:** applicare entrambe le migrazioni e pubblicare l’API prima di usare Saved Inbox sull’account reale. Pubblicare i client aggiornati dopo l’API. Il test con login sintetico e database isolato non equivale a una migrazione o a un rilascio di produzione. Vedere il recap mobile per compilazioni, prove nel simulatore e limiti.
+
+## Integrazione di main — 1 ottobre 2026
+
+Integrato `origin/main` a `4f204aef7d9a38e19baff915c58aec0a5498524f` nel branch desktop `codex/cloudflare-remote-mvp`. Il lavoro locale preesistente (119 percorsi) è stato prima salvato nel commit `ee36a79`, conservato anche dal branch `codex/remote-before-main-20261001`. La descrizione del delta non committato e i checkpoint del 30 settembre più sotto sono **storici**, non lo stato corrente. Nessuna modifica alla repo iOS o all'infrastruttura Cloudflare in questo passaggio.
+
+Risolti 30 conflitti Git, oltre alle incompatibilità che un merge testuale non individua:
+
+- **Database:** `main` occupa le migrazioni 109–126; quelle account/remote del branch diventano 127–130. La recovery riconosce esattamente la vecchia sequenza privata fino a 112, prepara il backup tramite il percorso esistente e conserva trust, certificati e connessioni desiderate. Sequenze sconosciute continuano a essere rifiutate. Non modificati database dell'utente.
+- **Stato per computer:** le nuove tab aperte, i pin degli agenti Hub e lo stato di chiusura dei pannelli usano lo storage già isolato per ambiente. Stessi identificativi su due computer non condividono più questi valori.
+- **Statistiche account:** riutilizzata la query canonica di `main` per i delta per provider e i risultati verificati di Claude. Conservata la dimensione reasoning per l'account e adattata l'attribuzione ai nuovi provider instance. Le istanze duplicate non generano chiavi React uguali nel riepilogo profilo.
+- **Permessi Hub/MCP:** i nuovi coordinatori e worker gestiti non possono usare la delega remota per aggirare i vincoli di proprietà dell'Hub locale. I normali thread utente mantengono gli strumenti remoti; i chiamanti remoti non acquisiscono un'identità di coordinatore locale.
+- **Integrazione UI/runtime:** Hub remoti nella superficie Hub esistente, Activity e ricerca con identità host, route rigenerate, risorse HTTP instradate sul computer corretto, provider instance conservata per la trascrizione. Packaging mantiene sia cloudflared sia il nuovo addon macOS di `main`; conservate le correzioni Windows di `main`.
+
+Regressioni riprodotte prima dei fix per migrazioni, isolamento storage, conteggio token e autorizzazione dei worker. Dopo i fix: 224 test server mirati e 47 test web mirati passati. Avvio server reale con home temporanea e porta 51275: `/health` segnala startup, subscription e proiezioni sane; processo arrestato e porta liberata dopo la prova. I controlli della lineage hanno verificato 91 tag di release. Le prove su due Mac, iOS fisico, provider live e pacchetti firmati restano distinte da questa verifica d'integrazione.
+
+Verifica complessiva: `bun run test` completato con 10 package riusciti, 15.247 test passati e 246 saltati secondo le condizioni delle suite. Dopo l’ultima precisazione del guard dei ruoli, rieseguiti i 134 test del gateway/MCP: chat ordinarie e membri semplici degli Hub possono delegare, coordinatori e worker no. In Chromium passati 40 test su sei superfici: Activity, ricerca, Hub, tab aperte, creazione progetto e icone. Passati anche formato, lint (warning presenti, zero errori), tipi e controllo dei confini Windows; quest’ultimo è statico e non certifica il pacchetto Windows.
+
+Per riprendere: usare il branch desktop aggiornato e il recap iOS; non riapplicare il vecchio delta dei 119 percorsi. Prima di aggiornare runtime esistenti conservare le rispettive home e seguire il normale backup delle migrazioni. Rimangono valide le prove di qualificazione elencate in “Cosa manca davvero”; questo merge non costituisce un rilascio.
+
+## Aggiornamento account/profile — 30 settembre 2026
+
+Dopo il rename Connections (`fdfde17` desktop, `e9aa0b6` iOS), corretto il fallback dell'identità: finché manca un profilo Synara, la pagina Profile usa nome e foto del login, come il menu account. Un profilo salvato continua ad avere precedenza, anche quando la foto è stata esplicitamente rimossa. Gli edit prima dell'onboarding non vengono più salvati silenziosamente nell'identità locale. Il feature gate esistente rimane invariato.
+
+iOS legge `/me` con la sessione autenticata e mostra la stessa precedenza nella sezione Account di Connections; aggiorna all'apertura, al ritorno in foreground e con pull-to-refresh. La presentazione rimane separata dallo stato di autorizzazione. Nessuna modifica ai dati salvati o deploy dell'API; serve una build client aggiornata. Una foto può apparire soltanto se il provider la fornisce o l'utente l'ha caricata.
+
+Verifica desktop: regressione riprodotta prima del fix, poi 26 test pertinenti passati; `bun run fmt:check`, `bun run lint` e `bun run typecheck` riusciti. iOS: 180 test core, 8 test gateway isolati con Node 24 e build/avvio nel simulatore riusciti. Questo passaggio non ripete le prove live sui due Mac né certifica una release. I 119 percorsi desktop preesistenti restano fuori da questi commit. Le tabelle seguenti conservano i checkpoint storici del recap iniziale.
+
+## Dove si trova il lavoro e cosa è pubblicato
+
+| Superficie               | Repository / branch                                        | Stato verificato prima di questo recap                                                                                                                    |
+| ------------------------ | ---------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Desktop, API e trasporto | `Emanuele-web04/synara`, `codex/cloudflare-remote-mvp`     | HEAD locale e branch remota entrambi a `b5f8837adb3a8c938d3f16e2d4882aa1b8a1c7ce`; nessuna PR trovata per questa head                                     |
+| iPhone                   | `Emanuele-web04/SynaraIOS`, `codex/ios-remote-connections` | [PR #1](https://github.com/Emanuele-web04/SynaraIOS/pull/1), aperta, codice pubblicato fino a `4b855e68faadb99396452899d53af1f9d0ced3b3`; worktree pulita |
+
+Questo recap viene pubblicato con un commit di sola documentazione dopo quei checkpoint. La sua pubblicazione **non include né certifica** le modifiche desktop non committate descritte sotto. La branch desktop pubblicata è consultabile [qui](https://github.com/Emanuele-web04/synara/tree/codex/cloudflare-remote-mvp).
+
+Il worktree desktop è `.codex/worktrees/a816/synara`; quello iOS è `Developer/SynaraIOS-remote-connections` sul Mac Mini. Il [recap iOS](https://github.com/Emanuele-web04/SynaraIOS/blob/codex/ios-remote-connections/Docs/REMOTE-CONNECTIONS-HANDOFF.md) documenta il lato telefono. Non usare la repo beta-diagnostics per riprendere questa attività.
+
+## Storico del 30 settembre: lavoro desktop allora locale
+
+Alla lettura iniziale di questa sessione Git riportava **119 percorsi modificati**, tutti non staged: 36 D, 83 M. Diff complessivo: **1.941 righe aggiunte, 6.392 rimosse**. È un delta successivo al checkpoint pubblicato, non un riepilogo dell'intera feature.
+
+Le aree coinvolte sono:
+
+- API e identità: configurazione, issuer/grant, revoche e route di autorizzazione.
+- Rimozione del runtime relay ritirato: `apps/relay`, `packages/relay-protocol`, dialer e harness precedenti; aggiornamenti dei manifest e del lockfile.
+- Runtime remoto: supervisor/registry, session gateway, tunnel e risorse, strumenti MCP remoti.
+- Web: sidebar unificata, Activity, ricerca, creazione progetto, menu/azioni dei thread e stato delle connessioni.
+- Contratti, test e documentazione collegati.
+
+Queste modifiche sono preservate nel worktree. Non sono state aggiunte automaticamente al commit di questo recap: non è stata ricostruita una prova di validazione del loro insieme esatto. I test storici della branch non dimostrano che questo delta passi oggi. Prima di pubblicarlo, rivedere il diff, verificare che appartenga tutto all'attività, eseguire i controlli pertinenti e creare commit coerenti. Non usare `reset --hard`, `clean` o uno stage indiscriminato per semplificare il lavoro.
+
+Git emette inoltre avvisi `non-monotonic index` per file AppleDouble `._pack-*.idx` nel Git common directory sul volume esterno. Le letture di HEAD e la verifica remota sono riuscite. Nessuna riparazione o cancellazione degli oggetti Git è stata eseguita; se gli avvisi bloccano operazioni successive, trattarli come problema del repository, non dell'app.
+
+## Logica scelta e invarianti
+
+L'app mantiene più computer collegati nello stesso workspace. Progetti e chat conservano l'identità del computer proprietario; aprire una chat o filtrare una sidebar cambia la vista, non sposta l'esecuzione. La creazione di una chat/progetto cattura esplicitamente computer e progetto di destinazione. Identificativi uguali su due host non devono collidere.
+
+Il percorso gestito usa Cloudflare Tunnel per raggiungere il computer, con autenticazione del dispositivo e identità del computer verificata dal protocollo remoto. Il codice di pairing serve a iniziare l'abbinamento; non sostituisce l'approvazione dell'identità. Trust, sessione e riconnessione sono per host. La disconnessione di uno non deve interrompere gli altri.
+
+L'API account gestisce identità/directory/autorizzazione; non esegue i task al posto dei Mac. I provider e i file restano sul computer scelto. La configurazione concordata è API/profili su Cloudflare e PostgreSQL su Supabase. Per questo trial l'infrastruttura è già configurata: non occorre ricrearla per riprendere le prove. Segreti, token e chiavi restano fuori dalla repo.
+
+Gli strumenti interni Synara MCP hanno instradamento remoto tramite un `environmentId` esplicito e la connessione già approvata. Il default locale e i controlli di autorizzazione rimangono distinti dai grant delle integrazioni MCP esterne. Cloudflare e SSH sono percorsi differenti: provare l'uno non certifica l'altro. Le regole server Beta/Stable rimangono autorevoli; non disattivarle per far riuscire un test.
+
+## Cosa è stato effettivamente verificato
+
+| Evidenza                 | Risultato e limite                                                                                                                                                                                                                                                                         |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Desktop MacBook ↔ Mini   | Collegamento in entrambe le direzioni sulle istanze isolate di test, con navigazione e letture remote. Non equivale a verificare le app distribuite su ogni sistema operativo.                                                                                                             |
+| Recovery desktop         | Nella cronologia di [STATUS.md](STATUS.md) sono registrate correzioni e prove di ripresa dopo restart/crash del connector. I primi test usavano un override DNS limitato al processo; non generalizzare quelle prove alla risoluzione di rete ordinaria.                                   |
+| MCP remoto               | Il checkpoint `ac27fd7` implementa il routing; `b5f8837` registra la validazione. Listing/lettura reali sul bridge MacBook → Mini; mutazioni coperte anche da fixture con provider deterministico. Una negoziazione 503 poi riuscita è registrata, non mascherata come reconnect perfetto. |
+| iOS → entrambi i Mac     | Simulatore iPhone 18 Pro/iOS 27, pairing separato e approvato, entrambi i computer collegati attraverso le route Cloudflare gestite.                                                                                                                                                       |
+| Chat reali da iOS        | Creazione e risposte di provider reali su entrambi: `REMOTE IOS OK` e `MACBOOK IOS OK`. Snapshot dei server hanno confermato che ogni chat era sul proprio host.                                                                                                                           |
+| Isolamento e riavvio iOS | Disconnettendo un host, l'altro ha continuato a rispondere. Dopo terminazione/rilancio dell'app entrambi hanno recuperato trust, connessioni e cronologia senza nuovo OTP.                                                                                                                 |
+| Sidebar iOS              | All e filtri per computer, ricerca, apertura del transcript corretto e destinazione dei nuovi task separata dai filtri. Screenshot e test sono nella PR iOS.                                                                                                                               |
+
+Le risposte delle prove sono messaggi sintetici senza uso di tool o modifica dei file dell'utente. Non presentare le prove del simulatore come prove su un iPhone fisico. I record dettagliati e i limiti delle suite storiche sono in [STATUS.md](STATUS.md), [QUALIFICATION.md](QUALIFICATION.md) e nel recap iOS; nessuna suite desktop è stata rieseguita per questo commit di sola documentazione.
+
+## Cosa manca davvero
+
+Non è stato identificato un blocco fondamentale assente nel percorso normale pairing → connessione → chat. Restano qualificazione e possibili correzioni dei casi limite, oltre alla qualificazione del desktop aggiornato:
+
+1. Due task realmente in streaming, uno su ciascun Mac; Stop, richiesta di approvazione e input devono restare sull'host corretto anche cambiando chat e durante reconnect.
+2. Revoca durante una sessione reale e nuovo tentativo di accesso; i test di sicurezza isolati esistono, ma non sostituiscono questa prova finale.
+3. Riavvio del server, sleep/wake, indisponibilità dell'API e rinnovo delle credenziali durante una prova prolungata con durata e misure dichiarate.
+4. iPhone fisico: Wi-Fi/cellulare, lock/unlock, background/foreground e recupero. Non promettere socket continuamente attivi in background su iOS.
+5. Allegati consumati da un provider reale e percorso microfono/trascrizione.
+6. SSH nativo, Windows/Linux e pacchetti firmati/distribuiti non sono qualificati da queste prove Mac/Cloudflare. Nessuna prova di capacità con molti host autorizza a promettere connessioni illimitate.
+7. Prima di un rollout commerciale: il trial usa enrollment esplicito, non una verifica completa dell'abbonamento.
+
+## Sequenza per ripartire
+
+1. Leggere questo file e il recap iOS, poi aggiornare HEAD, stato Git e stato remoto. Il delta storico di 119 percorsi è già conservato nel checkpoint `ee36a79` e incluso nell’integrazione del 1 ottobre.
+2. Verificare eventuali nuovi delta desktop rispetto al commit d’integrazione. UI aggiuntiva in pausa; nessun altro ridisegno richiesto.
+3. Seguire AGENTS: Node/Bun da `.mise.toml`; `bun run fmt:check`, `bun run lint`, `bun run typecheck`, test Vitest pertinenti tramite `bun run test`. Le modifiche attuali attraversano più package/lifecycle: serve anche la suite più ampia. Eseguire `bun run windows-runtime:check` se si toccano confini process/platform e `bun run migrations:check` se si cambiano migrazioni. Non usare database di produzione per i test.
+4. Committare e pushare solo dopo aver registrato risultati e limiti del delta esatto. Al momento del controllo iniziale questa branch non aveva una PR: crearla quando il contenuto da revisionare è pronto, senza confonderla con la PR iOS #1.
+5. Riallineare i due runtime isolati a commit noti, conservando le rispettive home e pairing. Verificare porte IPv4/IPv6 prima di avviarli; dry-run del dev runner prima del launch. Le ultime home di prova erano `/private/tmp/synara-remote-mini` (porta 4775) e `/private/tmp/synara-remote-macbook-20260929` (4776 sul MacBook); sono riferimenti storici, non una garanzia che i processi siano ancora in esecuzione.
+6. Eseguire i casi 1–3 sopra dal simulatore, poi passare al telefono fisico. Registrare commit di ogni runtime/client, passaggi, esito, artefatti e durata. Nuova identità di dispositivo richiede la sua specifica approvazione; non copiare chiavi tra dispositivi.
+7. Correggere difetti concreti emersi; niente riscritture preventive o nuovi strati di trasporto se non necessari. Aggiornare entrambi i recap dopo ciascuna prova significativa.
+
+## Mappa del codice e riferimenti
+
+- `apps/api/src`: configurazione account, identità e route di autorizzazione.
+- `apps/server/src/hostConnections`: connessioni e lifecycle del controller.
+- `apps/server/src/remoteSessions` e `remoteTransport`: sessioni, gateway, trasporto e risorse.
+- `apps/server/src/agentGateway/remoteTools.ts`: strumenti agent/MCP verso altri computer.
+- `apps/web/src/lib/hosts` e componenti Sidebar/Activity/Search/CreateProject: proiezione e navigazione multi-host.
+- `packages/contracts`: contratti condivisi; non introdurre orchestrazione runtime qui.
+- [Piano originale](PLAN.md), [configurazione trial](READINESS.md), [operazioni](../../cloudflare-remote.md), [ADR 0016](../../adr/0016-managed-cloudflare-remote.md).
+
+Il checkpoint originale del 30 settembre era un recap con verifica del push. Per il merge successivo e lo stato corrente leggere l’aggiornamento del 1 ottobre in apertura.
+
+## Verifica operativa iPhone — 6 ottobre 2026
+
+La connessione Cloudflare deve funzionare anche su rete cellulare; la stessa LAN non è un requisito. Il controllo live ha trovato entrambi i tunnel del trial `down`, senza connector collegati, mentre l'API account rispondeva HTTP 200. Sul Mini girava soltanto l'istanza demo, senza configurazione account e senza cloudflared; la precedente home temporanea del Mini non era più presente. Le prove storiche non descrivono quindi lo stato dell'installazione attuale.
+
+L'iPhone conservava profili legacy LAN/Tailscale, non un abbinamento Cloudflare verificato per l'istanza demo. Le correzioni della UI offline non ripristinano quell'autorizzazione e non costituiscono una prova di accesso remoto.
+
+L'istanza demo è stata riavviata con API account e accesso remoto configurati, conservando la stessa home e una copia SQLite privata precedente al collegamento. Health locale HTTP 200 verificato. Il login Google integrato in Synara ha registrato l'istanza corrente e la creazione del codice di pairing ha inizializzato la sua identità TLS. Cloudflare segnala il nuovo tunnel `healthy`, con quattro connessioni; `/health` pubblico risponde HTTP 200 e `/api/v1/instance` pubblico HTTP 404, senza override DNS. Restano da completare il pairing della specifica chiave dell'iPhone e una lettura reale attraverso il tunnel. Non qualificare la connessione cellulare prima di questa prova e non conservare identità di una demo durevole in una home temporanea.
+
+Il percorso CLI `auth --device-code` restituisce una verification URI `/link`, ma il deployment attuale vi serve soltanto il messaggio generico dell'API, senza form di approvazione. Il codice scaduto non ha collegato alcun host; per questa ripresa è stato usato il login integrato, non una modifica manuale delle credenziali. Il flusso headless browser non è quindi qualificato su questo deployment.
+
+### October 6 — QR-first mobile pairing
+
+- Connections now renders an offline-generated QR alongside the short manual code. The `synara://connect` fragment contains version 1, the configured HTTPS account origin, invitation code, pinned root fingerprint, and expiry. It contains no account token. Expiry/cancel hides the QR; owner approval remains mandatory.
+- SynaraIOS accepts the remote invitation in its existing scanner, paste entry, and system-camera deep-link route. It retains the invitation through first sign-in, reuses an existing account session for that authority, selects a sole workspace automatically, and checks the returned computer fingerprint against the scanned one.
+- The signed-out desktop Connections panel now opens the existing account sign-in dialog. The mobile entry starts with Scan QR Code; manual server/code entry is secondary.
+- Verification: desktop formatting/lint/typecheck, four RemoteControls browser tests, and two UI typography tests pass. A desktop-generated invitation was parsed by the actual Swift parser; expired, duplicate-field, plaintext-authority, embedded-credential, and bad-fingerprint variants were rejected. Signed iPhone and simulator builds succeeded. Simulator deep-link delivery opened the new account screen with the invitation retained. Camera optics, physical-phone login, approval, and remote chat read/write are still unverified for this new flow.
+
+- The final signed build was installed on the USB iPhone without deleting its data. Apple Vision decoded the actual desktop-rendered QR, and its validated link was delivered to the iPhone with `devicectl --payload-url`; launch succeeded. This proves QR readability and OS delivery, not completed phone authentication or host approval.
+
+## Remote workspace consistency follow-up — 2026-10-07
+
+- Outer-sidebar creation shortcuts, palette New chat, and native New Terminal Tab now dispatch
+  to the selected execution owner. Unavailable owners refuse the action without local fallback.
+- Remote panes inherit controller app keybindings, zoom, and actual title-bar state through
+  bounded callbacks. Project-script shortcuts stay execution-owned. Remote Keybindings opens
+  controller settings and retains a usable action when Back reveals the persistent frame.
+- Desktop docks remain visible when the remote pane is narrower than the controller window.
+- External editor launchers respect remote capability restrictions; local failures report an
+  error without changing the preferred editor. The favorite-editor shortcut shares this path.
+- Disconnect/Forget recover editor drafts before closing backend access, resume autosave if
+  the backend close fails, and remove in-memory workspaces even when session persistence fails.
+- Validation: formatting, lint (928 warnings, zero errors), and all 12 typecheck tasks pass.
+  Full repository tests: 16,265 passed, 251 skipped, all 11 tasks passed. Focused Chromium
+  checks: 39 passed, including real shell/sidebar entry-point dispatch and local draft behavior.
+  Isolated baseline checks reproduce the repaired failures, including autosave rollback.
+- Limits: native MacBook/Windows/Linux acceptance was not rerun for this follow-up. The routing
+  browser fixture logs a router preload warning during the run; assertions pass. No new live
+  provider turn, pairing change, backend deployment, or database operation was performed.

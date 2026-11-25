@@ -16,21 +16,31 @@ afterEach(() => roots.splice(0).forEach((root) => rmSync(root, { recursive: true
 
 function checkpoint(
   platform: "linux" | "mac" | "win" = "linux",
-  flavor: "production" | "beta" = "production",
+  flavor: "production" | "beta" | "remote" = "production",
+  archOverride?: "arm64" | "x64",
 ) {
   const assetsDirectory = mkdtempSync(join(tmpdir(), "synara-checkpoint-"));
   roots.push(assetsDirectory);
-  const version = flavor === "beta" ? "1.2.3-beta.1" : "1.2.3";
-  // Electron Builder's AppImage target emits x86_64 while provenance records x64.
-  const nativeFileArch = platform === "linux" ? "x86_64" : "x64";
-  const stem = `${flavor === "beta" ? "Synara-Beta" : "Synara"}-${version}-${nativeFileArch}`;
+  const version = flavor === "production" ? "1.2.3" : `1.2.3-${flavor}.1`;
+  const arch = archOverride ?? (flavor === "remote" && platform === "mac" ? "arm64" : "x64");
+  // Electron Builder's AppImage target emits x86_64 for Intel while provenance
+  // records the matrix spelling; other targets keep the matrix spelling.
+  const nativeFileArch = platform === "linux" && arch === "x64" ? "x86_64" : arch;
+  const productName = { production: "Synara", beta: "Synara-Beta", remote: "Synara-Remote" }[
+    flavor
+  ];
+  const stem = `${productName}-${version}-${nativeFileArch}`;
   const payload = `${stem}.${platform === "mac" ? "dmg" : platform === "win" ? "exe" : "AppImage"}`;
   const updater =
     platform === "mac"
-      ? "latest-mac-x64.yml"
+      ? arch === "arm64"
+        ? "latest-mac.yml"
+        : `latest-mac-${arch}.yml`
       : platform === "win"
         ? "latest.yml"
-        : "latest-linux.yml";
+        : arch === "x64"
+          ? "latest-linux.yml"
+          : `latest-linux-${arch}.yml`;
   const files = platform === "mac" ? [payload, `${stem}.zip`, updater] : [payload, updater];
   const signing: ReleaseArtifactProvenanceManifest["signing"] =
     platform === "mac"
@@ -40,7 +50,7 @@ function checkpoint(
           identity: {
             teamId: "EXPECTEDTEAM",
             authorities: ["Developer ID Application"],
-            appBundle: "Synara.app",
+            appBundle: `${productName.replaceAll("-", " ")}.app`,
             diskImage: payload,
           },
           checks: ["codesign --verify app", "stapler validate app"],
@@ -54,7 +64,7 @@ function checkpoint(
   const input: ReleaseArtifactCheckpointInput = {
     assetsDirectory,
     platform,
-    arch: "x64",
+    arch,
     target: platform === "mac" ? "dmg" : platform === "win" ? "nsis" : "AppImage",
     version,
     flavor,
@@ -88,7 +98,7 @@ function checkpoint(
       };
     }),
   };
-  const manifestPath = join(assetsDirectory, `artifact-${platform}-x64.provenance.json`);
+  const manifestPath = join(assetsDirectory, `artifact-${platform}-${arch}.provenance.json`);
   writeFileSync(manifestPath, JSON.stringify(manifest));
   function changeManifest(change: (value: Record<string, any>) => void) {
     const value = JSON.parse(readFileSync(manifestPath, "utf8"));
@@ -132,10 +142,13 @@ describe("same-run release artifact checkpoint", () => {
   it.each([
     ["linux", "production"],
     ["linux", "beta"],
+    ["linux", "remote"],
     ["mac", "production"],
     ["mac", "beta"],
+    ["mac", "remote"],
     ["win", "production"],
     ["win", "beta"],
+    ["win", "remote"],
   ] as const)(
     "accepts the native producer's %s %s payload and its full inventory",
     async (platform, flavor) => {
@@ -144,6 +157,18 @@ describe("same-run release artifact checkpoint", () => {
       expect(verified.source.commit).toBe(input.sourceCommit);
     },
   );
+
+  it("refuses Remote receipts as Stable or Beta and unsupported Remote targets", async () => {
+    const { input } = checkpoint("mac", "remote");
+    for (const flavor of ["production", "beta"] as const)
+      await expect(verifyReleaseArtifactCheckpoint({ ...input, flavor })).rejects.toThrow(
+        "unexpected or duplicate artifact name",
+      );
+    for (const change of [{ arch: "x64" }, { version: "1.2.3", sourceTag: "v1.2.3" }])
+      await expect(verifyReleaseArtifactCheckpoint({ ...input, ...change })).rejects.toThrow(
+        "Invalid expected release checkpoint identity",
+      );
+  });
 
   it("rejects a Linux AppImage using the manifest architecture alias", async () => {
     const { input, payloadPath, changeManifest } = checkpoint();
@@ -155,6 +180,52 @@ describe("same-run release artifact checkpoint", () => {
     await expect(verifyReleaseArtifactCheckpoint(input)).rejects.toThrow(
       "unexpected or duplicate artifact name",
     );
+  });
+
+  it("accepts an arm64 Linux checkpoint with its own payload and feed", async () => {
+    const { input } = checkpoint("linux", "production", "arm64");
+    expect(input.arch).toBe("arm64");
+    await expect(verifyReleaseArtifactCheckpoint(input)).resolves.toMatchObject({
+      platform: "linux",
+      arch: "arm64",
+    });
+    // The x86_64 alias belongs to Intel checkpoints only.
+    const aliased = checkpoint("linux", "production", "arm64");
+    renameSync(
+      aliased.payloadPath,
+      join(aliased.input.assetsDirectory, "Synara-1.2.3-x86_64.AppImage"),
+    );
+    aliased.changeManifest((manifest) => {
+      manifest.artifacts[0].fileName = "Synara-1.2.3-x86_64.AppImage";
+    });
+    await expect(verifyReleaseArtifactCheckpoint(aliased.input)).rejects.toThrow(
+      "unexpected or duplicate artifact name",
+    );
+  });
+
+  it("rejects the x86_64 Linux feed name on an arm64 checkpoint", async () => {
+    const { input, changeManifest } = checkpoint("linux", "production", "arm64");
+    renameSync(
+      join(input.assetsDirectory, "latest-linux-arm64.yml"),
+      join(input.assetsDirectory, "latest-linux.yml"),
+    );
+    changeManifest((manifest) => {
+      manifest.artifacts[1].fileName = "latest-linux.yml";
+    });
+    await expect(verifyReleaseArtifactCheckpoint(input)).rejects.toThrow(
+      "unexpected or duplicate artifact name",
+    );
+  });
+
+  it("rejects architectures that this platform does not package", async () => {
+    for (const { input } of [
+      checkpoint("win", "production", "arm64"),
+      checkpoint("linux", "remote", "arm64"),
+    ]) {
+      await expect(verifyReleaseArtifactCheckpoint(input)).rejects.toThrow(
+        "Invalid expected release checkpoint identity",
+      );
+    }
   });
 
   it.each([

@@ -1,5 +1,5 @@
 // Purpose: Browser checks for the landing ASCII field’s rendering and lifecycle.
-// Covers hidden owners, reduced motion, Retina allocation and complete resize frames.
+// Covers hidden owners, reduced motion, Retina allocation and resize frames.
 import "../../index.css";
 
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -13,14 +13,37 @@ vi.mock("~/hooks/useTheme", () => ({
   useTheme: () => ({ activeTheme: { theme: { ink: "#ffffff", accent: "#88ee44" } } }),
 }));
 
-const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+// The field runs on setTimeout, requestAnimationFrame, requestIdleCallback and
+// performance.now. A fake clock replays its real cadence without sleeping through
+// the start delay, reveal and ripple lifetime.
+const CLOCK = [
+  "setTimeout",
+  "clearTimeout",
+  "requestAnimationFrame",
+  "cancelAnimationFrame",
+  "requestIdleCallback",
+  "cancelIdleCallback",
+  "performance",
+] as const;
+const realSetTimeout = globalThis.setTimeout.bind(globalThis);
+const wait = (ms: number) => vi.advanceTimersByTimeAsync(ms);
+// Advances the fake clock until `done` holds. Yields real time between steps so
+// browser-owned callbacks (ResizeObserver, rendering) can run.
+async function advanceUntil(done: () => boolean, maxMs: number, stepMs = 16) {
+  for (let elapsed = 0; !done(); elapsed += stepMs) {
+    if (elapsed >= maxMs) throw new Error(`Condition not met within ${maxMs}ms of fake time`);
+    await vi.advanceTimersByTimeAsync(stepMs);
+    await new Promise((resolve) => realSetTimeout(resolve, 0));
+  }
+}
 
 function pixels(canvas: HTMLCanvasElement, bottomQuarter = false) {
   const y = bottomQuarter ? Math.floor(canvas.height * 0.75) : 0;
   return canvas.getContext("2d")!.getImageData(0, y, canvas.width, canvas.height - y).data;
 }
 
-async function mount(width = 800, height = 600) {
+// `settle` waits out the glyph reveal for tests that compare finished pixels.
+async function mount(width = 800, height = 600, settle = false) {
   const view = await render(
     <div data-testid="landing" style={{ position: "relative", width, height }}>
       <AsciiWaveBackground />
@@ -28,16 +51,18 @@ async function mount(width = 800, height = 600) {
   );
   const host = document.querySelector<HTMLDivElement>('[data-testid="landing"]')!;
   const canvas = host.querySelector("canvas")!;
-  await expect.poll(() => pixels(canvas).some((byte) => byte > 0), { timeout: 5000 }).toBe(true);
-  await wait(1600);
+  await advanceUntil(() => pixels(canvas).some((byte) => byte > 0), 5000, 50);
+  if (settle) await wait(1600);
   return { view, host, canvas };
 }
 
 beforeEach(() => {
+  vi.useFakeTimers({ toFake: [...CLOCK] });
   motion.reduced = false;
   vi.spyOn(Math, "random").mockReturnValue(0.5);
 });
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -48,10 +73,10 @@ it("pauses canvas work in an invisible retained owner, resumes, and stops on unm
   host.style.visibility = "hidden";
   await wait(150);
   draws.mockClear();
-  await wait(1200);
+  await wait(600);
   expect(draws.mock.calls.length).toBe(0);
   host.style.visibility = "visible";
-  await expect.poll(() => draws.mock.calls.length, { timeout: 2000 }).toBeGreaterThan(0);
+  await advanceUntil(() => draws.mock.calls.length > 0, 2000);
   await view.unmount();
   draws.mockClear();
   await wait(150);
@@ -60,7 +85,7 @@ it("pauses canvas work in an invisible retained owner, resumes, and stops on unm
 
 it("keeps the reduced-motion field unchanged after a user-triggered ripple settles", async () => {
   motion.reduced = true;
-  const { host, canvas } = await mount();
+  const { host, canvas } = await mount(800, 600, true);
   const before = pixels(canvas);
   const rect = host.getBoundingClientRect();
   for (const type of ["pointerdown", "pointerup"]) {
@@ -103,7 +128,7 @@ it("bounds Retina canvas allocation while preserving the landing's CSS size", as
 
 it("publishes complete glyph layers after resize without a partial top-down wipe", async () => {
   motion.reduced = true;
-  const { host, canvas } = await mount();
+  const { host, canvas } = await mount(800, 600, true);
   const bottomCoverage: boolean[] = [];
   const drawImage = CanvasRenderingContext2D.prototype.drawImage;
   vi.spyOn(CanvasRenderingContext2D.prototype, "drawImage").mockImplementation(function (
@@ -117,6 +142,6 @@ it("publishes complete glyph layers after resize without a partial top-down wipe
   });
   host.style.width = "1200px";
   host.style.height = "800px";
-  await expect.poll(() => bottomCoverage.length, { timeout: 5000 }).toBeGreaterThan(0);
+  await advanceUntil(() => bottomCoverage.length > 0, 5000);
   expect(bottomCoverage.every(Boolean)).toBe(true);
 });

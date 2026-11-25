@@ -1,3 +1,5 @@
+import { RemoteHostTrustRepositoryLive } from "./persistence/Layers/RemoteHostTrust";
+import { RemoteDeviceTrustRepositoryLive } from "./persistence/Layers/RemoteDeviceTrust";
 import { ProjectionThreadMessageRepositoryLive } from "./persistence/Layers/ProjectionThreadMessages";
 import { OrchestrationCommandReceiptRepositoryLive } from "./persistence/Layers/OrchestrationCommandReceipts";
 import { QueuedTurnPromotionRepositoryLive } from "./persistence/Layers/QueuedTurnPromotions";
@@ -45,6 +47,7 @@ import { ServerSecretStoreLive } from "./auth/Layers/ServerSecretStore";
 import { SessionCredentialServiceLive } from "./auth/Layers/SessionCredentialService";
 import { ProfileStatsQueryLive } from "./profileStats";
 import { RecapStatsQueryLive } from "./recapStats";
+import { UsageAnalyticsQueryLive } from "./usageAnalyticsStats";
 import { ThreadSearchQueryLive } from "./threadSearch";
 import { ProfileStatsArchiveLive } from "./profileStatsArchive";
 import { ServerEventLoopMonitorLive } from "./eventLoopMonitor";
@@ -74,9 +77,12 @@ import { ManagedAttachmentCleanupLive } from "./managedAttachmentCleanup";
 import { PullRequestServiceLive } from "./pullRequests/Layers/PullRequestService";
 import { PullRequestAutoFixRepositoryLive } from "./persistence/Layers/PullRequestAutoFixRepository";
 import { PullRequestAutoFixServiceLive } from "./pullRequestAutoFix/Layers/PullRequestAutoFixService";
+import { ComposerPredictionServiceLive } from "./composerPrediction/Layers/ComposerPredictionService";
 import { GitHubInboxServiceLive } from "./githubInbox/Layers/GitHubInboxService";
 import { ProviderHealthLive } from "./provider/Layers/ProviderHealth";
 import { makeServerProviderLayer } from "./provider/runtimeLayer";
+import { RemoteSessionRegistryLive } from "./remoteSessions/sessionRegistry";
+import { HostConnectionRegistryLive } from "./hostConnections/registry";
 
 export { makeServerProviderLayer } from "./provider/runtimeLayer";
 
@@ -210,6 +216,7 @@ export function makeServerRuntimeServicesLayer(
     Layer.provide(sessionCredentialLayer),
   );
   const serverAuthLayer = ServerAuthLive.pipe(
+    Layer.provide(RemoteSessionRegistryLive),
     Layer.provide(ServerAuthPolicyLive),
     Layer.provide(BootstrapCredentialServiceLive),
     Layer.provide(sessionCredentialLayer),
@@ -256,6 +263,9 @@ export function makeServerRuntimeServicesLayer(
     Layer.provideMerge(agentGatewayCredentialsLayer),
   );
   const agentGatewayLayer = AgentGatewayLive.pipe(
+    Layer.provideMerge(mcpConnectorsLayer),
+    Layer.provideMerge(ServerEnvironmentLive),
+    Layer.provideMerge(HostConnectionRegistryLive),
     Layer.provideMerge(
       Layer.mergeAll(
         ProjectionThreadMessageRepositoryLive,
@@ -264,10 +274,14 @@ export function makeServerRuntimeServicesLayer(
         todoServiceLayer,
       ),
     ),
-    Layer.provideMerge(QueuedTurnPromotionRepositoryLive),
-    Layer.provideMerge(HubWorkRepositoryLive),
-    Layer.provideMerge(ProjectAgentRepositoryLive),
-    Layer.provideMerge(ManagedAttachmentRepositoryLive),
+    Layer.provideMerge(
+      Layer.mergeAll(
+        QueuedTurnPromotionRepositoryLive,
+        HubWorkRepositoryLive,
+        ProjectAgentRepositoryLive,
+        ManagedAttachmentRepositoryLive,
+      ),
+    ),
     Layer.provideMerge(agentGatewayCredentialsLayer),
     Layer.provideMerge(automationServiceLayer),
     Layer.provideMerge(projectAgentServiceLayer),
@@ -302,6 +316,11 @@ export function makeServerRuntimeServicesLayer(
     Layer.provideMerge(GitLayerLive),
     Layer.provideMerge(runtimeServicesLayer),
   );
+  const composerPredictionLayer = ComposerPredictionServiceLive.pipe(
+    Layer.provideMerge(runtimeServicesLayer),
+    Layer.provideMerge(TextGenerationLayerLive),
+    Layer.provideMerge(serverSettingsLayer),
+  );
   const keepAwakeLayer = KeepAwakeLive.pipe(
     Layer.provideMerge(runtimeServicesLayer),
     Layer.provideMerge(ServerSettingsLive),
@@ -329,6 +348,7 @@ export function makeServerRuntimeServicesLayer(
     ProjectPullRequestPinsLive,
     pullRequestServiceLayer,
     pullRequestAutoFixLayer,
+    composerPredictionLayer,
     orchestrationReactorLayer,
     providerCommandReactorLayer,
     sidechatExpiryReactorLayer,
@@ -347,6 +367,7 @@ export function makeServerRuntimeServicesLayer(
     ServerEnvironmentLive,
     ProfileStatsQueryLive,
     RecapStatsQueryLive,
+    UsageAnalyticsQueryLive,
     ThreadSearchQueryLive,
     authServicesLayer,
     ServerLifecycleEventsLive,
@@ -354,6 +375,10 @@ export function makeServerRuntimeServicesLayer(
     ServerRuntimeStartupLive,
     WorkspaceLayerLive,
     ProjectFaviconResolverLive,
+    RemoteSessionRegistryLive,
+    RemoteDeviceTrustRepositoryLive,
+    RemoteHostTrustRepositoryLive,
+    HostConnectionRegistryLive,
   ).pipe(Layer.provideMerge(serverSettingsLayer), Layer.provideMerge(NodeServices.layer));
 }
 

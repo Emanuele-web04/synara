@@ -69,7 +69,6 @@ import {
 import { ProjectAgentRepository } from "./persistence/Services/ProjectAgentRepository";
 import { resolveCachedEditorIcon } from "./editorAppIcons";
 import { LOCAL_IMAGE_ROUTE_PATH, resolveAllowedLocalPreviewFile } from "./localImageFiles.ts";
-import type { ProjectFaviconResolverShape } from "./project/Services/ProjectFaviconResolver";
 import { resolveScratchWorkspacesRoot } from "./scratchWorkspaces.ts";
 import { ProjectFaviconResolver } from "./project/Services/ProjectFaviconResolver";
 import { OrchestrationEngineService } from "./orchestration/Services/OrchestrationEngine";
@@ -80,6 +79,8 @@ import { threadArchiveChunks, threadArchiveFileName } from "./orchestration/expo
 import type { ServerReadiness } from "./server/readiness";
 import { ServerSettingsService } from "./serverSettings";
 import { isLoopbackHost } from "./startupAccess";
+import { decideWithBillingPolicy, isTrustedLocalServerToken } from "./auth/remoteAccess";
+import { RemoteSessionRegistryService } from "./remoteSessions/sessionRegistry";
 import {
   attachmentPrincipalForSession,
   LOCAL_LOOPBACK_ATTACHMENT_PRINCIPAL,
@@ -415,13 +416,25 @@ function trustedMutationCorsHeaders(input: {
 export function isLegacyTokenAuthorized(input: {
   readonly config: ServerConfigShape;
   readonly url: URL;
+  readonly remoteBillingEnforced?: boolean;
 }): boolean {
+  if (input.remoteBillingEnforced)
+    return isTrustedLocalServerToken(input.config, input.url.searchParams.get("token"));
   if (!isLoopbackHost(input.config.host) || input.config.publicUrl) {
     return false;
   }
   const legacyToken = input.url.searchParams.get("token");
   return !input.config.authToken || legacyToken === input.config.authToken;
 }
+
+/** The live registry is mandatory: default-off compatibility is a policy, not missing DI. */
+const isLocalHttpRequest = (config: ServerConfigShape, url: URL) =>
+  Effect.gen(function* () {
+    const remoteSessions = yield* RemoteSessionRegistryService;
+    return yield* decideWithBillingPolicy(remoteSessions, (remoteBillingEnforced) =>
+      isLegacyTokenAuthorized({ config, url, remoteBillingEnforced }),
+    );
+  });
 
 function encodeCookie(input: {
   readonly name: string;
@@ -698,7 +711,7 @@ export const projectFaviconEffectRouteLayer = HttpRouter.add(
     // Desktop image requests carry the local startup token in the URL, just
     // like site favicons and attachment previews; remote servers require a session.
     const config = yield* ServerConfig;
-    if (!isLegacyTokenAuthorized({ config, url })) {
+    if (!(yield* isLocalHttpRequest(config, url))) {
       yield* requireAuthenticatedRequest;
     }
     const projectCwd = url.searchParams.get("cwd");
@@ -759,7 +772,7 @@ const siteFaviconEffectRouteLayer = HttpRouter.add(
     // same startup-token rule the local-image/attachments routes use so favicons
     // load in local dev without a session cookie.
     const config = yield* ServerConfig;
-    if (!isLegacyTokenAuthorized({ config, url })) {
+    if (!(yield* isLocalHttpRequest(config, url))) {
       yield* requireAuthenticatedRequest;
     }
 
@@ -805,7 +818,7 @@ const threadExportEffectRouteLayer = HttpRouter.add(
     if (!url) return HttpServerResponse.text("Bad Request", { status: 400 });
 
     const config = yield* ServerConfig;
-    if (!isLegacyTokenAuthorized({ config, url })) {
+    if (!(yield* isLocalHttpRequest(config, url))) {
       yield* requireAuthenticatedRequest;
     }
 
@@ -860,7 +873,7 @@ export const editorIconEffectRouteLayer = HttpRouter.add(
     if (!url) return HttpServerResponse.text("Bad Request", { status: 400 });
 
     const config = yield* ServerConfig;
-    if (!isLegacyTokenAuthorized({ config, url })) {
+    if (!(yield* isLocalHttpRequest(config, url))) {
       yield* requireAuthenticatedRequest;
     }
 
@@ -904,13 +917,44 @@ function streamedFileResponse(input: {
   readonly path: string;
   readonly sizeBytes: number;
   readonly headers: Record<string, string>;
+  readonly range?: string | undefined;
 }): HttpServerResponse.HttpServerResponse {
-  return HttpServerResponse.stream(input.fileSystem.stream(input.path), {
-    status: 200,
-    contentType: Mime.getType(input.path) ?? "application/octet-stream",
-    contentLength: input.sizeBytes,
-    headers: input.headers,
-  });
+  const headers = { ...input.headers, "Accept-Ranges": "bytes" };
+  let start = 0;
+  let end = input.sizeBytes - 1;
+  if (input.range !== undefined) {
+    const match = /^bytes=(\d*)-(\d*)$/.exec(input.range);
+    if (match && (match[1] || match[2])) {
+      start = match[1] ? Number(match[1]) : Math.max(0, input.sizeBytes - Number(match[2]));
+      end = match[1] && match[2] ? Math.min(Number(match[2]), end) : end;
+    } else start = Number.NaN;
+    if (
+      !Number.isSafeInteger(start) ||
+      !Number.isSafeInteger(end) ||
+      start > end ||
+      start >= input.sizeBytes
+    ) {
+      return HttpServerResponse.empty({
+        status: 416,
+        headers: { ...headers, "Content-Range": `bytes */${input.sizeBytes}` },
+      });
+    }
+  }
+  const length = Math.max(0, end - start + 1);
+  return HttpServerResponse.stream(
+    input.fileSystem.stream(input.path, { offset: start, bytesToRead: length }),
+    {
+      status: input.range === undefined ? 200 : 206,
+      contentType: Mime.getType(input.path) ?? "application/octet-stream",
+      contentLength: length,
+      headers: {
+        ...headers,
+        ...(input.range === undefined
+          ? {}
+          : { "Content-Range": `bytes ${start}-${end}/${input.sizeBytes}` }),
+      },
+    },
+  );
 }
 
 export const localImageEffectRouteLayer = HttpRouter.add(
@@ -922,7 +966,7 @@ export const localImageEffectRouteLayer = HttpRouter.add(
     if (!url) return HttpServerResponse.text("Bad Request", { status: 400 });
 
     const config = yield* ServerConfig;
-    if (!isLegacyTokenAuthorized({ config, url })) {
+    if (!(yield* isLocalHttpRequest(config, url))) {
       yield* requireAuthenticatedRequest;
     }
 
@@ -988,6 +1032,7 @@ export const localImageEffectRouteLayer = HttpRouter.add(
       fileSystem,
       path: previewFile.path,
       sizeBytes: previewFile.sizeBytes,
+      range: request.headers.range,
       headers: {
         "Cache-Control": "private, max-age=60",
         // The PDF viewer fetches bytes from either the desktop app origin or
@@ -1025,9 +1070,14 @@ const binaryUploadEffectHandler = Effect.gen(function* () {
   if (request.method !== "POST") {
     return HttpServerResponse.text("Method Not Allowed", { status: 405, headers: corsHeaders });
   }
-  const mutationSession = isLegacyTokenAuthorized({ config, url })
-    ? null
-    : yield* requireAuthenticatedMutationRequest;
+  const localMutation = yield* decideWithBillingPolicy(
+    yield* RemoteSessionRegistryService,
+    (remoteBillingEnforced) =>
+      (remoteBillingEnforced && isTrustedLocalServerToken(config, url.searchParams.get("token"))) ||
+      (!request.headers.authorization &&
+        isLegacyTokenAuthorized({ config, url, remoteBillingEnforced })),
+  );
+  const mutationSession = localMutation ? null : yield* requireAuthenticatedMutationRequest;
   const attachmentPrincipal =
     mutationSession === null
       ? LOCAL_LOOPBACK_ATTACHMENT_PRINCIPAL
@@ -1396,7 +1446,7 @@ export const attachmentsEffectRouteLayer = HttpRouter.add(
     const config = yield* ServerConfig;
     // Desktop image tags cannot attach Authorization headers; preserve the same
     // startup token rule that the WebSocket route already accepts.
-    if (!isLegacyTokenAuthorized({ config, url })) {
+    if (!(yield* isLocalHttpRequest(config, url))) {
       yield* requireAuthenticatedRequest;
     }
 
@@ -1467,6 +1517,7 @@ export const attachmentsEffectRouteLayer = HttpRouter.add(
       fileSystem,
       path: filePath,
       sizeBytes: Number(fileInfo.size),
+      range: request.headers.range,
       // Attachment access is session/token gated and attachments are mutable
       // lifecycle resources: deletion or session revocation must take effect on
       // the next request, including when a shared proxy is present.
@@ -1480,6 +1531,64 @@ export const attachmentsEffectRouteLayer = HttpRouter.add(
     });
   }).pipe(Effect.catchTag("AuthError", (error) => Effect.succeed(authErrorResponse(error)))),
 );
+
+interface CachedImmutableStaticAsset {
+  readonly data: Uint8Array;
+  readonly etag: string;
+  readonly contentType: string;
+  readonly encoding: string | undefined;
+  readonly byteLength: number;
+}
+
+const IMMUTABLE_STATIC_CACHE_MAX_BYTES = 24 * 1024 * 1024;
+const immutableStaticAssetCache = new Map<string, CachedImmutableStaticAsset>();
+let immutableStaticAssetCacheBytes = 0;
+
+function getCachedImmutableStaticAsset(key: string): CachedImmutableStaticAsset | undefined {
+  const hit = immutableStaticAssetCache.get(key);
+  if (!hit) return undefined;
+  immutableStaticAssetCache.delete(key);
+  immutableStaticAssetCache.set(key, hit);
+  return hit;
+}
+
+function setCachedImmutableStaticAsset(key: string, entry: CachedImmutableStaticAsset): void {
+  if (entry.byteLength > IMMUTABLE_STATIC_CACHE_MAX_BYTES / 4) return;
+  const previous = immutableStaticAssetCache.get(key);
+  if (previous) {
+    immutableStaticAssetCacheBytes -= previous.byteLength;
+    immutableStaticAssetCache.delete(key);
+  }
+  while (
+    immutableStaticAssetCacheBytes + entry.byteLength > IMMUTABLE_STATIC_CACHE_MAX_BYTES &&
+    immutableStaticAssetCache.size > 0
+  ) {
+    const oldestKey = immutableStaticAssetCache.keys().next().value;
+    if (oldestKey === undefined) break;
+    const oldest = immutableStaticAssetCache.get(oldestKey);
+    immutableStaticAssetCache.delete(oldestKey);
+    if (oldest) immutableStaticAssetCacheBytes -= oldest.byteLength;
+  }
+  immutableStaticAssetCache.set(key, entry);
+  immutableStaticAssetCacheBytes += entry.byteLength;
+}
+
+function cachedImmutableStaticResponse(
+  cached: CachedImmutableStaticAsset,
+  cacheHeaders: { readonly "Cache-Control": string; readonly Vary: string },
+  ifNoneMatch: string | undefined,
+) {
+  const encodingHeaders = cached.encoding ? { "Content-Encoding": cached.encoding } : {};
+  const headers = { ...cacheHeaders, ...encodingHeaders, ETag: cached.etag };
+  if (ifNoneMatchSatisfies(ifNoneMatch, cached.etag)) {
+    return HttpServerResponse.empty({ status: 304, headers });
+  }
+  return HttpServerResponse.uint8Array(cached.data, {
+    status: 200,
+    contentType: cached.contentType,
+    headers,
+  });
+}
 
 export const staticAndDevEffectRouteLayer = HttpRouter.add(
   "GET",
@@ -1522,27 +1631,17 @@ export const staticAndDevEffectRouteLayer = HttpRouter.add(
       candidate === staticRoot ||
       candidate.startsWith(staticRoot.endsWith(path.sep) ? staticRoot : `${staticRoot}${path.sep}`);
 
-    // Lexical containment is not containment: stat and readFile follow
-    // symlinks, so a link inside the root pointing outside it would be served.
-    // Canonicalize before opening anything. The root itself is canonicalized
-    // too, otherwise a symlinked staticDir would fail its own check.
+    // Resolve the root and the file for each request. A symlinked build can be
+    // replaced while the server is still running, including when assets are cached.
     const canonicalStaticRoot = yield* fileSystem
       .realPath(staticRoot)
-      .pipe(Effect.catch(() => Effect.succeed(staticRoot)));
-    const isWithinCanonicalRoot = (candidate: string) =>
-      candidate === canonicalStaticRoot ||
-      candidate.startsWith(
-        canonicalStaticRoot.endsWith(path.sep)
-          ? canonicalStaticRoot
-          : `${canonicalStaticRoot}${path.sep}`,
-      );
-    const resolvesInsideRoot = Effect.fn(function* (candidate: string) {
-      const real = yield* fileSystem
-        .realPath(candidate)
-        .pipe(Effect.catch(() => Effect.succeed(null)));
-      // A path that cannot be canonicalized does not exist; the caller's own
-      // stat/readFile will fail it, and refusing here keeps 404 semantics.
-      return real === null ? false : isWithinCanonicalRoot(real);
+      .pipe(Effect.orElseSucceed(() => staticRoot));
+    const canonicalPrefix = canonicalStaticRoot.endsWith(path.sep)
+      ? canonicalStaticRoot
+      : `${canonicalStaticRoot}${path.sep}`;
+    const resolveStaticFile = Effect.fn(function* (candidate: string) {
+      const real = yield* fileSystem.realPath(candidate).pipe(Effect.orElseSucceed(() => null));
+      return real !== null && real.startsWith(canonicalPrefix) ? real : null;
     });
 
     let filePath = path.resolve(staticRoot, relativePath);
@@ -1564,8 +1663,11 @@ export const staticAndDevEffectRouteLayer = HttpRouter.add(
     // when a sidecar is served, so validators differ per encoding), making
     // no-cache revalidation a 304 instead of a full re-transfer.
     const serveStaticFile = Effect.fn(function* (resolvedPath: string) {
+      const relativeResolved = path.relative(staticRoot, resolvedPath).replaceAll("\\", "/");
+      const cacheControl = staticCacheControl(relativeResolved);
+      const isImmutableAsset = relativeResolved.startsWith("assets/");
       const cacheHeaders = {
-        "Cache-Control": staticCacheControl(path.relative(staticRoot, resolvedPath)),
+        "Cache-Control": cacheControl,
         Vary: "Accept-Encoding",
       };
       const ifNoneMatch = request.headers["if-none-match"];
@@ -1573,12 +1675,16 @@ export const staticAndDevEffectRouteLayer = HttpRouter.add(
       const contentType =
         baseContentType === "text/html" ? "text/html; charset=utf-8" : baseContentType;
       const respond = Effect.fn(function* (servedPath: string, encoding?: string) {
-        // Canonicalize before opening: a symlink inside the root pointing
-        // outside it passes the lexical guard but must not be served.
-        if (!(yield* resolvesInsideRoot(servedPath))) return null;
-        const info = yield* fileSystem
-          .stat(servedPath)
-          .pipe(Effect.catch(() => Effect.succeed(null)));
+        const real = yield* resolveStaticFile(servedPath);
+        if (real === null) return null;
+        // Include the representation URL so aliases with different MIME types
+        // never share cached headers even when they resolve to the same file.
+        const cacheKey = isImmutableAsset ? `${canonicalStaticRoot}\0${servedPath}\0${real}` : null;
+        if (cacheKey !== null) {
+          const cached = getCachedImmutableStaticAsset(cacheKey);
+          if (cached) return cachedImmutableStaticResponse(cached, cacheHeaders, ifNoneMatch);
+        }
+        const info = yield* fileSystem.stat(real).pipe(Effect.orElseSucceed(() => null));
         if (!info || info.type !== "File") return null;
         const etag = staticEtag(Number(info.size), info.mtime?.getTime() ?? 0, encoding);
         const encodingHeaders = encoding ? { "Content-Encoding": encoding } : {};
@@ -1587,9 +1693,18 @@ export const staticAndDevEffectRouteLayer = HttpRouter.add(
           return HttpServerResponse.empty({ status: 304, headers });
         }
         const data = yield* fileSystem
-          .readFile(servedPath)
+          .readFile(real)
           .pipe(Effect.catch(() => Effect.succeed(null)));
         if (!data) return null;
+        if (cacheKey !== null) {
+          setCachedImmutableStaticAsset(cacheKey, {
+            data,
+            etag,
+            contentType,
+            encoding,
+            byteLength: data.byteLength,
+          });
+        }
         return HttpServerResponse.uint8Array(data, { status: 200, contentType, headers });
       });
       const preference = negotiateStaticEncodingPreference(request.headers["accept-encoding"]);

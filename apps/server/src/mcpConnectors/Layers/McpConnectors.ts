@@ -46,6 +46,7 @@ export const makeMcpConnectors = (options: { readonly enabled?: boolean } = {}) 
     const credentials = yield* AgentGatewayCredentials;
 
     const runtime = new McpConnectorRuntime({
+      ownerActive: (token) => credentials.verifySession(token) !== null,
       load: () =>
         Effect.runPromise(
           secretStore
@@ -62,7 +63,25 @@ export const makeMcpConnectors = (options: { readonly enabled?: boolean } = {}) 
       logWarning: (message, fields) => log.warn(message, fields),
     });
     // Restore only this app's connector document; Stable and Beta have separate homes.
-    if (enabled) yield* Effect.promise(() => runtime.init());
+    if (enabled) {
+      yield* Effect.promise(() => runtime.init());
+      yield* Effect.addFinalizer(() => Effect.promise(() => runtime.dispose()));
+      yield* Effect.forkScoped(
+        Effect.forever(
+          Effect.tryPromise(async () => {
+            await runtime.refreshLocalStatus();
+            await runtime.sweepStdio((token) => credentials.verifySession(token) !== null);
+          }).pipe(
+            Effect.catch(() =>
+              Effect.sync(() =>
+                log.warn("Could not refresh local connectors or complete process cleanup."),
+              ),
+            ),
+            Effect.andThen(Effect.sleep("10 seconds")),
+          ),
+        ),
+      );
+    }
 
     const unavailable = Effect.fail(
       new McpConnectorError({ message: "Connectors are unavailable on this server." }),
@@ -70,6 +89,32 @@ export const makeMcpConnectors = (options: { readonly enabled?: boolean } = {}) 
 
     return {
       enabled,
+      listProposals: () => (enabled ? Effect.sync(() => runtime.listProposals()) : unavailable),
+      proposeAdd: (input, threadId, cwd, source) =>
+        enabled
+          ? Effect.tryPromise({
+              try: () => runtime.proposeAdd(input, threadId, cwd, source),
+              catch: toConnectorError(
+                "Invalid connector proposal. Check the URL or process settings.",
+              ),
+            })
+          : unavailable,
+      proposeRemove: (connectorId, threadId) =>
+        enabled
+          ? Effect.tryPromise({
+              try: () => runtime.proposeRemove(connectorId, threadId),
+              catch: toConnectorError("Could not propose connector removal."),
+            })
+          : unavailable,
+      resolveProposal: (input) =>
+        enabled
+          ? Effect.tryPromise({
+              try: () => runtime.resolveProposal(input),
+              catch: toConnectorError(
+                "Could not apply the connector proposal. Check Settings → Connectors.",
+              ),
+            })
+          : unavailable,
       list: () => (enabled ? Effect.sync(() => runtime.list()) : unavailable),
       connect: (input) =>
         enabled

@@ -32,18 +32,16 @@ describe("resolvePrStatePresentation", () => {
 });
 
 describe("resolveIssueStatePresentation", () => {
-  it("maps open, completed, and not planned issues to GitHub's glyphs and colors", () => {
+  it("maps open, completed, and not planned issues to GitHub glyphs", () => {
     expect(resolveIssueStatePresentation({ state: "open", stateReason: null })).toMatchObject({
       shortLabel: "Open",
       iconKind: "issue-opened",
-      colorClass: "text-status-open",
     });
     expect(
       resolveIssueStatePresentation({ state: "closed", stateReason: "completed" }),
     ).toMatchObject({
       shortLabel: "Closed",
       iconKind: "issue-closed",
-      colorClass: "text-status-merged",
     });
     // A closed issue without a reason reads as completed, as it does on GitHub.
     expect(resolveIssueStatePresentation({ state: "closed", stateReason: null }).iconKind).toBe(

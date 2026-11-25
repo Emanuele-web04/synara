@@ -7,6 +7,7 @@ import type {
   DesktopComputerPreviewFrame,
   DesktopDiagnosticActivity,
   DesktopWindowTranslucency,
+  ProductAnalyticsInput,
 } from "@synara/contracts";
 import { normalizeDesktopWsUrl, resolveDesktopWsUrlFromEnv } from "./desktopWsBridge";
 import { DESKTOP_IPC_CHANNELS } from "./ipcChannels";
@@ -127,6 +128,11 @@ function parseBrowserAnnotationEvent(payload: unknown): BrowserAnnotationEvent |
 }
 
 const betaDiagnosticsBridge = getBetaDiagnosticsBridge();
+const productAnalyticsBridge: DesktopBridge["productAnalytics"] = {
+  getState: () => ipcRenderer.invoke(IPC.productAnalytics.getState),
+  setEnabled: (enabled) => ipcRenderer.invoke(IPC.productAnalytics.setEnabled, enabled),
+  track: (input: ProductAnalyticsInput) => ipcRenderer.send(IPC.productAnalytics.track, input),
+};
 let lastBrowserResize = -Infinity;
 function recordBrowserActivity(activity: DesktopDiagnosticActivity): void {
   try {
@@ -143,9 +149,12 @@ function recordBrowserActivity(activity: DesktopDiagnosticActivity): void {
 }
 
 contextBridge.exposeInMainWorld("desktopBridge", {
+  productAnalytics: productAnalyticsBridge,
   ...(betaDiagnosticsBridge ? { betaDiagnostics: betaDiagnosticsBridge } : {}),
   getWsUrl: getDesktopWsUrl,
-  getSystemLanguages: () => ipcRenderer.sendSync(IPC.getSystemLanguages),
+  whenBackendReady: () => ipcRenderer.invoke(IPC.backendReady),
+  remoteResourceUrl: (hostId, reference) =>
+    ipcRenderer.sendSync(IPC.remoteResourceUrl, hostId, reference),
   // Absolute path for OS-dropped File objects (folders with spaces/parens, etc.).
   getPathForFile: (file: File) => {
     try {
@@ -159,7 +168,6 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   saveFile: (input) => ipcRenderer.invoke(IPC.saveFile, input),
   confirm: (message) => ipcRenderer.invoke(IPC.confirm, message),
   setTheme: (theme) => ipcRenderer.invoke(IPC.setTheme, theme),
-  setLanguagePreference: (preference) => ipcRenderer.invoke(IPC.setLanguagePreference, preference),
   setWindowMaterial: (input) => ipcRenderer.invoke(IPC.setWindowMaterial, input),
   ...(windowTranslucency ? { windowTranslucency } : {}),
   getAppIcon: () => ipcRenderer.invoke(IPC.getAppIcon),
@@ -199,6 +207,12 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     getState: () => ipcRenderer.invoke(IPC.customTitleBarGetState),
     setPreference: (enabled) => ipcRenderer.invoke(IPC.customTitleBarSetPreference, enabled),
     relaunch: () => ipcRenderer.invoke(IPC.customTitleBarRelaunch),
+  },
+  keepAwake: {
+    getState: () => ipcRenderer.invoke(IPC.keepAwake.getState),
+    setEnabled: (enabled) => ipcRenderer.invoke(IPC.keepAwake.setEnabled, enabled),
+    setRemoteAccessAllowed: (allowed) =>
+      ipcRenderer.invoke(IPC.keepAwake.setRemoteAccessAllowed, allowed),
   },
   computerPreview: {
     onFrame: (listener) => {

@@ -1,3 +1,4 @@
+import { executionStorage } from "./lib/hosts/executionStorage";
 // FILE: storePersistence.ts
 // Purpose: Persists project-only renderer preferences without depending on the Zustand facade.
 // Exports: Persistence I/O plus read-only remembered project UI state.
@@ -55,6 +56,8 @@ function resetRememberedProjectState(): void {
   persistedProjectNamesByCwd.clear();
   persistedProjectAppearanceByCwd.clear();
   persistedExpandedProjectCwdsDefined = false;
+  lastPersistedProjectsRef = null;
+  lastPersistedProjectsPayload = null;
 }
 
 /**
@@ -139,12 +142,12 @@ export function forgetProjectState(cwd: string): void {
 export function readPersistedState(initialState: AppState): AppState {
   if (typeof window === "undefined") return initialState;
   try {
-    const raw = window.localStorage.getItem(PERSISTED_STATE_KEY);
+    const raw = executionStorage.getItem(PERSISTED_STATE_KEY);
     if (!raw) {
       resetRememberedProjectState();
       return initialState;
     }
-    // SAFETY: localStorage is only writable by same-origin scripts. We validate the
+    // SAFETY: executionStorage is only writable by same-origin scripts. We validate the
     // persisted shape below, discarding any malformed entries and falling back to defaults.
     const parsed = JSON.parse(raw) as {
       expandedProjectCwds?: string[];
@@ -196,8 +199,12 @@ export function readPersistedState(initialState: AppState): AppState {
   }
 }
 
+let lastPersistedProjectsRef: AppState["projects"] | null = null;
+let lastPersistedProjectsPayload: string | null = null;
+
 export function persistState(state: AppState): void {
   if (typeof window === "undefined" || !state.threadsHydrated) return;
+  if (state.projects === lastPersistedProjectsRef) return;
   try {
     const projectNamesByCwd: Record<string, string> = {};
     const projectAppearanceByCwd: Record<string, ProjectAppearance> = {};
@@ -210,17 +217,19 @@ export function persistState(state: AppState): void {
         projectAppearanceByCwd[projectCwdKey(project.cwd)] = project.appearance;
       }
     }
-    window.localStorage.setItem(
-      PERSISTED_STATE_KEY,
-      JSON.stringify({
-        expandedProjectCwds: state.projects
-          .filter((project) => project.expanded)
-          .map((project) => projectCwdKey(project.cwd)),
-        projectOrderCwds: state.projects.map((project) => projectCwdKey(project.cwd)),
-        projectNamesByCwd,
-        projectAppearanceByCwd,
-      }),
-    );
+    const payload = JSON.stringify({
+      expandedProjectCwds: state.projects
+        .filter((project) => project.expanded)
+        .map((project) => projectCwdKey(project.cwd)),
+      projectOrderCwds: state.projects.map((project) => projectCwdKey(project.cwd)),
+      projectNamesByCwd,
+      projectAppearanceByCwd,
+    });
+    if (payload !== lastPersistedProjectsPayload) {
+      executionStorage.setItem(PERSISTED_STATE_KEY, payload);
+      lastPersistedProjectsPayload = payload;
+    }
+    lastPersistedProjectsRef = state.projects;
   } catch (error) {
     // Quota/private-mode storage failures are not actionable in the UI; log at
     // debug level so they are observable in devtools without breaking chat UX.

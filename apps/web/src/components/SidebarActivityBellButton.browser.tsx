@@ -31,7 +31,7 @@ vi.mock("../lib/serverReactQuery", async (importOriginal) => ({
 
 const activityKey = "synara:activity-onboarding:v1";
 const importKey = "synara:project-import-announcement:v1";
-const tourKey = "synara:feature-tour:since-0.9.2:v1";
+const tourKey = "synara:app-tour:v1";
 const coachmark = "See running tasks, completed work, and anything that needs your attention.";
 const clients: QueryClient[] = [];
 const screens: Awaited<ReturnType<typeof render>>[] = [];
@@ -49,6 +49,7 @@ beforeEach(() => {
   useProjectImportDialogStore.setState({ isOpen: false });
 });
 afterEach(async () => {
+  vi.useRealTimers();
   for (const screen of screens.splice(0)) await screen.unmount();
   for (const client of clients.splice(0)) client.clear();
   for (const key of [activityKey, importKey, tourKey, "synara:tasks-onboarding:v1"])
@@ -77,26 +78,29 @@ async function show() {
   return screen;
 }
 
-it("waits for import and the feature tour before showing and remembering the Activity coachmark", async () => {
+it("waits for import, then lets the app tour point at Activity in place of its hint", async () => {
   const screen = await show();
   await expect.element(page.getByRole("dialog", { name: "Import projects" })).toBeVisible();
   expect(page.getByText(coachmark).all()).toHaveLength(0);
   expect(localStorage.getItem(activityKey)).toBeNull();
   await page.getByRole("button", { name: "Not now" }).click();
-  await expect
-    .element(page.getByRole("dialog", { name: "A new home for your work" }))
-    .toBeVisible();
-  expect(page.getByText(coachmark).all()).toHaveLength(0);
-  expect(localStorage.getItem(activityKey)).toBeNull();
-  await page.getByRole("button", { name: "Skip tour" }).click();
-  await expect.element(page.getByText(coachmark)).toBeVisible();
+  // Only the bell is on screen, so the tour skips to its step and rings it.
+  const tour = page.getByRole("dialog", { name: "See what your agents are doing" });
+  await expect.element(tour).toBeVisible();
+  expect(tour.element().getAttribute("data-tour-side")).toBe("right");
   expect(localStorage.getItem(activityKey)).toBe("seen");
-  await page.getByRole("button", { name: "Switch to activity view" }).click();
-  await expect.element(page.getByText(coachmark)).not.toBeInTheDocument();
+  await page.getByRole("button", { name: "Done" }).click();
+  await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  expect(page.getByText(coachmark).all()).toHaveLength(0);
+  // The bell was mounted before the tour acknowledged its hint; its tooltip still works.
+  await page.getByRole("button", { name: "Switch to activity view" }).hover();
+  await expect.element(page.getByText("Activity view")).toBeVisible();
   await screen.unmount();
   screens.splice(screens.indexOf(screen), 1);
   await show();
-  await expect.element(page.getByText(coachmark)).not.toBeInTheDocument();
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  expect(page.getByText(coachmark).all()).toHaveLength(0);
 });
 
 it("leaves Activity unseen when import confirmation hands off to another flow", async () => {
@@ -119,9 +123,12 @@ it("shows after previously seen announcements and releases the slot when the hin
   const installation = "/repo/.codex/worktrees";
   localStorage.setItem(importKey, JSON.stringify([installation]));
   localStorage.setItem(tourKey, JSON.stringify([installation]));
+  // Only the hint's 8 s expiry timer is faked; polling and rendering use real timers.
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   await show();
   await expect.element(page.getByText(coachmark)).toBeVisible();
   expect(localStorage.getItem(activityKey)).toBe("seen");
+  await vi.advanceTimersByTimeAsync(8_000);
   await expect.element(page.getByText(coachmark)).not.toBeInTheDocument();
   expect(useAnnouncementSheetSlotStore.getState().owner).toBeNull();
   expect(localStorage.getItem(activityKey)).toBe("seen");
@@ -184,36 +191,4 @@ it("queues the Tasks hint behind Activity and remembers selection across layouts
   expect(page.getByText(copy).all()).toHaveLength(0);
   await page.getByRole("button", { name: "Tasks", exact: true }).click();
   expect(selectTasks).toHaveBeenCalledTimes(2);
-});
-
-it("paints the Tasks coachmark on its accent fill so the copy stays readable", async () => {
-  useAnnouncementSheetSlotStore.setState({ startupSettled: true });
-  localStorage.setItem(activityKey, "seen");
-  const screen = await render(
-    <TooltipProvider>
-      <AppRail
-        items={[
-          {
-            id: "tasks",
-            glyphs: railItemGlyphs("tasks"),
-            label: "Tasks",
-            badge: null,
-            active: false,
-            onSelect: () => {},
-          },
-        ]}
-        shortcuts={[]}
-        bottomItems={[]}
-      />
-    </TooltipProvider>,
-  );
-  screens.push(screen);
-  const copy = page.getByText(TASKS_COACHMARK.description);
-  await expect.element(copy).toBeVisible();
-  const popup = copy.element().closest<HTMLElement>("[data-slot='tooltip-popup']");
-  const popupStyle = getComputedStyle(popup!);
-  // The white copy needs the accent fill, not the shared popup surface's gradient fill.
-  expect(popupStyle.backgroundImage).toBe("none");
-  expect(popupStyle.backgroundColor).not.toBe("rgba(0, 0, 0, 0)");
-  expect(popupStyle.backgroundColor).not.toBe(getComputedStyle(copy.element()).color);
 });

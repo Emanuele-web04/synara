@@ -16,10 +16,19 @@ Work through these checks in order:
 5. Re-download the current installer from the [official download page](/install).
 6. Reinstall over the current application without deleting workspace data.
 
-On macOS, use the Arm64 build for Apple Silicon and the x64 build for Intel. On Linux, ensure the AppImage is executable:
+On macOS, use the Arm64 build for Apple Silicon and the x64 build for Intel. On Linux, match the
+AppImage to your CPU (`uname -m`: `x86_64` uses the Intel build, `aarch64` uses ARM64), make it
+executable, and install FUSE 2 if the AppImage cannot mount itself:
 
 ```bash
 chmod +x Synara*.AppImage
+```
+
+If your distribution has no FUSE 2 package, run the bundle without mounting it:
+
+```bash
+./Synara*.AppImage --appimage-extract
+./squashfs-root/synara
 ```
 
 <Callout type="warn" title="Do not delete data as a first step">
@@ -82,6 +91,16 @@ Fully quit every Synara process, then relaunch. Do not expose or forward Synaraâ
 7. Launch Synara and verify the displayed version before resuming important work.
 
 An update failure does not prove that local task data was deleted. Avoid combining an update recovery with manual data-directory cleanup.
+
+## A downloaded update is waiting
+
+Synara continues checking on its normal four-hour schedule while a downloaded update waits for installation. **Check for Updates** also checks immediately. If a newer compatible release is available, Synara downloads it and replaces the pending version; a failed check keeps the already verified download. Installation waits until checking and downloading finish.
+
+## Update a Mac from an iPhone or iPad
+
+In companion builds that support remote updates, open **Settings â†’ Connections**, select the Mac, then open **Software Update**. You can check, download, and choose **Restart & Install** for the downloaded version. This requires an approved connection to the packaged Synara Remote app on macOS; older desktop builds must first be updated on the Mac.
+
+Finish running chats, queued tasks, approvals, and development servers before installing. The Mac refuses a remote restart when it detects that work is still active or cannot establish that it is idle. Confirm the displayed version and the temporary connection interruption. The app reconnects after Synara restarts; check **Installed version** to confirm completion. A dropped connection alone does not prove installation succeeded. There is no need to delete local data or pair again for an ordinary update.
 
 ## Synara opens but providers changed after an update
 

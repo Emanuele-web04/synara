@@ -16,34 +16,84 @@ $expected = @($installers | ForEach-Object {
     @{ path = $_.FullName; sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash }
 })
 ConvertTo-Json -InputObject $expected | Set-Content "$evidence/expected-installers.json"
-function Save-DefenderState($name) {
-    Get-MpComputerStatus | Select-Object * -ExcludeProperty CimClass, CimInstanceProperties, CimSystemProperties |
-        ConvertTo-Json -Depth 6 | Set-Content "$evidence/$name-status.json"
-    Get-MpPreference | Select-Object * -ExcludeProperty CimClass, CimInstanceProperties, CimSystemProperties |
-        ConvertTo-Json -Depth 6 | Set-Content "$evidence/$name-preferences.json"
-    ConvertTo-Json -InputObject @(Get-MpThreatDetection) -Depth 8 | Set-Content "$evidence/$name-detections.json"
+$errorCaptureFailures = [System.Collections.Generic.List[string]]::new()
+$readinessBudget = [Diagnostics.Stopwatch]::new()
+function Save-DefenderError($failure, $name) {
+    try {
+        $failure | Format-List * -Force | Out-String -Width 4096 | Set-Content "$evidence/$name-error.txt"
+        $failure.Exception | Format-List * -Force | Out-String -Width 4096 | Add-Content "$evidence/$name-error.txt"
+    } catch {
+        $errorCaptureFailures.Add($name)
+        Write-Warning "Could not preserve $name error: $($_.Exception.Message)"
+    }
 }
-function Update-DefenderSignatures([string]$source = 'default', [switch]$AllowFallback) {
-    # A platform update can interrupt the service RPC. Require a successful
-    # update call within this bound; recorded state alone cannot qualify it.
+function Save-DefenderState($name, [switch]$BestEffort) {
+    $captures = @{
+        status = { Get-MpComputerStatus | Select-Object * -ExcludeProperty CimClass, CimInstanceProperties, CimSystemProperties }
+        preferences = { Get-MpPreference | Select-Object * -ExcludeProperty CimClass, CimInstanceProperties, CimSystemProperties }
+        detections = { @(Get-MpThreatDetection) }
+    }
+    foreach ($kind in @('status', 'preferences', 'detections')) {
+        try {
+            $value = if ($kind -eq 'detections') { ,@(& $captures[$kind]) } else { & $captures[$kind] }
+            ConvertTo-Json -InputObject $value -Depth 8 | Set-Content "$evidence/$name-$kind.json"
+        } catch {
+            Save-DefenderError $_ "$name-$kind"
+            if (-not $BestEffort) { throw }
+            Write-Output "$name-$kind"
+        }
+    }
+}
+function Wait-DefenderReady {
+    $wait = [Diagnostics.Stopwatch]::StartNew()
+    $readinessBudget.Start()
+    try {
+        # Keep each wait bounded and share a total budget across update retries.
+        # A final immediate healthy-state check remains valid without more sleep.
+        for ($poll = 0; $poll -lt 24 -and ($poll -eq 0 -or ($wait.Elapsed.TotalSeconds -lt 120 -and $readinessBudget.Elapsed.TotalSeconds -lt 240)); $poll++) {
+            try {
+                $service = Get-Service -Name WinDefend
+                if ($service.Status -eq 'Stopped') {
+                    Start-Service -Name WinDefend
+                    $service.Refresh()
+                }
+                $status = Get-MpComputerStatus
+                if ($service.Status -eq 'Running' -and $status.AMServiceEnabled -and
+                    $status.AMEngineVersion -and $status.AMEngineVersion -ne '0.0.0.0') { return }
+            } catch { Save-DefenderError $_ "readiness-$poll" }
+            $remaining = [Math]::Min(120000 - $wait.Elapsed.TotalMilliseconds, 240000 - $readinessBudget.Elapsed.TotalMilliseconds)
+            if ($remaining -gt 0) { Start-Sleep -Milliseconds ([Math]::Min(5000, [int]$remaining)) }
+        }
+        if ($readinessBudget.Elapsed.TotalSeconds -ge 240) { throw 'Defender total readiness budget of 240 seconds was exhausted.' }
+        throw 'WinDefend and its engine did not become ready within 120 seconds.'
+    } finally { $readinessBudget.Stop() }
+}
+function Update-DefenderSignatures([string]$UpdateSource, [switch]$AllowFallback) {
+    $arguments = @{ ErrorAction = 'Stop' }
+    if ($UpdateSource) { $arguments.UpdateSource = $UpdateSource }
+    $source = if ($UpdateSource) { $UpdateSource } else { 'default' }
     for ($attempt = 1; $attempt -le 3; $attempt++) {
         try {
-            if ($source -eq 'MMPC') { Update-MpSignature -UpdateSource MMPC -ErrorAction Stop | Out-Null }
-            else { Update-MpSignature -ErrorAction Stop | Out-Null }
+            Update-MpSignature @arguments | Out-Null
             return $true
         } catch {
-            $_ | Out-String | Set-Content "$evidence/update-$source-attempt-$attempt-error.txt"
+            Save-DefenderError $_ "update-$source-attempt-$attempt"
             if ($attempt -eq 3) {
                 if ($AllowFallback) { return $false }
                 throw
             }
             Write-Warning "Defender $source signature update failed on attempt $attempt; retrying in 5 seconds."
+            # Keep the first direct fallback immediate, but repair a stopped
+            # service/engine before retrying an unsuccessful MMPC update.
+            if ($UpdateSource -eq 'MMPC') { Wait-DefenderReady }
             Start-Sleep -Seconds 5
         }
     }
 }
 Save-DefenderState 'before'
 $results = @()
+$events = @()
+$evidenceFailures = @()
 try {
     # Hosted images disable protection and exclude their entire working drives.
     # Strengthen this disposable public-release runner only. Safe samples may be
@@ -60,16 +110,17 @@ try {
     Set-MpPreference -MAPSReporting Advanced -SubmitSamplesConsent SendSafeSamples -DisableBlockAtFirstSeen $false
     $needsDirectUpdate = -not (Update-DefenderSignatures -AllowFallback)
     if (-not $needsDirectUpdate) {
+        Wait-DefenderReady
         $signatureStatus = Get-MpComputerStatus
         $needsDirectUpdate = -not $signatureStatus.AntivirusSignatureLastUpdated -or $signatureStatus.AntivirusSignatureLastUpdated -lt (Get-Date).AddDays(-1)
         if ($needsDirectUpdate) { Save-DefenderState 'default-update' }
     }
     if ($needsDirectUpdate) {
-        # Exhausted default updates and older staged definitions both need a
-        # successful direct update. After failure, go directly to MMPC: status
-        # RPCs can remain unavailable during the same platform transition.
+        # Failed default updates must reach MMPC before any state/readiness RPC:
+        # the same platform transition can make those reads unavailable.
         Write-Output 'Configured update source failed or returned stale definitions; retrying MMPC.'
-        Update-DefenderSignatures 'MMPC' | Out-Null
+        Update-DefenderSignatures -UpdateSource MMPC | Out-Null
+        Wait-DefenderReady
     }
     for ($attempt = 0; $attempt -lt 12; $attempt++) {
         if ((Get-MpComputerStatus).RealTimeProtectionEnabled) { break }
@@ -148,11 +199,21 @@ try {
     }
 } finally {
     Start-Sleep -Seconds 20
-    Save-DefenderState 'after'
-    ConvertTo-Json -InputObject $results -Depth 6 | Set-Content "$evidence/results.json"
-    $events = @(Get-WinEvent -FilterHashtable @{ LogName = 'Microsoft-Windows-Windows Defender/Operational'; StartTime = $started })
-    $events | Select-Object TimeCreated, Id, Message | ConvertTo-Json -Depth 6 | Set-Content "$evidence/events.json"
+    # Evidence failures must not mask the original update/scan failure or stop other captures.
+    $evidenceFailures = @(Save-DefenderState 'after' -BestEffort)
+    try { ConvertTo-Json -InputObject $results -Depth 6 | Set-Content "$evidence/results.json" } catch {
+        Save-DefenderError $_ 'results'
+        $evidenceFailures += 'results'
+    }
+    try {
+        $events = @(Get-WinEvent -FilterHashtable @{ LogName = 'Microsoft-Windows-Windows Defender/Operational'; StartTime = $started })
+        ConvertTo-Json -InputObject @($events | Select-Object TimeCreated, Id, Message) -Depth 6 | Set-Content "$evidence/events.json"
+    } catch {
+        Save-DefenderError $_ 'events'
+        $evidenceFailures += 'events'
+    }
 }
+if ($evidenceFailures.Count -gt 0 -or $errorCaptureFailures.Count -gt 0) { throw 'Defender qualification evidence is incomplete. Inspect the preserved errors.' }
 if (@($events | Where-Object { $_.Id -in @(1116, 1117, 1118, 1119) }).Count -gt 0) {
     throw 'Defender recorded detection/remediation during qualification.'
 }

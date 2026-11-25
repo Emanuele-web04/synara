@@ -1,3 +1,5 @@
+import type { RemoteAgentCall } from "@synara/contracts";
+import type { McpToolCallResult } from "../protocol";
 /**
  * AgentGateway - Synara app-control tool surface for provider agents.
  *
@@ -19,6 +21,11 @@ export interface AgentGatewayHttpResult {
 }
 
 export interface AgentGatewayShape {
+  /** Called only by the authenticated peer RPC boundary, never public MCP arguments. */
+  readonly handleRemoteTool?: (
+    call: RemoteAgentCall,
+    peerOwnerId: string,
+  ) => Effect.Effect<McpToolCallResult>;
   /**
    * Handle one MCP streamable-HTTP POST. All failures are folded into
    * JSON-RPC error responses or HTTP status codes; the effect never fails.

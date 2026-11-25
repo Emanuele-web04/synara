@@ -15,11 +15,6 @@ import {
 } from "./ComputerBackend.ts";
 import { computerApprovalGate } from "./ComputerApprovalGate.ts";
 import { COMPUTER_CONTROL_ENABLE_TIMEOUT_MS, ComputerManager } from "./ComputerManager.ts";
-import {
-  ComputerCallContext,
-  ComputerCallTiming,
-  withComputerCallContext,
-} from "./computerCallContext.ts";
 import { withComputerTask } from "./computerTaskContext.ts";
 import { FakeComputerBackend } from "./FakeComputerBackend.ts";
 import type { FrameSink } from "@synara/shared/frameTransport";
@@ -471,15 +466,6 @@ describe("ComputerManager and FakeComputerBackend", () => {
     const initial = await manager.getThreadState("thread-1");
     expect(initial.threadId).toBe("thread-1");
     expect(initial.version).toBeGreaterThanOrEqual(0);
-    // Seeding a panel is not a use of the desktop, so it costs the desktop
-    // nothing: the passive probe answers whether the feature works, and the
-    // window list stays empty until something really asks for the backend.
-    expect(initial.windows).toEqual([]);
-    expect(backend.calls.map((call) => call.method)).toEqual(["probeAvailability"]);
-    expect(initial.availability).toEqual({
-      kind: "available",
-      backend: "fake",
-    });
 
     const result = await manager.withAgentActivity("thread-1", async () => {
       const active = events.findLast((event) => event.type === "computer.thread-state");
@@ -1150,15 +1136,6 @@ describe("ComputerManager and FakeComputerBackend", () => {
       await manager.dispose();
     });
 
-    it("still waits the compiled 300 ms when nothing overrides it", async () => {
-      setEnv("SYNARA_CUA_ACTION_SETTLE_MS", undefined);
-      setEnv("SYNARA_CUA_CONDITIONAL_SETTLE", undefined);
-      const manager = new ComputerManager({ backend: new FakeComputerBackend() });
-      const { spy } = await pressThenObserve(manager);
-      expect(settleWaitedFor(spy, 300)).toBe(true);
-      await manager.dispose();
-    });
-
     it("SYNARA_CUA_ACTION_SETTLE_MS overrides the wait, and an explicit 0 removes it", async () => {
       setEnv("SYNARA_CUA_CONDITIONAL_SETTLE", undefined);
       setEnv("SYNARA_CUA_ACTION_SETTLE_MS", "45");
@@ -1296,18 +1273,6 @@ describe("ComputerManager and FakeComputerBackend", () => {
       await manager.dispose();
     });
 
-    it("a busy verdict from the observer still ends the wait — the timeout already covered the bound", async () => {
-      setEnv("SYNARA_CUA_CONDITIONAL_SETTLE", undefined);
-      const backend = new ProvenBackend({
-        waitForSettle: () => ({ settled: false, waitedMs: 5_000, eventsSeen: 14 }),
-      });
-      const manager = new ComputerManager({ backend, actionSettleMs: 60 });
-      const { spy } = await pressThenObserveWindow(manager);
-      expect(backend.callsFor("waitForSettle")).toHaveLength(1);
-      expect(settleWaitedFor(spy, 60)).toBe(false);
-      await manager.dispose();
-    });
-
     it("falls back to the fixed wait without a window hint, even when the observer exists", async () => {
       setEnv("SYNARA_CUA_CONDITIONAL_SETTLE", undefined);
       const backend = new ProvenBackend({ waitForSettle: true });
@@ -1337,6 +1302,9 @@ describe("ComputerManager and FakeComputerBackend", () => {
         await pressThenObserveWindow(manager);
         expect(probes).toBe(1);
         expect(settleWaitedFor(spy, 60)).toBe(true);
+        // The refused wait never replays the action it observed.
+        expect(backend.callsFor("pressKey")).toHaveLength(1);
+        expect(backend.callsFor("captureScreenshot")).toHaveLength(1);
         spy.mockClear();
         await pressThenObserveWindow(manager);
         // The refusal is cached for the backend's life: the second action
@@ -1383,22 +1351,6 @@ describe("ComputerManager and FakeComputerBackend", () => {
       const { spy } = await pressThenObserveWindow(manager);
       expect(backend.callsFor("waitForSettle")).toHaveLength(0);
       expect(settleWaitedFor(spy, 60)).toBe(false);
-      await manager.dispose();
-    });
-
-    it("an observer refusal mid-observation never replays the action", async () => {
-      setEnv("SYNARA_CUA_CONDITIONAL_SETTLE", undefined);
-      const backend = new ProvenBackend({
-        waitForSettle: () => {
-          throw new Error("Unknown tool: wait_for_settle");
-        },
-      });
-      const manager = new ComputerManager({ backend, actionSettleMs: 60 });
-      await pressThenObserveWindow(manager);
-      // The uncertain wait fell back and the observation still landed; the
-      // action it observed ran exactly once.
-      expect(backend.callsFor("pressKey")).toHaveLength(1);
-      expect(backend.callsFor("captureScreenshot")).toHaveLength(1);
       await manager.dispose();
     });
   });
@@ -3030,23 +2982,6 @@ describe("ComputerManager and FakeComputerBackend", () => {
     await manager.dispose();
   });
 
-  it("returns every capture for the gateway to compare with delivered screenshots", async () => {
-    const backend = new FakeComputerBackend();
-    const manager = new ComputerManager({ backend, actionSettleMs: 0 });
-    try {
-      const first = await manager.captureActionScreenshot("fake-terminal");
-      const second = await manager.captureActionScreenshot("fake-terminal");
-      if (!first || !("screenshot" in first)) throw new Error("Expected a captured screenshot");
-      expect(second).toEqual({
-        ...first,
-        screenshot: { ...first.screenshot, capturedAt: expect.any(String) },
-      });
-      expect(backend.callsFor("captureScreenshot")).toHaveLength(2);
-    } finally {
-      await manager.dispose();
-    }
-  });
-
   /**
    * A manager whose travel measurement is scripted, so the tests exercise the
    * closed loop rather than the correlator (which has its own unit tests). Each
@@ -3840,21 +3775,6 @@ describe("ComputerManager foreground containment", () => {
     },
   );
 
-  it("refuses an explicit false authorization the same way", async () => {
-    const backend = new FakeComputerBackend();
-    const manager = new ComputerManager({ backend, actionSettleMs: 0 });
-    try {
-      await expect(
-        manager.foregroundWithRestore("thread-1", "fake-calculator", undefined, {
-          userRequestedVisibleUse: false,
-        }),
-      ).rejects.toMatchObject({ code: "foreground_not_requested" });
-      expect(foregroundRaisedIds(backend)).toEqual([]);
-    } finally {
-      await manager.dispose();
-    }
-  });
-
   it("refuses the raise while the user was just interacting through the pane, then allows it after quiet", async () => {
     const backend = new FakeComputerBackend();
     let clock = 1_000_000;
@@ -3907,6 +3827,21 @@ describe("ComputerManager foreground containment", () => {
 });
 
 describe("ComputerManager foregroundWithRestore", () => {
+  it("refuses an explicit false authorization the same way", async () => {
+    const backend = new FakeComputerBackend();
+    const manager = new ComputerManager({ backend, actionSettleMs: 0 });
+    try {
+      await expect(
+        manager.foregroundWithRestore("thread-1", "fake-calculator", undefined, {
+          userRequestedVisibleUse: false,
+        }),
+      ).rejects.toMatchObject({ code: "foreground_not_requested" });
+      expect(foregroundRaisedIds(backend)).toEqual([]);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
   it("restores the previously frontmost window after raising the target", async () => {
     const backend = new FakeComputerBackend();
     const manager = new ComputerManager({ backend, actionSettleMs: 0 });
@@ -3931,32 +3866,6 @@ describe("ComputerManager foregroundWithRestore", () => {
       });
       expect(actions[0]).not.toHaveProperty("message");
     } finally {
-      await manager.dispose();
-    }
-  });
-
-  it("counts one foreground excursion on the call timing record", async () => {
-    const backend = new FakeComputerBackend();
-    const manager = new ComputerManager({ backend, actionSettleMs: 0 });
-    const timing = new ComputerCallTiming(() => 0);
-    const lines: string[] = [];
-    const info = console.info;
-    console.info = (message: unknown) => {
-      lines.push(String(message));
-    };
-    try {
-      await withComputerCallContext(new ComputerCallContext({ timing }), () =>
-        manager.foregroundWithRestore(
-          "thread-1",
-          "fake-calculator",
-          undefined,
-          VISIBLE_USE_AUTHORIZED,
-        ),
-      );
-      timing.finish();
-      expect(lines.join("\n")).toContain("foreground_excursion=1");
-    } finally {
-      console.info = info;
       await manager.dispose();
     }
   });

@@ -1,14 +1,41 @@
 import http from "node:http";
 import type { ListenOptions, Socket } from "node:net";
 
-import { WS_FEATURE_PATH } from "@synara/contracts";
+import { WS_FEATURE_PATH, WS_FEATURE_UNCOMPRESSED_QUERY } from "@synara/contracts";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import { Effect, Scope } from "effect";
 import * as HttpServer from "effect/unstable/http/HttpServer";
 import { ServeError } from "effect/unstable/http/HttpServerError";
-import { WebSocketServer } from "ws";
+import { WebSocketServer, type WebSocket } from "ws";
 
 export const MAX_WEBSOCKET_MESSAGE_BYTES = 2 * 1024 * 1024;
+
+// A one-shot capability tied to the actual request, not a socket-shaped shim.
+// Only a route that has completed its admission checks may consume it.
+const nativeUpgrades = new WeakMap<object, (accept: (socket: WebSocket) => void) => void>();
+
+export function upgradeNativeWebSocket(source: object) {
+  return Effect.acquireRelease(
+    Effect.callback<WebSocket, Error>((resume) => {
+      const upgrade = nativeUpgrades.get(source);
+      nativeUpgrades.delete(source);
+      if (!upgrade) {
+        resume(
+          Effect.fail(
+            new Error("Native Node WebSocket upgrade is unavailable or already consumed"),
+          ),
+        );
+        return;
+      }
+      try {
+        upgrade((socket) => resume(Effect.succeed(socket)));
+      } catch (cause) {
+        resume(Effect.fail(new Error("Native WebSocket upgrade failed", { cause })));
+      }
+    }),
+    (socket) => Effect.sync(() => socket.terminate()),
+  );
+}
 
 /**
  * Node's HTTP parser owns the socket error listener until an upgrade starts.
@@ -116,6 +143,25 @@ export function upgradePathAllowsCompression(requestUrl: string | undefined): bo
 }
 
 /**
+ * True when the upgrade target carries the client's declared opt-out of compression
+ * (WS_FEATURE_UNCOMPRESSED_QUERY). Only consulted for targets that would otherwise
+ * negotiate compression; it selects which ws instance completes the handshake and
+ * nothing else. Malformed targets keep compression (fail closed to the default).
+ */
+export function upgradeOptsOutOfCompression(requestUrl: string | undefined): boolean {
+  if (!requestUrl) return false;
+  try {
+    return (
+      new URL(requestUrl, "http://upgrade.invalid").searchParams.get(
+        WS_FEATURE_UNCOMPRESSED_QUERY.name,
+      ) === WS_FEATURE_UNCOMPRESSED_QUERY.value
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Owns the Node HTTP/WebSocket transport so Synara, rather than the platform
  * adapter's 100 MiB default, controls admission before a message is decoded.
  */
@@ -171,9 +217,13 @@ export const makeBoundedNodeHttpServer = Effect.fnUntraced(function* (
           server.close(() => resume(Effect.void));
         }),
     ).pipe(Scope.provide(scope));
-  // Two ws servers sharing one HTTP listener: compression is negotiated only
-  // on authenticated feature-socket paths (see PER_MESSAGE_DEFLATE_OPTIONS).
+  // Three ws servers sharing one HTTP listener: compression is negotiated only
+  // on authenticated feature-socket paths (see PER_MESSAGE_DEFLATE_OPTIONS). A ws
+  // instance only completes the handshake: routing, authentication and admission
+  // run in `httpApp` for every instance alike, keyed on the request path. The
+  // uncompressed feature instance serves clients that opt out of compression.
   const featureWebSocketServer = yield* makeBoundedWebSocketServer(true);
+  const uncompressedFeatureWebSocketServer = yield* makeBoundedWebSocketServer(false);
   const bootstrapWebSocketServer = yield* makeBoundedWebSocketServer(false);
 
   return HttpServer.make({
@@ -201,6 +251,14 @@ export const makeBoundedNodeHttpServer = Effect.fnUntraced(function* (
           scope: serveScope,
         },
       );
+      const uncompressedFeatureUpgradeHandler = yield* NodeHttpServer.makeUpgradeHandler(
+        Effect.succeed(uncompressedFeatureWebSocketServer),
+        httpApp,
+        {
+          middleware: middleware as any,
+          scope: serveScope,
+        },
+      );
       const bootstrapUpgradeHandler = yield* NodeHttpServer.makeUpgradeHandler(
         Effect.succeed(bootstrapWebSocketServer),
         httpApp,
@@ -214,9 +272,16 @@ export const makeBoundedNodeHttpServer = Effect.fnUntraced(function* (
         socket: Parameters<typeof featureUpgradeHandler>[1],
         head: Parameters<typeof featureUpgradeHandler>[2],
       ) => {
-        const dispatch = upgradePathAllowsCompression(nodeRequest.url)
-          ? featureUpgradeHandler
-          : bootstrapUpgradeHandler;
+        nativeUpgrades.set(nodeRequest, (accept) => {
+          // Native TLS streams never negotiate per-message compression.
+          bootstrapWebSocketServer.handleUpgrade(nodeRequest, socket, head, accept);
+        });
+        socket.once("close", () => nativeUpgrades.delete(nodeRequest));
+        const dispatch = !upgradePathAllowsCompression(nodeRequest.url)
+          ? bootstrapUpgradeHandler
+          : upgradeOptsOutOfCompression(nodeRequest.url)
+            ? uncompressedFeatureUpgradeHandler
+            : featureUpgradeHandler;
         dispatch(nodeRequest, socket, head);
       };
 

@@ -7,10 +7,63 @@ import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 
 import { makeEffectProcessCommand } from "./effectProcessRuntime";
+import { spawnProcess } from "@synara/shared/processRuntime";
+import { once } from "node:events";
 
 const nodeChildProcess = createRequire(import.meta.url)(
   "node:child_process",
 ) as typeof import("node:child_process");
+
+it.skipIf(process.platform === "win32")(
+  "keeps signal ownership until asynchronous runtime finalizers finish",
+  async () => {
+    const child = spawnProcess(
+      process.execPath,
+      [
+        "--input-type=module",
+        "-e",
+        `
+        import { runMain } from '@effect/platform-node/NodeRuntime';
+        import { Effect } from 'effect';
+        runMain(Effect.gen(function* () {
+          yield* Effect.addFinalizer(() => Effect.promise(async () => {
+            await new Promise(resolve => setTimeout(resolve, 100));
+            process.stdout.write('finalized');
+          }));
+          // signal-exit installs after runMain when a provider loads it. If
+          // runtime ownership disappears, it re-raises the same OS signal.
+          function lateExitHandler() {
+            if (process.listenerCount('SIGTERM') === 1) {
+              process.removeListener('SIGTERM', lateExitHandler);
+              process.kill(process.pid, 'SIGTERM');
+            }
+          }
+          process.on('SIGTERM', lateExitHandler);
+          process.stdout.write('ready');
+          yield* Effect.never;
+        }).pipe(Effect.scoped));
+        `,
+      ],
+      { stdio: ["ignore", "pipe", "pipe"] },
+    );
+    let output = "";
+    child.stdout!.on("data", (chunk) => {
+      output += chunk.toString();
+    });
+    const closed = once(child, "close");
+    try {
+      await vi.waitFor(() => expect(output).toContain("ready"));
+      child.kill("SIGTERM");
+      const [code, signal] = await closed;
+      expect(signal).toBeNull();
+      expect(code).toBe(130);
+      expect(output).toContain("finalized");
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+      await closed;
+    }
+  },
+);
 
 describe("Effect process signal guards", () => {
   const invalidPids = [undefined, 0, 1, -1, 1.5, NaN, Infinity, 2 ** 32 + 1];

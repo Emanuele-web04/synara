@@ -1,6 +1,6 @@
 import "../index.css";
 
-import type { ServerProviderStatus } from "@synara/contracts";
+import type { ProviderKind, ServerProviderStatus } from "@synara/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { page } from "vitest/browser";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -8,22 +8,31 @@ import { render } from "vitest-browser-react";
 
 import { ProvidersStep } from "../onboarding/steps/ProvidersStep";
 import { useProviderDetection } from "../onboarding/useProviderDetection";
+import { useProviderSetup } from "../onboarding/useProviderSetup";
 
-const mocks = vi.hoisted(() => ({ getConfig: vi.fn(), refreshProviders: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  getConfig: vi.fn(),
+  refreshProviders: vi.fn(),
+  updateSettingsAndWait: vi.fn(),
+  settings: { disabledProviders: [] as ProviderKind[] },
+}));
 vi.mock("../nativeApi", () => {
   const api = {
     server: { getConfig: mocks.getConfig, refreshProviders: mocks.refreshProviders },
   };
   return { ensureNativeApi: () => api, readNativeApi: () => api };
 });
-vi.mock("../appSettings", () => {
-  const appSettings = { settings: { disabledProviders: [] }, updateSettingsAndWait: vi.fn() };
-  return { useAppSettings: () => appSettings, getCustomBinaryPathForProvider: () => null };
+vi.mock("../appSettings", async (importOriginal) => {
+  const appSettings = {
+    settings: mocks.settings,
+    updateSettingsAndWait: mocks.updateSettingsAndWait,
+  };
+  return {
+    ...(await importOriginal<typeof import("../appSettings")>()),
+    useAppSettings: () => appSettings,
+    getCustomBinaryPathForProvider: () => null,
+  };
 });
-vi.mock("../workspacePathsStore", () => ({
-  useWorkspacePathsStore: (select: (state: { homeDir: null }) => unknown) =>
-    select({ homeDir: null }),
-}));
 
 const codexStatus: ServerProviderStatus = {
   provider: "codex",
@@ -39,6 +48,8 @@ const clients: QueryClient[] = [];
 beforeEach(() => {
   mocks.getConfig.mockReset().mockResolvedValue({ providers: [] });
   mocks.refreshProviders.mockReset();
+  mocks.settings.disabledProviders = [];
+  mocks.updateSettingsAndWait.mockReset().mockResolvedValue(undefined);
 });
 afterEach(() => {
   for (const client of clients.splice(0)) client.clear();
@@ -46,7 +57,8 @@ afterEach(() => {
 
 function ProvidersStepWithDetection() {
   const detection = useProviderDetection();
-  return <ProvidersStep detection={detection} />;
+  const setup = useProviderSetup(detection);
+  return <ProvidersStep detection={detection} setup={setup} />;
 }
 
 async function renderStep() {
@@ -97,4 +109,85 @@ it("leaves missing agents unknown after a timeout and recovers on retry", async 
   await expect
     .element(page.getByText("1 connected · 0 need sign-in · 9 not installed"))
     .toBeVisible();
+});
+
+it("keeps the default agent connected while re-enabling it alongside a custom instance", async () => {
+  const customCodex: ServerProviderStatus = {
+    ...codexStatus,
+    instanceId: "codex-work",
+    authStatus: "unauthenticated",
+  };
+  const providers = [codexStatus, customCodex];
+  mocks.getConfig.mockResolvedValue({ providers });
+  mocks.refreshProviders.mockResolvedValue({ providers });
+  mocks.updateSettingsAndWait.mockImplementationOnce(async () => {
+    mocks.settings.disabledProviders = ["codex"];
+  });
+  await renderStep();
+
+  const connected = page.getByText("1 connected · 0 need sign-in · 9 not installed");
+  const disabled = page.getByText("0 connected · 0 need sign-in · 9 not installed");
+  const codexSwitch = page.getByRole("switch", { name: "Codex", exact: true });
+  await expect.element(connected).toBeVisible();
+  await codexSwitch.click();
+  await expect.element(disabled).toBeVisible();
+
+  mocks.refreshProviders.mockResolvedValue({
+    providers: [
+      {
+        ...codexStatus,
+        enabled: false,
+        status: "warning",
+        available: false,
+        authStatus: "unknown",
+        checkedAt: "2026-09-23T13:33:19.154Z",
+      },
+      customCodex,
+    ],
+  });
+  const detect = page.getByRole("button", { name: "Re-detect" });
+  await detect.click();
+  await expect.element(detect).toBeEnabled();
+
+  let finishWrite!: () => void;
+  const pendingWrite = new Promise<void>((resolve) => {
+    finishWrite = resolve;
+  });
+  mocks.updateSettingsAndWait.mockReturnValueOnce(pendingWrite);
+  try {
+    await codexSwitch.click();
+    await expect.element(connected).toBeVisible();
+  } finally {
+    // A rejected save settles after settings are refetched, still disabled here.
+    finishWrite();
+  }
+  await expect.element(disabled).toBeVisible();
+  await expect.element(codexSwitch).not.toBeChecked();
+});
+
+it("switches on only the agents installed on this machine", async () => {
+  const claudeSignedOut: ServerProviderStatus = {
+    ...codexStatus,
+    provider: "claudeAgent",
+    instanceId: "claudeAgent",
+    driver: "claudeAgent",
+    authStatus: "unauthenticated",
+  };
+  const providers = [codexStatus, claudeSignedOut];
+  mocks.getConfig.mockResolvedValue({ providers });
+  mocks.refreshProviders.mockResolvedValue({ providers });
+  await renderStep();
+
+  await expect
+    .element(page.getByText("1 connected · 1 need sign-in · 8 not installed"))
+    .toBeVisible();
+  await expect.element(page.getByRole("switch", { name: "Codex", exact: true })).toBeChecked();
+  // Installed but signed out: on, with sign-in offered in place.
+  await expect.element(page.getByRole("switch", { name: "Claude", exact: true })).toBeChecked();
+  await expect.element(page.getByRole("button", { name: "Sign in", exact: true })).toBeVisible();
+  // Not on this machine: off, and not switchable until it is installed.
+  const cursorSwitch = page.getByRole("switch", { name: "Cursor", exact: true });
+  await expect.element(cursorSwitch).not.toBeChecked();
+  await expect.element(cursorSwitch).toBeDisabled();
+  expect(mocks.updateSettingsAndWait).not.toHaveBeenCalled();
 });

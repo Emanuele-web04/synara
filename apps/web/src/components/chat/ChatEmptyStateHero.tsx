@@ -3,7 +3,7 @@
 // Layer: Chat presentation
 // Depends on: the caller-supplied project display name.
 
-import { SynaraLogo } from "~/components/SynaraLogo";
+import { SynaraLogo } from "@synara/profile-ui/logo";
 import { useTranslation } from "~/i18n";
 
 export const ChatEmptyStateHero = function ChatEmptyStateHero({

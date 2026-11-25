@@ -10,6 +10,9 @@ import type {
   McpConnectorConnectInput,
   McpConnectorConnectResult,
   McpConnectorSetup,
+  McpConnectorProposal,
+  McpConnectorResolveProposalInput,
+  McpConnectorResolveProposalResult,
 } from "@synara/contracts";
 import { Data, ServiceMap } from "effect";
 import type { Effect } from "effect";
@@ -26,13 +29,30 @@ export class McpConnectorError extends Data.TaggedError("McpConnectorError")<{
 }> {}
 
 export interface McpConnectorsShape {
-  /** False on Stable: every method refuses and the routes answer 404. */
+  /** When disabled, management refuses and the routes answer 404. */
   readonly enabled: boolean;
   readonly list: () => Effect.Effect<ReadonlyArray<McpConnector>, McpConnectorError>;
   readonly connect: (
     input: McpConnectorConnectInput,
   ) => Effect.Effect<McpConnectorConnectResult, McpConnectorError>;
   readonly disconnect: (connectorId: string) => Effect.Effect<boolean, McpConnectorError>;
+  readonly listProposals: () => Effect.Effect<
+    ReadonlyArray<McpConnectorProposal>,
+    McpConnectorError
+  >;
+  readonly proposeAdd: (
+    input: unknown,
+    threadId: string,
+    cwd?: string,
+    source?: string,
+  ) => Effect.Effect<McpConnectorProposal, McpConnectorError>;
+  readonly proposeRemove: (
+    connectorId: string,
+    threadId: string,
+  ) => Effect.Effect<McpConnectorProposal, McpConnectorError>;
+  readonly resolveProposal: (
+    input: McpConnectorResolveProposalInput,
+  ) => Effect.Effect<McpConnectorResolveProposalResult, McpConnectorError>;
   /** What a user's own OAuth app needs, such as its redirect URL. */
   readonly setup: () => Effect.Effect<McpConnectorSetup, McpConnectorError>;
   /** The OAuth redirect target; never fails, the outcome is rendered as a page. */

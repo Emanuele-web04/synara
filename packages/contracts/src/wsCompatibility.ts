@@ -1,3 +1,4 @@
+import { REMOTE_AGENT_GATEWAY_CAPABILITY } from "./remoteAgentGateway";
 import { Schema } from "effect";
 
 import { NonNegativeInt } from "./baseSchemas";
@@ -28,6 +29,18 @@ export const WS_COMPATIBILITY_QUERY = {
   protocolEpoch: "x-synara-protocol-epoch",
   protocolRevision: "x-synara-protocol-revision",
   serverInstanceId: "x-synara-server-instance",
+} as const;
+
+/**
+ * Feature-socket query flag by which a client declares it sits next to the backend (the
+ * desktop app on the backend it spawned) and wants no permessage-deflate: compressing a
+ * multi-megabyte snapshot only adds latency over loopback. It can only remove
+ * compression; authentication, admission and payload limits do not read it. Servers
+ * that predate it ignore it, and clients that omit it keep compression.
+ */
+export const WS_FEATURE_UNCOMPRESSED_QUERY = {
+  name: "x-synara-uncompressed",
+  value: "1",
 } as const;
 
 export const WS_NEGOTIATE_QUERY = {
@@ -61,6 +74,7 @@ export const WS_CLIENT_REQUIRED_CAPABILITIES = [
 ] as const;
 
 export const WS_SERVER_CAPABILITIES = [
+  REMOTE_AGENT_GATEWAY_CAPABILITY,
   ...WS_CLIENT_REQUIRED_CAPABILITIES,
   // Optional feature capability: older servers may omit it without making the
   // rest of a newer client unusable during a staggered rollout.
@@ -89,6 +103,8 @@ export const WsBootstrapNegotiateInput = Schema.Struct({
 export type WsBootstrapNegotiateInput = typeof WsBootstrapNegotiateInput.Type;
 
 export const WsBootstrapNegotiateResult = Schema.Struct({
+  /** Controller reservation for a single remote renderer stream; never a credential. */
+  remoteAttachmentId: Schema.optional(Schema.String),
   protocolEpoch: Schema.Int,
   negotiatedRevision: NonNegativeInt,
   serverBuild: Schema.String,

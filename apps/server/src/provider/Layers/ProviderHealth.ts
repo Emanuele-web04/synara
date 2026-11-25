@@ -68,7 +68,7 @@ import {
   type ProviderChildKind,
 } from "../../providerChildEnvironment.ts";
 import { buildOpenCodeServerProcessEnv } from "../providerBinaryResolution.ts";
-import { ServerSettingsService } from "../../serverSettings";
+import { ServerSettingsService, withoutNewThreadDefaultsOnlyChanges } from "../../serverSettings";
 import { isWindowsShellCommandMissingResult } from "../../shell-command-detection";
 import {
   buildCursorAgentCommand,
@@ -87,8 +87,10 @@ import {
 import {
   claudeAuthMetadata,
   isStructuredClaudeAuthFalseNegativeCandidate,
+  parseClaudeAccountIdentityFromOutput,
   parseClaudeAuthStatusFromOutput,
 } from "../claudeAuthStatus";
+import { codexAccountIdentityFromAuthRecord } from "../codexAccountIdentity";
 import { acquireClaudeAuthStatusLock } from "../claudeAuthStatusLock";
 import { loadClaudeAgentSdk } from "../claudeAgentSdk.ts";
 import { buildClaudeProcessEnv, readClaudeCliCredentialsSummary } from "../claudeProcessEnv";
@@ -107,6 +109,7 @@ import {
   orderProviderStatuses,
   readProviderStatusCache,
   resolveProviderStatusCachePath,
+  withoutProviderAccountIdentity,
   writeProviderStatusCache,
 } from "../providerStatusCache";
 import { makeProviderMaintenanceCommandCoordinator } from "../providerMaintenanceCommandCoordinator";
@@ -122,14 +125,13 @@ import {
 } from "../providerMaintenance";
 import { isClaudeAutoModeCliVersionSupported } from "../claudeCliVersion.ts";
 import { collectUint8StreamText } from "../../stream/collectUint8StreamText";
-import { buildCodexProcessEnv } from "../../codexProcessEnv.ts";
-import { readGrokCachedLogin } from "../../providerUsage/providers/grok";
 import {
-  buildProviderProcessEnv,
-  MODEL_PROVIDER_API_KEY_ENV_MAPPINGS,
-  type ProviderProcessEnvDriver,
-} from "../providerProcessEnv.ts";
-import { defaultPiSdkAgentDir, makePiStoragePaths } from "../piStoragePaths.ts";
+  buildCodexProcessEnv,
+  readEffectiveCodexAuthCredentialsStoreMode,
+} from "../../codexProcessEnv.ts";
+import { readGrokCachedLogin } from "../../providerUsage/providers/grok";
+import { buildProviderProcessEnv, type ProviderProcessEnvDriver } from "../providerProcessEnv.ts";
+import { PiNotInstalledError, resolvePiInstallation } from "../piSdkImports.ts";
 
 export { parseClaudeAuthStatusFromOutput } from "../claudeAuthStatus";
 export type { CommandResult } from "../providerCliOutput";
@@ -151,7 +153,8 @@ const PI_PROVIDER = "pi" as const;
 const OMP_PROVIDER = "omp" as const;
 type ProviderStatuses = ReadonlyArray<ServerProviderStatus>;
 const DISABLED_PROVIDER_STATUS_MESSAGE = "Provider is disabled in Synara settings.";
-const MINIMUM_ANTIGRAVITY_CLI_VERSION = "1.0.12";
+// `agy acp`, which Synara drives Antigravity through, shipped in 1.5.0.
+const MINIMUM_ANTIGRAVITY_CLI_VERSION = "1.5.0";
 
 const PROVIDERS = [
   CODEX_PROVIDER,
@@ -511,9 +514,18 @@ function codexAccountAuthLabel(input: {
   }
 }
 
-function extractCodexAccountTypeFromOutput(result: CommandResult): string | undefined {
+const CODEX_CHATGPT_LOGIN = /^logged in using chatgpt\s*$/m;
+const CODEX_API_KEY_LOGIN = /^logged in using an api key\b/m;
+
+function extractCodexAccountTypeFromOutput(
+  result: CommandResult,
+): "apiKey" | "chatgpt" | undefined {
   const parsed = decodeUnknownJson(result.stdout.trim());
-  if (Result.isFailure(parsed)) return undefined;
+  if (Result.isFailure(parsed)) {
+    const output = `${result.stdout}\n${result.stderr}`.toLowerCase();
+    if (CODEX_API_KEY_LOGIN.test(output)) return "apiKey";
+    return CODEX_CHATGPT_LOGIN.test(output) ? "chatgpt" : undefined;
+  }
   const walk = (value: unknown): string | undefined => {
     if (Array.isArray(value)) {
       for (const entry of value) {
@@ -534,7 +546,14 @@ function extractCodexAccountTypeFromOutput(result: CommandResult): string | unde
     }
     return undefined;
   };
-  return walk(parsed.success);
+  const reportedTypes = [walk(parsed.success), extractAuthMethod(parsed.success)].map((type) =>
+    type?.toLowerCase().replace(/[\s_-]+/g, ""),
+  );
+  if (reportedTypes.includes("apikey")) return "apiKey";
+  if (reportedTypes.includes("chatgpt") || reportedTypes.includes("chatgptauthtokens")) {
+    return "chatgpt";
+  }
+  return undefined;
 }
 
 // ── Claude SDK capability probe ─────────────────────────────────────
@@ -730,9 +749,9 @@ export function parseAuthStatusFromOutput(result: CommandResult): {
     // Current Codex CLI prints login status as plain text (on stderr), not JSON.
     // Only explicit login methods establish voice capability; unknown successful
     // output remains authenticated without advertising ChatGPT-only dictation.
-    const voiceTranscriptionAvailable = /^logged in using chatgpt\s*$/m.test(lowerOutput)
+    const voiceTranscriptionAvailable = CODEX_CHATGPT_LOGIN.test(lowerOutput)
       ? true
-      : /^logged in using an api key\b/m.test(lowerOutput)
+      : CODEX_API_KEY_LOGIN.test(lowerOutput)
         ? false
         : undefined;
     return {
@@ -1113,21 +1132,35 @@ export function makeClaudeProbeEnv(
   });
 }
 
-export const readCodexConfigModelProviderForEnv = (env: NodeJS.ProcessEnv) =>
+const readCodexHomeFile = (env: NodeJS.ProcessEnv, fileName: string) =>
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const codexHome = env.CODEX_HOME?.trim() || path.join(OS.homedir(), ".codex");
-    const configPath = path.join(codexHome, "config.toml");
-
-    const content = yield* fileSystem
-      .readFileString(configPath)
+    return yield* fileSystem
+      .readFileString(path.join(codexHome, fileName))
       .pipe(Effect.orElseSucceed(() => undefined));
-    if (content === undefined) {
-      return undefined;
+  });
+
+export const readCodexConfigModelProviderForEnv = (env: NodeJS.ProcessEnv) =>
+  Effect.map(readCodexHomeFile(env, "config.toml"), (content) =>
+    content === undefined ? undefined : parseCodexConfigModelProvider(content),
+  );
+
+// A non-file credentials store can leave an old auth.json in the same home.
+const readCodexAccountIdentity = (env: NodeJS.ProcessEnv) =>
+  Effect.gen(function* () {
+    const config = yield* readCodexHomeFile(env, "config.toml");
+    try {
+      if (readEffectiveCodexAuthCredentialsStoreMode(config ?? "") !== "file") return {};
+    } catch {
+      return {};
     }
 
-    return parseCodexConfigModelProvider(content);
+    const content = yield* readCodexHomeFile(env, "auth.json");
+    if (content === undefined) return {};
+    const record = decodeUnknownJson(content);
+    return Result.isFailure(record) ? {} : codexAccountIdentityFromAuthRecord(record.success);
   });
 
 const hasCustomModelProviderForEnv = (env: NodeJS.ProcessEnv) =>
@@ -1186,6 +1219,7 @@ export const makeCheckCodexProviderStatus = (
         driver: CODEX_PROVIDER,
         status: "error" as const,
         available: false,
+        ...(versionProbe.outcome === "missing" ? { installed: false } : {}),
         authStatus: "unknown" as const,
         checkedAt,
         message:
@@ -1317,8 +1351,14 @@ export const makeCheckCodexProviderStatus = (
 
     const authOutput = authProbe.success.value;
     const parsed = parseAuthStatusFromOutput(authOutput);
-    const codexPlanType = extractSubscriptionTypeFromOutput(authOutput);
     const codexAccountType = extractCodexAccountTypeFromOutput(authOutput);
+    const accountIdentity =
+      parsed.authStatus === "authenticated" &&
+      authOutput.code === 0 &&
+      codexAccountType === "chatgpt"
+        ? yield* readCodexAccountIdentity(probeEnv)
+        : {};
+    const codexPlanType = extractSubscriptionTypeFromOutput(authOutput) ?? accountIdentity.planType;
     const codexLabel =
       parsed.authStatus === "authenticated"
         ? codexAccountAuthLabel({ type: codexAccountType, planType: codexPlanType })
@@ -1341,6 +1381,7 @@ export const makeCheckCodexProviderStatus = (
       supportsAutoRuntimeMode,
       ...(codexAuthType ? { authType: codexAuthType } : {}),
       ...(codexLabel ? { authLabel: codexLabel } : {}),
+      ...(accountIdentity.email ? { accountEmail: accountIdentity.email } : {}),
       ...(parsed.voiceTranscriptionAvailable !== undefined
         ? { voiceTranscriptionAvailable: parsed.voiceTranscriptionAvailable }
         : {}),
@@ -1398,6 +1439,7 @@ export const makeCheckClaudeProviderStatus = (
         driver: CLAUDE_AGENT_PROVIDER,
         status: "error" as const,
         available: false,
+        ...(versionProbe.outcome === "missing" ? { installed: false } : {}),
         authStatus: "unknown" as const,
         checkedAt,
         message:
@@ -1552,6 +1594,10 @@ export const makeCheckClaudeProviderStatus = (
       subscriptionType = yield* resolveSubscriptionType;
     }
     const authMetadata = claudeAuthMetadata({ subscriptionType, authMethod });
+    const accountIdentity =
+      effectiveParsed.authStatus === "authenticated"
+        ? parseClaudeAccountIdentityFromOutput(authOutput)
+        : {};
 
     return {
       provider: CLAUDE_AGENT_PROVIDER,
@@ -1563,6 +1609,10 @@ export const makeCheckClaudeProviderStatus = (
       version: parsedVersion,
       supportsAutoRuntimeMode,
       ...(authMetadata ? { authType: authMetadata.type, authLabel: authMetadata.label } : {}),
+      ...(accountIdentity.email ? { accountEmail: accountIdentity.email } : {}),
+      ...(accountIdentity.organization
+        ? { accountOrganization: accountIdentity.organization }
+        : {}),
       checkedAt,
       ...(effectiveParsed.message ? { message: effectiveParsed.message } : {}),
     } satisfies ServerProviderStatus;
@@ -1607,6 +1657,7 @@ export const makeCheckGrokProviderStatus = (
         driver: GROK_PROVIDER,
         status: "error" as const,
         available: false,
+        ...(versionProbe.outcome === "missing" ? { installed: false } : {}),
         authStatus: "unknown" as const,
         checkedAt,
         message:
@@ -1706,6 +1757,7 @@ export const makeCheckDroidProviderStatus = (
         driver: DROID_PROVIDER,
         status: "error" as const,
         available: false,
+        ...(versionProbe.outcome === "missing" ? { installed: false } : {}),
         authStatus: "unknown" as const,
         checkedAt,
         message:
@@ -1851,6 +1903,7 @@ export const makeCheckOpenCodeProviderStatus = (
         driver: OPENCODE_PROVIDER,
         status: "error" as const,
         available: false,
+        ...(versionProbe.outcome === "missing" ? { installed: false } : {}),
         authStatus: "unknown" as const,
         checkedAt,
         message:
@@ -1910,197 +1963,47 @@ export const checkOpenCodeProviderStatus = makeCheckOpenCodeProviderStatus();
 
 // ── Pi health check ─────────────────────────────────────────────
 
-const PI_SDK_SETUP_FILE_NAMES = ["auth.json", "models.json"] as const;
-// Additional credential names supported by the installed Pi SDK; these are not
-// all plain API-key overrides, so do not add them to the runtime override mapping.
-const PI_SDK_AUTH_ENV_KEYS = [
-  "ANTHROPIC_AUTH_TOKEN",
-  "ANT_LING_API_KEY",
-  "QWEN_TOKEN_PLAN_API_KEY",
-  "QWEN_TOKEN_PLAN_CN_API_KEY",
-  "NVIDIA_API_KEY",
-  "RADIUS_API_KEY",
-  "TOGETHER_API_KEY",
-  "BASETEN_API_KEY",
-  "META_API_KEY",
-  "ZAI_CODING_CN_API_KEY",
-] as const;
-// Pi also supports cloud credentials that are not provider API keys.
-const PI_SDK_CLOUD_AUTH_ENV_KEYS = [
-  "AWS_PROFILE",
-  "AWS_BEARER_TOKEN_BEDROCK",
-  "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
-  "AWS_CONTAINER_CREDENTIALS_FULL_URI",
-  "AWS_WEB_IDENTITY_TOKEN_FILE",
-] as const;
-
-function hasPiSdkSetup(
-  content: string,
-  fileName: (typeof PI_SDK_SETUP_FILE_NAMES)[number],
-): boolean {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(content);
-  } catch {
-    return false;
-  }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return false;
-  const data = parsed as Record<string, unknown>;
-  const entries = fileName === "auth.json" ? data : data.providers;
-  if (!entries || typeof entries !== "object" || Array.isArray(entries)) return false;
-  return Object.values(entries).some((entry: unknown) => {
-    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return false;
-    const value = entry as Record<string, unknown>;
-    if (fileName === "models.json") {
-      return (
-        (typeof value.apiKey === "string" && value.apiKey.trim().length > 0) ||
-        typeof value.baseUrl === "string" ||
-        (Array.isArray(value.models) && value.models.length > 0)
-      );
-    }
-    return value.type === "oauth"
-      ? (typeof value.refresh === "string" && value.refresh.trim().length > 0) ||
-          (typeof value.access === "string" && value.access.trim().length > 0)
-      : value.type === "api_key" &&
-          ((typeof value.key === "string" && value.key.trim().length > 0) ||
-            (value.env !== null &&
-              typeof value.env === "object" &&
-              Object.keys(value.env).length > 0));
-  });
-}
-
-/**
- * Looks for evidence that Pi is set up for the bundled SDK even though the Pi
- * CLI is unavailable: a provider API key set on this Pi instance, or a
- * configured credentials/models file in the agent dir Pi sessions will use.
- * Files are inspected without executing configuration commands or importing the SDK.
- */
-const inspectPiSdkSetup = (input: {
-  readonly agentDir: string | undefined;
-  readonly environment: Readonly<Record<string, string>> | undefined;
-  readonly runtimeEnvironment: Readonly<NodeJS.ProcessEnv>;
-  readonly instanceId: string | undefined;
-  readonly paths: { readonly homeDir: string; readonly isolationRootDir: string } | undefined;
-}): Effect.Effect<
-  { readonly found: boolean; readonly agentDir: string },
-  never,
-  FileSystem.FileSystem
-> =>
-  Effect.gen(function* () {
-    const environment = input.environment;
-    const { agentDir } = makePiStoragePaths({
-      agentDir: input.agentDir,
-      environment,
-      instanceId: input.instanceId,
-      stateDir: input.paths?.isolationRootDir,
-      homeDir: input.paths?.homeDir ?? OS.homedir(),
-      sdkAgentDir: defaultPiSdkAgentDir(),
-    });
-    const runtimeEnv = input.runtimeEnvironment;
-    const defaultAccount =
-      environment === undefined && (!input.instanceId || input.instanceId === PI_PROVIDER);
-    if (
-      MODEL_PROVIDER_API_KEY_ENV_MAPPINGS.some(
-        ({ provider, envKeys }) =>
-          (defaultAccount || provider !== "azure-openai-responses") &&
-          envKeys.some((key) => nonEmptyTrimmed(runtimeEnv[key]) !== undefined),
-      ) ||
-      PI_SDK_AUTH_ENV_KEYS.some((key) => nonEmptyTrimmed(runtimeEnv[key]) !== undefined) ||
-      (defaultAccount &&
-        (PI_SDK_CLOUD_AUTH_ENV_KEYS.some((key) => nonEmptyTrimmed(runtimeEnv[key]) !== undefined) ||
-          (nonEmptyTrimmed(runtimeEnv.AWS_ACCESS_KEY_ID) !== undefined &&
-            nonEmptyTrimmed(runtimeEnv.AWS_SECRET_ACCESS_KEY) !== undefined)))
-    ) {
-      return { found: true, agentDir };
-    }
-    const fileSystem = yield* FileSystem.FileSystem;
-    if (
-      defaultAccount &&
-      (nonEmptyTrimmed(runtimeEnv.GOOGLE_CLOUD_PROJECT) ??
-        nonEmptyTrimmed(runtimeEnv.GCLOUD_PROJECT)) &&
-      nonEmptyTrimmed(runtimeEnv.GOOGLE_CLOUD_LOCATION)
-    ) {
-      const adcPath =
-        nonEmptyTrimmed(runtimeEnv.GOOGLE_APPLICATION_CREDENTIALS) ??
-        nodePath.join(
-          input.paths?.homeDir ?? OS.homedir(),
-          ".config/gcloud/application_default_credentials.json",
-        );
-      if (adcPath && (yield* fileSystem.exists(adcPath).pipe(Effect.orElseSucceed(() => false)))) {
-        return { found: true, agentDir };
-      }
-    }
-    for (const fileName of PI_SDK_SETUP_FILE_NAMES) {
-      const info = yield* fileSystem
-        .stat(nodePath.join(agentDir, fileName))
-        .pipe(Effect.orElseSucceed(() => undefined));
-      if (info?.type === "File" && Number(info.size) > 0) {
-        // The SDK creates auth.json as {}, even before any account is configured.
-        const content = yield* fileSystem
-          .readFileString(nodePath.join(agentDir, fileName))
-          .pipe(Effect.orElseSucceed(() => ""));
-        if (hasPiSdkSetup(content, fileName)) return { found: true, agentDir };
-      }
-    }
-    return { found: false, agentDir };
-  });
-
 export const checkPiProviderStatus = (
   agentDir?: string,
   binaryPath?: string,
   environment?: Readonly<Record<string, string>>,
   instanceId?: string,
   paths?: { readonly homeDir: string; readonly isolationRootDir: string },
-): Effect.Effect<
-  ServerProviderStatus,
-  never,
-  ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem
-> =>
+): Effect.Effect<ServerProviderStatus, never, ChildProcessSpawner.ChildProcessSpawner> =>
   Effect.gen(function* () {
     const checkedAt = new Date().toISOString();
-    const executable = nonEmptyTrimmed(binaryPath) ?? "pi";
     const probeEnvResult = tryMakeProviderProbeEnv(PI_PROVIDER, environment, instanceId, paths);
     if (!probeEnvResult.ok) {
       return providerHomePreparationFailure(PI_PROVIDER, checkedAt, probeEnvResult.cause);
     }
     const probeEnv = probeEnvResult.env;
-
-    const versionProbe = yield* probeProviderCliVersion(
-      runPiCommand(["--version"], executable, probeEnv),
-      PI_HEALTH_TIMEOUT_MS,
+    const installation = yield* Effect.result(
+      Effect.tryPromise({
+        try: () => resolvePiInstallation({ binaryPath, env: probeEnv }),
+        catch: (cause) => cause,
+      }),
     );
-
-    // Pi itself is SDK-backed in Synara, and health refreshes must not import the
-    // SDK (it initializes a native clipboard module). A CLI that is absent or
-    // fails only makes Pi unavailable when nothing shows an SDK-only setup;
-    // otherwise the probe stays advisory. A timeout stays advisory regardless so a
-    // slow CLI cannot flip Pi off.
-    if (
-      versionProbe.outcome === "missing" ||
-      versionProbe.outcome === "failure" ||
-      versionProbe.outcome === "nonzero"
-    ) {
-      const sdkSetup = yield* inspectPiSdkSetup({
-        agentDir,
-        environment,
-        runtimeEnvironment: probeEnv,
-        instanceId,
-        paths,
-      });
-      if (!sdkSetup.found) {
-        return {
-          provider: PI_PROVIDER,
-          instanceId: PI_PROVIDER,
-          driver: PI_PROVIDER,
-          status: "error" as const,
-          available: false,
-          authStatus: "unknown" as const,
-          checkedAt,
-          message: `Pi is not set up. Install the Pi CLI (\`pi\`) or add Pi credentials to ${sdkSetup.agentDir} to use the Pi provider.`,
-        } satisfies ServerProviderStatus;
-      }
+    if (Result.isFailure(installation)) {
+      return {
+        provider: PI_PROVIDER,
+        instanceId: PI_PROVIDER,
+        driver: PI_PROVIDER,
+        status: "error" as const,
+        available: false,
+        ...(installation.failure instanceof PiNotInstalledError ? { installed: false } : {}),
+        authStatus: "unknown" as const,
+        checkedAt,
+        message:
+          installation.failure instanceof Error
+            ? installation.failure.message
+            : "Could not locate the selected Pi CLI installation.",
+      } satisfies ServerProviderStatus;
     }
 
+    const versionProbe = yield* probeProviderCliVersion(
+      runPiCommand(["--version"], installation.success.binaryPath, probeEnv),
+      PI_HEALTH_TIMEOUT_MS,
+    );
     if (versionProbe.outcome === "missing" || versionProbe.outcome === "failure") {
       const error = versionProbe.cause;
       return {
@@ -2111,10 +2014,7 @@ export const checkPiProviderStatus = (
         available: true,
         authStatus: "unknown" as const,
         checkedAt,
-        message:
-          versionProbe.outcome === "missing"
-            ? "Pi SDK is bundled, but the Pi CLI (`pi`) is not on PATH, so Synara could not verify the installed CLI version."
-            : `Pi SDK is bundled, but the CLI health check failed: ${error instanceof Error ? error.message : String(error)}.`,
+        message: `Pi is installed, but the CLI health check failed: ${error instanceof Error ? error.message : String(error)}.`,
       } satisfies ServerProviderStatus;
     }
 
@@ -2128,7 +2028,7 @@ export const checkPiProviderStatus = (
         authStatus: "unknown" as const,
         checkedAt,
         message:
-          "Pi SDK is bundled, but the CLI health check timed out before Synara could verify the installed version.",
+          "Pi is installed, but the CLI health check timed out before Synara could verify the installed version.",
       } satisfies ServerProviderStatus;
     }
 
@@ -2144,8 +2044,8 @@ export const checkPiProviderStatus = (
         authStatus: "unknown" as const,
         checkedAt,
         message: detail
-          ? `Pi SDK is bundled, but the CLI health check failed. ${detail}`
-          : "Pi SDK is bundled, but the CLI health check failed.",
+          ? `Pi is installed, but the CLI health check failed. ${detail}`
+          : "Pi is installed, but the CLI health check failed.",
       } satisfies ServerProviderStatus;
     }
 
@@ -2199,6 +2099,7 @@ export const checkOmpProviderStatus = (
         driver: OMP_PROVIDER,
         status: "error" as const,
         available: false,
+        ...(versionProbe.outcome === "missing" ? { installed: false } : {}),
         authStatus: "unknown" as const,
         checkedAt,
         message:
@@ -2282,6 +2183,7 @@ export const checkAntigravityProviderStatus = (
         driver: ANTIGRAVITY_PROVIDER,
         status: "error",
         available: false,
+        ...(versionProbe.outcome === "missing" ? { installed: false } : {}),
         authStatus: "unknown",
         checkedAt,
         message:
@@ -2398,6 +2300,7 @@ export const makeCheckCursorProviderStatus = (
         driver: CURSOR_PROVIDER,
         status: "error" as const,
         available: false,
+        ...(versionProbe.outcome === "missing" ? { installed: false } : {}),
         authStatus: "unknown" as const,
         checkedAt,
         message:
@@ -2631,6 +2534,7 @@ export const makeCheckDevinProviderStatus = (
         driver: DEVIN_PROVIDER,
         status: "error" as const,
         available: false,
+        ...(versionProbe.outcome === "missing" ? { installed: false } : {}),
         authStatus: "unknown" as const,
         checkedAt,
         message:
@@ -2730,6 +2634,8 @@ export function providerStatusesEqual(
       status.authStatus === next.authStatus &&
       (status.authType ?? null) === (next.authType ?? null) &&
       (status.authLabel ?? null) === (next.authLabel ?? null) &&
+      (status.accountEmail ?? null) === (next.accountEmail ?? null) &&
+      (status.accountOrganization ?? null) === (next.accountOrganization ?? null) &&
       status.voiceTranscriptionAvailable === next.voiceTranscriptionAvailable &&
       status.supportsAutoRuntimeMode === next.supportsAutoRuntimeMode &&
       (status.autoRuntimeModeBinaryPath ?? null) === (next.autoRuntimeModeBinaryPath ?? null) &&
@@ -2781,8 +2687,9 @@ export function stabilizeProviderStatusesAgainstTransientTimeouts(
     // A single slow CLI probe should not make an already usable provider look broken.
     // The previous update advisory is network-backed evidence, though, so it must
     // not survive a probe that could not confirm the installed version.
+    // Keep the account label tied to a confirmed login as well.
     const stabilizedStatus = {
-      ...previous,
+      ...withoutProviderAccountIdentity(previous),
       checkedAt: status.checkedAt,
       ...(status.updateState !== undefined ? { updateState: status.updateState } : {}),
     };
@@ -2847,9 +2754,18 @@ function projectStatusForProviderInstance(
   if (isExactInstanceStatus || instance.isDefault || status.authStatus === "unknown") {
     return projected;
   }
-  const { authType, authLabel, voiceTranscriptionAvailable, ...withoutAuthMetadata } = projected;
+  const {
+    authType,
+    authLabel,
+    accountEmail,
+    accountOrganization,
+    voiceTranscriptionAvailable,
+    ...withoutAuthMetadata
+  } = projected;
   void authType;
   void authLabel;
+  void accountEmail;
+  void accountOrganization;
   void voiceTranscriptionAvailable;
   return {
     ...withoutAuthMetadata,
@@ -3701,7 +3617,12 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
         });
       }
 
-      yield* serverSettings.streamChanges.pipe(
+      // New-chat defaults change with every composer pick and never affect
+      // providers, so they must not start CLI probes.
+      yield* withoutNewThreadDefaultsOnlyChanges(
+        serverSettings.streamChanges,
+        yield* serverSettings.getSettings.pipe(Effect.catch(() => Effect.succeed(null))),
+      ).pipe(
         Stream.runForEach((settings) =>
           Effect.gen(function* () {
             // Publish settings-only projection changes immediately from the

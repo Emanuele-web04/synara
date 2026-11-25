@@ -8,6 +8,7 @@ import { Data, DateTime, Duration, ServiceMap } from "effect";
 import type { Effect, Stream } from "effect";
 
 export type SessionRole = "owner" | "client";
+export type AuthAccessOrigin = "local" | "remote";
 
 export interface IssuedSession {
   readonly sessionId: AuthSessionId;
@@ -26,6 +27,8 @@ export interface VerifiedSession {
   readonly expiresAt?: DateTime.DateTime;
   readonly subject: string;
   readonly role: SessionRole;
+  /** Missing on legacy credentials whose local/remote provenance is unproven. */
+  readonly accessOrigin?: AuthAccessOrigin | null;
 }
 
 export type SessionCredentialChange =
@@ -59,6 +62,7 @@ export interface SessionCredentialServiceShape {
     readonly method?: ServerAuthSessionMethod;
     readonly role?: SessionRole;
     readonly client?: AuthClientMetadata;
+    readonly accessOrigin?: AuthAccessOrigin | null;
   }) => Effect.Effect<IssuedSession, SessionCredentialError>;
   readonly verify: (token: string) => Effect.Effect<VerifiedSession, SessionCredentialError>;
   readonly issueWebSocketToken: (

@@ -81,8 +81,8 @@ function makeRuntime(
       published.push(registrations);
     },
     clientVersion: "1.0.4",
-    logWarning: (message) => {
-      warnings.push(message);
+    logWarning: (message, fields) => {
+      warnings.push(JSON.stringify({ message, fields }));
     },
     now: () => now,
   });
@@ -170,7 +170,9 @@ describe("McpConnectorRuntime.connect", () => {
     expect(
       mocks.forward.mock.calls.every(([request]) => request.accessToken === "rotated-access"),
     ).toBe(true);
-    expect(harness.warnings).toContain("Could not save refreshed connector tokens.");
+    expect(harness.warnings).toContainEqual(
+      expect.stringContaining("Could not save refreshed connector tokens."),
+    );
   });
 
   it.each([false, true])(
@@ -197,9 +199,11 @@ describe("McpConnectorRuntime.connect", () => {
         "rejected",
         bothFail ? "rejected" : "fulfilled",
       ]);
-      expect(harness.runtime.list().map((entry) => entry.url)).toEqual(
-        bothFail ? [] : ["https://second.example.com/mcp"],
-      );
+      expect(
+        harness.runtime
+          .list()
+          .map((entry) => (entry.transport === "stdio" ? entry.command : entry.url)),
+      ).toEqual(bothFail ? [] : ["https://second.example.com/mcp"]);
       expect(harness.published.flat().some((entry) => entry.name === "failed_connector")).toBe(
         false,
       );
@@ -328,7 +332,7 @@ describe("McpConnectorRuntime.connect", () => {
       harness.runtime.connect({ presetId: "supabase", url: "https://mcp.supabase.com/mcp" }),
     ).rejects.toBeInstanceOf(McpConnectorFailure);
     await expect(harness.runtime.connect({ url: "http://insecure.example.com" })).rejects.toThrow(
-      "The URL must start with https://.",
+      "HTTP is allowed only for loopback hosts",
     );
     expect(mocks.probe).not.toHaveBeenCalled();
   });
@@ -869,6 +873,20 @@ describe("McpConnectorRuntime persistence", () => {
     expect(second.published.at(-1)).toEqual([
       { name: "supabase_connector", connectorId: connector.connectorId },
     ]);
+  });
+
+  it("keeps private values out of warnings when a saved proposal cannot be decoded", async () => {
+    const initial = JSON.stringify({
+      version: 1,
+      connectors: [],
+      proposals: [{ proposal: {}, input: { env: { TOKEN: "private-proposal-value" } } }],
+    });
+    const h = makeRuntime(initial);
+    await h.runtime.init();
+    expect(h.runtime.list()).toEqual([]);
+    expect(h.warnings).toHaveLength(1);
+    expect(h.warnings.join("")).not.toContain("private-proposal-value");
+    expect(h.saved()).toBe(initial);
   });
 
   it("starts empty when the saved document is unreadable, and never saves over it", async () => {

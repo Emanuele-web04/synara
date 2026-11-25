@@ -20,6 +20,7 @@ import { useStore } from "../../store";
 import { NewTaskButton } from "../tasks/NewTaskButton";
 import { TasksViewSwitch } from "../tasks/TasksViewSwitch";
 import { RouteSurface, RouteSurfaceHeader } from "../RouteSurface";
+import { WorkspaceSurfaceComputerPicker } from "../hosts/ComputerPicker";
 import { KanbanNewTaskDialog } from "./KanbanNewTaskDialog";
 import { KanbanOverview } from "./KanbanOverview";
 import { KanbanProjectBoardView } from "./KanbanProjectBoardView";
@@ -161,6 +162,7 @@ export default function KanbanView({ projectId }: { projectId: string | null }) 
     <RouteInsetSurface>
       <RouteSurface>
         <RouteSurfaceHeader>
+          <WorkspaceSurfaceComputerPicker path="/kanban" />
           <div className="flex min-w-0 flex-1 items-center gap-2 [-webkit-app-region:no-drag]">
             {projectBoard ? (
               <Button
@@ -175,7 +177,7 @@ export default function KanbanView({ projectId }: { projectId: string | null }) 
             <h2 className="max-w-[clamp(16rem,50vw,40rem)] truncate text-ui-lg font-medium text-foreground">
               {projectBoard ? projectBoard.projectName : t("workspace:view_kanban")}
             </h2>
-            <span className="shrink-0 text-ui leading-snug text-muted-foreground/70">
+            <span className="shrink-0 text-ui leading-snug text-muted-foreground">
               {projectBoard ? projectBoard.totalCount : board.totalCount} {t("common:view_tasks")}
             </span>
             {projectBoard ? null : <TasksViewSwitch current="kanban" />}

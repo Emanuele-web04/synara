@@ -148,6 +148,7 @@ const authorizeConnectorRequest = Effect.gen(function* () {
     connectors,
     request,
     connectorId,
+    ownerToken: token,
     sessionId: request.headers["mcp-session-id"],
     protocolVersion: request.headers["mcp-protocol-version"],
   };
@@ -179,6 +180,7 @@ const postRoute = HttpRouter.add(
     }
     const result = yield* access.connectors.forward(access.connectorId, {
       method: "POST",
+      ownerToken: access.ownerToken,
       body: body.body,
       sessionId: access.sessionId,
       protocolVersion: access.protocolVersion,
@@ -197,10 +199,12 @@ const deleteRoute = HttpRouter.add(
     if (!access.sessionId) return HttpServerResponse.empty({ status: 400 });
     const result = yield* access.connectors.forward(access.connectorId, {
       method: "DELETE",
+      ownerToken: access.ownerToken,
       sessionId: access.sessionId,
       protocolVersion: access.protocolVersion,
     });
-    return HttpServerResponse.empty({ status: result.status === 404 ? 404 : 204 });
+    const closed = result.status >= 200 && result.status < 300 && result.body.kind === "empty";
+    return HttpServerResponse.empty({ status: closed ? 204 : result.status === 404 ? 404 : 502 });
   }),
 );
 

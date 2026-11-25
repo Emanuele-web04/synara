@@ -8,6 +8,7 @@ import type {
   ModelCapabilities,
   ProviderKind,
   ProviderModelDescriptor,
+  ProviderOptionDescriptor,
 } from "@synara/contracts";
 import {
   getClaudeContextWindowSuffix,
@@ -82,6 +83,28 @@ export function resolveRuntimeModelDescriptor(input: {
   // while preserving exact matches and explicitly qualified selections above.
   return runtimeModels.find(
     (candidate) => normalizeClaudeModelOptionSlug(candidate) === normalizedModel,
+  );
+}
+
+// Older hosts publish Claude effort descriptors without a default. Composer normalization
+// drops the default level, so without it an unset effort reads as the first level.
+function withClaudeEffortDefault(
+  descriptors: ReadonlyArray<ProviderOptionDescriptor>,
+  defaultEffort: string | null,
+): ReadonlyArray<ProviderOptionDescriptor> {
+  if (!defaultEffort) return descriptors;
+  return descriptors.map((descriptor) =>
+    descriptor.type === "select" &&
+    descriptor.id === "effort" &&
+    !descriptor.options.some((option) => option.isDefault) &&
+    descriptor.options.some((option) => option.id === defaultEffort)
+      ? {
+          ...descriptor,
+          options: descriptor.options.map((option) =>
+            option.id === defaultEffort ? { ...option, isDefault: true as const } : option,
+          ),
+        }
+      : descriptor,
   );
 }
 
@@ -173,7 +196,14 @@ export function getRuntimeAwareModelCapabilities(input: {
 
   return {
     ...staticCapabilities,
-    ...(optionDescriptors ? { optionDescriptors } : {}),
+    ...(optionDescriptors
+      ? {
+          optionDescriptors:
+            input.provider === "claudeAgent"
+              ? withClaudeEffortDefault(optionDescriptors, runtimeDefaultEffort)
+              : optionDescriptors,
+        }
+      : {}),
     supportsFastMode,
     supportsThinkingToggle,
     contextWindowOptions,

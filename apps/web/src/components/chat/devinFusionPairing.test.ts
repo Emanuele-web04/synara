@@ -5,7 +5,7 @@ import {
   buildDevinPairingPatch,
   currentDevinPairing,
   devinPairingLeadEfforts,
-  devinPairingLeadHasFast,
+  devinPairingLeadSpeeds,
   devinPairingSidekicksForLead,
   devinPairingStatusLabel,
   getDevinPairingModel,
@@ -47,6 +47,7 @@ describe("getDevinPairingModel", () => {
     expect(pairing).not.toBeNull();
     expect(pairing?.leads.map((lead) => lead.value)).toEqual(["claude-fable-5-1", "gpt-6-sol"]);
     expect(pairing?.leads[0]?.label).toBe("Claude Fable 5.1");
+    expect(pairing?.leads[1]?.label).toBe("GPT-6 Sol");
     expect(pairing?.sidekicks.map((sidekick) => sidekick.value)).toEqual([
       "swe-2-medium",
       "claude-sonnet-5-5-medium",
@@ -79,9 +80,54 @@ describe("getDevinPairingModel", () => {
     });
     expect(pairing?.variants[0]?.label).toBe("Claude Fable 5.1 High Fast + SWE 2 Medium");
   });
+
+  it("supports future effortless leads, unknown effort tiers, new speeds, and dotted family slugs", () => {
+    const pairing = getDevinPairingModel("devin", {
+      slug: "fusion-2.0",
+      name: "Fusion 2.0",
+      modelVariants: [
+        {
+          model: "fusion-2-0-claude-opus-6-high-sidekick-swe-2-medium",
+          label: "Fusion 2.0 (Claude Opus 6 High + SWE-2 Medium)",
+        },
+        {
+          model: "fusion-2-0-claude-opus-6-mega-sidekick-swe-2-medium",
+          label: "Fusion 2.0 (Claude Opus 6 Mega + SWE-2 Medium)",
+        },
+        {
+          model: "fusion-2-0-claude-opus-6-high-priority-sidekick-swe-2-medium",
+          label: "Fusion 2.0 (Claude Opus 6 High Fast + SWE-2 Medium)",
+        },
+        {
+          model: "fusion-2-0-claude-opus-6-high-lightning-sidekick-swe-2-medium",
+          label: "Fusion 2.0 (Claude Opus 6 High Ultrafast + SWE-2 Medium)",
+        },
+        {
+          model: "fusion-2-0-kimi-k2-7-sidekick-swe-2-medium",
+          label: "Fusion 2.0 (Kimi K2.7 + SWE-2 Medium)",
+        },
+      ],
+    });
+    expect(pairing).not.toBeNull();
+    expect(pairing?.leads).toEqual([
+      { value: "claude-opus-6", label: "Claude Opus 6" },
+      { value: "kimi-k2-7", label: "Kimi K2.7" },
+    ]);
+    expect(devinPairingLeadEfforts(pairing!, "claude-opus-6")).toEqual([
+      { value: "high", label: "High" },
+      { value: "mega", label: "Mega" },
+    ]);
+    expect(devinPairingLeadEfforts(pairing!, "kimi-k2-7")).toEqual([]);
+    expect(devinPairingLeadSpeeds(pairing!, "claude-opus-6")).toEqual([
+      "standard",
+      "fast",
+      "ultrafast",
+    ]);
+    expect(devinPairingLeadSpeeds(pairing!, "kimi-k2-7")).toEqual(["standard"]);
+  });
 });
 
-describe("devinPairingLeadEfforts / sidekicksForLead / leadHasFast", () => {
+describe("devinPairingLeadEfforts / sidekicksForLead / leadSpeeds", () => {
   const pairing = getDevinPairingModel("devin", fusionRuntimeModel());
 
   it("lists the lead's efforts in canonical order", () => {
@@ -102,9 +148,9 @@ describe("devinPairingLeadEfforts / sidekicksForLead / leadHasFast", () => {
     ]);
   });
 
-  it("reports fast support per lead", () => {
-    expect(devinPairingLeadHasFast(pairing!, "claude-fable-5-1")).toBe(true);
-    expect(devinPairingLeadHasFast(pairing!, "gpt-6-sol")).toBe(false);
+  it("reports supported speed tiers per lead", () => {
+    expect(devinPairingLeadSpeeds(pairing!, "claude-fable-5-1")).toEqual(["standard", "fast"]);
+    expect(devinPairingLeadSpeeds(pairing!, "gpt-6-sol")).toEqual(["standard"]);
   });
 });
 
@@ -116,7 +162,7 @@ describe("resolveDevinPairingUid", () => {
       resolveDevinPairingUid(pairing, {
         lead: "claude-fable-5-1",
         effort: "high",
-        fast: false,
+        speed: "standard",
         sidekick: "claude-sonnet-5-5-medium",
       }),
     ).toBe("fusion-claude-fable-5-1-high-sidekick-claude-sonnet-5-5-medium");
@@ -127,7 +173,7 @@ describe("resolveDevinPairingUid", () => {
       resolveDevinPairingUid(pairing, {
         lead: "gpt-6-sol",
         effort: "xhigh",
-        fast: false,
+        speed: "standard",
         sidekick: "swe-2-medium",
       }),
     ).toBe("fusion-gpt-6-sol-xhigh-sidekick-glm-5-2");
@@ -138,7 +184,7 @@ describe("resolveDevinPairingUid", () => {
       resolveDevinPairingUid(pairing, {
         lead: "gpt-6-sol",
         effort: "xhigh",
-        fast: true,
+        speed: "fast",
         sidekick: "glm-5-2",
       }),
     ).toBe("fusion-gpt-6-sol-xhigh-sidekick-glm-5-2");
@@ -163,7 +209,7 @@ describe("currentDevinPairing / buildDevinPairingPatch / status label", () => {
     expect(pinned.parts).toEqual({
       lead: "claude-fable-5-1",
       effort: "high",
-      fast: true,
+      speed: "fast",
       sidekick: "swe-2-medium",
     });
   });

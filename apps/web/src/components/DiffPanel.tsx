@@ -10,7 +10,6 @@ import { Columns2Icon, CopyIcon, EllipsisIcon, FolderIcon, Rows3Icon } from "~/l
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   gitBranchesQueryOptions,
-  gitQueryKeys,
   refreshGitAfterFileWrite,
   gitStatusQueryOptions,
   gitWorkingTreeDiffQueryOptions,
@@ -64,6 +63,8 @@ import { useStore } from "../store";
 import { createProjectSelector } from "../storeSelectors";
 import { inferCheckpointTurnCountByTurnId } from "../session-logic";
 import { type TimestampFormat, useAppSettings } from "../appSettings";
+import { useNewChatDefault } from "../hooks/useNewChatDefault";
+import { resolveDraftFallbackModelSelection } from "../lib/draftFallbackModelSelection";
 import { useComposerDraftStore } from "../composerDraftStore";
 import {
   areAllRenderableFilesCollapsed,
@@ -91,7 +92,6 @@ import {
   type DiffPanelTurnScopeIntent,
   type DiffViewKind,
 } from "./DiffPanel.logic";
-import { resolveDraftFallbackModelSelection } from "./ChatView.logic";
 import { DiffPanelChangeMarkers } from "./DiffPanelChangeMarkers";
 import {
   DiffPanelChangeNavigationButtons,
@@ -479,6 +479,7 @@ export default function DiffPanel({
   const navigate = useNavigate();
   const { resolvedTheme } = useTheme();
   const { settings } = useAppSettings();
+  const newChatDefault = useNewChatDefault(settings);
   const [defaultDiffRenderMode, setDefaultDiffRenderMode] = useLocalStorage(
     DIFF_RENDER_MODE_STORAGE_KEY,
     DEFAULT_DIFF_RENDER_MODE,
@@ -572,7 +573,7 @@ export default function DiffPanel({
       draftThread,
       fallbackModelSelection: resolveDraftFallbackModelSelection({
         projectDefault: fallbackDraftProject?.defaultModelSelection,
-        settingsDefaultProvider: settings.defaultProvider,
+        newChatDefault,
       }),
     });
     return draftBackedThread ? toDiffPanelThreadCatalog(draftBackedThread) : undefined;
@@ -581,7 +582,7 @@ export default function DiffPanel({
     draftThread,
     fallbackDraftProject?.defaultModelSelection,
     serverThreadCatalog,
-    settings.defaultProvider,
+    newChatDefault,
   ]);
   const activeProjectId = activeThreadContext?.projectId ?? draftThread?.projectId ?? null;
   const activeProject = useStore(
