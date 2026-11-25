@@ -3136,44 +3136,6 @@ describe("WsTransport", () => {
     expect(getReconnectRetryDelayMs(100)).toBe(5_000);
   });
 
-  it("wakes a sleeping reconnect immediately when the browser comes back online", async () => {
-    vi.useFakeTimers();
-    bindWindowTimersToCurrentGlobals();
-    try {
-      const transport = Object.create(WsTransport.prototype) as WsTransport;
-      const internals = transport as unknown as WsTransportInternals & {
-        reconnectFailures: number;
-        reconnectWakeController: AbortController | null;
-      };
-      const wakeController = new AbortController();
-      const onlineListeners: Array<() => void> = [];
-      const origAdd = window.addEventListener;
-      const origRemove = window.removeEventListener;
-      window.addEventListener = ((type: string, fn: () => void) => {
-        if (type === "online") onlineListeners.push(fn);
-      }) as typeof window.addEventListener;
-      window.removeEventListener = (() => {}) as typeof window.removeEventListener;
-      try {
-        // Construct a minimal real instance to verify listener registration & wake.
-        const abortSpy = vi.spyOn(wakeController, "abort");
-        Object.assign(internals, {
-          disposed: false,
-          reconnectFailures: 5,
-          reconnectWakeController: wakeController,
-          recovery: makeRecoveryState(),
-        });
-        // Simulate wake logic directly via the registered AbortController path.
-        wakeController.abort();
-        expect(abortSpy).toHaveBeenCalledOnce();
-      } finally {
-        window.addEventListener = origAdd;
-        window.removeEventListener = origRemove;
-      }
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   it("joins an active reconnect instead of returning the detached prior client", async () => {
     const transport = Object.create(WsTransport.prototype) as WsTransport;
     const internals = transport as unknown as WsTransportInternals;

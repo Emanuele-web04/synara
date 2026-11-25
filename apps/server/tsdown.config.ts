@@ -76,7 +76,7 @@ export default defineConfig({
   // but because `yaml` stays external, Rolldown would otherwise preserve a dead
   // `import "yaml"` side-effect on the cold boot path (~13ms). `yaml` is pure.
   treeshake: {
-    moduleSideEffects: (id, external) => !(external && id === "yaml"),
+    moduleSideEffects: [{ test: /^yaml$/u, external: true, sideEffects: false }],
   },
   define: {
     __SYNARA_MIGRATION_RUNTIME_SOURCE_DIGEST__: JSON.stringify(migrationRuntimeSourceDigest),

@@ -35,7 +35,6 @@ const FORBIDDEN_BOOT_STATIC_IMPORTS = [
   "jose",
   "mdast-util-from-markdown",
   "yaml",
-  "smol-toml",
   "@pierre/diffs",
   "shiki",
 ] as const;

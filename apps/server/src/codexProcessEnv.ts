@@ -8,13 +8,7 @@ import * as fs from "node:fs/promises";
 import { constants, lstatSync, readFileSync, readlinkSync, type BigIntStats } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
-import { createRequire } from "node:module";
-
-let cachedSmolToml: typeof import("smol-toml") | undefined;
-function parseToml(source: string) {
-  cachedSmolToml ??= createRequire(import.meta.url)("smol-toml") as typeof import("smol-toml");
-  return cachedSmolToml.parse(source);
-}
+import { parse as parseToml } from "smol-toml";
 
 import { readActiveCodexProviderEnvKey } from "@synara/shared/codexConfig";
 import {

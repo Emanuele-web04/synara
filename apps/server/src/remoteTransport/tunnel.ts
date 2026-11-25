@@ -95,24 +95,15 @@ export class RemoteTlsServer {
     maxPayload: MAX_MESSAGE_BYTES,
     perMessageDeflate: false,
   });
-  #secureContext: tls.SecureContext;
+  #identity: RemoteTlsIdentity;
   readonly #contexts = new WeakMap<Duplex, RemoteIngressContext>();
   readonly #connections = new Map<WebSocket, Duplex>();
   readonly #options: RemoteTlsServerOptions;
   #closed = false;
 
-  private static createContext(identity: RemoteTlsIdentity): tls.SecureContext {
-    return tls.createSecureContext({
-      key: identity.leafPrivateKey,
-      cert: identity.leafCertificate,
-      minVersion: "TLSv1.3",
-      maxVersion: "TLSv1.3",
-    });
-  }
-
   constructor(options: RemoteTlsServerOptions) {
     this.#options = options;
-    this.#secureContext = RemoteTlsServer.createContext(options.identity);
+    this.#identity = options.identity;
     this.#http.headersTimeout = options.handshakeTimeoutMs ?? REMOTE_HANDSHAKE_TIMEOUT_MS;
     this.#http.requestTimeout = 30_000;
     this.#http.keepAliveTimeout = 5_000;
@@ -175,42 +166,37 @@ export class RemoteTlsServer {
       outer.close(1013, "Remote connection limit reached");
       return;
     }
-    // Construct a TLSSocket directly from the cached SecureContext so each
-    // connection skips per-connection tls.Server + OpenSSL SSL_CTX creation.
+    // A scoped TLS server carries ingress metadata through the public secure
+    // callback, without relying on Node's private TLSSocket parent fields.
+    const server = tls.createServer(
+      {
+        key: this.#identity.leafPrivateKey,
+        cert: this.#identity.leafCertificate,
+        minVersion: "TLSv1.3",
+        maxVersion: "TLSv1.3",
+        handshakeTimeout: this.#options.handshakeTimeoutMs ?? REMOTE_HANDSHAKE_TIMEOUT_MS,
+      },
+      (socket) => {
+        this.#contexts.set(socket, context);
+        socket.on("error", () => socket.destroy());
+        this.#http.emit("connection", socket);
+      },
+    );
+    server.on("tlsClientError", (_error, socket) => socket.destroy());
     const stream = ciphertextStream(outer);
-    const handshakeTimeoutMs = this.#options.handshakeTimeoutMs ?? REMOTE_HANDSHAKE_TIMEOUT_MS;
-    const tlsSocket = new tls.TLSSocket(stream, {
-      isServer: true,
-      secureContext: this.#secureContext,
-    });
-    const handshakeTimer = setTimeout(() => {
-      tlsSocket.destroy();
-    }, handshakeTimeoutMs);
-    handshakeTimer.unref();
-    tlsSocket.once("secure", () => {
-      clearTimeout(handshakeTimer);
-      if (this.#closed || outer.readyState !== WebSocket.OPEN) {
-        tlsSocket.destroy();
-        return;
-      }
-      this.#contexts.set(tlsSocket, context);
-      this.#http.emit("connection", tlsSocket);
-    });
-    tlsSocket.on("error", () => tlsSocket.destroy());
     this.#connections.set(outer, stream);
     let released = false;
     const release = () => {
       if (released) return;
       released = true;
-      clearTimeout(handshakeTimer);
       this.#connections.delete(outer);
-      tlsSocket.destroy();
+      server.close();
       stream.destroy();
       outer.terminate();
     };
     outer.once("close", release);
     stream.once("close", release);
-    tlsSocket.once("close", release);
+    server.emit("connection", stream);
   }
 
   /** Existing TLS sessions retain their keys while new handshakes use this leaf. */
@@ -221,7 +207,7 @@ export class RemoteTlsServer {
     ) {
       throw new Error("Root replacement requires local re-pair");
     }
-    this.#secureContext = RemoteTlsServer.createContext(identity);
+    this.#identity = identity;
   }
 
   close(): void {

@@ -209,7 +209,10 @@ function requestGrantWithSignal(
     const abort = () => reject(new Error("Grant request timed out"));
     signal.addEventListener("abort", abort, { once: true });
     Promise.resolve()
-      .then(() => requestGrant())
+      .then(() => {
+        signal.throwIfAborted();
+        return requestGrant();
+      })
       .then(resolve, reject)
       .finally(() => signal.removeEventListener("abort", abort));
     if (signal.aborted) abort();
@@ -238,10 +241,8 @@ async function openRemoteTransport<Socket>(
   const signal = input.signal ? AbortSignal.any([input.signal, deadline]) : deadline;
   const skipGrant = options.skipGrant === true;
 
-  // Overlap the first connection grant fetch with transport racing and outer
-  // socket/TLS establishment so the account API RTT does not sit serially on
-  // the critical path. Attach a no-op rejection handler so an earlier transport
-  // error never triggers an unhandled rejection.
+  // Overlap the grant with route discovery. Wait for it before opening the
+  // socket because the host starts its authorization timer on connection.
   const firstGrantPromise = skipGrant
     ? Promise.resolve("")
     : requestGrantWithSignal(input.requestGrant, signal);
@@ -287,28 +288,21 @@ async function openRemoteTransport<Socket>(
   for (let index = 0; index < ordered.length; index += 1) {
     const candidate = ordered[index]!;
     if (signal.aborted) break;
-    // Each attempt consumes its own grant. Attempt 0 reuses the overlapped grant;
-    // fallback attempts request a fresh grant in parallel with dialing.
-    const grantPromise =
-      index === 0
-        ? firstGrantPromise
-        : skipGrant
-          ? Promise.resolve("")
-          : requestGrantWithSignal(input.requestGrant, signal);
-    void grantPromise.catch(() => {});
+    // Each attempt consumes its own grant. The first overlaps route discovery.
+    const grant = skipGrant
+      ? ""
+      : await (index === 0
+          ? firstGrantPromise
+          : requestGrantWithSignal(input.requestGrant, signal));
 
     let outer: WebSocket | undefined;
     try {
       const attemptSignal = AbortSignal.any([signal, AbortSignal.timeout(10_000)]);
       outer = await openOuter(sessionUrl(candidate), attemptSignal);
       const socket = await authenticate(outer, attemptSignal);
-      const grant = await grantPromise;
       return { socket, grant, candidate, race };
     } catch (cause) {
       outer?.terminate();
-      if (cause instanceof HostDialError && cause.detail.stage === "grant") {
-        throw cause;
-      }
       failure = cause;
     }
   }

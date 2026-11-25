@@ -1,5 +1,5 @@
 import fs from "node:fs/promises";
-import { constants as fsConstants, type Dirent } from "node:fs";
+import type { Dirent } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { runProcess } from "./processRunner";
@@ -36,7 +36,7 @@ import {
   isWorkspaceRelativePathSafe,
 } from "@synara/shared/path";
 import { normalizeWorkspaceEntrySearchQuery } from "@synara/shared/searchQuery";
-import { isContainedPath, resolveRealPathWithinRoot } from "./workspace/realPathContainment";
+import { resolveRealPathWithinRoot } from "./workspace/realPathContainment";
 
 const WORKSPACE_CACHE_TTL_MS = 15_000;
 const WORKSPACE_CACHE_MAX_KEYS = 4;
@@ -956,50 +956,21 @@ function buildContentLineText(line: string): string {
   return `${trimmed.slice(0, CONTENT_SEARCH_MAX_LINE_LENGTH - 1)}…`;
 }
 
-const OPEN_NOFOLLOW_FLAGS =
-  typeof fsConstants.O_NOFOLLOW === "number" ? fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW : null;
-
-async function openContainedFile(
-  realRoot: string,
-  relativePath: string,
-  resolveDir: (relativeDir: string) => Promise<string | null>,
-): Promise<Awaited<ReturnType<typeof fs.open>> | null> {
-  const lastSlash = relativePath.lastIndexOf("/");
-  const relativeDir = lastSlash === -1 ? "" : relativePath.slice(0, lastSlash);
-  const fileName = lastSlash === -1 ? relativePath : relativePath.slice(lastSlash + 1);
-  const realDir = await resolveDir(relativeDir);
-  if (!realDir) {
-    return null;
-  }
-  const candidatePath = path.join(realDir, fileName);
-
-  if (OPEN_NOFOLLOW_FLAGS !== null) {
-    try {
-      return await fs.open(candidatePath, OPEN_NOFOLLOW_FLAGS);
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException | null)?.code;
-      if (code !== "ELOOP" && code !== "EMLINK") {
-        return null;
-      }
-      // Leaf is a symlink: resolve it and verify containment before opening.
-    }
-  }
-
-  const realTarget = await fs.realpath(candidatePath).catch(() => null);
-  if (!realTarget || !isContainedPath(realRoot, realTarget)) {
-    return null;
-  }
-  return await fs.open(realTarget, "r").catch(() => null);
-}
-
 async function searchFileContent(
-  realRoot: string,
+  cwd: string,
   relativePath: string,
   normalizedQuery: string,
-  resolveDir: (relativeDir: string) => Promise<string | null>,
 ): Promise<ContentSearchMatch[] | null> {
-  const fileHandle = await openContainedFile(realRoot, relativePath, resolveDir);
-  if (!fileHandle) {
+  const absolutePath = await resolveRealPathWithinRoot(cwd, path.join(cwd, relativePath)).catch(
+    () => null,
+  );
+  if (!absolutePath) {
+    return null;
+  }
+  let fileHandle: Awaited<ReturnType<typeof fs.open>>;
+  try {
+    fileHandle = await fs.open(absolutePath, "r");
+  } catch {
     return null;
   }
 
@@ -1026,37 +997,19 @@ async function searchFileContent(
     }
 
     const contents = contentBuffer.toString("utf8");
-    const lowered = contents.toLowerCase();
-    let matchIndex = lowered.indexOf(normalizedQuery);
-    if (matchIndex === -1) {
+    if (!contents.toLowerCase().includes(normalizedQuery)) {
       return [];
     }
-
-    // Scan matches directly via indexOf without splitting the entire file into
-    // a lines array or re-lowercasing every line.
+    const lines = contents.split("\n");
     const matches: ContentSearchMatch[] = [];
-    let lineNumber = 1;
-    let countedUpTo = 0;
-
-    while (matchIndex !== -1 && matches.length < CONTENT_SEARCH_MAX_MATCHES_PER_FILE) {
-      let lineStart = contents.lastIndexOf("\n", matchIndex - 1);
-      lineStart = lineStart === -1 ? 0 : lineStart + 1;
-      for (let pos = countedUpTo; pos < lineStart; pos += 1) {
-        if (contents.charCodeAt(pos) === 10 /* '\n' */) lineNumber += 1;
-      }
-      countedUpTo = lineStart;
-      let lineEnd = contents.indexOf("\n", matchIndex);
-      if (lineEnd === -1) lineEnd = contents.length;
-      const line = contents.slice(lineStart, lineEnd);
-      if (line.length > 0) {
-        matches.push({
-          path: relativePath,
-          lineNumber,
-          lineText: buildContentLineText(line),
-        });
-      }
-      if (lineEnd >= contents.length) break;
-      matchIndex = lowered.indexOf(normalizedQuery, lineEnd + 1);
+    for (const [index, line] of lines.entries()) {
+      if (!line.toLowerCase().includes(normalizedQuery)) continue;
+      matches.push({
+        path: relativePath,
+        lineNumber: index + 1,
+        lineText: buildContentLineText(line),
+      });
+      if (matches.length >= CONTENT_SEARCH_MAX_MATCHES_PER_FILE) break;
     }
     return matches;
   } catch {
@@ -1083,13 +1036,7 @@ export async function searchWorkspaceContent(
     Math.min(input.limit ?? CONTENT_SEARCH_DEFAULT_LIMIT, CONTENT_SEARCH_MAX_LIMIT),
   );
 
-  const [index, realRoot] = await Promise.all([
-    getWorkspaceIndex(input.cwd),
-    fs.realpath(input.cwd).catch(() => null),
-  ]);
-  if (!realRoot) {
-    return { matches: [], truncated: false };
-  }
+  const index = await getWorkspaceIndex(input.cwd);
   // Scan every indexed file: the time budget is the only scan bound. A fixed
   // file-count cap over the localeCompare-sorted index would permanently
   // exclude directories late in the alphabet, silently, on every query.
@@ -1101,21 +1048,6 @@ export async function searchWorkspaceContent(
   const collected: ContentSearchMatch[] = [];
   let scannedFiles = 0;
   let truncated = index.truncated;
-
-  const dirRealPathCache = new Map<string, Promise<string | null>>();
-  dirRealPathCache.set("", Promise.resolve(realRoot));
-  const resolveDir = (relativeDir: string): Promise<string | null> => {
-    const cached = dirRealPathCache.get(relativeDir);
-    if (cached) {
-      return cached;
-    }
-    const promise = fs
-      .realpath(path.join(realRoot, relativeDir))
-      .then((resolved) => (isContainedPath(realRoot, resolved) ? resolved : null))
-      .catch(() => null);
-    dirRealPathCache.set(relativeDir, promise);
-    return promise;
-  };
 
   let nextIndex = 0;
   const workers = Array.from(
@@ -1129,10 +1061,9 @@ export async function searchWorkspaceContent(
         const currentIndex = nextIndex;
         nextIndex += 1;
         const fileMatches = await searchFileContent(
-          realRoot,
+          input.cwd,
           filePaths[currentIndex] as string,
           normalizedQuery,
-          resolveDir,
         );
         scannedFiles += 1;
         if (fileMatches && fileMatches.length > 0) {
