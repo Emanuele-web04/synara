@@ -65,6 +65,11 @@ Codes expire after nine minutes (leaving one minute of clock-skew headroom below
 
 ### Diagnosing a rejected pairing code
 
+The host allows up to one minute of forward clock difference when checking the
+phone's signed approval request. The proof must still be unexpired and tied
+to the host's fresh challenge. Keep automatic date and time enabled on both
+devices when diagnosing a pairing refusal.
+
 **Find computer** prepares the controller's device identity before submitting
 the code. Preparation failures appear in the dialog and leave the code unused
 so the user can retry. An account-revoked device key is a separate failure from

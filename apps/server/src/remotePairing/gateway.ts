@@ -8,7 +8,11 @@ import { Effect, Schema } from "effect";
 import { calculateJwkThumbprint, importJWK, jwtVerify } from "jose";
 import type WebSocket from "ws";
 import type { AuthControlPlaneShape } from "../auth/Services/AuthControlPlane";
-import { HostMintError, type HostGrantVerifier } from "../hostAuth/grantVerifier";
+import {
+  assertBoundedLifetime,
+  HostMintError,
+  type HostGrantVerifier,
+} from "../hostAuth/grantVerifier";
 import type { RemoteDeviceTrustRepositoryShape } from "../persistence/Services/RemoteDeviceTrust";
 
 export const REMOTE_PAIRING_PROOF_TYPE = "synara-remote-pairing+jwt";
@@ -143,7 +147,6 @@ export function acceptRemotePairing(
               issuer: "synara-device",
               audience: `synara-host:${scope.environmentId}`,
               requiredClaims: ["exp", "iat", "jti"],
-              maxTokenAge: "60s",
             },
           );
           if (
@@ -151,10 +154,17 @@ export function acceptRemotePairing(
             payload.inviteId !== context.inviteId ||
             payload.sub !== scope.userId ||
             typeof payload.exp !== "number" ||
-            typeof payload.iat !== "number" ||
-            payload.exp - payload.iat > 60
+            typeof payload.iat !== "number"
           )
             throw new Error("Invalid pairing proof");
+          // A controller's clock can lead the host's. Keep JOSE's strict expiry
+          // check and use the shared bound for the signed proof's issue time.
+          assertBoundedLifetime(
+            { iat: payload.iat, exp: payload.exp },
+            60,
+            "Pairing proof",
+            Math.floor(Date.now() / 1_000),
+          );
           const ownerGrant =
             typeof frame.grant === "string" &&
             grants !== undefined &&
