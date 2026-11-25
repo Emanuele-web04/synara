@@ -133,9 +133,8 @@
 
 @layer components {
   /* Empty chat landing over the dithered backdrop (EmptyChatBackdrop.tsx): a soft halo in
-     the page background keeps the heading, banner and chips legible over the dots. */
-  [data-empty-chat-backdrop-host]
-    :is([data-empty-chat-backdrop-quiet], [data-empty-landing-controls]) {
+     the page background keeps the heading and banner legible over the dots. */
+  [data-empty-chat-backdrop-host] [data-empty-chat-backdrop-quiet] {
     text-shadow:
       0 0 1px var(--background),
       0 0 2px var(--background),
@@ -3326,11 +3325,55 @@ diffs-container {
 }
 
 /* Single-row composer (started threads, one-line draft): a true pill. Squircle smoothing at a
-   full radius pulls the ends toward a box, so this layout keeps round corners. */
-.chat-composer-shell[data-composer-layout="row"],
+   full radius pulls the ends toward a box, so this layout keeps round corners. Inside the
+   composer tray only the input surface is the pill; the tray keeps its squircle corners. */
+.chat-composer-shell[data-composer-layout="row"]:not([data-composer-tray]),
 .chat-composer-shell[data-composer-layout="row"] .chat-composer-surface {
   --composer-radius: 9999px;
   corner-shape: round;
+}
+
+/* Composer tray: a soft, opaque grey background behind the unchanged composer and the chips
+   around it: the project / branch strip above it on the new chat, the permission / branch /
+   model row below it in started threads. The composer inside keeps its own surface, border,
+   shadow and radius; the tray only follows its corners. */
+:root {
+  --composer-tray-tone: color-mix(in oklab, var(--foreground) 2%, var(--background));
+  --composer-tray-border: color-mix(in srgb, var(--foreground) 3.5%, transparent);
+  /* Resolved here, from the block composer's radius, so the tray keeps rounded corners when
+     a started thread's one-line composer turns into a pill inside it. */
+  --composer-tray-radius: calc(var(--composer-radius) + 0.25rem + 1px);
+}
+
+.dark {
+  --composer-tray-tone: color-mix(in oklab, var(--foreground) 4%, var(--background));
+  --composer-tray-border: color-mix(in srgb, var(--foreground) 7%, transparent);
+}
+
+/* The queued follow-up rail above the tray reads as a tab of it: the tray's grey and hairline
+   instead of the composer glass, so the stack does not draw a third outline. Whole-window
+   glass keeps the rail's raised tint, which the tray takes there too (see below). */
+:root:not([data-window-translucency="window"])
+  [data-composer-tray-host]
+  .chat-composer-stacked-top {
+  background: var(--composer-tray-tone);
+  border-color: var(--composer-tray-border);
+}
+
+:root:not([data-window-translucency="window"])
+  [data-composer-tray-host]
+  .chat-composer-stacked-top::before {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+/* Corners come from the shell's `squircle` utility, the same continuous shape as the composer
+   inside; only the radius is the tray's own. */
+.chat-composer-shell[data-composer-tray] {
+  border-radius: var(--composer-tray-radius);
+  padding: 0.25rem;
+  border: 1px solid var(--composer-tray-border);
+  background: var(--composer-tray-tone);
 }
 
 /* macOS Electron: leading inset for sidebar toggle + route nav past native traffic lights.
@@ -3780,6 +3823,20 @@ diffs-container {
   background: color-mix(in srgb, var(--app-glass-raised-surface) 50%, transparent);
 }
 
+/* The composer tray on whole-window glass: an opaque grey would sit on the window's coat as a
+   solid slab, so it takes the stacked rail's lighter continuation of the raised tint. Over the
+   empty-chat backdrop it takes a firm grey tint instead, so the dots stay out of the
+   composer's sheer glass. */
+:root[data-window-translucency="window"] .chat-composer-shell[data-composer-tray] {
+  background: color-mix(in srgb, var(--app-glass-raised-surface) 50%, transparent);
+}
+
+:root[data-window-translucency="window"]
+  [data-empty-chat-backdrop-host]
+  .chat-composer-shell[data-composer-tray] {
+  background: color-mix(in srgb, var(--composer-tray-tone) 88%, transparent);
+}
+
 /* Interactive raised surfaces (cards, selects) lift one more step on hover. */
 :root[data-window-translucency="window"] .app-glass-raised:is(button, [role="button"]):hover {
   background:
@@ -4122,15 +4179,10 @@ diffs-container {
   max-width: 1120px;
 }
 
-/* Light themes with soft grey text (Solarized, Notion) lose the landing heading and chip
+/* Light themes with soft grey text (Solarized, Notion) lose the landing heading and banner
    labels in the dithered backdrop (EmptyChatBackdrop.tsx); push them toward black while it
    shows. Unlayered so it beats the text color utilities. Dark mode is unchanged. */
-:root:not(.dark)
-  [data-empty-chat-backdrop-host]
-  :is([data-empty-chat-backdrop-quiet], [data-empty-landing-controls]),
-:root:not(.dark)
-  [data-empty-chat-backdrop-host]
-  :is([data-empty-chat-backdrop-quiet], [data-empty-landing-controls])
-  * {
+:root:not(.dark) [data-empty-chat-backdrop-host] [data-empty-chat-backdrop-quiet],
+:root:not(.dark) [data-empty-chat-backdrop-host] [data-empty-chat-backdrop-quiet] * {
   color: color-mix(in oklab, var(--foreground) 35%, black);
 }
