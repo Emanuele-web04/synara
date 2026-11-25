@@ -89,13 +89,13 @@ export function resolveReleaseBuildScope(
   )
     throw new Error("Cua benchmark requires one native macOS platform and a full baseline commit.");
   return {
-    matrix: {
-      include: stage === "native" ? selected.filter((entry) => entry.platform !== "win") : selected,
-    },
+    mac_matrix: { include: selected.filter((entry) => entry.platform === "mac") },
+    non_mac_matrix: { include: selected.filter((entry) => entry.platform !== "mac") },
+    package_non_mac: stage === "artifact" && selected.some((entry) => entry.platform !== "mac"),
     cua_matrix: { include: selected.filter((entry) => entry.platform !== "win") },
-    prepare_cua:
-      (stage === "native" || stage === "artifact") &&
-      selected.some((entry) => entry.platform !== "win"),
+    // Artifact runs provision on their own packaging runners. The separate
+    // matrix is only needed for build-only native validation and benchmarks.
+    prepare_cua: stage === "native",
     build_icon:
       stage === "icon" ||
       (stage === "artifact" && selected.some((entry) => entry.platform === "mac")),

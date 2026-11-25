@@ -5,6 +5,10 @@
 
 import { WS_STREAM_LIMITS, type ThreadId } from "@synara/contracts";
 import { useSyncExternalStore } from "react";
+import {
+  isSessionOpenOrLatestTurnRunning,
+  isSessionOrLatestTurnStartingOrRunning,
+} from "./session-logic";
 import { useStore } from "./store";
 import type { AppState } from "./storeState";
 
@@ -65,16 +69,12 @@ function isThreadDetailEvictionUnsafe(threadId: ThreadId): boolean {
       return true;
     }
 
-    const orchestrationStatus = sidebarThread.session?.orchestrationStatus;
     if (
-      orchestrationStatus &&
-      orchestrationStatus !== "idle" &&
-      orchestrationStatus !== "stopped"
+      isSessionOpenOrLatestTurnRunning(
+        sidebarThread.session?.orchestrationStatus,
+        sidebarThread.latestTurn?.state,
+      )
     ) {
-      return true;
-    }
-
-    if (sidebarThread.latestTurn?.state === "running") {
       return true;
     }
   }
@@ -88,21 +88,17 @@ function isThreadDetailEvictionUnsafe(threadId: ThreadId): boolean {
     const hiddenSession = state.threadSessionById?.[threadId];
     const hiddenTurnState = state.threadTurnStateById?.[threadId];
     return (
-      hiddenSession?.orchestrationStatus === "starting" ||
-      hiddenSession?.orchestrationStatus === "running" ||
-      hiddenTurnState?.latestTurn?.state === "running" ||
-      hiddenTurnState?.pendingSourceProposedPlan !== undefined
+      isSessionOrLatestTurnStartingOrRunning(
+        hiddenSession?.orchestrationStatus,
+        hiddenTurnState?.latestTurn?.state,
+      ) || hiddenTurnState?.pendingSourceProposedPlan !== undefined
     );
   }
 
   const session = state.threadSessionById?.[threadId];
   const turnState = state.threadTurnStateById?.[threadId];
-  const orchestrationStatus = session?.orchestrationStatus;
   return (
-    Boolean(
-      orchestrationStatus && orchestrationStatus !== "idle" && orchestrationStatus !== "stopped",
-    ) ||
-    turnState?.latestTurn?.state === "running" ||
+    isSessionOpenOrLatestTurnRunning(session?.orchestrationStatus, turnState?.latestTurn?.state) ||
     turnState?.pendingSourceProposedPlan !== undefined
   );
 }

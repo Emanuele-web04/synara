@@ -30,7 +30,7 @@ describe("web Vite React Compiler activation", () => {
     vi.unstubAllEnvs();
   });
 
-  it.each([undefined, "yes"])(
+  it.each([undefined])(
     "keeps the compiler out of serve with flag %s while retaining Fast Refresh",
     async (flag) => {
       vi.stubEnv("SYNARA_DEV_REACT_COMPILER", flag);

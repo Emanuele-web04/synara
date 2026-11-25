@@ -4,6 +4,7 @@
 // Layer: Chat composer presentation
 // Depends on: provider icons/availability helpers and tooltip primitives.
 
+import { providerAccountNeedsSignIn } from "~/lib/providerSetupStatus";
 import {
   type ProviderInstanceId,
   type ProviderKind,
@@ -97,10 +98,12 @@ export type ComposerModelPickerProviderTab = {
   identity: string | null;
   /** Tooltip sentence explaining why the account cannot run right now; null when it can. */
   unavailableLabel: string | null;
-  /** The tab cannot be opened at all (another account's thread, status still loading). */
+  /** The tab cannot be opened at all (a thread that cannot hand off, status still loading). */
   blocked: boolean;
   /** Shown in place of the model list when the account still has to be signed in or fixed. */
   setupMessage: string | null;
+  /** The setup still owed is a sign-in, which the picker can start in place. */
+  needsSignIn: boolean;
 };
 
 // Why an enabled account cannot run, phrased for its tab tooltip.
@@ -118,41 +121,52 @@ function resolveAccountTabState(input: {
   label: string;
   status: ServerProviderStatus | undefined;
   lockedToSibling: boolean;
-}): Pick<ComposerModelPickerProviderTab, "unavailableLabel" | "blocked" | "setupMessage"> {
+}): Pick<
+  ComposerModelPickerProviderTab,
+  "unavailableLabel" | "blocked" | "setupMessage" | "needsSignIn"
+> {
   const { label, status } = input;
   if (input.lockedToSibling) {
     return {
       unavailableLabel: `${label} is unavailable in this thread. Start a new thread to switch accounts.`,
       blocked: true,
       setupMessage: null,
+      needsSignIn: false,
     };
   }
   if (!resolveLiveProviderAvailability(status).disabled) {
-    return { unavailableLabel: null, blocked: false, setupMessage: null };
+    return { unavailableLabel: null, blocked: false, setupMessage: null, needsSignIn: false };
   }
   if (!status) {
-    return { unavailableLabel: `${label} — Checking.`, blocked: true, setupMessage: null };
+    return {
+      unavailableLabel: `${label} — Checking.`,
+      blocked: true,
+      setupMessage: null,
+      needsSignIn: false,
+    };
   }
+  const needsSignIn = providerAccountNeedsSignIn({ status, enabled: status.enabled !== false });
   return {
     unavailableLabel: describeUnavailableAccount(label, status),
     blocked: false,
-    setupMessage:
-      status.authStatus === "unauthenticated"
+    setupMessage: needsSignIn
+      ? "Sign in here and Synara opens the login for you, no terminal needed."
+      : status.authStatus === "unauthenticated"
         ? "Open provider setup to sign in to this account."
         : (status.message?.trim() ?? `${label} is unavailable right now.`),
+    needsSignIn,
   };
 }
 
 // One tab per enabled account, so a second Codex or Claude account is as reachable as
-// another provider. A started thread stays on its account: siblings are listed but closed.
+// another provider, and picking one in a started thread hands it off like another provider.
+// A thread that cannot hand off stays on its account: siblings are listed but closed.
 // An account that still needs signing in stays openable and invites the user to set it up.
 export function resolveComposerModelPickerProviderTabs(input: {
   options: ReadonlyArray<{ value: ProviderKind; label: string }>;
   providers: ReadonlyArray<ServerProviderStatus> | undefined;
   providerInstances?: ReadonlyArray<ProviderModelPickerInstance> | undefined;
   lockedInstanceId?: ProviderInstanceId | null | undefined;
-  // Locks only this provider's sibling accounts; other providers stay pickable.
-  lockedInstanceProvider?: ProviderKind | null | undefined;
 }): ComposerModelPickerProviderTab[] {
   return input.options.flatMap((option) => {
     const accounts = (input.providerInstances ?? []).filter(
@@ -191,9 +205,7 @@ export function resolveComposerModelPickerProviderTabs(input: {
         label: tab.label,
         status,
         lockedToSibling:
-          input.lockedInstanceId != null &&
-          tab.instanceId !== input.lockedInstanceId &&
-          (input.lockedInstanceProvider == null || option.value === input.lockedInstanceProvider),
+          input.lockedInstanceId != null && tab.instanceId !== input.lockedInstanceId,
       });
       return {
         provider: option.value,
@@ -206,6 +218,7 @@ export function resolveComposerModelPickerProviderTabs(input: {
         unavailableLabel: state.unavailableLabel,
         blocked: state.blocked,
         setupMessage: state.setupMessage,
+        needsSignIn: state.needsSignIn,
       };
     });
   });

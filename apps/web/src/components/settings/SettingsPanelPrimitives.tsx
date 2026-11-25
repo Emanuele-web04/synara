@@ -300,7 +300,7 @@ export function SettingsRow({
       >
         <div className="min-w-0 flex-1 space-y-0.5">
           <div className="flex min-h-5 items-center gap-1.5">
-            <h3 className={SETTINGS_CARD_ROW_TITLE_CLASS_NAME}>
+            <h3 id={id ? `${id}-title` : undefined} className={SETTINGS_CARD_ROW_TITLE_CLASS_NAME}>
               {typeof title === "string" ? t(title) : title}
             </h3>
             <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center">

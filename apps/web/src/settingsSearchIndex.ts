@@ -173,6 +173,7 @@ export const ROW_EXTRA_KEYWORDS: Readonly<Record<string, readonly string[]>> = {
   "setting-source-control-writing-style": [
     "settings:repositoryConventionsConventionalCommitsCustomInstructionsCommitMessagesPR",
   ],
+  "setting-synara-attribution": ["settings:addsCreatedWithSynaraToTheEndOfPullRequests2"],
   "setting-saved-model-slugs": ["settings:addCustomModelSlugsForSupportedProvidersCustomModel"],
   "setting-keep-synara-responsive": [
     "settings:lowerAgentCPUSchedulingPriorityPerformanceLoadNiceResponsiveness",

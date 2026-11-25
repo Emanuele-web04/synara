@@ -74,6 +74,17 @@ function linkedAtMs(link: OrchestrationThreadPullRequestLink): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+/** Display order for a thread's linked PRs: open ones first, then the most recently linked. */
+export function compareLinkedPullRequests(
+  left: OrchestrationThreadPullRequestLink,
+  right: OrchestrationThreadPullRequestLink,
+): number {
+  const leftOpen = left.pullRequest.state === "open" ? 0 : 1;
+  const rightOpen = right.pullRequest.state === "open" ? 0 : 1;
+  if (leftOpen !== rightOpen) return leftOpen - rightOpen;
+  return linkedAtMs(right) - linkedAtMs(left);
+}
+
 /**
  * The thread's current PR: an open link beats a settled one, and among equals the most
  * recently linked wins (the top of a stack is linked after its base). Tombstones never count.

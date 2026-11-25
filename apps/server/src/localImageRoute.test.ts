@@ -323,6 +323,52 @@ describe("localImageEffectRouteLayer", () => {
     });
   });
 
+  it("streams workspace videos with their video content type and byte ranges", async () => {
+    const workspace = makeTempDir("synara-effect-video-workspace-");
+    writeFileSync(path.join(workspace, ".git"), "gitdir: .git");
+    const config = makeServerConfig({ cwd: workspace });
+    const bytes = Buffer.from(Array.from({ length: 64 }, (_, index) => index));
+    const files = [
+      ["demo.mp4", "video/mp4"],
+      ["demo.m4v", "video/x-m4v"],
+      ["demo.webm", "video/webm"],
+      ["demo.mov", "video/quicktime"],
+      ["demo.ogv", "video/ogg"],
+    ] as const;
+    for (const [fileName] of files) writeFileSync(path.join(workspace, fileName), bytes);
+
+    await withEffectServer(config, localImageEffectRouteLayer, async (origin) => {
+      for (const [fileName, contentType] of files) {
+        const params = new URLSearchParams({
+          path: path.join(workspace, fileName),
+          cwd: workspace,
+        });
+        const full = await fetch(`${origin}/api/local-image?${params}`);
+        expect(full.status).toBe(200);
+        expect(full.headers.get("content-type")).toBe(contentType);
+        expect(full.headers.get("accept-ranges")).toBe("bytes");
+        expect(full.headers.get("x-content-type-options")).toBe("nosniff");
+        await full.arrayBuffer();
+
+        // Media elements probe with an open-ended range, then seek.
+        for (const [range, start, end] of [
+          ["bytes=0-", 0, 63],
+          ["bytes=16-31", 16, 31],
+          ["bytes=-8", 56, 63],
+        ] as const) {
+          const part = await fetch(`${origin}/api/local-image?${params}`, {
+            headers: { Range: range },
+          });
+          expect(part.status).toBe(206);
+          expect(part.headers.get("content-type")).toBe(contentType);
+          expect(part.headers.get("content-range")).toBe(`bytes ${start}-${end}/64`);
+          expect(part.headers.get("content-length")).toBe(String(end - start + 1));
+          expect(Buffer.from(await part.arrayBuffer())).toEqual(bytes.subarray(start, end + 1));
+        }
+      }
+    });
+  });
+
   it("downloads files whose names are not plain ASCII through an RFC 5987 filename", async () => {
     const workspace = makeTempDir("synara-effect-image-unicode-name-");
     writeFileSync(path.join(workspace, ".git"), "gitdir: .git");

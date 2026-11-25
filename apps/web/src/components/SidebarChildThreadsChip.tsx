@@ -1,7 +1,7 @@
 // FILE: SidebarChildThreadsChip.tsx
 // Purpose: Count chip that folds and unfolds a parent's agent-created child threads. Sits in the
 //          empty slot before a project row's glyph, over a pinned row's glyph, and at the start
-//          of an Activity row's meta line, so one control works everywhere a parent appears.
+//          of an Activity row's reply line, so one control works everywhere a parent appears.
 // Layer: Sidebar UI component
 // Exports: SidebarChildThreadsChip
 

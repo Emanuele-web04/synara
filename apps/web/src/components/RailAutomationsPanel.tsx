@@ -22,7 +22,10 @@ import {
   useAutomationListClock,
 } from "~/routes/-automations.list";
 import { automationListRowIcon, useAutomations } from "~/routes/-automations.shared";
-import { SIDEBAR_SECTION_LABEL_CLASS_NAME } from "~/sidebarRowStyles";
+import {
+  SIDEBAR_SECTION_LABEL_CLASS_NAME,
+  SIDEBAR_EMPTY_STATE_CLASS_NAME,
+} from "~/sidebarRowStyles";
 import { SidebarPanelTitle } from "./SidebarPanelTitle";
 import { SidebarPrimaryAction } from "./SidebarPrimaryAction";
 import { SidebarGroup, SidebarMenu } from "./ui/sidebar";
@@ -158,13 +161,9 @@ export function RailAutomationsPanel({
       </SidebarGroup>
       <SidebarGroup className="gap-2 px-1.5 py-1.5">
         {isLoading ? (
-          <div className="px-2 pt-4 text-center text-ui text-muted-foreground/58">
-            {t("automation:list_loading")}
-          </div>
+          <div className={SIDEBAR_EMPTY_STATE_CLASS_NAME}>{t("automation:list_loading")}</div>
         ) : data.definitions.length === 0 && remoteAutomations.length === 0 ? (
-          <div className="px-2 pt-4 text-center text-ui text-muted-foreground/58">
-            {t("automation:list_emptyTitle")}
-          </div>
+          <div className={SIDEBAR_EMPTY_STATE_CLASS_NAME}>{t("automation:list_emptyTitle")}</div>
         ) : (
           <>
             {renderSection("Active", active, true)}

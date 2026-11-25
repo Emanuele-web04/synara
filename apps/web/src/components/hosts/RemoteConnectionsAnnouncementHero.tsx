@@ -2,7 +2,7 @@
 // Purpose: Hero art for the Remote Connections launch sheet: a laptop and a desktop
 //          running Synara, linked over an abstract orange backdrop.
 // Layer: Web hosts UI
-// Exports: RemoteConnectionsAnnouncementHero
+// Exports: RemoteConnectionsAnnouncementHero, AnnouncementBackdrop, DEVICE_SHADOW_CLASS_NAME
 //
 // Everything is drawn in code, no bitmap: the backdrop is blurred SVG waves with a light
 // grain, and the two screens use theme tokens so they turn dark with the app. The link
@@ -13,7 +13,7 @@ import { useId, type CSSProperties, type ReactNode } from "react";
 import { LinkIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 
-const DEVICE_SHADOW_CLASS_NAME = "drop-shadow-[0_18px_22px_rgba(110,35,0,0.35)]";
+export const DEVICE_SHADOW_CLASS_NAME = "drop-shadow-[0_18px_22px_rgba(110,35,0,0.35)]";
 const BEZEL_CLASS_NAME = "flex bg-neutral-900 p-[5px] ring-1 ring-white/15 ring-inset";
 const ALUMINIUM_CLASS_NAME = "bg-linear-to-b from-neutral-200 to-neutral-400";
 const CLAUDE_TILE_CLASS_NAME = "bg-[#d97757]";
@@ -25,7 +25,7 @@ const FLOW_DELAYS_MS = [0, 180, 540, 720] as const;
 export function RemoteConnectionsAnnouncementHero() {
   return (
     <div className="absolute inset-0 select-none">
-      <Backdrop />
+      <AnnouncementBackdrop />
       <div className="absolute inset-0 flex items-end justify-center gap-[22px] pb-[42px]">
         <Laptop />
         <Link />
@@ -36,7 +36,7 @@ export function RemoteConnectionsAnnouncementHero() {
 }
 
 /** Warm orange field with soft, out-of-focus waves; scales to cover the band. */
-function Backdrop() {
+export function AnnouncementBackdrop() {
   // SVG ids are document-global, so each instance namespaces its own.
   const id = useId().replace(/[^\w-]/g, "");
   const ref = (name: string) => `url(#${id}-${name})`;

@@ -1,6 +1,8 @@
 // FILE: src/api.ts
 // Purpose: Thin fetch layer for the dashboard API plus the shared filter model.
 
+import type { ProductAnalyticsConnectionFailure } from "@synara/contracts/productAnalytics";
+
 export interface Filters {
   days: number;
   version: string;
@@ -269,6 +271,9 @@ export interface ProductData {
     event: string;
     reason: string;
     surface: string;
+    pairingMode?: string | null;
+    failureStage?: ProductAnalyticsConnectionFailure | null;
+    httpStatus?: number | null;
     events: number;
     installations: number;
   }[];

@@ -5,7 +5,11 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { downloadUrlAsBlob } from "./browserDownload";
+import {
+  VIDEO_DOWNLOAD_BLOB_LIMIT_MIB,
+  downloadUrlAsBlob,
+  downloadVideoUrl,
+} from "./browserDownload";
 
 describe("browserDownload", () => {
   const originalDocument = globalThis.document;
@@ -57,6 +61,7 @@ describe("browserDownload", () => {
     globalThis.fetch = originalFetch;
     URL.createObjectURL = originalCreateObjectUrl;
     URL.revokeObjectURL = originalRevokeObjectUrl;
+    vi.unstubAllGlobals();
   });
 
   it("falls back to the caller filename when Content-Disposition is absent", async () => {
@@ -144,4 +149,37 @@ describe("browserDownload", () => {
     expect(URL.createObjectURL).not.toHaveBeenCalled();
     expect(click).not.toHaveBeenCalled();
   });
+
+  it.each([null, "1", String((VIDEO_DOWNLOAD_BLOB_LIMIT_MIB + 1) * 1024 * 1024)])(
+    "cancels oversized video downloads before constructing a desktop Blob (length %s)",
+    async (contentLength) => {
+      vi.stubGlobal("window", { desktopBridge: {}, location: new URL("http://127.0.0.1:5733") });
+      const chunk = new Uint8Array(8 * 1024 * 1024);
+      const cancel = vi.fn();
+      const body = new ReadableStream<Uint8Array<ArrayBuffer>>({
+        pull(controller) {
+          controller.enqueue(chunk);
+        },
+        cancel,
+      });
+      globalThis.fetch = vi.fn(() =>
+        Promise.resolve(
+          new Response(body, {
+            headers: contentLength !== null ? { "Content-Length": contentLength } : {},
+          }),
+        ),
+      );
+
+      await expect(
+        downloadVideoUrl({
+          url: "http://127.0.0.1:5733/api/local-image?download=1",
+          filename: "recording.webm",
+          tooLargeMessage: "Video exceeds the buffered download limit.",
+        }),
+      ).rejects.toThrow("Video exceeds the buffered download limit.");
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(URL.createObjectURL).not.toHaveBeenCalled();
+      expect(click).not.toHaveBeenCalled();
+    },
+  );
 });

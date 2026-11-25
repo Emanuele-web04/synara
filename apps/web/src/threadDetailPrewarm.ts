@@ -26,6 +26,13 @@ interface RetainedThreadPrewarmEntry {
 
 export interface ThreadDetailPrewarmController {
   prewarmThreadDetail(threadId: ThreadId): void;
+  /**
+   * A press that is about to open `threadId` (primary pointerdown on its row). Unlike
+   * hover intent, navigation is all but certain, so a thread without cached detail is
+   * subscribed now instead of after the route renders. At most one such cold retain is
+   * held; it is released by the usual timeout if the press never navigates (a drag).
+   */
+  prewarmThreadDetailForActivation(threadId: ThreadId): void;
   prewarmThreadDetails(threadIds: readonly ThreadId[]): void;
   dispose(): void;
 }
@@ -83,6 +90,7 @@ export function createThreadDetailPrewarmController(
   const maxRetainedThreads = options.maxRetainedThreads ?? THREAD_DETAIL_PREWARM_LIMIT;
   const clock = options.clock ?? DEFAULT_CLOCK;
   const retainedThreadById = new Map<ThreadId, RetainedThreadPrewarmEntry>();
+  let coldActivationThreadId: ThreadId | null = null;
 
   const releaseThread = (threadId: ThreadId) => {
     const entry = retainedThreadById.get(threadId);
@@ -92,6 +100,7 @@ export function createThreadDetailPrewarmController(
     clock.clearTimeout(entry.timeoutId);
     entry.release();
     retainedThreadById.delete(threadId);
+    if (coldActivationThreadId === threadId) coldActivationThreadId = null;
   };
 
   const prewarmThreadDetail = (threadId: ThreadId) => {
@@ -99,6 +108,23 @@ export function createThreadDetailPrewarmController(
     if (!existing && !canPrewarmThreadDetail(threadId)) {
       return;
     }
+    retainThread(threadId, existing);
+  };
+
+  const prewarmThreadDetailForActivation = (threadId: ThreadId) => {
+    const existing = retainedThreadById.get(threadId);
+    if (existing || canPrewarmThreadDetail(threadId)) {
+      retainThread(threadId, existing);
+      return;
+    }
+    // Cold: one speculative full-snapshot subscription at a time, so a burst of
+    // presses (or presses that turn into drags) cannot fan out snapshot streams.
+    if (coldActivationThreadId !== null) releaseThread(coldActivationThreadId);
+    retainThread(threadId, undefined);
+    coldActivationThreadId = threadId;
+  };
+
+  const retainThread = (threadId: ThreadId, existing: RetainedThreadPrewarmEntry | undefined) => {
     if (existing) {
       clock.clearTimeout(existing.timeoutId);
     }
@@ -111,6 +137,7 @@ export function createThreadDetailPrewarmController(
       }
       current.release();
       retainedThreadById.delete(threadId);
+      if (coldActivationThreadId === threadId) coldActivationThreadId = null;
     }, releaseMs);
 
     retainedThreadById.set(threadId, { release, timeoutId });
@@ -118,6 +145,7 @@ export function createThreadDetailPrewarmController(
 
   return {
     prewarmThreadDetail,
+    prewarmThreadDetailForActivation,
     prewarmThreadDetails(threadIds) {
       const nextThreadIds = uniqueEligibleThreadIds(
         threadIds,
@@ -163,12 +191,17 @@ export function useThreadDetailPrewarm(): Omit<ThreadDetailPrewarmController, "d
     controllerRef.current?.prewarmThreadDetail(threadId);
   };
 
+  const prewarmThreadDetailForActivation = (threadId: ThreadId) => {
+    controllerRef.current?.prewarmThreadDetailForActivation(threadId);
+  };
+
   const prewarmThreadDetails = (threadIds: readonly ThreadId[]) => {
     controllerRef.current?.prewarmThreadDetails(threadIds);
   };
 
   return {
     prewarmThreadDetail,
+    prewarmThreadDetailForActivation,
     prewarmThreadDetails,
   };
 }

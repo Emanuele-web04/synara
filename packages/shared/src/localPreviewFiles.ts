@@ -1,9 +1,10 @@
 // FILE: localPreviewFiles.ts
 // Purpose: Single source of truth for the /api/local-image route shape consumed by
 //          both the server (HTTP route + filesystem allowlist) and the web client
-//          (URL builder + markdown image source detection). The route serves every
-//          allowlisted preview file: images (rendered via <img>) and PDFs (rendered
-//          by the browser's built-in viewer in an <iframe>).
+//          (URL builder + markdown image/video source detection). The route serves
+//          every allowlisted preview file: images (rendered via <img>), videos
+//          (rendered via a native <video>, streamed with HTTP Range requests) and
+//          PDFs (rendered by the browser's built-in viewer in an <iframe>).
 // Layer: Shared utility (no runtime dependencies)
 // Exports: route path, preview-file extension allowlists, and helper predicates
 //          derived from them.
@@ -50,18 +51,44 @@ export function isSupportedLocalPdfPath(filePath: string): boolean {
   return lowerCaseExtensionOf(filePath) === SUPPORTED_LOCAL_PDF_EXTENSION;
 }
 
-// Full allowlist for the /api/local-image serving route. Markdown image source
-// detection (below) intentionally stays image-only: a `.pdf` link in chat
-// markdown must never be inlined as an <img>.
-export function isSupportedLocalPreviewFilePath(filePath: string): boolean {
-  return isSupportedLocalImagePath(filePath) || isSupportedLocalPdfPath(filePath);
+// Containers Chromium/Electron can play natively. Codec support inside them is
+// not guaranteed (e.g. HEVC or ProRes `.mov`), so video surfaces must handle the
+// element's `error` event with a download fallback.
+export const SUPPORTED_LOCAL_VIDEO_EXTENSIONS = [".m4v", ".mov", ".mp4", ".ogv", ".webm"] as const;
+
+const SUPPORTED_LOCAL_VIDEO_EXTENSIONS_SET: ReadonlySet<string> = new Set(
+  SUPPORTED_LOCAL_VIDEO_EXTENSIONS,
+);
+
+export function isSupportedLocalVideoPath(filePath: string): boolean {
+  const extension = lowerCaseExtensionOf(filePath);
+  return extension !== null && SUPPORTED_LOCAL_VIDEO_EXTENSIONS_SET.has(extension);
 }
 
-// Built from the canonical extensions list so the web regex never drifts from the
-// server allowlist. Anchored at end-of-string to match `.png`-style suffixes only.
-export const SUPPORTED_LOCAL_IMAGE_EXTENSION_REGEX: RegExp = (() => {
-  const escaped = SUPPORTED_LOCAL_IMAGE_EXTENSIONS.map((extension) =>
+// Full allowlist for the /api/local-image serving route. Markdown media source
+// detection (below) stays split by kind: an image regex for <img>, a video regex
+// for <video>, and a `.pdf` link in chat markdown is never inlined at all.
+export function isSupportedLocalPreviewFilePath(filePath: string): boolean {
+  return (
+    isSupportedLocalImagePath(filePath) ||
+    isSupportedLocalVideoPath(filePath) ||
+    isSupportedLocalPdfPath(filePath)
+  );
+}
+
+function extensionSuffixRegex(extensions: readonly string[]): RegExp {
+  const escaped = extensions.map((extension) =>
     extension.slice(1).replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&"),
   );
   return new RegExp(`\\.(?:${escaped.join("|")})$`, "i");
-})();
+}
+
+// Built from the canonical extensions lists so the web regexes never drift from
+// the server allowlist. Anchored at end-of-string to match `.png`-style suffixes only.
+export const SUPPORTED_LOCAL_IMAGE_EXTENSION_REGEX: RegExp = extensionSuffixRegex(
+  SUPPORTED_LOCAL_IMAGE_EXTENSIONS,
+);
+
+export const SUPPORTED_LOCAL_VIDEO_EXTENSION_REGEX: RegExp = extensionSuffixRegex(
+  SUPPORTED_LOCAL_VIDEO_EXTENSIONS,
+);

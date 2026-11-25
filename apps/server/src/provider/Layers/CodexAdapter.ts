@@ -35,7 +35,12 @@ import {
 } from "@synara/contracts";
 import { Cause, Effect, Layer, Option, Queue, Schema, ServiceMap, Stream } from "effect";
 import { sanitizeUserFacingErrorMessage } from "@synara/shared/errorMessages";
-import { isCodexUnstableFeaturesWarning } from "@synara/shared/codexStderr";
+import {
+  isCodexMultiAgentDeprecationWarning,
+  isCodexUnstableFeaturesWarning,
+  isCodexUserMcpOAuthStartupError,
+  readCodexMcpSubscriptionError,
+} from "@synara/shared/codexStderr";
 
 import {
   ProviderAdapterProcessError,
@@ -1885,8 +1890,14 @@ function mapToRuntimeEvents(
     ];
   }
 
-  if (CODEX_RUNTIME_WARNING_METHODS.has(event.method)) {
-    const message = asTrimmedString(payload?.message);
+  // The manager consolidates this issue as configWarning; history consumes runtime.warning.
+  const isMultiAgentConfigWarning =
+    event.method === "configWarning" &&
+    isCodexMultiAgentDeprecationWarning(asTrimmedString(payload?.summary) ?? "");
+  if (CODEX_RUNTIME_WARNING_METHODS.has(event.method) || isMultiAgentConfigWarning) {
+    const message = asTrimmedString(
+      isMultiAgentConfigWarning ? payload?.summary : payload?.message,
+    );
     if (event.method === "warning" && message && isCodexUnstableFeaturesWarning(message)) {
       return [];
     }
@@ -1908,6 +1919,29 @@ function mapToRuntimeEvents(
         },
       },
     ];
+  }
+
+  // The startup notification owns the server name; rmcp worker stderr does not carry it.
+  if (event.method === "mcpServer/startupStatus/updated") {
+    const name = asTrimmedString(payload?.name);
+    const error = asTrimmedString(payload?.error);
+    if (payload?.status === "failed" && name && error) {
+      if (isCodexUserMcpOAuthStartupError(name, error)) return [];
+      const subscriptionError = readCodexMcpSubscriptionError(error);
+      return [
+        {
+          type: "runtime.warning",
+          ...withMinimalRawPayload(runtimeEventBase(event, canonicalThreadId), event),
+          payload: {
+            message: sanitizeUnmappedProviderDetail(
+              `MCP server "${name}" failed to start${subscriptionError ? " (HTTP 403)" : ""}: ${subscriptionError ?? error}`,
+              2_000,
+            )!,
+            detail: sanitizeUnmappedProviderData(event.payload),
+          },
+        },
+      ];
+    }
   }
 
   if (event.method === "configWarning") {
@@ -2844,7 +2878,10 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
           const runtimeEvents = sizedRuntimeEvents.map((item) => item.event);
           trackTurnWatchdogActivity(stampedEvent.threadId, runtimeEvents);
           const nativeEvent = compactCodexNativeEventForIngress(
-            hasUnmappedEvent || CODEX_RUNTIME_WARNING_METHODS.has(stampedEvent.method)
+            hasUnmappedEvent ||
+              mappedRuntimeEvents.some((runtimeEvent) => runtimeEvent.type === "runtime.warning") ||
+              stampedEvent.method === "mcpServer/startupStatus/updated" ||
+              CODEX_RUNTIME_WARNING_METHODS.has(stampedEvent.method)
               ? sanitizeUnmappedProviderEvent(stampedEvent)
               : stampedEvent,
           );

@@ -152,7 +152,7 @@ type AccountClientOverrides = Partial<AccountClient> & {
   readonly reportEndpoints?: (
     proof: string,
     hostId: string,
-    request: { readonly endpoints: readonly unknown[] },
+    request: { readonly endpoints: readonly unknown[]; readonly appVersion?: string },
   ) => Promise<AccountHost>;
 };
 
@@ -216,8 +216,8 @@ function makeClient(overrides: AccountClientOverrides): AccountClient {
       : {}),
     ...(reportEndpoints
       ? {
-          replaceHostEndpoints: (proof: string, hostId: string, endpoints: readonly unknown[]) =>
-            reportEndpoints(proof, hostId, { endpoints } as any),
+          replaceHostEndpoints: (proof, hostId, endpoints, appVersion) =>
+            reportEndpoints(proof, hostId, { endpoints, ...(appVersion ? { appVersion } : {}) }),
         }
       : {}),
   } as AccountClient;
@@ -2141,6 +2141,7 @@ describe("refreshHostRegistration", () => {
     expect(calls[0]?.hostId).toBe("host_1");
     expect(calls[0]?.request).toEqual({
       endpoints: [{ url: "http://192.168.1.42:3773", transport: "lan" }],
+      appVersion: "0.6.4",
     });
   });
 
@@ -2224,6 +2225,6 @@ describe("refreshHostRegistration", () => {
       }),
     });
 
-    expect(requests).toEqual([{ endpoints: [] }]);
+    expect(requests).toEqual([{ endpoints: [], appVersion: "0.6.4" }]);
   });
 });

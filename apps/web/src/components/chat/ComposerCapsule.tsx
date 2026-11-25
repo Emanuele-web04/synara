@@ -61,8 +61,13 @@ interface ComposerCapsuleProps {
   /** Trailing controls (tip action, dismiss) beside the label. */
   actions?: ReactNode;
   title?: string | undefined;
+  /** Accessible name when the visible label is abbreviated (an action-style capsule). */
+  ariaLabel?: string | undefined;
   role?: string;
   testId?: string;
+  /** Border and text-tone variants (dashed opt-in, muted unavailable). Never a fill:
+   *  the glass background is unlayered CSS that a utility class cannot override. */
+  className?: string | undefined;
 }
 
 export function ComposerCapsule({
@@ -71,8 +76,10 @@ export function ComposerCapsule({
   onClick,
   actions,
   title,
+  ariaLabel,
   role,
   testId,
+  className,
 }: ComposerCapsuleProps) {
   const label = (
     <>
@@ -84,8 +91,13 @@ export function ComposerCapsule({
     return (
       <button
         type="button"
-        className={cn(COMPOSER_CAPSULE_CLASS_NAME, COMPOSER_CAPSULE_INTERACTIVE_CLASS_NAME)}
+        className={cn(
+          COMPOSER_CAPSULE_CLASS_NAME,
+          COMPOSER_CAPSULE_INTERACTIVE_CLASS_NAME,
+          className,
+        )}
         title={title}
+        aria-label={ariaLabel}
         data-testid={testId}
         onClick={onClick}
       >
@@ -95,8 +107,9 @@ export function ComposerCapsule({
   }
   return (
     <div
-      className={cn(COMPOSER_CAPSULE_CLASS_NAME, actions ? "pr-0.5" : null)}
+      className={cn(COMPOSER_CAPSULE_CLASS_NAME, actions ? "pr-0.5" : null, className)}
       title={title}
+      aria-label={ariaLabel}
       role={role}
       data-testid={testId}
     >

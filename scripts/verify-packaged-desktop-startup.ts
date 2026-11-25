@@ -20,6 +20,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { listPackage } from "@electron/asar";
 import { CLOUDFLARED_VERSION } from "@synara/shared/cloudflared";
 import { spawnProcess, spawnProcessSync } from "@synara/shared/processRuntime";
 import { teardownChildProcessTree } from "../apps/server/src/platform/supervisedProcessTeardown.ts";
@@ -201,6 +202,18 @@ function prepareLinuxLaunch(
   };
 }
 
+function isCookieReader(path: string): boolean {
+  return /(^|[/\\])rookie[-_]cookies(?:[./\\-]|$)/i.test(path);
+}
+
+export function verifyWindowsCookieReaderAbsent(resourcesDirectory: string): void {
+  const bundled = listPackage(join(resourcesDirectory, "app.asar"), { isPack: false });
+  const reader = bundled.find(isCookieReader) ?? findFiles(resourcesDirectory, isCookieReader)[0];
+  if (reader)
+    throw new Error(`Windows installer contains a disabled browser cookie reader: ${reader}.`);
+  console.log("Verified the Windows installer does not bundle the browser cookie reader.");
+}
+
 function prepareWindowsLaunch(assetsDirectory: string, extractionRoot: string): LaunchCommand {
   const installer = requireSingleAsset(assetsDirectory, ".exe");
   const installerRoot = join(extractionRoot, "installer");
@@ -225,14 +238,14 @@ function prepareWindowsLaunch(assetsDirectory: string, extractionRoot: string): 
       `Expected one extracted Synara application executable, found ${executables.length}.`,
     );
   }
+  const executable = executables[0]!;
+  const resourcesDirectory = join(dirname(executable), "resources");
+  verifyWindowsCookieReaderAbsent(resourcesDirectory);
   return {
-    command: executables[0]!,
+    command: executable,
     args: [],
-    cwd: dirname(executables[0]!),
-    runtime: {
-      executable: executables[0]!,
-      resourcesDirectory: join(dirname(executables[0]!), "resources"),
-    },
+    cwd: dirname(executable),
+    runtime: { executable, resourcesDirectory },
   };
 }
 
@@ -422,9 +435,11 @@ function waitForExit(child: ChildProcess, timeoutMs: number): Promise<boolean> {
 async function terminateProcessTree(child: ChildProcess): Promise<void> {
   if (!child.pid || child.exitCode !== null || child.signalCode !== null) return;
   if (process.platform === "win32") {
+    // Bounded: a taskkill that cannot finish must not hold the smoke open.
     spawnSync("taskkill", ["/pid", String(child.pid), "/t", "/f"], {
       stdio: "ignore",
       windowsHide: true,
+      timeout: 30_000,
     });
     await waitForExit(child, 5_000);
     return;
@@ -495,6 +510,7 @@ export async function verifyPackagedDesktopStartup(
   let child: ChildProcess | null = null;
   let logDirectory: string | null = null;
   let outputTail = "";
+  let startupFailure: { error: unknown } | undefined;
   try {
     const launch = prepareLaunch(options, extractionRoot);
     const env = createPackagedDesktopSmokeEnvironment(join(temporaryRoot, "state"), options);
@@ -533,12 +549,14 @@ export async function verifyPackagedDesktopStartup(
     child.stderr?.on("data", retainOutputTail);
 
     const deadline = Date.now() + options.timeoutMs;
+    let passed = false;
     while (Date.now() < deadline) {
       if (hasStartupProof(logPath)) {
         console.log(
           `Packaged ${options.platform}/${options.arch} startup smoke passed from isolated state.`,
         );
-        return;
+        passed = true;
+        break;
       }
       if (childOutcome.launchError) {
         throw new Error(`Packaged app could not start: ${childOutcome.launchError.message}`);
@@ -550,35 +568,53 @@ export async function verifyPackagedDesktopStartup(
       }
       await new Promise((resolveDelay) => setTimeout(resolveDelay, 200));
     }
-    throw new Error(`Packaged startup proof timed out after ${options.timeoutMs}ms.`);
+    if (!passed) {
+      throw new Error(`Packaged startup proof timed out after ${options.timeoutMs}ms.`);
+    }
   } catch (error) {
+    startupFailure = { error };
     if (logDirectory) {
       console.error(readPackagedStartupLogTails(logDirectory));
       console.error(`Packaged process output tail:\n${outputTail || "No output captured."}`);
     }
-    throw error;
-  } finally {
-    if (child) {
-      await terminateProcessTree(child);
-    }
+  }
+  let cleanupFailure: { error: unknown } | undefined;
+  if (child) {
     try {
-      rmSync(temporaryRoot, {
-        recursive: true,
-        force: true,
-        maxRetries: process.platform === "win32" ? 20 : 0,
-        retryDelay: process.platform === "win32" ? 250 : 100,
-      });
+      await terminateProcessTree(child);
     } catch (error) {
-      if (
-        process.platform !== "win32" ||
-        !(error instanceof Error && "code" in error && error.code === "EPERM")
-      ) {
-        throw error;
+      cleanupFailure = { error };
+      if (startupFailure) console.error("Packaged smoke process cleanup failed:", error);
+    }
+  }
+  try {
+    rmSync(temporaryRoot, {
+      recursive: true,
+      force: true,
+      maxRetries: process.platform === "win32" ? 20 : 0,
+      retryDelay: process.platform === "win32" ? 250 : 100,
+    });
+  } catch (error) {
+    if (
+      process.platform !== "win32" ||
+      !(error instanceof Error && "code" in error && error.code === "EPERM")
+    ) {
+      if (startupFailure || cleanupFailure) {
+        console.error("Packaged smoke directory cleanup failed:", error);
+      } else {
+        cleanupFailure = { error };
       }
+    } else {
       console.warn(
         `Could not remove Windows smoke temp directory; leaving it for runner cleanup: ${temporaryRoot}`,
       );
     }
+  }
+  if (startupFailure) {
+    throw startupFailure.error;
+  }
+  if (cleanupFailure) {
+    throw cleanupFailure.error;
   }
 }
 

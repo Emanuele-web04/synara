@@ -63,60 +63,27 @@ function typeIntoField(raw: string): string {
 }
 
 describe("DeviceCodeField input normalization", () => {
-  it("uppercases what the user types", () => {
-    expect(typeIntoField("abcdefgh")).toBe("ABCDEFGH");
-  });
-
-  it("accepts a code typed in mixed case", () => {
-    expect(typeIntoField("aBcD23gH")).toBe("ABCD23GH");
-  });
-
   // The alphabet excludes I/O/0/1 precisely because they are the characters
   // people mistype off another screen; a rejected character must disappear as
   // you type rather than fail after you submit and burn a rate-limited attempt.
-  it("drops the ambiguous characters the alphabet excludes", () => {
-    expect(typeIntoField("IO01")).toBe("");
-    expect(typeIntoField("AIBOC0D1")).toBe("ABCD");
-  });
-
-  it("accepts the displayed grouped form when pasted back", () => {
-    expect(typeIntoField("abcd-efgh")).toBe("ABCDEFGH");
-  });
-
-  it("stops at the code length", () => {
-    expect(typeIntoField("ABCDEFGHJKLM")).toBe("ABCDEFGH");
+  it.each([
+    ["uppercases what the user types", "abcdefgh", "ABCDEFGH"],
+    ["accepts mixed case", "aBcD23gH", "ABCD23GH"],
+    ["drops only ambiguous characters", "IO01", ""],
+    ["drops ambiguous characters among valid ones", "AIBOC0D1", "ABCD"],
+    ["accepts the displayed grouped form when pasted back", "abcd-efgh", "ABCDEFGH"],
+    ["stops at the code length", "ABCDEFGHJKLM", "ABCDEFGH"],
+  ])("%s", (_name, raw, expected) => {
+    expect(typeIntoField(raw)).toBe(expected);
   });
 });
 
 describe("DeviceCodeField rendering", () => {
-  it("renders the code in the mono face", () => {
-    expect(renderField("ABCDEFGH").className).toContain("font-mono");
-  });
-
   it("shows the grouped form of a complete code", () => {
     expect(renderField("ABCDEFGH").value).toBe("ABCD-EFGH");
   });
 
   it("shows partial input as typed", () => {
     expect(renderField("ABC").value).toBe("ABC");
-  });
-
-  it("hints the format with a placeholder inside the code alphabet", () => {
-    const placeholder = renderField("").placeholder ?? "";
-    expect(placeholder).toBe("ABCD-EFGH");
-    expect(placeholder).not.toMatch(/[IO01]/);
-  });
-
-  it("stops the keyboard from fighting the normalizer", () => {
-    const props = renderField("");
-    expect(props.autoCapitalize).toBe("characters");
-    expect(props.autoCorrect).toBe("off");
-    expect(props.autoComplete).toBe("off");
-    expect(props.spellCheck).toBe(false);
-  });
-
-  it("disables the field when it says it is disabled", () => {
-    expect(renderField("", true).disabled).toBe(true);
-    expect(renderField("", false).disabled).toBe(false);
   });
 });

@@ -39,7 +39,8 @@
     "build:desktop": "turbo run build --filter=@synara/desktop --filter=@synara/cli",
     "postinstall": "node scripts/patch-workspace-typescript.ts && effect-tsgo patch --typescript --typescript-package @typescript/native",
     "prepare": "node scripts/install-git-hooks.ts",
-    "typecheck": "effect-tsgo patch --typescript --typescript-package @typescript/native && turbo run typecheck",
+    "typecheck": "node scripts/typecheck.ts",
+    "typecheck:tsc": "effect-tsgo patch --typescript --typescript-package @typescript/native && turbo run typecheck",
     "typecheck:native": "bun run typecheck",
     "typecheck:legacy": "turbo run typecheck:legacy",
     "lint": "oxlint --report-unused-disable-directives && bun run server-sync-fs:check",
@@ -47,6 +48,7 @@
     "test": "turbo run test",
     "test:web:focused": "bun run --cwd apps/web test",
     "brand:check": "node scripts/check-brand-identity.ts",
+    "bundle-size:check": "node scripts/check-bundle-size.ts --mode portable",
     "windows-runtime:check": "node scripts/check-windows-runtime-boundary.ts",
     "migrations:check": "node scripts/check-migration-lineage.ts",
     "test:desktop-smoke": "turbo run smoke-test --filter=@synara/desktop",
@@ -82,6 +84,7 @@
     "@vitest/coverage-v8": "4.1.10",
     "oxfmt": "^0.40.0",
     "oxlint": "^1.55.0",
+    "tsrs": "0.25.0-ts7.1.0-beta",
     "turbo": "^2.9.14",
     "vitest": "catalog:"
   },
@@ -109,10 +112,10 @@
     "yaml": "^2.8.3"
   },
   "engines": {
-    "bun": "^1.4.4",
+    "bun": "^1.4.5",
     "node": "^24.13.1"
   },
-  "packageManager": "bun@1.4.4",
+  "packageManager": "bun@1.4.5",
   "msw": {
     "workerDirectory": [
       "apps/web/public"

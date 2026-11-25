@@ -114,6 +114,14 @@ export function useChatProviderModels({
     selectedProviderByThreadId !== boundProvider
       ? selectedProviderByThreadId
       : null;
+  // So is another account of the bound provider.
+  const handoffAccountPending =
+    allowProviderHandoff === true &&
+    boundProvider !== null &&
+    selectedProviderByThreadId === boundProvider &&
+    selectedProviderInstanceIdByThreadId !== null &&
+    (composerDraft.modelSelectionByProvider[selectedProviderInstanceIdByThreadId]?.instanceId ??
+      selectedProviderInstanceIdByThreadId) !== boundProviderInstanceId;
   const lockedProvider: ProviderKind | null = allowProviderHandoff === true ? null : boundProvider;
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const localProviderStatuses = useProviderStatusesForLocalConfig();
@@ -143,7 +151,7 @@ export function useChatProviderModels({
     ],
   );
   const sessionInstanceId =
-    activeThread?.session?.provider === selectedProvider
+    !handoffAccountPending && activeThread?.session?.provider === selectedProvider
       ? activeThread.session.providerInstanceId
       : undefined;
   let candidateInstanceId: ProviderInstanceId | undefined =
@@ -188,7 +196,9 @@ export function useChatProviderModels({
       : null;
   const selectedProviderInstanceId =
     sessionInstanceId ??
-    (boundProvider === selectedProvider ? boundProviderInstanceId : null) ??
+    (boundProvider === selectedProvider && !handoffAccountPending
+      ? boundProviderInstanceId
+      : null) ??
     (usableFallback ? providerStatusInstanceKey(usableFallback) : configuredInstanceId);
 
   const composerModelHintByProvider = useMemo<Record<ProviderKind, string | null>>(() => {
@@ -415,15 +425,11 @@ export function useChatProviderModels({
       buildSearchableModelOptions({
         providerOptions: providerInstances
           // Search mirrors the picker: disabled instances are not actionable,
-          // and a started thread is locked to its exact provider instance.
+          // and a thread that cannot hand off is locked to its exact account.
           .filter(
             (instance) =>
               instance.enabled &&
-              (lockedProvider === null || instance.instanceId === selectedProviderInstanceId) &&
-              // A handoff can change the provider, not the bound provider's account.
-              (boundProvider === null ||
-                instance.provider !== boundProvider ||
-                instance.instanceId === boundProviderInstanceId),
+              (lockedProvider === null || instance.instanceId === selectedProviderInstanceId),
           )
           .map((instance) => ({
             value: instance.provider,
@@ -438,8 +444,6 @@ export function useChatProviderModels({
         lockedProvider,
       }),
     [
-      boundProvider,
-      boundProviderInstanceId,
       lockedProvider,
       modelOptionsByProvider,
       modelOptionsByProviderInstance,
@@ -454,7 +458,6 @@ export function useChatProviderModels({
     hasThreadStarted,
     lockedProvider,
     boundProvider,
-    boundProviderInstanceId,
     serverConfigQuery,
     selectedProvider,
     providerInstances,

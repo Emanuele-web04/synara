@@ -117,59 +117,53 @@ const parameterizedCursorVariantConfigOptions: ReadonlyArray<Acp.SessionConfigOp
   },
 ];
 
+type RecordedCall =
+  | { readonly type: "model"; readonly value: string }
+  | { readonly type: "config"; readonly configId: string; readonly value: string | boolean };
+
+const recordCalls = (calls: RecordedCall[]) => ({
+  setModel: (value: string) =>
+    Effect.sync(() => {
+      calls.push({ type: "model", value });
+    }),
+  setConfigOption: (configId: string, value: string | boolean) =>
+    Effect.sync(() => {
+      calls.push({ type: "config", configId, value });
+    }),
+});
+
 const noCursorAgentCommandOptions = {
   env: { PATH: "" },
   pathExists: () => false,
 };
 
 describe("buildCursorAcpSpawnInput", () => {
-  it("builds the default Cursor ACP command", () => {
-    expect(buildCursorAcpSpawnInput(undefined, "/tmp/project")).toMatchObject({
+  it.each([
+    {
+      name: "default Cursor ACP command",
+      settings: undefined,
+      options: undefined,
       command: "cursor-agent",
       args: ["acp"],
-      cwd: "/tmp/project",
-      env: {
-        NO_BROWSER: "true",
-        BROWSER: "www-browser",
-      },
-      providerEnvironment: { driver: "cursor" },
-    });
-  });
-
-  it("includes the configured api endpoint when present", () => {
-    expect(
-      buildCursorAcpSpawnInput(
-        {
-          binaryPath: "/usr/local/bin/agent",
-          apiEndpoint: "http://localhost:3000",
-        },
-        "/tmp/project",
-      ),
-    ).toMatchObject({
+    },
+    {
+      name: "configured api endpoint",
+      settings: { binaryPath: "/usr/local/bin/agent", apiEndpoint: "http://localhost:3000" },
+      options: undefined,
       command: "/usr/local/bin/agent",
       args: ["-e", "http://localhost:3000", "acp"],
-      cwd: "/tmp/project",
-      env: {
-        NO_BROWSER: "true",
-        BROWSER: "www-browser",
-      },
-      providerEnvironment: { driver: "cursor" },
-    });
-  });
-
-  it("passes api endpoint overrides through the Cursor launcher fallback", () => {
-    expect(
-      buildCursorAcpSpawnInput(
-        {
-          binaryPath: "/not-real/bin/cursor",
-          apiEndpoint: "http://localhost:3000",
-        },
-        "/tmp/project",
-        noCursorAgentCommandOptions,
-      ),
-    ).toMatchObject({
+    },
+    {
+      name: "api endpoint through the Cursor launcher fallback",
+      settings: { binaryPath: "/not-real/bin/cursor", apiEndpoint: "http://localhost:3000" },
+      options: noCursorAgentCommandOptions,
       command: "/not-real/bin/cursor",
       args: ["agent", "-e", "http://localhost:3000", "acp"],
+    },
+  ])("builds the $name", ({ settings, options, command, args }) => {
+    expect(buildCursorAcpSpawnInput(settings, "/tmp/project", options)).toMatchObject({
+      command,
+      args,
       cwd: "/tmp/project",
       env: {
         NO_BROWSER: "true",
@@ -181,26 +175,24 @@ describe("buildCursorAcpSpawnInput", () => {
 });
 
 describe("buildCursorCliModelListCommand", () => {
-  it("builds the default Cursor model list command", () => {
-    expect(buildCursorCliModelListCommand(undefined)).toEqual({
-      command: "cursor-agent",
-      args: ["models"],
-    });
-  });
-
-  it("uses the Cursor launcher fallback for model discovery", () => {
-    expect(
-      buildCursorCliModelListCommand(
-        {
-          binaryPath: "/not-real/bin/cursor",
-          apiEndpoint: "http://localhost:3000",
-        },
-        noCursorAgentCommandOptions,
-      ),
-    ).toEqual({
-      command: "/not-real/bin/cursor",
-      args: ["agent", "-e", "http://localhost:3000", "models"],
-    });
+  it.each([
+    {
+      name: "default",
+      settings: undefined,
+      options: undefined,
+      expected: { command: "cursor-agent", args: ["models"] },
+    },
+    {
+      name: "Cursor launcher fallback",
+      settings: { binaryPath: "/not-real/bin/cursor", apiEndpoint: "http://localhost:3000" },
+      options: noCursorAgentCommandOptions,
+      expected: {
+        command: "/not-real/bin/cursor",
+        args: ["agent", "-e", "http://localhost:3000", "models"],
+      },
+    },
+  ])("builds the $name model list command", ({ settings, options, expected }) => {
+    expect(buildCursorCliModelListCommand(settings, options)).toEqual(expected);
   });
 });
 
@@ -405,10 +397,7 @@ describe("applyCursorAcpModelSelection", () => {
       expected: "grok-4-20[thinking=true]",
     },
   ])("$name", async ({ currentValue, choices, model, expected }) => {
-    const calls: Array<
-      | { readonly type: "model"; readonly value: string }
-      | { readonly type: "config"; readonly configId: string; readonly value: string | boolean }
-    > = [];
+    const calls: RecordedCall[] = [];
 
     const runtime = {
       getConfigOptions: Effect.succeed([
@@ -421,14 +410,7 @@ describe("applyCursorAcpModelSelection", () => {
           options: choices,
         },
       ] satisfies ReadonlyArray<Acp.SessionConfigOption>),
-      setModel: (value: string) =>
-        Effect.sync(() => {
-          calls.push({ type: "model", value });
-        }),
-      setConfigOption: (configId: string, value: string | boolean) =>
-        Effect.sync(() => {
-          calls.push({ type: "config", configId, value });
-        }),
+      ...recordCalls(calls),
     };
 
     await Effect.runPromise(
@@ -444,21 +426,11 @@ describe("applyCursorAcpModelSelection", () => {
   });
 
   it("sets the base model before applying separate config options", async () => {
-    const calls: Array<
-      | { readonly type: "model"; readonly value: string }
-      | { readonly type: "config"; readonly configId: string; readonly value: string | boolean }
-    > = [];
+    const calls: RecordedCall[] = [];
 
     const runtime = {
       getConfigOptions: Effect.succeed(parameterizedGpt54ConfigOptions),
-      setModel: (value: string) =>
-        Effect.sync(() => {
-          calls.push({ type: "model", value });
-        }),
-      setConfigOption: (configId: string, value: string | boolean) =>
-        Effect.sync(() => {
-          calls.push({ type: "config", configId, value });
-        }),
+      ...recordCalls(calls),
     };
 
     await Effect.runPromise(
@@ -488,10 +460,7 @@ describe("applyCursorAcpModelSelection", () => {
   });
 
   it("keeps GPT-5.4 fast=true after switching away from Auto", async () => {
-    const calls: Array<
-      | { readonly type: "model"; readonly value: string }
-      | { readonly type: "config"; readonly configId: string; readonly value: string | boolean }
-    > = [];
+    const calls: RecordedCall[] = [];
     let currentModel = "default";
     const gpt54TraitOptions = parameterizedGpt54ConfigOptions.filter(
       (option) => option.id !== "model",
@@ -548,21 +517,11 @@ describe("applyCursorAcpModelSelection", () => {
   });
 
   it("maps synthetic Cursor model variants back to ACP model plus config options", async () => {
-    const calls: Array<
-      | { readonly type: "model"; readonly value: string }
-      | { readonly type: "config"; readonly configId: string; readonly value: string | boolean }
-    > = [];
+    const calls: RecordedCall[] = [];
 
     const runtime = {
       getConfigOptions: Effect.succeed(parameterizedCursorVariantConfigOptions),
-      setModel: (value: string) =>
-        Effect.sync(() => {
-          calls.push({ type: "model", value });
-        }),
-      setConfigOption: (configId: string, value: string | boolean) =>
-        Effect.sync(() => {
-          calls.push({ type: "config", configId, value });
-        }),
+      ...recordCalls(calls),
     };
 
     await Effect.runPromise(
@@ -586,10 +545,7 @@ describe("applyCursorAcpModelSelection", () => {
   });
 
   it("maps Cursor CLI model ids to parameterized ACP values without silently dropping variants", async () => {
-    const calls: Array<
-      | { readonly type: "model"; readonly value: string }
-      | { readonly type: "config"; readonly configId: string; readonly value: string | boolean }
-    > = [];
+    const calls: RecordedCall[] = [];
 
     const runtime = {
       getConfigOptions: Effect.succeed([
@@ -651,14 +607,7 @@ describe("applyCursorAcpModelSelection", () => {
           currentValue: false,
         },
       ] satisfies ReadonlyArray<Acp.SessionConfigOption>),
-      setModel: (value: string) =>
-        Effect.sync(() => {
-          calls.push({ type: "model", value });
-        }),
-      setConfigOption: (configId: string, value: string | boolean) =>
-        Effect.sync(() => {
-          calls.push({ type: "config", configId, value });
-        }),
+      ...recordCalls(calls),
     };
 
     await Effect.runPromise(
@@ -693,10 +642,7 @@ describe("applyCursorAcpModelSelection", () => {
   });
 
   it("maps Cursor's namespaced Grok CLI id to the unprefixed ACP model value", async () => {
-    const calls: Array<
-      | { readonly type: "model"; readonly value: string }
-      | { readonly type: "config"; readonly configId: string; readonly value: string | boolean }
-    > = [];
+    const calls: RecordedCall[] = [];
 
     const runtime = {
       getConfigOptions: Effect.succeed([
@@ -715,14 +661,7 @@ describe("applyCursorAcpModelSelection", () => {
           ],
         },
       ] satisfies ReadonlyArray<Acp.SessionConfigOption>),
-      setModel: (value: string) =>
-        Effect.sync(() => {
-          calls.push({ type: "model", value });
-        }),
-      setConfigOption: (configId: string, value: string | boolean) =>
-        Effect.sync(() => {
-          calls.push({ type: "config", configId, value });
-        }),
+      ...recordCalls(calls),
     };
 
     await Effect.runPromise(
@@ -743,10 +682,7 @@ describe("applyCursorAcpModelSelection", () => {
   });
 
   it("keeps Cursor Grok fast mode off even when ACP advertises fast=true", async () => {
-    const calls: Array<
-      | { readonly type: "model"; readonly value: string }
-      | { readonly type: "config"; readonly configId: string; readonly value: string | boolean }
-    > = [];
+    const calls: RecordedCall[] = [];
 
     const runtime = {
       getConfigOptions: Effect.succeed([
@@ -765,14 +701,7 @@ describe("applyCursorAcpModelSelection", () => {
           ],
         },
       ] satisfies ReadonlyArray<Acp.SessionConfigOption>),
-      setModel: (value: string) =>
-        Effect.sync(() => {
-          calls.push({ type: "model", value });
-        }),
-      setConfigOption: (configId: string, value: string | boolean) =>
-        Effect.sync(() => {
-          calls.push({ type: "config", configId, value });
-        }),
+      ...recordCalls(calls),
     };
 
     await Effect.runPromise(
@@ -793,10 +722,7 @@ describe("applyCursorAcpModelSelection", () => {
   });
 
   it("lets an explicit fastMode=false override a persisted parameterized fast model", async () => {
-    const calls: Array<
-      | { readonly type: "model"; readonly value: string }
-      | { readonly type: "config"; readonly configId: string; readonly value: string | boolean }
-    > = [];
+    const calls: RecordedCall[] = [];
 
     const runtime = {
       getConfigOptions: Effect.succeed([
@@ -814,14 +740,7 @@ describe("applyCursorAcpModelSelection", () => {
           ],
         },
       ] satisfies ReadonlyArray<Acp.SessionConfigOption>),
-      setModel: (value: string) =>
-        Effect.sync(() => {
-          calls.push({ type: "model", value });
-        }),
-      setConfigOption: (configId: string, value: string | boolean) =>
-        Effect.sync(() => {
-          calls.push({ type: "config", configId, value });
-        }),
+      ...recordCalls(calls),
     };
 
     await Effect.runPromise(
@@ -842,10 +761,7 @@ describe("applyCursorAcpModelSelection", () => {
   });
 
   it("defaults Cursor fast mode off through the dedicated ACP config option", async () => {
-    const calls: Array<
-      | { readonly type: "model"; readonly value: string }
-      | { readonly type: "config"; readonly configId: string; readonly value: string | boolean }
-    > = [];
+    const calls: RecordedCall[] = [];
 
     const runtime = {
       getConfigOptions: Effect.succeed([
@@ -874,14 +790,7 @@ describe("applyCursorAcpModelSelection", () => {
           ],
         },
       ] satisfies ReadonlyArray<Acp.SessionConfigOption>),
-      setModel: (value: string) =>
-        Effect.sync(() => {
-          calls.push({ type: "model", value });
-        }),
-      setConfigOption: (configId: string, value: string | boolean) =>
-        Effect.sync(() => {
-          calls.push({ type: "config", configId, value });
-        }),
+      ...recordCalls(calls),
     };
 
     await Effect.runPromise(
@@ -903,10 +812,7 @@ describe("applyCursorAcpModelSelection", () => {
   });
 
   it("does not inherit advertised low effort when enabling Cursor Grok fast mode", async () => {
-    const calls: Array<
-      | { readonly type: "model"; readonly value: string }
-      | { readonly type: "config"; readonly configId: string; readonly value: string | boolean }
-    > = [];
+    const calls: RecordedCall[] = [];
 
     const runtime = {
       getConfigOptions: Effect.succeed([
@@ -924,14 +830,7 @@ describe("applyCursorAcpModelSelection", () => {
           ],
         },
       ] satisfies ReadonlyArray<Acp.SessionConfigOption>),
-      setModel: (value: string) =>
-        Effect.sync(() => {
-          calls.push({ type: "model", value });
-        }),
-      setConfigOption: (configId: string, value: string | boolean) =>
-        Effect.sync(() => {
-          calls.push({ type: "config", configId, value });
-        }),
+      ...recordCalls(calls),
     };
 
     await Effect.runPromise(
@@ -952,10 +851,7 @@ describe("applyCursorAcpModelSelection", () => {
   });
 
   it("does not apply requested Grok options to a fallback model", async () => {
-    const calls: Array<
-      | { readonly type: "model"; readonly value: string }
-      | { readonly type: "config"; readonly configId: string; readonly value: string | boolean }
-    > = [];
+    const calls: RecordedCall[] = [];
     const configOptions: ReadonlyArray<Acp.SessionConfigOption> = [
       {
         id: "model",
@@ -991,14 +887,7 @@ describe("applyCursorAcpModelSelection", () => {
     ];
     const runtime = {
       getConfigOptions: Effect.succeed(configOptions),
-      setModel: (value: string) =>
-        Effect.sync(() => {
-          calls.push({ type: "model", value });
-        }),
-      setConfigOption: (configId: string, value: string | boolean) =>
-        Effect.sync(() => {
-          calls.push({ type: "config", configId, value });
-        }),
+      ...recordCalls(calls),
     };
 
     await Effect.runPromise(
@@ -1014,10 +903,7 @@ describe("applyCursorAcpModelSelection", () => {
   });
 
   it("applies Cursor Grok effort after fast so the fast variant keeps HIGH", async () => {
-    const calls: Array<
-      | { readonly type: "model"; readonly value: string }
-      | { readonly type: "config"; readonly configId: string; readonly value: string | boolean }
-    > = [];
+    const calls: RecordedCall[] = [];
 
     const runtime = {
       getConfigOptions: Effect.succeed([
@@ -1054,14 +940,7 @@ describe("applyCursorAcpModelSelection", () => {
           ],
         },
       ] satisfies ReadonlyArray<Acp.SessionConfigOption>),
-      setModel: (value: string) =>
-        Effect.sync(() => {
-          calls.push({ type: "model", value });
-        }),
-      setConfigOption: (configId: string, value: string | boolean) =>
-        Effect.sync(() => {
-          calls.push({ type: "config", configId, value });
-        }),
+      ...recordCalls(calls),
     };
 
     await Effect.runPromise(
@@ -1081,10 +960,7 @@ describe("applyCursorAcpModelSelection", () => {
   });
 
   it("keeps OpenAI CLI 1M context in the ACP model value so unsupported variants fail instead of falling back", async () => {
-    const calls: Array<
-      | { readonly type: "model"; readonly value: string }
-      | { readonly type: "config"; readonly configId: string; readonly value: string | boolean }
-    > = [];
+    const calls: RecordedCall[] = [];
 
     const runtime = {
       getConfigOptions: Effect.succeed([
@@ -1102,14 +978,7 @@ describe("applyCursorAcpModelSelection", () => {
           ],
         },
       ] satisfies ReadonlyArray<Acp.SessionConfigOption>),
-      setModel: (value: string) =>
-        Effect.sync(() => {
-          calls.push({ type: "model", value });
-        }),
-      setConfigOption: (configId: string, value: string | boolean) =>
-        Effect.sync(() => {
-          calls.push({ type: "config", configId, value });
-        }),
+      ...recordCalls(calls),
     };
 
     await Effect.runPromise(
@@ -1127,10 +996,7 @@ describe("applyCursorAcpModelSelection", () => {
   });
 
   it("uses the accepted ACP model value when Cursor exposes fast as a separate option", async () => {
-    const calls: Array<
-      | { readonly type: "model"; readonly value: string }
-      | { readonly type: "config"; readonly configId: string; readonly value: string | boolean }
-    > = [];
+    const calls: RecordedCall[] = [];
 
     const runtime = {
       getConfigOptions: Effect.succeed([
@@ -1159,14 +1025,7 @@ describe("applyCursorAcpModelSelection", () => {
           ],
         },
       ] satisfies ReadonlyArray<Acp.SessionConfigOption>),
-      setModel: (value: string) =>
-        Effect.sync(() => {
-          calls.push({ type: "model", value });
-        }),
-      setConfigOption: (configId: string, value: string | boolean) =>
-        Effect.sync(() => {
-          calls.push({ type: "config", configId, value });
-        }),
+      ...recordCalls(calls),
     };
 
     await Effect.runPromise(
@@ -1185,21 +1044,11 @@ describe("applyCursorAcpModelSelection", () => {
   });
 
   it("maps collapsed Cursor model selections plus trait options to the ACP model value", async () => {
-    const calls: Array<
-      | { readonly type: "model"; readonly value: string }
-      | { readonly type: "config"; readonly configId: string; readonly value: string | boolean }
-    > = [];
+    const calls: RecordedCall[] = [];
 
     const runtime = {
       getConfigOptions: Effect.succeed(parameterizedCursorVariantConfigOptions),
-      setModel: (value: string) =>
-        Effect.sync(() => {
-          calls.push({ type: "model", value });
-        }),
-      setConfigOption: (configId: string, value: string | boolean) =>
-        Effect.sync(() => {
-          calls.push({ type: "config", configId, value });
-        }),
+      ...recordCalls(calls),
     };
 
     await Effect.runPromise(
@@ -1228,10 +1077,7 @@ describe("applyCursorAcpModelSelection", () => {
   });
 
   it("drops stale Cursor context traits that are no longer exposed by ACP", async () => {
-    const calls: Array<
-      | { readonly type: "model"; readonly value: string }
-      | { readonly type: "config"; readonly configId: string; readonly value: string | boolean }
-    > = [];
+    const calls: RecordedCall[] = [];
 
     const runtime = {
       getConfigOptions: Effect.succeed([
@@ -1253,14 +1099,7 @@ describe("applyCursorAcpModelSelection", () => {
           ],
         },
       ] satisfies ReadonlyArray<Acp.SessionConfigOption>),
-      setModel: (value: string) =>
-        Effect.sync(() => {
-          calls.push({ type: "model", value });
-        }),
-      setConfigOption: (configId: string, value: string | boolean) =>
-        Effect.sync(() => {
-          calls.push({ type: "config", configId, value });
-        }),
+      ...recordCalls(calls),
     };
 
     await Effect.runPromise(
@@ -1285,10 +1124,7 @@ describe("applyCursorAcpModelSelection", () => {
   });
 
   it("repairs stale parameterized Cursor model strings against ACP choices", async () => {
-    const calls: Array<
-      | { readonly type: "model"; readonly value: string }
-      | { readonly type: "config"; readonly configId: string; readonly value: string | boolean }
-    > = [];
+    const calls: RecordedCall[] = [];
 
     const runtime = {
       getConfigOptions: Effect.succeed([
@@ -1310,14 +1146,7 @@ describe("applyCursorAcpModelSelection", () => {
           ],
         },
       ] satisfies ReadonlyArray<Acp.SessionConfigOption>),
-      setModel: (value: string) =>
-        Effect.sync(() => {
-          calls.push({ type: "model", value });
-        }),
-      setConfigOption: (configId: string, value: string | boolean) =>
-        Effect.sync(() => {
-          calls.push({ type: "config", configId, value });
-        }),
+      ...recordCalls(calls),
     };
 
     await Effect.runPromise(

@@ -28,7 +28,6 @@ import {
   COMPUTER_TEXT_MAX_LENGTH,
   COMPUTER_WAIT_MAX_MS,
   type ComputerActionResult,
-  type ComputerApp,
   type ComputerAvailability,
   type ComputerBuildSignature,
   type ComputerInputModifier,
@@ -37,7 +36,6 @@ import {
   type ComputerRect,
   type ComputerScreenshot,
   type ComputerTarget,
-  type ComputerWindow,
 } from "@synara/contracts";
 
 import {

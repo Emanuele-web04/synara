@@ -702,6 +702,48 @@ describe("ProviderDiscoveryService.listModels", () => {
     expect(adapterCalls).toBe(2);
   });
 
+  it("rediscovers only the OpenCode account whose explicit config file changed", async () => {
+    const workConfig = path.join(root, "work.jsonc");
+    const personalConfig = path.join(root, "personal.jsonc");
+    await writeFile(workConfig, "{}");
+    await writeFile(personalConfig, "{}");
+    const listModels = vi.fn(() =>
+      Effect.succeed({
+        models: [{ slug: "model", name: "Model" }],
+        source: "opencode",
+        cached: false,
+      }),
+    );
+
+    await runDiscovery({
+      adapter: { listModels },
+      settings: {
+        providerInstances: {
+          opencode_work: {
+            driver: "opencode",
+            environment: [{ name: "OPENCODE_CONFIG", value: workConfig, sensitive: false }],
+          },
+          opencode_personal: {
+            driver: "opencode",
+            environment: [{ name: "OPENCODE_CONFIG", value: personalConfig, sensitive: false }],
+          },
+        },
+      },
+      effect: Effect.gen(function* () {
+        const discovery = yield* ProviderDiscoveryService;
+        const work = { provider: "opencode", instanceId: "opencode_work", cwd } as const;
+        const personal = { ...work, instanceId: "opencode_personal" } as const;
+        yield* discovery.listModels(work);
+        yield* discovery.listModels(personal);
+        expect((yield* discovery.listModels(work)).cached).toBe(true);
+        yield* Effect.promise(() => writeFile(workConfig, '{"model":"fixture/new"}'));
+        expect((yield* discovery.listModels(work)).cached).toBe(false);
+        expect((yield* discovery.listModels(personal)).cached).toBe(true);
+      }),
+    });
+    expect(listModels).toHaveBeenCalledTimes(3);
+  });
+
   it("omits malformed model descriptors while preserving valid entries", async () => {
     const result = await runListModels({
       adapter: {

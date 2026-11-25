@@ -115,6 +115,7 @@ export function useProviderUsageSummary(input: {
   const allProviderUsageQuery = useQuery(
     serverAllProviderUsageQueryOptions({
       enabled: shouldFetchLiveProviderUsage,
+      scope: provider === "antigravity" ? "antigravity" : "other",
     }),
   );
   const liveProviderSnapshot = (allProviderUsageQuery.data ?? []).find(

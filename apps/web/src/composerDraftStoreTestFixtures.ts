@@ -183,15 +183,9 @@ export function makeQueuedChatTurn(
   };
 }
 
+/** Restores the store's initial state; partial resets let one test's drafts leak into the next. */
 export function resetComposerDraftStore() {
-  useComposerDraftStore.setState({
-    draftsByThreadId: {},
-    draftThreadsByThreadId: {},
-    projectDraftThreadIdByProjectId: {},
-    stickyModelSelectionByProvider: {},
-    stickyActiveProvider: null,
-    stickyRuntimeMode: null,
-  });
+  useComposerDraftStore.setState(useComposerDraftStore.getInitialState(), true);
 }
 
 export function modelSelection(

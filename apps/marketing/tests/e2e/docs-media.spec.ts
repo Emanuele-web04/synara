@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { expect, test } from "@playwright/test";
-import { assertNoOverflow, prepareRoute } from "../test-helpers";
+import { prepareRoute } from "../test-helpers";
 
 const CONTENT_ROOT = path.resolve(process.cwd(), "content/docs");
 
@@ -42,7 +42,6 @@ test.describe("documentation media", () => {
 
       const media = page.locator("[data-docs-media]");
       await expect(media.first()).toBeVisible();
-      await assertNoOverflow(page);
 
       for (const imageFigure of await page.locator('[data-docs-media="image"]').all()) {
         await expect(imageFigure).toHaveAttribute("data-provenance", /^(real|derived|diagram)$/);

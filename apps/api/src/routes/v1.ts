@@ -24,8 +24,6 @@ import {
   RemoteTunnelRequest,
   type AccountErrorBody,
   type AccountErrorCode,
-  ACCOUNT_HOST_ENDPOINTS_MAX,
-  AccountHostEndpoint,
   AuthorizeTokenRequest,
   AuthorizeUrlRequest,
   type AuthorizeUrlResponse,
@@ -71,6 +69,7 @@ import {
   SESSION_CREDENTIAL_MAX_AGE_SECONDS,
   RefreshTokenRequest,
   type RefreshTokenResponse,
+  ReplaceHostEndpointsRequest,
   UpdateHostRequest,
   UpdateOrganizationRequest,
   UpdateProfileRequest,
@@ -118,7 +117,6 @@ import {
   type DeviceRegistry,
   type HostGrantIssuer,
   type HostKeyRegistry,
-  type HostRecord,
   type HostSecretStore,
   type IdentityUser,
   type OrganizationRef,
@@ -244,12 +242,6 @@ function secretHeaderMatches(expected: string, presented: string | undefined): b
     expectedBytes.length === presentedBytes.length && timingSafeEqual(expectedBytes, presentedBytes)
   );
 }
-
-const ReplaceHostEndpointsRequest = Schema.Struct({
-  endpoints: Schema.Array(AccountHostEndpoint).check(
-    Schema.isMaxLength(ACCOUNT_HOST_ENDPOINTS_MAX),
-  ),
-});
 
 type ProfileRow = typeof profiles.$inferSelect;
 
@@ -1928,7 +1920,12 @@ export function createV1Routes(deps: {
       );
     try {
       return c.json({
-        host: await hostKeys.replaceEndpoints(c.req.header("authorization"), id, parsed.endpoints),
+        host: await hostKeys.replaceEndpoints(
+          c.req.header("authorization"),
+          id,
+          parsed.endpoints,
+          parsed.appVersion,
+        ),
       });
     } catch (error) {
       return hostDomainError(c, error);
@@ -3382,7 +3379,7 @@ export function createV1Routes(deps: {
     return Boolean(deps.webCheckoutOrigin && c.req.header("origin") === deps.webCheckoutOrigin);
   }
 
-  v1.post("/billing/web-checkout/code", (c) => {
+  v1.post("/billing/web-checkout/code", async (c) => {
     if (!isWebCheckoutOrigin(c))
       return errorResponse(c, 403, "unauthorized", "Checkout origin is not allowed");
     if (!deps.billing) return errorResponse(c, 503, "internal_error", "Billing is not configured");
@@ -3541,6 +3538,13 @@ export function createV1Routes(deps: {
         ...(parsed.organizationId ? { organizationId: parsed.organizationId } : {}),
         context: authContext(c),
       });
+      // The provider can still rotate a session while sign-out delivery is pending.
+      // Check the verified session identity before returning either credential.
+      const session = await verifier.verifyAccessToken(refreshed.accessToken);
+      if (session.userId !== refreshed.user.id)
+        throw new IdentityProviderError(502, "Refreshed account identity did not match");
+      if (await accountDeletion.isSessionFenced(session.userId, session.sessionId))
+        throw new RefreshRejectedError();
       const body: RefreshTokenResponse = {
         ...authTokensBody(refreshed),
         ...(refreshed.organizationId ? { organizationId: refreshed.organizationId } : {}),

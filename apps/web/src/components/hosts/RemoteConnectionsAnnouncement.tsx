@@ -3,7 +3,8 @@
 //          account button. Without Synara Alto the sheet opens the plans in Usage &
 //          limits; with Alto (or where billing is off) it opens Connections.
 // Layer: Root web overlay
-// Exports: RemoteConnectionsAnnouncement, RemoteConnectionsCoachmark
+// Exports: RemoteConnectionsAnnouncement, RemoteConnectionsCoachmark,
+//          useRemoteConnectionsAvailable, useClearOfOutsideDialogs
 //
 // Nothing here may overlap another surface:
 // - Both steps share the announcement slot. The sheet is ordered last among startup
@@ -55,7 +56,7 @@ function useAnnouncementStorage() {
   );
 }
 
-function useRemoteConnectionsAvailable(): boolean {
+export function useRemoteConnectionsAvailable(): boolean {
   const inRemoteWorkspace = useRouterState({
     select: (state) => state.location.pathname === "/remote",
   });
@@ -71,7 +72,7 @@ function useRemoteConnectionsAvailable(): boolean {
  * True once nothing outside the announcement slot can still claim the screen: the
  * account has loaded and, when signed in, no team sharing consent is owed.
  */
-function useClearOfOutsideDialogs(wanted: boolean): boolean {
+export function useClearOfOutsideDialogs(wanted: boolean): boolean {
   const account = useAccount();
   const signedIn = account.status?.state === "signed-in";
   const enrollment = useQuery({
@@ -84,20 +85,21 @@ function useClearOfOutsideDialogs(wanted: boolean): boolean {
   return enrollment.data === undefined ? enrollment.isError : !enrollment.data;
 }
 
-export function RemoteConnectionsAnnouncement() {
+export function RemoteConnectionsAnnouncement({ deferred = false }: { deferred?: boolean }) {
   const navigate = useNavigate();
   const openPlans = useOpenSynaraPlan();
   const [storage, setStorage] = useAnnouncementStorage();
   const onboardingOpen = useOnboardingDialogStore((state) => state.isOpen);
   const available = useRemoteConnectionsAvailable();
   const unseen = available && !storage.acknowledged;
-  const clear = useClearOfOutsideDialogs(unseen);
+  const wanted = unseen && !deferred;
+  const clear = useClearOfOutsideDialogs(wanted);
 
   const { status, statusQuery } = useAccount();
   const billingOptions = accountBillingQueryOptions(status);
   const billing = useQuery({
     ...billingOptions,
-    enabled: billingOptions.enabled === true && ACCOUNT_BILLING_ENABLED && unseen,
+    enabled: billingOptions.enabled === true && ACCOUNT_BILLING_ENABLED && wanted,
   });
   const checkingAccess =
     ACCOUNT_BILLING_ENABLED &&
@@ -112,15 +114,15 @@ export function RemoteConnectionsAnnouncement() {
 
   return (
     <AnnouncementSheet
-      open={unseen && clear && !checkingAccess}
+      open={wanted && clear && !checkingAccess}
       order="last"
       presentation="feature"
       hero={<RemoteConnectionsAnnouncementHero />}
       title="Introducing Remote Connections"
       description={
         offerPlans
-          ? "Control Synara on one computer from another. Included with Synara Alto; iPhone and iPad are coming soon."
-          : "Control Synara on one computer from another. Pair a device to start; iPhone and iPad are coming soon."
+          ? "Control Synara on one computer from another with Synara Alto. The iPhone app is now in beta."
+          : "Control Synara on one computer from another. Pair a device to start. The iPhone app is now in beta."
       }
       dismissLabel="Not now"
       confirmLabel={offerPlans ? "View Alto plans" : "Connect a device"}

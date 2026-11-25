@@ -18,6 +18,7 @@ import {
   COMPOSER_PREDICTION_MIN_HEDGE_DELAY_MS,
   resolveComposerPredictionHedgeDelayMs,
   resolveComposerPredictionRouting,
+  resolveComposerPredictionTurnBlocker,
 } from "./composerPrediction.ts";
 
 const TURN = TurnId.makeUnsafe("turn-2");
@@ -92,6 +93,32 @@ describe("isComposerPredictionTurnCurrent", () => {
     ["a pending user-input request", settledThread({ hasPendingUserInput: true })],
   ])("rejects %s", (_label, thread) => {
     expect(isComposerPredictionTurnCurrent(thread as never, TURN)).toBe(false);
+  });
+});
+
+describe("resolveComposerPredictionTurnBlocker", () => {
+  it("finds nothing in the way of the settled latest turn", () => {
+    expect(resolveComposerPredictionTurnBlocker(settledThread(), TURN)).toBeNull();
+  });
+
+  it.each([
+    ["thread-missing", undefined],
+    ["thread-archived", settledThread({ archivedAt: NOW })],
+    [
+      "turn-not-latest",
+      settledThread({
+        latestTurn: { ...settledThread().latestTurn, turnId: TurnId.makeUnsafe("turn-3") },
+      }),
+    ],
+    [
+      "turn-incomplete",
+      settledThread({ latestTurn: { ...settledThread().latestTurn, assistantMessageId: null } }),
+    ],
+    ["session-busy", settledThread({ session: session({ status: "starting" }) })],
+    ["pending-approval", settledThread({ hasPendingApprovals: true })],
+    ["pending-user-input", settledThread({ hasPendingUserInput: true })],
+  ])("names %s", (reason, thread) => {
+    expect(resolveComposerPredictionTurnBlocker(thread as never, TURN)).toBe(reason);
   });
 });
 
@@ -294,7 +321,17 @@ describe("resolveComposerPredictionRouting", () => {
         } as unknown as ModelSelection,
         session: session({ providerInstanceId: "claudeAgent" }),
       },
-      settings: settings(),
+      settings: settings({
+        textGenerationModelSelection: {
+          provider: "claudeAgent",
+          instanceId: "claudeAgent",
+          model: "claude-opus-4-8",
+          options: [
+            { id: "effort", value: "max" },
+            { id: "fastMode", value: true },
+          ],
+        } as unknown as ModelSelection,
+      }),
     });
 
     expect(routing?.modelSelection.options).toEqual([
@@ -303,17 +340,41 @@ describe("resolveComposerPredictionRouting", () => {
     ]);
   });
 
-  it("keeps the chat's model at its lowest effort when the Git-writing model is elsewhere", () => {
+  it("uses the smaller prediction model when the Git-writing model is elsewhere", () => {
     const routing = resolveComposerPredictionRouting({ thread: claudeChat, settings: settings() });
 
     expect(routing).toMatchObject({
-      source: "chat-model",
+      source: "prediction-model",
       modelSelection: {
         provider: "claudeAgent",
         instanceId: "claudeAgent",
-        model: "claude-opus-4-8",
-        options: { effort: "low", fastMode: true },
+        model: "claude-sonnet-5-5",
       },
+    });
+    // The chat's fast mode belongs to its own model and is not carried over.
+    expect(routing?.modelSelection.options).toEqual({ effort: "low" });
+  });
+
+  it("keeps the chat's model when its provider has no prediction model", () => {
+    const routing = resolveComposerPredictionRouting({
+      thread: {
+        modelSelection: {
+          provider: "droid",
+          instanceId: "droid",
+          model: "claude-opus-4-8",
+        } as ModelSelection,
+        session: null,
+      },
+      settings: settings({
+        providerInstances: {
+          droid: { driver: "droid", enabled: true, config: {} },
+        } as ServerSettings["providerInstances"],
+      }),
+    });
+
+    expect(routing).toMatchObject({
+      source: "chat-model",
+      modelSelection: { instanceId: "droid", model: "claude-opus-4-8" },
     });
   });
 
@@ -335,10 +396,10 @@ describe("resolveComposerPredictionRouting", () => {
     });
 
     expect(routing).toMatchObject({
-      source: "chat-model",
+      source: "prediction-model",
       modelSelection: {
         instanceId: "codex_work",
-        model: "gpt-5.5",
+        model: "gpt-6-luna",
         options: { reasoningEffort: "low" },
       },
       providerOptions: { codex: expect.objectContaining({ homePath: "/tmp/codex-work" }) },

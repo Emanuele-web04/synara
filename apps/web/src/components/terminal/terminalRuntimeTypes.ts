@@ -2,11 +2,11 @@
 // Purpose: Shared types and stable identity helpers for persistent terminal runtimes.
 // Layer: Terminal runtime infrastructure
 
-import { FitAddon } from "@xterm/addon-fit";
-import { SearchAddon } from "@xterm/addon-search";
-import { WebglAddon } from "@xterm/addon-webgl";
+import type { FitAddon } from "@xterm/addon-fit";
+import type { SearchAddon } from "@xterm/addon-search";
+import type { WebglAddon } from "@xterm/addon-webgl";
 import { type TerminalActivityState, type TerminalCliKind } from "@synara/shared/terminalThreads";
-import { Terminal, type IDisposable } from "@xterm/xterm";
+import type { Terminal, IDisposable } from "@xterm/xterm";
 import type { TerminalLinkMatch } from "../../terminal-links";
 
 export interface TerminalRuntimeCallbacks {

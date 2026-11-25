@@ -99,12 +99,6 @@ interface IdempotencyTombstone {
   readonly expiresAt: number;
 }
 
-const boundedMapSet = <K, V>(map: Map<K, V>, key: K, value: V, maximum: number): void => {
-  map.delete(key);
-  map.set(key, value);
-  while (map.size > maximum) map.delete(map.keys().next().value as K);
-};
-
 const isToolName = (value: string): value is BrowserToolName =>
   (BROWSER_TOOL_NAMES as readonly string[]).includes(value);
 

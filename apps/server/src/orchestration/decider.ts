@@ -182,22 +182,23 @@ function validateAutoRuntimeMode(
 }
 
 /**
- * A same-thread provider handoff restarts the session on another provider, so
- * it shares Hand off's preconditions: no running turn, pending approval, or
- * pending question the new session could not settle.
+ * A same-thread provider handoff restarts the session on another provider or
+ * another account of the same one, so it shares Hand off's preconditions: no
+ * running turn, pending approval, or pending question the new session could
+ * not settle.
  */
 function validateProviderHandoff(
   command: Extract<OrchestrationCommand, { type: "thread.meta.update" }>,
   thread: OrchestrationThread,
 ) {
   const target = command.modelSelection;
-  // A live session cannot switch between instances of one provider in place
-  // (the turn path rejects that), so those handoffs keep using a new thread.
   const detail =
     target === undefined
       ? "A provider handoff needs a target model selection."
-      : target.provider === thread.modelSelection.provider
-        ? `Thread '${command.threadId}' already runs on '${target.provider}'; hand off to a new thread instead.`
+      : target.provider === thread.modelSelection.provider &&
+          (target.instanceId ?? target.provider) ===
+            (thread.modelSelection.instanceId ?? thread.modelSelection.provider)
+        ? `Thread '${command.threadId}' already runs on '${target.instanceId ?? target.provider}'.`
         : thread.session?.status === "starting" || thread.session?.status === "running"
           ? `Thread '${command.threadId}' still has a running turn.`
           : thread.hasPendingApprovals || thread.hasPendingUserInput
@@ -2333,6 +2334,30 @@ const decideCommand = Effect.fn("decideOrchestrationCommand")(function* ({
         threadId: command.threadId,
       });
       yield* validateSidechatExecutionAvailable(command, targetThread);
+      const gatewayCompletion = command.gatewayCompletionPrecondition;
+      // Stop records this turn's cancellation before the provider updates its status.
+      if (
+        gatewayCompletion !== undefined &&
+        (targetThread.archivedAt != null ||
+          targetThread.snoozedUntil != null ||
+          targetThread.session?.status === "stopped" ||
+          targetThread.usageLimitRecoveryCancelledTurnId === gatewayCompletion.sourceTurnId ||
+          targetThread.claudeCacheReview != null ||
+          targetThread.hasPendingApprovals ||
+          targetThread.hasPendingUserInput ||
+          threadHasInFlightTurn(targetThread) ||
+          targetThread.latestTurn?.state !== "completed" ||
+          targetThread.latestTurn.turnId !== gatewayCompletion.sourceTurnId ||
+          targetThread.modelSelection.provider !== gatewayCompletion.provider ||
+          targetThread.modelSelection.instanceId !== gatewayCompletion.instanceId ||
+          targetThread.runtimeMode !== gatewayCompletion.runtimeMode ||
+          (targetThread.latestUserMessageAt ?? null) !== gatewayCompletion.latestUserMessageAt)
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "The delegated wave no longer owns an idle creator thread.",
+        });
+      }
       // Native reviews accept only their review target, never prompt attachments.
       // Reject before message acceptance so callers can preserve and resend the draft.
       if (command.reviewTarget !== undefined && command.message.attachments.length > 0) {
@@ -2416,11 +2441,15 @@ const decideCommand = Effect.fn("decideOrchestrationCommand")(function* ({
       // Respect settings changed before its serialized dispatch instead of
       // replaying the planner's stale permission or interaction mode.
       const runtimeMode =
-        command.resumePrecondition === undefined && !questionResponse
+        command.resumePrecondition === undefined &&
+        gatewayCompletion === undefined &&
+        !questionResponse
           ? command.runtimeMode
           : targetThread.runtimeMode;
       const interactionMode =
-        command.resumePrecondition === undefined && !questionResponse
+        command.resumePrecondition === undefined &&
+        gatewayCompletion === undefined &&
+        !questionResponse
           ? command.interactionMode
           : targetThread.interactionMode;
       yield* validateAutoRuntimeMode(
@@ -2481,7 +2510,11 @@ const decideCommand = Effect.fn("decideOrchestrationCommand")(function* ({
         targetThread.parentThreadId === null &&
         (targetThread.claudeCacheReview != null ||
           (isThreadRunning &&
-            (dispatchMode === "queue" || !providerSupportsNativeTurnSteering(activeProvider))));
+            (dispatchMode === "queue" ||
+              !providerSupportsNativeTurnSteering(
+                activeProvider,
+                targetThread.session?.supportsNativeTurnSteering,
+              ))));
       const snoozeEvents: Array<Omit<OrchestrationEvent, "sequence">> =
         (command.dispatchOrigin ?? "user") === "user" &&
         (targetThread.snoozedUntil != null || targetThread.snoozeReminderAt != null)
@@ -3218,6 +3251,65 @@ const decideCommand = Effect.fn("decideOrchestrationCommand")(function* ({
       };
     }
 
+    case "thread.turn.resume": {
+      const thread = yield* requireThreadNotArchived({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      yield* validateSidechatExecutionAvailable(command, thread);
+      if (command.resumePrecondition !== undefined) {
+        const violation = threadResumePreconditionViolation(thread, command.resumePrecondition);
+        if (violation !== null) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: threadResumePreconditionDetail(command.threadId, violation),
+          });
+        }
+      }
+      const refusal = threadHasInFlightTurn(thread)
+        ? `Thread '${command.threadId}' already has a turn in flight.`
+        : threadHasCheckpointRevertInProgress(thread)
+          ? checkpointRevertInProgressDetail(command.threadId)
+          : thread.hasPendingApprovals || thread.hasPendingUserInput
+            ? `Thread '${command.threadId}' is waiting for an answer.`
+            : thread.usageLimitRecovery != null
+              ? `Thread '${command.threadId}' resumes on its own after the usage limit.`
+              : thread.creationSource === "provider_native" || thread.id.startsWith("subagent:")
+                ? `Subagent '${command.threadId}' cannot be resumed.`
+                : null;
+      if (refusal !== null) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: refusal,
+        });
+      }
+      // The provider reactor reads the linked transcript and picks the target:
+      // resend a request that never started a turn, or continue the latest one.
+      return {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.goal-continuation-requested",
+        payload: {
+          threadId: command.threadId,
+          goalStartedAt: null,
+          trigger: "manual-resume",
+          ...(thread.latestTurn !== null ? { sourceTurnId: thread.latestTurn.turnId } : {}),
+          ...(command.continuationPrompt !== undefined
+            ? { resumePrompt: command.continuationPrompt }
+            : {}),
+          ...(command.computerControlGeneration !== undefined
+            ? { resumeComputerControlGeneration: command.computerControlGeneration }
+            : {}),
+          createdAt: command.createdAt,
+        },
+      };
+    }
+
     case "thread.session.set": {
       const thread = yield* requireThread({
         readModel,
@@ -3247,6 +3339,9 @@ const decideCommand = Effect.fn("decideOrchestrationCommand")(function* ({
         payload: {
           threadId: command.threadId,
           session: command.session,
+          ...(command.session.status === "starting" && command.pendingResumeMessageId !== undefined
+            ? { pendingResumeMessageId: command.pendingResumeMessageId }
+            : {}),
         },
       };
     }
@@ -3760,16 +3855,25 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommandW
       }
     }
     if (!thread || !("threadId" in command)) return events;
+    // Only a real change invalidates a wait or its source. Clients and server
+    // housekeeping resend current values (a worktree branch rename restates its
+    // path; every send restates the model), and treating those echoes as edits
+    // silently disarmed recovery for the running turn.
     const metadataChange =
       command.type === "thread.meta.update" &&
-      (command.modelSelection !== undefined ||
-        command.goal !== undefined ||
-        command.goalPaused !== undefined ||
+      ((command.modelSelection !== undefined &&
+        !isDeepStrictEqual(command.modelSelection, thread.modelSelection)) ||
+        (command.goal !== undefined && command.goal.trim() !== (thread.goal ?? "").trim()) ||
+        (command.goalPaused !== undefined &&
+          command.goalPaused !== (thread.goalPausedAt != null)) ||
         command.goalAchieved === true ||
         command.isSettled === true ||
-        command.worktreePath !== undefined ||
-        command.workingDirectory !== undefined ||
-        command.parentThreadId !== undefined);
+        (command.worktreePath !== undefined &&
+          command.worktreePath !== (thread.worktreePath ?? null)) ||
+        (command.workingDirectory !== undefined &&
+          command.workingDirectory !== (thread.workingDirectory ?? null)) ||
+        (command.parentThreadId !== undefined &&
+          command.parentThreadId !== (thread.parentThreadId ?? null)));
     const cancel =
       metadataChange ||
       command.type === "thread.turn.interrupt" ||

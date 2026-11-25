@@ -34,6 +34,10 @@ export class LRUCache<T> {
     this.totalSize += approximateSize;
   }
 
+  get size(): number {
+    return this.cache.size;
+  }
+
   clear(): void {
     this.cache.clear();
     this.totalSize = 0;

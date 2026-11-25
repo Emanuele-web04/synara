@@ -228,7 +228,7 @@ export function ProviderAccountsList(props: {
             <button
               type="button"
               aria-label={t("settings:select", { value0: account.label })}
-              className="flex min-w-0 cursor-pointer items-center gap-2 text-left outline-none focus-visible:ring-1 focus-visible:ring-ring/60"
+              className="flex min-w-0 cursor-pointer items-center gap-2 rounded-sm text-left outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--color-border-focus)]"
               onClick={() => props.onOpenAccount(instanceId)}
             >
               <span className="truncate">{account.label}</span>

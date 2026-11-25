@@ -293,6 +293,62 @@ final class OneFrameWindowCapture {
     }
 
     func start() {
+        DispatchQueue.global().asyncAfter(deadline: .now() + captureTimeoutSeconds) { [weak self] in
+            self?.finish(.failure(AppSnapFailure(code: "capture_timed_out", message: "Timed out while capturing the window.")))
+        }
+
+        if #available(macOS 14.0, *) {
+            // Let ScreenCaptureKit own the lifetime of a single-image request.
+            captureImage()
+        } else {
+            startLegacyStream()
+        }
+    }
+
+    @available(macOS 14.0, *)
+    private func captureImage() {
+        SCShareableContent.getExcludingDesktopWindows(true, onScreenWindowsOnly: false) { [weak self] content, error in
+            guard let self else { return }
+            guard let window = content?.windows.first(where: { $0.windowID == self.selectedWindow.windowID }) else {
+                self.finish(.failure(AppSnapFailure(code: "target_unavailable", message: error?.localizedDescription ?? "The selected window is no longer available.")))
+                return
+            }
+            let size = window.frame.size
+            guard size.width >= 2, size.height >= 2 else {
+                self.finish(.failure(AppSnapFailure(code: "invalid_window_dimensions", message: "The selected window has no capturable area.")))
+                return
+            }
+            let scale = min(backingScale(for: self.selectedWindow.bounds), 8_192 / max(size.width, size.height))
+            let configuration = SCStreamConfiguration()
+            configuration.width = max(2, Int((size.width * scale).rounded()))
+            configuration.height = max(2, Int((size.height * scale).rounded()))
+            configuration.pixelFormat = kCVPixelFormatType_32BGRA
+            configuration.scalesToFit = true
+            configuration.showsCursor = false
+            configuration.colorSpaceName = CGColorSpace.sRGB as CFString
+
+            // Do not start a new request if window lookup exhausted the deadline.
+            self.completionLock.lock()
+            let shouldCapture = !self.completed
+            self.completionLock.unlock()
+            guard shouldCapture else { return }
+            SCScreenshotManager.captureImage(
+                contentFilter: SCContentFilter(desktopIndependentWindow: window),
+                configuration: configuration
+            ) { [weak self] image, error in
+                if let image, error == nil {
+                    self?.finish(.success(image))
+                } else {
+                    self?.finish(.failure(AppSnapFailure(
+                        code: "capture_failed",
+                        message: error?.localizedDescription ?? "The selected window did not deliver an image."
+                    )))
+                }
+            }
+        }
+    }
+
+    private func startLegacyStream() {
         let stream = WindowFrameStream(windowID: selectedWindow.windowID, scaleFactor: backingScale(for: selectedWindow.bounds)) { [weak self] sample in
             guard let self, let pixels = sample.imageBuffer else { return }
             let image = CIImage(cvPixelBuffer: pixels)
@@ -301,16 +357,29 @@ final class OneFrameWindowCapture {
                 self.finish(.failure(AppSnapFailure(code: "frame_conversion_failed", message: "Could not convert the captured frame.")))
                 return
             }
-            self.finish(.success(cgImage))
+            self.stopLegacyStream(with: cgImage)
         } onFailure: { [weak self] failure in
             self?.finish(.failure(failure))
         }
         completionLock.lock()
+        guard !completed else { completionLock.unlock(); return }
         self.stream = stream
-        completionLock.unlock()
         stream.start()
-        DispatchQueue.global().asyncAfter(deadline: .now() + captureTimeoutSeconds) { [weak self] in
-            self?.finish(.failure(AppSnapFailure(code: "capture_timed_out", message: "Timed out while capturing the window.")))
+        completionLock.unlock()
+    }
+
+    private func stopLegacyStream(with image: CGImage) {
+        completionLock.lock()
+        let active = stream
+        stream = nil
+        completionLock.unlock()
+        active?.stop { [weak self] result in
+            switch result {
+            case let .failure(error):
+                self?.finish(.failure(AppSnapFailure(code: "capture_stop_failed", message: error.localizedDescription)))
+            case .success:
+                self?.finish(.success(image))
+            }
         }
     }
 

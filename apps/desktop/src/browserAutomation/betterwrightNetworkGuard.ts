@@ -9,6 +9,16 @@ export interface BetterwrightNetworkGuardLease {
   release(): Promise<void>;
 }
 
+// Chromium restarts its network service after the main thread was blocked for
+// long at startup (about 15 s; the first launch's static snapshot takes longer
+// than that on a slow disk). A session call in flight across that restart is
+// dropped and its promise never settles, which used to leave the app running
+// with no window. Both setup calls are idempotent, so one that goes unanswered
+// is issued again; the proxy configuration itself survives the restart. Setup
+// normally takes about 65 ms.
+export const NETWORK_GUARD_CALL_TIMEOUT_MS = 3_000;
+export const NETWORK_GUARD_CALL_ATTEMPTS = 5;
+
 export class BetterwrightNetworkGuard {
   readonly policy = new NetworkPolicy({ allowLoopback: true });
   private readonly proxy = createGuardProxy({
@@ -26,14 +36,44 @@ export class BetterwrightNetworkGuard {
     if (this.disposed) return Promise.reject(new Error("Browser network guard is closed."));
     this.initializing ??= (async () => {
       const port = await this.proxy.ensure();
-      await this.browserSession.setProxy({
-        mode: "fixed_servers",
-        proxyRules: `socks5://127.0.0.1:${port}`,
-        proxyBypassRules: "<-loopback>",
-      });
-      await this.browserSession.closeAllConnections();
+      await this.answered("install the session proxy", () =>
+        this.browserSession.setProxy({
+          mode: "fixed_servers",
+          proxyRules: `socks5://127.0.0.1:${port}`,
+          proxyBypassRules: "<-loopback>",
+        }),
+      );
+      await this.answered("close existing connections", () =>
+        this.browserSession.closeAllConnections(),
+      );
     })();
     return this.initializing;
+  }
+
+  // Resolves once the session answered `call`. A rejection propagates at once.
+  // An unanswered call is issued again, and after the last attempt setup fails
+  // instead of waiting forever, so startup reports it rather than hanging.
+  private async answered(action: string, call: () => Promise<void>): Promise<void> {
+    for (let attempt = 1; attempt <= NETWORK_GUARD_CALL_ATTEMPTS; attempt += 1) {
+      let timer: NodeJS.Timeout | undefined;
+      try {
+        const wasAnswered = await Promise.race([
+          call().then(() => true),
+          new Promise<boolean>((resolve) => {
+            timer = setTimeout(() => resolve(false), NETWORK_GUARD_CALL_TIMEOUT_MS);
+          }),
+        ]);
+        if (wasAnswered) return;
+      } finally {
+        clearTimeout(timer);
+      }
+      console.warn(
+        `[Synara browser] The browser session did not ${action} within ${NETWORK_GUARD_CALL_TIMEOUT_MS} ms (attempt ${attempt} of ${NETWORK_GUARD_CALL_ATTEMPTS}).`,
+      );
+    }
+    throw new Error(
+      `Browser network guard could not ${action}: the browser session never answered.`,
+    );
   }
 
   async attach(signal?: AbortSignal): Promise<BetterwrightNetworkGuardLease> {

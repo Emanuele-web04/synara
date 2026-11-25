@@ -1,6 +1,6 @@
 import { useTranslation } from "~/i18n";
 import { ProviderInteractionMode } from "@synara/contracts";
-import { type ReactNode } from "react";
+import { type ReactNode, useEffect, useRef } from "react";
 import { GoTasklist } from "react-icons/go";
 import {
   BugIcon,
@@ -8,6 +8,7 @@ import {
   ChevronRightIcon,
   ComposerSendArrowIcon,
   LayoutSidebarIcon,
+  PlayIcon,
 } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import type { derivePendingUserInputProgress } from "../../pendingUserInput";
@@ -67,8 +68,15 @@ interface ChatComposerFooterProps {
     hasPrompt: boolean;
     onInterrupt: () => void;
     onImplementInNewThread: () => void;
+    /** Set while the latest turn was interrupted: an empty composer's send button
+     *  becomes Resume (filled play) and continues that task. */
+    onResume?: (() => void) | undefined;
   };
 }
+
+// Resume takes Stop's place, so it ignores clicks this long after Stop leaves:
+// a repeated Stop click must not resume the task it just stopped.
+const STOP_LANDED_RESUME_GUARD_MS = 500;
 
 /** Busy glyph inside the round send button. */
 function SendButtonSpinner() {
@@ -111,6 +119,25 @@ export function ChatComposerFooter({
 
   const row = (layoutProp ?? "block") === "row";
   const voiceActive = voice.recording || voice.transcribing;
+  const showStop =
+    submission.phase === "running" ||
+    submission.connecting ||
+    submission.recoveryStopAvailable === true ||
+    submission.usageLimitStopAvailable === true;
+  const showResume = submission.onResume !== undefined && !submission.hasContent;
+  const stopLeftAtRef = useRef<number | null>(null);
+  const previousShowStopRef = useRef(showStop);
+  useEffect(() => {
+    if (previousShowStopRef.current && !showStop) stopLeftAtRef.current = performance.now();
+    previousShowStopRef.current = showStop;
+  }, [showStop]);
+  const onResumeClick = () => {
+    const stopLeftAt = stopLeftAtRef.current;
+    if (stopLeftAt !== null && performance.now() - stopLeftAt < STOP_LANDED_RESUME_GUARD_MS) {
+      return;
+    }
+    submission.onResume?.();
+  };
   return (
     <div
       data-chat-composer-footer={row ? undefined : "true"}
@@ -197,7 +224,7 @@ export function ChatComposerFooter({
               : "col-start-3 row-start-1 shrink-0"
             : voiceActive
               ? "min-w-0 flex-1"
-              : "shrink-0",
+              : "min-w-0 shrink",
         )}
       >
         {contextMeter}
@@ -269,10 +296,7 @@ export function ChatComposerFooter({
                   : t("chat:composerPendingUserInputPanel_nextQuestion")}
             </Button>
           )
-        ) : submission.phase === "running" ||
-          submission.connecting ||
-          submission.recoveryStopAvailable ||
-          submission.usageLimitStopAvailable ? (
+        ) : showStop ? (
           <>
             {/* Dictating a follow-up is allowed mid-turn: the transcript lands in the
                 composer and sending it follows the queue/steer behavior. */}
@@ -402,7 +426,7 @@ export function ChatComposerFooter({
                 />
               ) : null}
               <Button
-                type="submit"
+                type={showResume ? "button" : "submit"}
                 variant="prominent"
                 size="icon-xs"
                 className={COMPOSER_ACTION_CIRCLE_CLASS_NAME}
@@ -413,8 +437,9 @@ export function ChatComposerFooter({
                   submission.hasPendingCacheReview ||
                   voice.transcribing ||
                   submission.preparingImages ||
-                  !submission.hasContent
+                  (!submission.hasContent && !showResume)
                 }
+                {...(showResume ? { onClick: onResumeClick } : {})}
                 aria-label={
                   submission.connecting
                     ? t("chat:composer_connecting")
@@ -426,16 +451,22 @@ export function ChatComposerFooter({
                           ? t("workspace:composer_preparingWorktree")
                           : submission.busy
                             ? t("chat:sending")
-                            : t("chat:composer_sendMessage")
+                            : showResume
+                              ? t("chat:composer_resumeTask")
+                              : t("chat:composer_sendMessage")
                 }
                 title={
                   submission.hasPendingCacheReview
                     ? t("chat:chooseHowToResumeTheHeldMessageAbove")
-                    : undefined
+                    : showResume
+                      ? t("chat:composer_resumeTask")
+                      : undefined
                 }
               >
                 {submission.connecting || submission.busy || submission.preparingImages ? (
                   <SendButtonSpinner />
+                ) : showResume ? (
+                  <PlayIcon aria-hidden="true" className="size-3.5 shrink-0" />
                 ) : (
                   <ComposerSendArrowIcon
                     aria-hidden="true"

@@ -389,6 +389,7 @@ export type ThreadRealtimeClosedPayload = typeof ThreadRealtimeClosedPayload.Typ
 const TurnStartedPayload = Schema.Struct({
   model: Schema.optional(TrimmedNonEmptyStringSchema),
   effort: Schema.optional(TrimmedNonEmptyStringSchema),
+  supportsNativeTurnSteering: Schema.optional(Schema.Boolean),
 });
 export type TurnStartedPayload = typeof TurnStartedPayload.Type;
 
@@ -495,6 +496,8 @@ const RequestResolvedPayload = Schema.Struct({
 export type RequestResolvedPayload = typeof RequestResolvedPayload.Type;
 
 const UserInputQuestionOption = Schema.Struct({
+  // Some provider protocols identify choices independently of their display labels.
+  value: Schema.optional(Schema.String),
   label: TrimmedNonEmptyStringSchema,
   description: TrimmedNonEmptyStringSchema,
 });
@@ -505,6 +508,9 @@ export const UserInputQuestion = Schema.Struct({
   header: TrimmedNonEmptyStringSchema,
   question: TrimmedNonEmptyStringSchema,
   options: Schema.Array(UserInputQuestionOption),
+  allowCustomAnswer: Schema.optional(Schema.Boolean),
+  // Some providers receive free-form text in a separate response field.
+  customAnswerId: Schema.optional(TrimmedNonEmptyStringSchema),
   multiSelect: Schema.optional(Schema.Boolean).pipe(
     Schema.withConstructorDefault(() => Option.some(false)),
   ),

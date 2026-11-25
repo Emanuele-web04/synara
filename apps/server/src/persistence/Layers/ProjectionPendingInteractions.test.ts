@@ -1,8 +1,12 @@
-import { ApprovalRequestId, ThreadId } from "@synara/contracts";
+import { ApprovalRequestId, ProjectionPendingInteractionStatus, ThreadId } from "@synara/contracts";
 import { assert, it } from "@effect/vitest";
 import { Effect, Layer } from "effect";
 
 import * as SqlClient from "effect/unstable/sql/SqlClient";
+import {
+  RESPONDING_INTERACTION_RECLAIM_GRACE_MS,
+  isPendingInteractionResponseClaimable,
+} from "@synara/shared/pendingInteractions";
 import { buildStalePendingRequestFailureDetail } from "@synara/shared/threadSummary";
 import { ProjectionPendingInteractionRepository } from "../Services/ProjectionPendingInteractions.ts";
 import { ProjectionPendingInteractionRepositoryLive } from "./ProjectionPendingInteractions.ts";
@@ -295,6 +299,59 @@ layer("ProjectionPendingInteractionRepository", (it) => {
         }),
         true,
       );
+    }),
+  );
+
+  // The claim guard is written twice: as SQL in `claimRow` and as the shared predicate the
+  // web uses to decide whether an answer can still be sent. Drive every status and every
+  // response age through the repository and require both to agree.
+  it.effect("claims exactly the rows the shared claimable predicate accepts", () =>
+    Effect.gen(function* () {
+      const repository = yield* ProjectionPendingInteractionRepository;
+      const threadId = ThreadId.makeUnsafe("thread-claim-matrix");
+      const requestedAt = "2026-07-14T13:00:00.000Z";
+      const before = (ms: number) => new Date(Date.parse(requestedAt) - ms).toISOString();
+      const ages = {
+        none: null,
+        fresh: before(1_000),
+        atCutoff: before(RESPONDING_INTERACTION_RECLAIM_GRACE_MS),
+        stale: before(RESPONDING_INTERACTION_RECLAIM_GRACE_MS + 1_000),
+      } as const;
+
+      for (const status of ProjectionPendingInteractionStatus.literals) {
+        for (const [age, responseRequestedAt] of Object.entries(ages)) {
+          const requestId = ApprovalRequestId.makeUnsafe(`request-claim-matrix-${status}-${age}`);
+          yield* repository.upsert({
+            interactionKind: "approval",
+            requestId,
+            threadId,
+            turnId: null,
+            lifecycleGeneration: "generation-matrix",
+            status,
+            decision: null,
+            responseCommandId: null,
+            responseRequestedAt,
+            createdAt: "2026-07-14T12:59:00.000Z",
+            resolvedAt: null,
+          });
+
+          const claimed = yield* repository.claimResponse({
+            threadId,
+            interactionKind: "approval",
+            requestId,
+            lifecycleGeneration: "generation-matrix",
+            responseCommandId: `command-claim-matrix-${status}-${age}` as never,
+            decision: "accept",
+            requestedAt,
+          });
+
+          assert.strictEqual(
+            claimed,
+            isPendingInteractionResponseClaimable({ status, responseRequestedAt, requestedAt }),
+            `${status} with ${age} response`,
+          );
+        }
+      }
     }),
   );
 });

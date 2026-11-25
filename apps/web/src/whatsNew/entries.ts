@@ -22,6 +22,274 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "1.6.7",
+    date: "Nov 25",
+    features: [
+      {
+        id: "windows-browser-cookie-import",
+        title: "Sign in directly in the Synara browser on Windows",
+        description:
+          "Windows builds remove the native browser cookie reader. Sign in directly to your sites in the Synara browser. Saved logins and existing browser sessions remain available.",
+      },
+      {
+        id: "startup-and-app-size-since-165",
+        title: "Faster startup and smaller downloads since 1.6.5",
+        description:
+          "1.6.7 carries forward the startup and packaging improvements introduced in 1.6.6.",
+        details:
+          "In a Chromium benchmark, startup used 61 HTTP requests instead of 315, and median splash dismissal on an emulated slow link fell from 1.58 s to 0.71 s. In a local Apple Silicon comparison, the DMG was 22% smaller and the installed app used 27% fewer bytes.",
+      },
+      {
+        id: "antigravity-question-answers",
+        title: "More reliable Antigravity questions",
+        description:
+          "Question cards show the choices Antigravity sends. Selected choices and custom answers are returned using the IDs Antigravity expects.",
+      },
+      {
+        id: "macos-backend-shutdown",
+        title: "Clean backend shutdown on macOS",
+        description:
+          "The updater connection releases the backend so it can exit after completing shutdown.",
+      },
+      {
+        id: "provider-usage-refresh",
+        title: "More reliable Codex and Grok usage refresh",
+        description:
+          "Overlapping usage requests on the same account share a refresh lock, reducing conflicts when a provider rotates a refresh token.",
+      },
+    ],
+  },
+  {
+    version: "1.6.6",
+    date: "Nov 24",
+    features: [
+      {
+        id: "smaller-desktop-download",
+        title: "A smaller desktop app",
+        description:
+          "Synara ships fewer duplicate dependencies and unused packaged assets, reducing download size and disk use.",
+        details:
+          "In a like-for-like local packaging comparison on Apple Silicon, the unsigned macOS installer was 22% smaller, the updater ZIP was 21% smaller, and the installed app used 27% fewer bytes.",
+      },
+      {
+        id: "faster-boot-and-streaming",
+        title: "Faster startup and lighter streaming",
+        description:
+          "Synara loads fewer assets up front and does less database work while responses stream.",
+        details:
+          "In headless Chromium with 83 seeded chats, cold startup went from 315 HTTP requests to 61 and transferred 22.5% less HTTP data. On an emulated slow link, the median time to dismiss the splash fell from 1.58 s to 0.71 s. In a separate two-chat SQLite benchmark, streaming persistence took 8% less time.",
+      },
+      {
+        id: "antigravity-workflows",
+        title: "More control in Antigravity",
+        description:
+          "Use projects with multiple folders, answer native questions and approve tool requests in chat, steer supported live turns, and see account quotas and reset times in Settings → Usage.",
+      },
+      {
+        id: "provider-session-reliability",
+        title: "More reliable Devin and Claude sessions",
+        description:
+          "Devin reuses its saved CLI sign-in and reconnects granted tools when reopening a chat. Windows process tracking improves Stop and restart. Claude Code honors the selected profile’s native Auto-compact setting.",
+      },
+      {
+        id: "stable-product-analytics",
+        title: "Product analytics on Stable",
+        description:
+          "Stable desktop shares product analytics by default and explains the data in a one-time notice. You can opt out in Settings → Privacy. Prompts, chats, files, project names, and identity are excluded.",
+      },
+    ],
+  },
+  {
+    version: "1.6.5",
+    date: "Nov 22",
+    features: [
+      {
+        id: "multilingual-chat-direction",
+        title: "Better reading order in multilingual chats",
+        description:
+          "Each transcript block follows its dominant writing direction. A Persian, Arabic, or Hebrew paragraph can start with an English product name and still read right to left. Code and table columns keep their original order.",
+      },
+      {
+        id: "opencode-reasoning-trace",
+        title: "Keep OpenCode reasoning in activity history",
+        description:
+          "When an OpenCode turn ends, its streamed reasoning is saved as a Reasoning trace in the activity log.",
+      },
+      {
+        id: "antigravity-planner-selection",
+        title: "Keep your Antigravity planner selection",
+        description:
+          "Synara honors the selected Orchestrator planner when resuming. If your chosen planner is unavailable, you can select one that the session offers.",
+      },
+    ],
+  },
+  {
+    version: "1.6.4",
+    date: "Nov 20",
+    features: [
+      {
+        id: "antigravity-connectors",
+        title: "Use connectors with Antigravity",
+        description:
+          "Antigravity can use Synara tools and connected services such as Notion and Linear. Chat shows live tool activity, reasoning, and questions in the same format as other providers.",
+        details:
+          "Requires Antigravity CLI 1.5.0 or newer. Start a new session to pick up newly connected services.",
+      },
+      {
+        id: "remote-thread-resume",
+        title: "Resume Remote chats with less data",
+        description:
+          "A cached chat can catch up on its own changes after unrelated activity on the desktop. Synara still reloads the full chat when it needs a fresh snapshot.",
+        details:
+          "In a loopback benchmark with 400 chats and 1,500 messages in the active chat, one sparse catch-up returned about 2 KB, down from 676 KB. Median time to apply the update in the iOS Simulator fell from 73 ms to 55 ms.",
+      },
+      {
+        id: "compact-chat-layout",
+        title: "Smoother sidebars and more room in chat",
+        description:
+          "The Environment panel floats when chat gets narrow, overlay cards stay within the chat column, and the composer keeps the model name visible longer.",
+        details:
+          "In a Chromium profile with four empty chat tabs, sidebar open and close each went from 14–16 React commits to 3.",
+      },
+      {
+        id: "codex-tool-summaries",
+        title: "Cleaner Codex tool summaries",
+        description:
+          "Reasoning stays with the surrounding tool run without adding to its tool count. MCP startup failures and app-server logs stay in diagnostics. Failed tool calls and turns remain visible in chat.",
+      },
+      {
+        id: "pull-request-attribution",
+        title: "Optional pull request attribution",
+        description:
+          "New pull requests created through Synara include a Created with Synara link by default. Turn it off in Settings → Models & writing → Add Synara attribution.",
+      },
+      {
+        id: "mac-worktree-setup",
+        title: "Restore macOS worktree setup",
+        description:
+          "New worktrees start without cloned dependencies. Use your project setup script or install dependencies in the new worktree.",
+      },
+    ],
+  },
+  {
+    version: "1.6.3",
+    date: "Nov 19",
+    features: [
+      {
+        id: "live-tool-activity",
+        title: "See what your agent is doing",
+        description:
+          "The chat's working indicator shows the current tool call or tells you when the agent needs approval or an answer. Completed tool runs fold into readable summaries.",
+      },
+      {
+        id: "long-chat-performance",
+        title: "Open long chats faster",
+        description:
+          "Chats begin loading when you press a sidebar row, and the transcript reuses parsed Markdown as you scroll back.",
+        details:
+          "In headless Chromium benchmarks with seeded conversations, median first-open time fell 16–20%. Scripting time on a repeat scroll fling fell 19–29% in the four cases that measured it.",
+      },
+      {
+        id: "mac-worktree-dependencies",
+        title: "Start macOS worktrees with dependencies",
+        description:
+          "New worktrees can inherit installed dependencies through APFS clones when the lockfiles match. Project setup scripts still run as configured.",
+        details:
+          "On the Synara checkout used for the benchmark, cloning 13 dependency directories took 1.9–3.2 seconds. A warm Bun install in a fresh worktree took 6.5 seconds.",
+      },
+      {
+        id: "codex-clarity",
+        title: "Clearer Codex speed and startup",
+        description:
+          "The model picker shows when Ultrafast is selected. OAuth notices for your own MCP servers stay in diagnostics, while tool failures and Synara connector warnings remain visible.",
+      },
+      {
+        id: "shell-and-runtime",
+        title: "Integrated Zsh and runtime fixes",
+        description:
+          "The terminal respects changes to ZDOTDIR during Zsh startup and keeps Synara's managed CLI available after shell setup. This release also updates Bun and Electron.",
+      },
+    ],
+  },
+  {
+    version: "1.6.2",
+    date: "Nov 17",
+    features: [
+      {
+        id: "local-video",
+        title: "Play local videos",
+        description:
+          "Play and seek local videos in file previews and inline in chat, with download and retry options when playback is unavailable.",
+      },
+      {
+        id: "codex-ultrafast",
+        title: "Choose Codex Ultrafast",
+        description:
+          "Choose Standard, Fast or Ultrafast for Codex models that offer those speeds on your account.",
+      },
+      {
+        id: "worktrees",
+        title: "Faster, more reliable worktrees",
+        description:
+          "Worktree creation no longer waits for unrelated Git and GitHub refreshes, and copying local changes preserves relative symlinks.",
+      },
+      {
+        id: "remote-and-iphone",
+        title: "Synara for iPhone is in beta",
+        description:
+          "Discover the iPhone beta from Synara and remove empty Remote projects without deleting their files.",
+      },
+      {
+        id: "reliability",
+        title: "More reliable agents and capture",
+        description:
+          "Pi chats use their dedicated workspace, OpenCode refreshes changed model configuration, and macOS capture stops more reliably after work ends.",
+      },
+    ],
+  },
+  {
+    version: "1.6.1",
+    date: "Nov 17",
+    features: [
+      {
+        id: "resume-task",
+        title: "Resume an interrupted task",
+        description:
+          "Resume eligible stopped or interrupted work directly from the empty composer, without adding a new message to the conversation.",
+      },
+      {
+        id: "provider-sign-in",
+        title: "A clearer way to connect agents",
+        description:
+          "Guided provider sign-in helps you open the login link, enter a code when needed, and see when an agent needs attention.",
+      },
+      {
+        id: "account-handoff",
+        title: "Continue a chat on another account",
+        description:
+          "Hand off a started conversation to another account of the same provider while keeping the conversation in the same thread.",
+      },
+      {
+        id: "usage-limits",
+        title: "See and recover from usage limits",
+        description:
+          "A usage-limit card shows reset information and available resume controls. Automatic recovery now arms more reliably when eligible.",
+      },
+      {
+        id: "activity-and-suggestions",
+        title: "Find work and follow up more easily",
+        description:
+          "Activity shows the latest reply and groups multiple pull requests. Composer suggestions retry more reliably and can be accepted with Right Arrow as well as Tab.",
+      },
+      {
+        id: "reliability",
+        title: "More reliable startup and queued work",
+        description:
+          "Desktop startup recovers from an unanswered browser network-guard call, queued messages keep their order when leaving a chat, and supported simulator actions can boot a stopped simulator.",
+      },
+    ],
+  },
+  {
     version: "1.6.0",
     date: "Nov 15",
     features: [

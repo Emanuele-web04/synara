@@ -46,7 +46,10 @@ import {
   cloneComposerImageAttachment,
   stageUploadComposerAttachments,
 } from "../../lib/composerSend";
-import { armQueuedComposerSteerGate } from "../../lib/queuedComposerDrain";
+import {
+  armQueuedComposerSteerGate,
+  cancelQueuedComposerWorktreeHandoff,
+} from "../../lib/queuedComposerDrain";
 import { clearPendingTurnDispatch } from "../../pendingTurnDispatch";
 import { useStore } from "../../store";
 import { getThreadFromState } from "../../threadDerivation";
@@ -176,8 +179,6 @@ export function useChatTurnExecution({
   runProjectScript,
   persistThreadSettingsForNextTurn,
   rememberCustomBinaryPathForDispatch,
-  computerControlChangeSequence,
-  setComposerDraftComputerControlMode,
   setSettledThreadBranchWarningDismissedThreadId,
   armLocalDispatchAckFallback,
   setQueuedSteerGate,
@@ -238,7 +239,6 @@ export function useChatTurnExecution({
         messageCreatedAt,
         turnAttachmentsPromise,
         messageIdForSend,
-        providerOptionsForDispatchForSend,
         outgoingMessageText,
         mentionedSkillsForSend,
         mentionedPluginMentionsForSend,
@@ -248,7 +248,6 @@ export function useChatTurnExecution({
         currentActiveGitBranchForSend,
         queuedChatTurn,
         turnDispatchSettings: preparedTurnDispatchSettings,
-        computerControlSequenceForSend,
         promptForSend,
         composerImagesSnapshot,
         composerFilesSnapshot,
@@ -293,6 +292,7 @@ export function useChatTurnExecution({
       let createdWorktreeForSendPath: string | null = null;
       let switchedToLocalCheckout = false;
       let turnStartSucceeded = false;
+      let setupCancelled = false;
       let attemptedTurnStart = false;
       let settledLocalBranchUpdatedForSend = false;
       await (async () => {
@@ -710,7 +710,10 @@ export function useChatTurnExecution({
           activeThread?.session?.provider ?? selectedModelSelectionForSend.provider;
         if (
           dispatchMode === "steer" &&
-          !providerSupportsNativeTurnSteering(liveProviderForSteerGate)
+          !providerSupportsNativeTurnSteering(
+            liveProviderForSteerGate,
+            activeThread?.session?.supportsNativeTurnSteering,
+          )
         ) {
           const nextSteerGate = {
             sawInterruptGap: false,
@@ -747,7 +750,7 @@ export function useChatTurnExecution({
         }
         // A user-cancelled worktree setup unwinds through this same rollback,
         // but silently: no error styling on the step row, no thread error.
-        const setupCancelled = err instanceof WorktreeSetupCancelledError;
+        setupCancelled = err instanceof WorktreeSetupCancelledError;
         const turnUnsettled = attemptedTurnStart && composerTurnMayHaveBeenSent(err);
         const canRollback = !turnStartSucceeded && !turnUnsettled;
         // Uploads start in parallel with workspace/session preparation. If any
@@ -970,6 +973,9 @@ export function useChatTurnExecution({
           // A resolved setup (cancelled, or switched to local and then failed)
           // has no error step to hold on screen — release the marker directly.
           resetLocalDispatch();
+        }
+        if (setupCancelled) {
+          cancelQueuedComposerWorktreeHandoff(threadIdForSend, messageIdForSend);
         }
       }
       return turnStartSucceeded;

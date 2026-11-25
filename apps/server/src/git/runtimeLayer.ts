@@ -41,6 +41,7 @@ export const GitManagerLayerLive = GitManagerLive.pipe(
   Layer.provideMerge(GitCoreLive),
   Layer.provideMerge(GitHubCliLive),
   Layer.provideMerge(TextGenerationLayerLive),
+  Layer.provide(ServerSettingsLive),
 );
 
 export const GitStatusBroadcasterLayerLive = GitStatusBroadcasterLive.pipe(

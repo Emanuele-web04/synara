@@ -290,6 +290,7 @@ export interface AccountClient {
     hostProof: string,
     hostId: string,
     endpoints: readonly AccountHostEndpoint[],
+    appVersion?: string,
   ): Promise<AccountHost>;
   publishRemotePairingCode(
     hostProof: string,
@@ -802,13 +803,13 @@ export function createAccountClient(options: CreateAccountClientOptions): Accoun
       return requestJson("/api/v1/keys/jwks", { method: "GET" }, ApiJwksSchema);
     },
 
-    async replaceHostEndpoints(hostProof, hostId, endpoints) {
+    async replaceHostEndpoints(hostProof, hostId, endpoints, appVersion) {
       const decoded = await requestJson(
         `/api/v1/hosts/${encodeURIComponent(hostId)}/endpoints`,
         {
           method: "PUT",
           headers: { ...hostProofHeaders(hostProof), "content-type": "application/json" },
-          body: JSON.stringify({ endpoints }),
+          body: JSON.stringify({ endpoints, appVersion }),
         },
         UpdateHostResponse,
       );

@@ -4,7 +4,8 @@
 
 Desktop product sharing includes separate daily UTC counts for approved pairings,
 successful remote RPC connections, successful reconnects, Remote bootstrap timeouts,
-and unexpected app/backend crashes. Stable remains opt-in.
+and unexpected app/backend crashes. Stable desktop defaults to sharing when no
+local choice is saved. Users can turn sharing off in Settings → Privacy.
 The host approval RPC must succeed before the approval is counted, and a
 remote RPC liveness check must succeed before the connection is counted.
 
@@ -26,7 +27,7 @@ Unexpected main exceptions, renderer crashes, and supervised backend exits
 increment the crash counter. Expected shutdowns and migration consent blocks are
 excluded. These reports are best-effort. A hard process kill or a failure to persist
 the queue can prevent a crash report. A main-process exception is queued for delivery
-after the next launch. No technical crash details enter this opt-in path.
+after the next launch. These product events contain no technical crash details.
 Stable continues to disable the separate Beta diagnostics sender.
 The desktop surface is the sole reporter.
 
@@ -149,6 +150,20 @@ was seen. `edge_blocked` separates a provider's Cloudflare 403 page from a real
 `auth` failure. Categories come from provider error codes on the client; no error
 text is stored. Rows exist only from clients that send the category and after
 migration `0014_product_turn_failures.sql`.
+
+The `connectionFailures` field in `GET /api/product` groups failed `connection.pair`, `connection.connect` and
+`connection.reconnect` events by day, device, app version, mode, route, network,
+failure stage and HTTP status. The native client sends one fixed stage
+(`account_unavailable`, `subscription_required`, `billing_unavailable`,
+`host_unlinked`, `identity_mismatch`, `no_route`, `route_connect`,
+`route_upgrade`, `tls_handshake`, `inner_upgrade`, `session_mint`,
+`session_authorize`, `incompatible`, `timeout`, `other`), the network kind (`wifi`,
+`cellular`, `wired`, `other`, `none`) and the route (`local`, `direct`, `tunnel`).
+The receiver accepts network and route on connection events only, and a stage only on
+a failed connection event. Older clients leave all three empty; their failures still
+appear with an unknown cause. No address, hostname, network name or error text is
+stored. The columns arrive with migration `0015_product_connection_detail.sql`. The
+host-side counterparts are the `remote.*` codes in [RELIABILITY.md](RELIABILITY.md).
 
 These are client observations, not unique global executions: multiple installations
 can observe the same turn. Event UUID retries deduplicate, but cross-device turn

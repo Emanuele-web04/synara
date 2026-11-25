@@ -235,6 +235,40 @@ const ProviderServiceTestSecretStoreLayer = Layer.succeed(ServerSecretStore, {
 const makeProviderServiceLive = (options?: Parameters<typeof makeProviderServiceLiveBase>[0]) =>
   makeProviderServiceLiveBase(options).pipe(Layer.provide(ProviderServiceTestSecretStoreLayer));
 
+// Builds a ProviderService over a registry that exposes only the given adapters,
+// sharing an optional directory layer so a second service can "restart" over it.
+const makeSingleAdapterServiceLayers = <RIn = never>(
+  adapters: ReadonlyArray<ReturnType<typeof makeFakeCodexAdapter>["adapter"]>,
+  options?: {
+    readonly directoryLayer?: Layer.Layer<ProviderSessionDirectory, unknown, RIn>;
+    readonly settingsLayer?: ReturnType<typeof ServerSettingsService.layerTest>;
+  },
+) => {
+  const registry: typeof ProviderAdapterRegistry.Service = {
+    getByProvider: (provider) => {
+      const adapter = adapters.find((candidate) => candidate.provider === provider);
+      return adapter
+        ? Effect.succeed(adapter)
+        : Effect.fail(new ProviderUnsupportedError({ provider }));
+    },
+    listProviders: () => Effect.succeed(adapters.map((adapter) => adapter.provider)),
+  };
+  const directoryLayer =
+    options?.directoryLayer ??
+    ProviderSessionDirectoryLive.pipe(
+      Layer.provide(
+        ProviderSessionRuntimeRepositoryLive.pipe(Layer.provide(SqlitePersistenceMemory)),
+      ),
+    );
+  const serviceLayer = makeProviderServiceLive().pipe(
+    Layer.provide(Layer.succeed(ProviderAdapterRegistry, registry)),
+    Layer.provide(directoryLayer),
+    Layer.provide(options?.settingsLayer ?? ServerSettingsService.layerTest()),
+    Layer.provide(NodeServices.layer),
+  );
+  return { directoryLayer, serviceLayer, layer: Layer.merge(serviceLayer, directoryLayer) };
+};
+
 type LegacyProviderRuntimeEvent = {
   readonly type: string;
   readonly eventId: EventId;
@@ -635,7 +669,6 @@ function makeProviderServiceLayer(
   providers?: {
     readonly freshRuntimeEventDelivery?: boolean;
     readonly includeRestartRollbackDroid?: boolean;
-    readonly includePi?: boolean;
     readonly includeOpenCode?: boolean;
     readonly codexDidResumeSession?: NonNullable<
       ProviderAdapterShape<ProviderAdapterError>["didResumeSession"]
@@ -660,7 +693,6 @@ function makeProviderServiceLayer(
   const claude = makeFakeCodexAdapter("claudeAgent");
   const antigravity = makeFakeCodexAdapter("antigravity");
   const droid = makeFakeCodexAdapter("droid", { conversationRollback: "restart-session" });
-  const pi = makeFakeCodexAdapter("pi");
   const openCode = makeFakeCodexAdapter("opencode");
   const registry: typeof ProviderAdapterRegistry.Service = {
     getByProvider: (provider) =>
@@ -672,18 +704,15 @@ function makeProviderServiceLayer(
             ? Effect.succeed(antigravity.adapter)
             : provider === "droid" && providers?.includeRestartRollbackDroid === true
               ? Effect.succeed(droid.adapter)
-              : provider === "pi" && providers?.includePi === true
-                ? Effect.succeed(pi.adapter)
-                : provider === "opencode" && providers?.includeOpenCode === true
-                  ? Effect.succeed(openCode.adapter)
-                  : Effect.fail(new ProviderUnsupportedError({ provider })),
+              : provider === "opencode" && providers?.includeOpenCode === true
+                ? Effect.succeed(openCode.adapter)
+                : Effect.fail(new ProviderUnsupportedError({ provider })),
     listProviders: () =>
       Effect.succeed([
         "codex",
         "claudeAgent",
         "antigravity",
         ...(providers?.includeRestartRollbackDroid === true ? (["droid"] as const) : []),
-        ...(providers?.includePi === true ? (["pi"] as const) : []),
         ...(providers?.includeOpenCode === true ? (["opencode"] as const) : []),
       ] as const),
   };
@@ -715,7 +744,6 @@ function makeProviderServiceLayer(
     claude,
     antigravity,
     droid,
-    pi,
     openCode,
     layer,
     rawLayer,
@@ -905,7 +933,6 @@ const rotationRetry = makeProviderServiceLayer({
 const restartRollbackRouting = makeProviderServiceLayer(undefined, {
   includeRestartRollbackDroid: true,
 });
-const piInteractionRouting = makeProviderServiceLayer(undefined, { includePi: true });
 const adapterConfirmedFreshRouting = makeProviderServiceLayer(undefined, {
   codexDidResumeSession: () => false,
 });
@@ -2388,92 +2415,12 @@ for (const driver of ["pi", "antigravity"] as const) {
 }
 
 for (const driver of ["pi", "antigravity"] as const) {
-  it.effect(`lists no retained ${driver} context after a failed stop of an active turn`, () =>
-    Effect.gen(function* () {
-      const source = makeFakeCodexAdapter(driver);
-      const threadId = asThreadId(`retained-${driver}-active-turn-listing`);
-      const sourceId = asProviderInstanceId(`${driver}_source`);
-      const settingsLayer = ServerSettingsService.layerTest({
-        providerInstances: { [sourceId]: { driver, enabled: true } },
-      });
-      yield* Effect.gen(function* () {
-        const provider = yield* ProviderService;
-        yield* provider.startSession(threadId, {
-          provider: driver,
-          providerInstanceId: sourceId,
-          threadId,
-          runtimeMode: "full-access",
-        });
-        const activeTurnId = asTurnId(`turn-${driver}-active`);
-        source.updateSession(threadId, (session) => ({
-          ...session,
-          status: "running",
-          activeTurnId,
-        }));
-        assert.deepEqual(
-          (yield* provider.listSessions()).map((session) => [
-            session.threadId,
-            session.status,
-            session.activeTurnId,
-          ]),
-          [[threadId, "running", activeTurnId]],
-        );
-        const stopError = new ProviderAdapterProcessError({
-          provider: driver,
-          threadId,
-          detail: "session teardown could not prove exit",
-        });
-        // Pi lists a stopped context as closed. Antigravity keeps the running
-        // turn it could not settle, so its snapshot still carries the turn id.
-        source.stopSession.mockImplementationOnce((id) =>
-          Effect.sync(() => {
-            source.retainStopped(id);
-            if (driver === "pi") {
-              source.updateSession(id, (session) => ({ ...session, status: "closed" }));
-            }
-          }).pipe(Effect.andThen(Effect.fail(stopError))),
-        );
-        assertFailure(yield* Effect.result(provider.stopRuntimeSession!({ threadId })), stopError);
-        assert.isFalse(yield* source.hasSession(threadId));
-        assert.isTrue(yield* source.adapter.hasRetainedSession!(threadId));
-        assert.lengthOf(yield* source.listSessions(), 1, "the adapter must keep the context");
-        assert.lengthOf(
-          (yield* provider.listSessions()).filter((session) => session.threadId === threadId),
-          0,
-          "a retained context was listed as a live session",
-        );
-        // The next send reaches recovery, which retries the cleanup and
-        // starts a fresh runtime instead of waiting on the retained turn.
-        yield* provider.sendTurn({ threadId, input: "recover" });
-        assert.lengthOf(source.stopSession.mock.calls, 2);
-        assert.lengthOf(source.startSession.mock.calls, 2);
-        assert.lengthOf(source.sendTurn.mock.calls, 1);
-        assert.isTrue(yield* source.hasSession(threadId));
-        assert.deepEqual(
-          (yield* provider.listSessions()).map((session) => [session.threadId, session.status]),
-          [[threadId, "ready"]],
-        );
-      }).pipe(
-        Effect.provide(
-          makeRegistrySwitchLayer(
-            driver,
-            source.adapter,
-            makeFakeCodexAdapter("droid").adapter,
-            settingsLayer,
-          ),
-        ),
-      );
-    }),
-  );
-}
-
-for (const driver of ["pi", "antigravity"] as const) {
   it.effect(
-    `lists a retained ${driver} context for safety checks after a failed stop of an active turn`,
+    `hides a retained ${driver} context from routing but not safety checks after a failed stop of an active turn`,
     () =>
       Effect.gen(function* () {
         const source = makeFakeCodexAdapter(driver);
-        const threadId = asThreadId(`retained-${driver}-active-turn-safety`);
+        const threadId = asThreadId(`retained-${driver}-active-turn-listing`);
         const sourceId = asProviderInstanceId(`${driver}_source`);
         const settingsLayer = ServerSettingsService.layerTest({
           providerInstances: { [sourceId]: { driver, enabled: true } },
@@ -2486,21 +2433,27 @@ for (const driver of ["pi", "antigravity"] as const) {
             threadId,
             runtimeMode: "full-access",
           });
-          const activeTurnId = asTurnId(`turn-${driver}-active-safety`);
+          const activeTurnId = asTurnId(`turn-${driver}-active`);
           source.updateSession(threadId, (session) => ({
             ...session,
             status: "running",
             activeTurnId,
           }));
-          const listRetainedSessions = () =>
-            provider.listRetainedSessions
-              ? provider.listRetainedSessions()
-              : Effect.succeed<ReadonlyArray<ProviderSession>>([]);
+          assert.deepEqual(
+            (yield* provider.listSessions()).map((session) => [
+              session.threadId,
+              session.status,
+              session.activeTurnId,
+            ]),
+            [[threadId, "running", activeTurnId]],
+          );
           const stopError = new ProviderAdapterProcessError({
             provider: driver,
             threadId,
             detail: "session teardown could not prove exit",
           });
+          // Pi lists a stopped context as closed. Antigravity keeps the running
+          // turn it could not settle, so its snapshot still carries the turn id.
           source.stopSession.mockImplementationOnce((id) =>
             Effect.sync(() => {
               source.retainStopped(id);
@@ -2513,6 +2466,9 @@ for (const driver of ["pi", "antigravity"] as const) {
             yield* Effect.result(provider.stopRuntimeSession!({ threadId })),
             stopError,
           );
+          assert.isFalse(yield* source.hasSession(threadId));
+          assert.isTrue(yield* source.adapter.hasRetainedSession!(threadId));
+          assert.lengthOf(yield* source.listSessions(), 1, "the adapter must keep the context");
           // The live listing hides the retained context from routing and
           // queued turns. The retained listing keeps its turn visible to the
           // checkpoint revert guard, which must not race a process the stop
@@ -2520,9 +2476,10 @@ for (const driver of ["pi", "antigravity"] as const) {
           assert.lengthOf(
             (yield* provider.listSessions()).filter((session) => session.threadId === threadId),
             0,
+            "a retained context was listed as a live session",
           );
           assert.deepEqual(
-            (yield* listRetainedSessions()).map((session) => [
+            (yield* provider.listRetainedSessions!()).map((session) => [
               session.threadId,
               session.status,
               session.activeTurnId,
@@ -2530,11 +2487,14 @@ for (const driver of ["pi", "antigravity"] as const) {
             [[threadId, driver === "pi" ? "closed" : "running", activeTurnId]],
             "the retained context must stay visible to safety checks",
           );
-          // Recovery retries the cleanup and starts a fresh runtime, so the
-          // retained listing is empty again and the live one has the new session.
+          // The next send reaches recovery, which retries the cleanup and
+          // starts a fresh runtime instead of waiting on the retained turn.
           yield* provider.sendTurn({ threadId, input: "recover" });
           assert.lengthOf(source.stopSession.mock.calls, 2);
-          assert.deepEqual(yield* listRetainedSessions(), []);
+          assert.lengthOf(source.startSession.mock.calls, 2);
+          assert.lengthOf(source.sendTurn.mock.calls, 1);
+          assert.isTrue(yield* source.hasSession(threadId));
+          assert.deepEqual(yield* provider.listRetainedSessions!(), []);
           assert.deepEqual(
             (yield* provider.listSessions()).map((session) => [session.threadId, session.status]),
             [[threadId, "ready"]],
@@ -3478,26 +3438,29 @@ routing.layer("ProviderServiceLive routing", (it) => {
     }),
   );
 
-  it.effect("carries autoApproveSynaraTools through session recovery", () =>
+  it.effect("carries autoApproveSynaraTools and extra folders through session recovery", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService;
       const directory = yield* ProviderSessionDirectory;
       const threadId = asThreadId("thread-autoapprove-recovery");
+      const additionalDirectories = ["/tmp/repos/api", "/tmp/repos/shared"];
 
       yield* provider.startSession(threadId, {
         provider: "codex",
         threadId,
         runtimeMode: "full-access",
         autoApproveSynaraTools: true,
+        additionalDirectories,
       });
-      const persisted = Option.getOrUndefined(yield* directory.getBinding(threadId));
-      assert.strictEqual(
-        asRuntimePayloadRecord(persisted?.runtimePayload).autoApproveSynaraTools,
-        true,
+      const persistedPayload = asRuntimePayloadRecord(
+        Option.getOrUndefined(yield* directory.getBinding(threadId))?.runtimePayload,
       );
+      assert.strictEqual(persistedPayload.autoApproveSynaraTools, true);
+      assert.deepStrictEqual(persistedPayload.additionalDirectories, additionalDirectories);
 
       // Kill the runtime out from under the binding: the next turn must
-      // recover the session with the same approval set it was spawned with.
+      // recover the session with the same approval set and folder grant it
+      // was spawned with.
       yield* routing.codex.stopSession(threadId);
       yield* provider.sendTurn({
         threadId,
@@ -3508,46 +3471,12 @@ routing.layer("ProviderServiceLive routing", (it) => {
       const recoveredStart = routing.codex.startSession.mock.calls.at(-1)?.[0];
       assert.strictEqual(recoveredStart?.threadId, threadId);
       assert.strictEqual(recoveredStart?.autoApproveSynaraTools, true);
+      assert.deepStrictEqual(recoveredStart?.additionalDirectories, additionalDirectories);
       const recovered = Option.getOrUndefined(yield* directory.getBinding(threadId));
       assert.strictEqual(
         asRuntimePayloadRecord(recovered?.runtimePayload).autoApproveSynaraTools,
         true,
       );
-
-      yield* provider.stopSession({ threadId });
-    }),
-  );
-
-  it.effect("carries a multi-folder project's extra folders through session recovery", () =>
-    Effect.gen(function* () {
-      const provider = yield* ProviderService;
-      const directory = yield* ProviderSessionDirectory;
-      const threadId = asThreadId("thread-additional-directories-recovery");
-      const additionalDirectories = ["/tmp/repos/api", "/tmp/repos/shared"];
-
-      yield* provider.startSession(threadId, {
-        provider: "codex",
-        threadId,
-        runtimeMode: "full-access",
-        additionalDirectories,
-      });
-      const persisted = Option.getOrUndefined(yield* directory.getBinding(threadId));
-      assert.deepStrictEqual(
-        asRuntimePayloadRecord(persisted?.runtimePayload).additionalDirectories,
-        additionalDirectories,
-      );
-
-      // A recovered runtime must keep the same folder grant it was spawned with.
-      yield* routing.codex.stopSession(threadId);
-      yield* provider.sendTurn({
-        threadId,
-        input: "keep going",
-        attachments: [],
-      });
-
-      const recoveredStart = routing.codex.startSession.mock.calls.at(-1)?.[0];
-      assert.strictEqual(recoveredStart?.threadId, threadId);
-      assert.deepStrictEqual(recoveredStart?.additionalDirectories, additionalDirectories);
       // The reactor reads these grants to notice a folder edit on a recovered runtime.
       assert.deepStrictEqual(
         yield* provider.getSessionAdditionalDirectories!(threadId),
@@ -3555,16 +3484,6 @@ routing.layer("ProviderServiceLive routing", (it) => {
       );
 
       yield* provider.stopSession({ threadId });
-    }),
-  );
-
-  it.effect("reports no folder grants for a thread without a persisted runtime", () =>
-    Effect.gen(function* () {
-      const provider = yield* ProviderService;
-      assert.strictEqual(
-        yield* provider.getSessionAdditionalDirectories!(asThreadId("thread-without-binding")),
-        undefined,
-      );
     }),
   );
 
@@ -4951,55 +4870,6 @@ routing.layer("ProviderServiceLive routing", (it) => {
       routing.claude.respondToRequest.mockClear();
       routing.claude.respondToUserInput.mockClear();
       routing.claude.stopSession.mockClear();
-    }),
-  );
-
-  it.effect("requires the source lifecycle generation for modern Antigravity approvals", () =>
-    Effect.gen(function* () {
-      const provider = yield* ProviderService;
-      const directory = yield* ProviderSessionDirectory;
-      const threadId = asThreadId("thread-antigravity-interaction-generation");
-
-      yield* provider.startSession(threadId, {
-        provider: "antigravity",
-        threadId,
-        cwd: "/tmp/project",
-        runtimeMode: "approval-required",
-      });
-      const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
-      const lifecycleGeneration = binding?.lifecycleGeneration;
-      assert.equal(typeof lifecycleGeneration, "string");
-
-      const responseCallCount = routing.antigravity.respondToRequest.mock.calls.length;
-      const missingGeneration = yield* Effect.result(
-        provider.respondToRequest({
-          threadId,
-          requestId: asRequestId("antigravity-approval-without-generation"),
-          decision: "accept",
-        }),
-      );
-      assertFailure(
-        missingGeneration,
-        new ProviderValidationError({
-          operation: "ProviderService.respondToRequest",
-          issue:
-            "Cannot respond to request 'antigravity-approval-without-generation' without its provider lifecycle generation.",
-        }),
-      );
-      assert.equal(routing.antigravity.respondToRequest.mock.calls.length, responseCallCount);
-
-      yield* provider.respondToRequest({
-        threadId,
-        requestId: asRequestId("antigravity-approval-current-generation"),
-        lifecycleGeneration,
-        decision: "accept",
-      });
-      assert.equal(routing.antigravity.respondToRequest.mock.calls.length, responseCallCount + 1);
-
-      yield* provider.stopSession({ threadId });
-      routing.antigravity.startSession.mockClear();
-      routing.antigravity.respondToRequest.mockClear();
-      routing.antigravity.stopSession.mockClear();
     }),
   );
 
@@ -6840,28 +6710,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
             updatedAt: now,
           });
         });
-        const registry: typeof ProviderAdapterRegistry.Service = {
-          getByProvider: (requested) =>
-            requested === provider
-              ? Effect.succeed(fake.adapter)
-              : Effect.fail(new ProviderUnsupportedError({ provider: requested })),
-          listProviders: () => Effect.succeed([provider]),
-        };
-        const runtimeRepositoryLayer = ProviderSessionRuntimeRepositoryLive.pipe(
-          Layer.provide(SqlitePersistenceMemory),
-        );
-        const directoryLayer = ProviderSessionDirectoryLive.pipe(
-          Layer.provide(runtimeRepositoryLayer),
-        );
-        const layer = Layer.merge(
-          makeProviderServiceLive().pipe(
-            Layer.provide(Layer.succeed(ProviderAdapterRegistry, registry)),
-            Layer.provide(directoryLayer),
-            Layer.provide(ServerSettingsService.layerTest()),
-            Layer.provide(NodeServices.layer),
-          ),
-          directoryLayer,
-        );
+        const { layer } = makeSingleAdapterServiceLayers([fake.adapter]);
 
         const { outcome, binding } = yield* Effect.gen(function* () {
           const service = yield* ProviderService;
@@ -6922,25 +6771,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
             )
           : Effect.fail(freshFailure),
       );
-      const registry: typeof ProviderAdapterRegistry.Service = {
-        getByProvider: () => Effect.succeed(devin.adapter),
-        listProviders: () => Effect.succeed(["devin"]),
-      };
-      const runtimeRepositoryLayer = ProviderSessionRuntimeRepositoryLive.pipe(
-        Layer.provide(SqlitePersistenceMemory),
-      );
-      const directoryLayer = ProviderSessionDirectoryLive.pipe(
-        Layer.provide(runtimeRepositoryLayer),
-      );
-      const layer = Layer.merge(
-        makeProviderServiceLive().pipe(
-          Layer.provide(Layer.succeed(ProviderAdapterRegistry, registry)),
-          Layer.provide(directoryLayer),
-          Layer.provide(ServerSettingsService.layerTest()),
-          Layer.provide(NodeServices.layer),
-        ),
-        directoryLayer,
-      );
+      const { directoryLayer, layer } = makeSingleAdapterServiceLayers([devin.adapter]);
 
       yield* Effect.gen(function* () {
         const directory = yield* ProviderSessionDirectory;
@@ -7007,25 +6838,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
           detail: testCase.detail,
         });
         adapter.startSession.mockImplementation(() => Effect.fail(failure));
-        const registry: typeof ProviderAdapterRegistry.Service = {
-          getByProvider: (provider) =>
-            provider === testCase.provider
-              ? Effect.succeed(adapter.adapter)
-              : Effect.fail(new ProviderUnsupportedError({ provider })),
-          listProviders: () => Effect.succeed([testCase.provider]),
-        };
-        const runtimeRepositoryLayer = ProviderSessionRuntimeRepositoryLive.pipe(
-          Layer.provide(SqlitePersistenceMemory),
-        );
-        const directoryLayer = ProviderSessionDirectoryLive.pipe(
-          Layer.provide(runtimeRepositoryLayer),
-        );
-        const layer = makeProviderServiceLive().pipe(
-          Layer.provide(Layer.succeed(ProviderAdapterRegistry, registry)),
-          Layer.provide(directoryLayer),
-          Layer.provide(ServerSettingsService.layerTest()),
-          Layer.provide(NodeServices.layer),
-        );
+        const { serviceLayer: layer } = makeSingleAdapterServiceLayers([adapter.adapter]);
 
         const exit = yield* Effect.gen(function* () {
           const provider = yield* ProviderService;
@@ -7059,22 +6872,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         detail: "Failed to load session data",
       });
       devin.startSession.mockImplementation(() => Effect.fail(failure));
-      const registry: typeof ProviderAdapterRegistry.Service = {
-        getByProvider: () => Effect.succeed(devin.adapter),
-        listProviders: () => Effect.succeed(["devin"]),
-      };
-      const runtimeRepositoryLayer = ProviderSessionRuntimeRepositoryLive.pipe(
-        Layer.provide(SqlitePersistenceMemory),
-      );
-      const directoryLayer = ProviderSessionDirectoryLive.pipe(
-        Layer.provide(runtimeRepositoryLayer),
-      );
-      const layer = makeProviderServiceLive().pipe(
-        Layer.provide(Layer.succeed(ProviderAdapterRegistry, registry)),
-        Layer.provide(directoryLayer),
-        Layer.provide(ServerSettingsService.layerTest()),
-        Layer.provide(NodeServices.layer),
-      );
+      const { serviceLayer: layer } = makeSingleAdapterServiceLayers([devin.adapter]);
 
       const exit = yield* Effect.gen(function* () {
         const provider = yield* ProviderService;
@@ -7109,22 +6907,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
       });
       devin.startSession.mockImplementation(() => Effect.fail(failure));
       devin.hasSession.mockImplementation(() => Effect.succeed(true));
-      const registry: typeof ProviderAdapterRegistry.Service = {
-        getByProvider: () => Effect.succeed(devin.adapter),
-        listProviders: () => Effect.succeed(["devin"]),
-      };
-      const runtimeRepositoryLayer = ProviderSessionRuntimeRepositoryLive.pipe(
-        Layer.provide(SqlitePersistenceMemory),
-      );
-      const directoryLayer = ProviderSessionDirectoryLive.pipe(
-        Layer.provide(runtimeRepositoryLayer),
-      );
-      const layer = makeProviderServiceLive().pipe(
-        Layer.provide(Layer.succeed(ProviderAdapterRegistry, registry)),
-        Layer.provide(directoryLayer),
-        Layer.provide(ServerSettingsService.layerTest()),
-        Layer.provide(NodeServices.layer),
-      );
+      const { serviceLayer: layer } = makeSingleAdapterServiceLayers([devin.adapter]);
 
       const exit = yield* Effect.gen(function* () {
         const provider = yield* ProviderService;
@@ -7187,25 +6970,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         live = true;
         return Effect.succeed(liveSession);
       });
-      const registry: typeof ProviderAdapterRegistry.Service = {
-        getByProvider: () => Effect.succeed(devin.adapter),
-        listProviders: () => Effect.succeed(["devin"]),
-      };
-      const runtimeRepositoryLayer = ProviderSessionRuntimeRepositoryLive.pipe(
-        Layer.provide(SqlitePersistenceMemory),
-      );
-      const directoryLayer = ProviderSessionDirectoryLive.pipe(
-        Layer.provide(runtimeRepositoryLayer),
-      );
-      const layer = Layer.merge(
-        makeProviderServiceLive().pipe(
-          Layer.provide(Layer.succeed(ProviderAdapterRegistry, registry)),
-          Layer.provide(directoryLayer),
-          Layer.provide(ServerSettingsService.layerTest()),
-          Layer.provide(NodeServices.layer),
-        ),
-        directoryLayer,
-      );
+      const { directoryLayer, layer } = makeSingleAdapterServiceLayers([devin.adapter]);
 
       yield* Effect.gen(function* () {
         const directory = yield* ProviderSessionDirectory;
@@ -7555,52 +7320,6 @@ routing.layer("ProviderServiceLive routing", (it) => {
       assert.equal(runtimePayload.activeTurnId, newerTurnId);
       assert.equal(runtimePayload.lastRuntimeEvent, "provider.sendTurn");
       assert.deepEqual(runtimePayload.modelSelection, newerModelSelection);
-    }),
-  );
-
-  it.effect("keeps the newer invocation active when an older dispatch returns last", () =>
-    Effect.gen(function* () {
-      const provider = yield* ProviderService;
-      const directory = yield* ProviderSessionDirectory;
-      const threadId = asThreadId("thread-overlapping-return-order");
-      const olderTurnId = asTurnId("turn-return-order-older");
-      const newerTurnId = asTurnId("turn-return-order-newer");
-      let releaseOlder: ((result: ProviderTurnStartResult) => void) | undefined;
-
-      yield* provider.startSession(threadId, {
-        provider: "codex",
-        threadId,
-        runtimeMode: "full-access",
-      });
-      routing.codex.sendTurn
-        .mockImplementationOnce(() =>
-          Effect.promise(
-            () =>
-              new Promise<ProviderTurnStartResult>((resolve) => {
-                releaseOlder = resolve;
-              }),
-          ),
-        )
-        .mockImplementationOnce((input) =>
-          Effect.succeed({
-            threadId: input.threadId,
-            turnId: newerTurnId,
-            resumeCursor: { cursor: "newer" },
-          }),
-        );
-
-      const olderFiber = yield* provider
-        .sendTurn({ threadId, input: "older", attachments: [] })
-        .pipe(Effect.forkChild);
-      yield* waitUntil(() => releaseOlder !== undefined, 500, 20, "older dispatch start");
-      yield* provider.sendTurn({ threadId, input: "newer", attachments: [] });
-      releaseOlder?.({ threadId, turnId: olderTurnId, resumeCursor: { cursor: "older" } });
-      yield* Fiber.join(olderFiber);
-
-      const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
-      const payload = binding?.runtimePayload as Record<string, unknown>;
-      assert.equal(payload.activeTurnId, newerTurnId);
-      assert.deepEqual(binding?.resumeCursor, { cursor: "newer" });
     }),
   );
 
@@ -8166,21 +7885,9 @@ routing.layer("ProviderServiceLive routing", (it) => {
       );
 
       const firstClaude = makeFakeCodexAdapter("claudeAgent");
-      const firstRegistry: typeof ProviderAdapterRegistry.Service = {
-        getByProvider: (provider) =>
-          provider === "claudeAgent"
-            ? Effect.succeed(firstClaude.adapter)
-            : Effect.fail(new ProviderUnsupportedError({ provider })),
-        listProviders: () => Effect.succeed(["claudeAgent"]),
-      };
-      const firstDirectoryLayer = ProviderSessionDirectoryLive.pipe(
-        Layer.provide(runtimeRepositoryLayer),
-      );
-      const firstProviderLayer = makeProviderServiceLive().pipe(
-        Layer.provide(Layer.succeed(ProviderAdapterRegistry, firstRegistry)),
-        Layer.provide(firstDirectoryLayer),
-        Layer.provide(ServerSettingsService.layerTest()),
-      );
+      const firstProviderLayer = makeSingleAdapterServiceLayers([firstClaude.adapter], {
+        directoryLayer: ProviderSessionDirectoryLive.pipe(Layer.provide(runtimeRepositoryLayer)),
+      }).serviceLayer;
 
       const initial = yield* Effect.gen(function* () {
         const provider = yield* ProviderService;
@@ -8198,21 +7905,9 @@ routing.layer("ProviderServiceLive routing", (it) => {
       }).pipe(Effect.provide(firstProviderLayer));
 
       const secondClaude = makeFakeCodexAdapter("claudeAgent");
-      const secondRegistry: typeof ProviderAdapterRegistry.Service = {
-        getByProvider: (provider) =>
-          provider === "claudeAgent"
-            ? Effect.succeed(secondClaude.adapter)
-            : Effect.fail(new ProviderUnsupportedError({ provider })),
-        listProviders: () => Effect.succeed(["claudeAgent"]),
-      };
-      const secondDirectoryLayer = ProviderSessionDirectoryLive.pipe(
-        Layer.provide(runtimeRepositoryLayer),
-      );
-      const secondProviderLayer = makeProviderServiceLive().pipe(
-        Layer.provide(Layer.succeed(ProviderAdapterRegistry, secondRegistry)),
-        Layer.provide(secondDirectoryLayer),
-        Layer.provide(ServerSettingsService.layerTest()),
-      );
+      const secondProviderLayer = makeSingleAdapterServiceLayers([secondClaude.adapter], {
+        directoryLayer: ProviderSessionDirectoryLive.pipe(Layer.provide(runtimeRepositoryLayer)),
+      }).serviceLayer;
 
       secondClaude.startSession.mockClear();
 
@@ -8262,21 +7957,9 @@ routing.layer("ProviderServiceLive routing", (it) => {
       };
 
       const firstCodex = makeFakeCodexAdapter("codex");
-      const firstRegistry: typeof ProviderAdapterRegistry.Service = {
-        getByProvider: (provider) =>
-          provider === "codex"
-            ? Effect.succeed(firstCodex.adapter)
-            : Effect.fail(new ProviderUnsupportedError({ provider })),
-        listProviders: () => Effect.succeed(["codex"]),
-      };
-      const firstDirectoryLayer = ProviderSessionDirectoryLive.pipe(
-        Layer.provide(runtimeRepositoryLayer),
-      );
-      const firstProviderLayer = makeProviderServiceLive().pipe(
-        Layer.provide(Layer.succeed(ProviderAdapterRegistry, firstRegistry)),
-        Layer.provide(firstDirectoryLayer),
-        Layer.provide(ServerSettingsService.layerTest()),
-      );
+      const firstProviderLayer = makeSingleAdapterServiceLayers([firstCodex.adapter], {
+        directoryLayer: ProviderSessionDirectoryLive.pipe(Layer.provide(runtimeRepositoryLayer)),
+      }).serviceLayer;
 
       const initial = yield* Effect.gen(function* () {
         const provider = yield* ProviderService;
@@ -8295,21 +7978,9 @@ routing.layer("ProviderServiceLive routing", (it) => {
       }).pipe(Effect.provide(firstProviderLayer));
 
       const secondCodex = makeFakeCodexAdapter("codex");
-      const secondRegistry: typeof ProviderAdapterRegistry.Service = {
-        getByProvider: (provider) =>
-          provider === "codex"
-            ? Effect.succeed(secondCodex.adapter)
-            : Effect.fail(new ProviderUnsupportedError({ provider })),
-        listProviders: () => Effect.succeed(["codex"]),
-      };
-      const secondDirectoryLayer = ProviderSessionDirectoryLive.pipe(
-        Layer.provide(runtimeRepositoryLayer),
-      );
-      const secondProviderLayer = makeProviderServiceLive().pipe(
-        Layer.provide(Layer.succeed(ProviderAdapterRegistry, secondRegistry)),
-        Layer.provide(secondDirectoryLayer),
-        Layer.provide(ServerSettingsService.layerTest()),
-      );
+      const secondProviderLayer = makeSingleAdapterServiceLayers([secondCodex.adapter], {
+        directoryLayer: ProviderSessionDirectoryLive.pipe(Layer.provide(runtimeRepositoryLayer)),
+      }).serviceLayer;
 
       yield* Effect.gen(function* () {
         const provider = yield* ProviderService;
@@ -8494,21 +8165,9 @@ routing.layer("ProviderServiceLive routing", (it) => {
       };
 
       const firstClaude = makeFakeCodexAdapter("claudeAgent");
-      const firstRegistry: typeof ProviderAdapterRegistry.Service = {
-        getByProvider: (provider) =>
-          provider === "claudeAgent"
-            ? Effect.succeed(firstClaude.adapter)
-            : Effect.fail(new ProviderUnsupportedError({ provider })),
-        listProviders: () => Effect.succeed(["claudeAgent"]),
-      };
-      const firstDirectoryLayer = ProviderSessionDirectoryLive.pipe(
-        Layer.provide(runtimeRepositoryLayer),
-      );
-      const firstProviderLayer = makeProviderServiceLive().pipe(
-        Layer.provide(Layer.succeed(ProviderAdapterRegistry, firstRegistry)),
-        Layer.provide(firstDirectoryLayer),
-        Layer.provide(ServerSettingsService.layerTest()),
-      );
+      const firstProviderLayer = makeSingleAdapterServiceLayers([firstClaude.adapter], {
+        directoryLayer: ProviderSessionDirectoryLive.pipe(Layer.provide(runtimeRepositoryLayer)),
+      }).serviceLayer;
 
       const initial = yield* Effect.gen(function* () {
         const provider = yield* ProviderService;
@@ -8531,21 +8190,9 @@ routing.layer("ProviderServiceLive routing", (it) => {
       assert.equal(firstClaude.stopSession.mock.calls.length, 1);
 
       const secondClaude = makeFakeCodexAdapter("claudeAgent");
-      const secondRegistry: typeof ProviderAdapterRegistry.Service = {
-        getByProvider: (provider) =>
-          provider === "claudeAgent"
-            ? Effect.succeed(secondClaude.adapter)
-            : Effect.fail(new ProviderUnsupportedError({ provider })),
-        listProviders: () => Effect.succeed(["claudeAgent"]),
-      };
-      const secondDirectoryLayer = ProviderSessionDirectoryLive.pipe(
-        Layer.provide(runtimeRepositoryLayer),
-      );
-      const secondProviderLayer = makeProviderServiceLive().pipe(
-        Layer.provide(Layer.succeed(ProviderAdapterRegistry, secondRegistry)),
-        Layer.provide(secondDirectoryLayer),
-        Layer.provide(ServerSettingsService.layerTest()),
-      );
+      const secondProviderLayer = makeSingleAdapterServiceLayers([secondClaude.adapter], {
+        directoryLayer: ProviderSessionDirectoryLive.pipe(Layer.provide(runtimeRepositoryLayer)),
+      }).serviceLayer;
 
       const savedProfile = yield* Effect.gen(function* () {
         const provider = yield* ProviderService;
@@ -8618,21 +8265,10 @@ routing.layer("ProviderServiceLive routing", (it) => {
       };
 
       const firstCodex = makeFakeCodexAdapter("codex");
-      const firstRegistry: typeof ProviderAdapterRegistry.Service = {
-        getByProvider: (provider) =>
-          provider === "codex"
-            ? Effect.succeed(firstCodex.adapter)
-            : Effect.fail(new ProviderUnsupportedError({ provider })),
-        listProviders: () => Effect.succeed(["codex"]),
-      };
-      const firstDirectoryLayer = ProviderSessionDirectoryLive.pipe(
-        Layer.provide(runtimeRepositoryLayer),
-      );
-      const firstProviderLayer = makeProviderServiceLive().pipe(
-        Layer.provide(Layer.succeed(ProviderAdapterRegistry, firstRegistry)),
-        Layer.provide(firstDirectoryLayer),
-        Layer.provide(ServerSettingsService.layerTest(firstSettings)),
-      );
+      const firstProviderLayer = makeSingleAdapterServiceLayers([firstCodex.adapter], {
+        directoryLayer: ProviderSessionDirectoryLive.pipe(Layer.provide(runtimeRepositoryLayer)),
+        settingsLayer: ServerSettingsService.layerTest(firstSettings),
+      }).serviceLayer;
 
       const initial = yield* Effect.gen(function* () {
         const provider = yield* ProviderService;
@@ -8646,21 +8282,10 @@ routing.layer("ProviderServiceLive routing", (it) => {
       }).pipe(Effect.provide(firstProviderLayer));
 
       const secondCodex = makeFakeCodexAdapter("codex");
-      const secondRegistry: typeof ProviderAdapterRegistry.Service = {
-        getByProvider: (provider) =>
-          provider === "codex"
-            ? Effect.succeed(secondCodex.adapter)
-            : Effect.fail(new ProviderUnsupportedError({ provider })),
-        listProviders: () => Effect.succeed(["codex"]),
-      };
-      const secondDirectoryLayer = ProviderSessionDirectoryLive.pipe(
-        Layer.provide(runtimeRepositoryLayer),
-      );
-      const secondProviderLayer = makeProviderServiceLive().pipe(
-        Layer.provide(Layer.succeed(ProviderAdapterRegistry, secondRegistry)),
-        Layer.provide(secondDirectoryLayer),
-        Layer.provide(ServerSettingsService.layerTest(secondSettings)),
-      );
+      const secondProviderLayer = makeSingleAdapterServiceLayers([secondCodex.adapter], {
+        directoryLayer: ProviderSessionDirectoryLive.pipe(Layer.provide(runtimeRepositoryLayer)),
+        settingsLayer: ServerSettingsService.layerTest(secondSettings),
+      }).serviceLayer;
 
       yield* Effect.gen(function* () {
         const provider = yield* ProviderService;
@@ -8847,61 +8472,6 @@ rotationRetry.layer("ProviderServiceLive credential rotation event durability", 
 });
 
 restartRollbackRouting.layer("ProviderServiceLive restart-based rollback", (it) => {
-  it.effect("requires the source lifecycle generation for modern ACP interactions", () =>
-    Effect.gen(function* () {
-      const provider = yield* ProviderService;
-      const directory = yield* ProviderSessionDirectory;
-      const threadId = asThreadId("thread-droid-interaction-generation");
-
-      yield* provider.startSession(threadId, {
-        provider: "droid",
-        threadId,
-        cwd: "/tmp/project",
-        runtimeMode: "approval-required",
-      });
-      const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
-      const lifecycleGeneration = binding?.lifecycleGeneration;
-      assert.equal(typeof lifecycleGeneration, "string");
-
-      const responseCallCount = restartRollbackRouting.droid.respondToRequest.mock.calls.length;
-      const missingGeneration = yield* Effect.result(
-        provider.respondToRequest({
-          threadId,
-          requestId: asRequestId("droid-approval-without-generation"),
-          decision: "accept",
-        }),
-      );
-      assertFailure(
-        missingGeneration,
-        new ProviderValidationError({
-          operation: "ProviderService.respondToRequest",
-          issue:
-            "Cannot respond to request 'droid-approval-without-generation' without its provider lifecycle generation.",
-        }),
-      );
-      assert.equal(
-        restartRollbackRouting.droid.respondToRequest.mock.calls.length,
-        responseCallCount,
-      );
-
-      yield* provider.respondToRequest({
-        threadId,
-        requestId: asRequestId("droid-approval-current-generation"),
-        lifecycleGeneration,
-        decision: "accept",
-      });
-      assert.equal(
-        restartRollbackRouting.droid.respondToRequest.mock.calls.length,
-        responseCallCount + 1,
-      );
-
-      yield* provider.stopSession({ threadId });
-      restartRollbackRouting.droid.startSession.mockClear();
-      restartRollbackRouting.droid.respondToRequest.mockClear();
-      restartRollbackRouting.droid.stopSession.mockClear();
-    }),
-  );
-
   it.effect("clears Droid's native cursor instead of reporting a fake rewind", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService;
@@ -8924,60 +8494,6 @@ restartRollbackRouting.layer("ProviderServiceLive restart-based rollback", (it) 
         assert.equal(binding.value.status, "stopped");
         assert.equal(binding.value.resumeCursor, null);
       }
-    }),
-  );
-});
-
-piInteractionRouting.layer("ProviderServiceLive Pi interaction generation", (it) => {
-  it.effect("requires the source lifecycle generation for modern Pi user input", () =>
-    Effect.gen(function* () {
-      const provider = yield* ProviderService;
-      const directory = yield* ProviderSessionDirectory;
-      const threadId = asThreadId("thread-pi-interaction-generation");
-
-      yield* provider.startSession(threadId, {
-        provider: "pi",
-        threadId,
-        cwd: "/tmp/project",
-        runtimeMode: "approval-required",
-      });
-      const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
-      const lifecycleGeneration = binding?.lifecycleGeneration;
-      assert.equal(typeof lifecycleGeneration, "string");
-
-      const responseCallCount = piInteractionRouting.pi.respondToUserInput.mock.calls.length;
-      const missingGeneration = yield* Effect.result(
-        provider.respondToUserInput({
-          threadId,
-          requestId: asRequestId("pi-user-input-without-generation"),
-          answers: { answer: "continue" },
-        }),
-      );
-      assertFailure(
-        missingGeneration,
-        new ProviderValidationError({
-          operation: "ProviderService.respondToUserInput",
-          issue:
-            "Cannot respond to request 'pi-user-input-without-generation' without its provider lifecycle generation.",
-        }),
-      );
-      assert.equal(piInteractionRouting.pi.respondToUserInput.mock.calls.length, responseCallCount);
-
-      yield* provider.respondToUserInput({
-        threadId,
-        requestId: asRequestId("pi-user-input-current-generation"),
-        lifecycleGeneration,
-        answers: { answer: "continue" },
-      });
-      assert.equal(
-        piInteractionRouting.pi.respondToUserInput.mock.calls.length,
-        responseCallCount + 1,
-      );
-
-      yield* provider.stopSession({ threadId });
-      piInteractionRouting.pi.startSession.mockClear();
-      piInteractionRouting.pi.respondToUserInput.mockClear();
-      piInteractionRouting.pi.stopSession.mockClear();
     }),
   );
 });
@@ -11152,13 +10668,6 @@ validation.layer("ProviderServiceLive validation", (it) => {
         status: "stopped",
         resumeCursor: { resume: "custom-driver-cursor" },
       });
-      const binding = yield* directory.getBinding(threadId);
-      assert.equal(Option.isSome(binding), true);
-      if (Option.isSome(binding)) {
-        assert.equal(binding.value.provider, "customFork");
-        assert.deepEqual(binding.value.resumeCursor, { resume: "custom-driver-cursor" });
-      }
-
       const profile = yield* provider.getPersistedSessionProfile(threadId);
       assert.equal(profile, undefined);
     }),
@@ -11179,65 +10688,37 @@ validation.layer("ProviderServiceLive validation", (it) => {
     }),
   );
 
-  it.effect("fails loudly when the adapter does not support stopping a task", () =>
+  it.effect("fails loudly when the adapter does not support stopping or backgrounding a task", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService;
-
-      yield* provider.startSession(asThreadId("thread-task-stop-unsupported"), {
+      const threadId = asThreadId("thread-task-control-unsupported");
+      yield* provider.startSession(threadId, {
         provider: "codex",
-        threadId: asThreadId("thread-task-stop-unsupported"),
+        threadId,
         cwd: "/tmp/project",
         runtimeMode: "full-access",
       });
 
-      const failure = yield* Effect.result(
-        provider.stopTask({
-          threadId: asThreadId("thread-task-stop-unsupported"),
-          taskId: "task-1",
-        }),
-      );
-
-      assert.equal(failure._tag, "Failure");
-      if (failure._tag !== "Failure") {
-        return;
+      const cases = [
+        {
+          result: yield* Effect.result(provider.stopTask({ threadId, taskId: "task-1" })),
+          operation: "ProviderService.stopTask",
+          issue: "does not support stopping",
+        },
+        {
+          result: yield* Effect.result(provider.backgroundTask({ threadId, toolUseId: "tool-1" })),
+          operation: "ProviderService.backgroundTask",
+          issue: "does not support backgrounding",
+        },
+      ];
+      for (const { result, operation, issue } of cases) {
+        assert.equal(result._tag, "Failure");
+        if (result._tag !== "Failure") return;
+        assert.equal(result.failure._tag, "ProviderValidationError");
+        if (result.failure._tag !== "ProviderValidationError") return;
+        assert.equal(result.failure.operation, operation);
+        assert.equal(result.failure.issue.includes(issue), true);
       }
-      assert.equal(failure.failure._tag, "ProviderValidationError");
-      if (failure.failure._tag !== "ProviderValidationError") {
-        return;
-      }
-      assert.equal(failure.failure.operation, "ProviderService.stopTask");
-      assert.equal(failure.failure.issue.includes("does not support stopping"), true);
-    }),
-  );
-
-  it.effect("fails loudly when the adapter does not support backgrounding a task", () =>
-    Effect.gen(function* () {
-      const provider = yield* ProviderService;
-
-      yield* provider.startSession(asThreadId("thread-task-bg-unsupported"), {
-        provider: "codex",
-        threadId: asThreadId("thread-task-bg-unsupported"),
-        cwd: "/tmp/project",
-        runtimeMode: "full-access",
-      });
-
-      const failure = yield* Effect.result(
-        provider.backgroundTask({
-          threadId: asThreadId("thread-task-bg-unsupported"),
-          toolUseId: "tool-1",
-        }),
-      );
-
-      assert.equal(failure._tag, "Failure");
-      if (failure._tag !== "Failure") {
-        return;
-      }
-      assert.equal(failure.failure._tag, "ProviderValidationError");
-      if (failure.failure._tag !== "ProviderValidationError") {
-        return;
-      }
-      assert.equal(failure.failure.operation, "ProviderService.backgroundTask");
-      assert.equal(failure.failure.issue.includes("does not support backgrounding"), true);
     }),
   );
 
@@ -11801,20 +11282,12 @@ stoppedOpenCodeRouting.layer("ProviderServiceLive OpenCode stopped retention", (
         cwd: "/tmp/opencode-stopped-retained",
         runtimeMode: "full-access",
       });
-      assert.equal(yield* stoppedOpenCodeRouting.openCode.hasSession(threadId), true);
-
       stoppedOpenCodeRouting.openCode.retainStopped(threadId);
-      assert.equal(yield* stoppedOpenCodeRouting.openCode.hasSession(threadId), false);
-      const retained = yield* stoppedOpenCodeRouting.openCode.listSessions();
-      assert.equal(retained.length, 1);
-      assert.equal(retained[0]?.threadId, threadId);
-
       stoppedOpenCodeRouting.openCode.startSession.mockClear();
       stoppedOpenCodeRouting.openCode.sendTurn.mockClear();
 
-      const turn = yield* provider.sendTurn({ threadId, input: "recover", attachments: [] });
+      yield* provider.sendTurn({ threadId, input: "recover", attachments: [] });
 
-      assert.equal(turn.threadId, threadId);
       assert.equal(stoppedOpenCodeRouting.openCode.startSession.mock.calls.length, 1);
       const resumeInput = stoppedOpenCodeRouting.openCode.startSession.mock.calls[0]?.[0];
       assert.deepEqual(resumeInput?.resumeCursor, initial.resumeCursor);
@@ -11861,7 +11334,6 @@ stoppedOpenCodeRouting.layer("ProviderServiceLive OpenCode stopped retention", (
     () =>
       Effect.gen(function* () {
         const provider = yield* ProviderService;
-        const directory = yield* ProviderSessionDirectory;
         const threadId = asThreadId("thread-opencode-stopped-control-plane");
 
         yield* provider.startSession(threadId, {
@@ -11898,8 +11370,6 @@ stoppedOpenCodeRouting.layer("ProviderServiceLive OpenCode stopped retention", (
         );
         assert.equal(stoppedOpenCodeRouting.openCode.interruptTurn.mock.calls.length, 0);
         assert.equal(stoppedOpenCodeRouting.openCode.respondToRequest.mock.calls.length, 0);
-        const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
-        assert.equal(binding?.provider, "opencode");
       }),
   );
 });

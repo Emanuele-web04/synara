@@ -16,11 +16,14 @@ describe("refresh admission", () => {
           refreshToken: "refresh-2",
           user: { id: "user_1", email: "ada@example.com" },
         });
-      // Refresh admission uses only the identity adapter; no database is involved.
       const app = new Hono().route(
         "/api/v1",
         createV1Routes({
-          verifier: { refreshTokens },
+          verifier: {
+            refreshTokens,
+            verifyAccessToken: async () => ({ userId: "user_1", sessionId: "session_1" }),
+          },
+          accountDeletion: { isSessionFenced: async () => false },
           trustedProxyHops: 1,
         } as unknown as Parameters<typeof createV1Routes>[0]),
       );

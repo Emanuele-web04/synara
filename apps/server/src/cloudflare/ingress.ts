@@ -51,6 +51,9 @@ export async function startCloudflareIngress(
       .then((admitted) => {
         if (socket.destroyed) return;
         if (!admitted) {
+          // Count only refusals of streams addressed to this host, not stray probes.
+          if (hostname !== undefined && request.headers.host === hostname)
+            reportReliabilityIssue("remote.admission_refused");
           refuse();
           return;
         }

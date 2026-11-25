@@ -4,7 +4,10 @@ import { Effect } from "effect";
 import WebSocket from "ws";
 import { describe, expect, it, vi } from "vitest";
 
+import { WS_FEATURE_PATH, WS_FEATURE_UNCOMPRESSED_QUERY } from "@synara/contracts";
+
 import type { SessionCredentialServiceShape } from "../auth/Services/SessionCredentialService";
+import { upgradeOptsOutOfCompression, upgradePathAllowsCompression } from "../nodeHttpServer";
 import type { RelaySocket } from "../relaySocket";
 import { bridgeRemoteSocketToLocalRpc, normalizeRelayFrame } from "./localRpcBridge";
 
@@ -124,6 +127,17 @@ describe("normalizeRelayFrame", () => {
 });
 
 describe("bridgeRemoteSocketToLocalRpc", () => {
+  it("dials the compressed feature route: a remote peer never opts its leg out", async () => {
+    const { internal } = await establishedBridge();
+    const target = new URL((internal as unknown as { url: string }).url);
+
+    expect(target.pathname).toBe(WS_FEATURE_PATH);
+    expect(target.searchParams.has(WS_FEATURE_UNCOMPRESSED_QUERY.name)).toBe(false);
+    const requestTarget = `${target.pathname}${target.search}`;
+    expect(upgradePathAllowsCompression(requestTarget)).toBe(true);
+    expect(upgradeOptsOutOfCompression(requestTarget)).toBe(false);
+  });
+
   it("preserves an oversized response refusal even when its local close reports 1006", async () => {
     const { external, internal } = await establishedBridge();
     internal.emit(

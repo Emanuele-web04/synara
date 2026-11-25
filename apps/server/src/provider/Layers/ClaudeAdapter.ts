@@ -6465,10 +6465,6 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               },
             });
             return;
-          case "commands_changed":
-            // A refreshed slash-command list. supportedCommands() already returns the
-            // latest push, and commands are read on demand, so there is nothing to show.
-            return;
           case "background_tasks_changed": {
             // REPLACE semantics: the payload is the full live background set.
             // Announce only newly backgrounded work with a one-line notice;
@@ -7721,10 +7717,8 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
                   ? "default"
                   : undefined));
         const settings = {
-          // Pin only explicit non-native overrides. Otherwise Claude Code owns
-          // resolution via server tuning, settings.json, and
-          // CLAUDE_CODE_AUTO_COMPACT_WINDOW.
-          autoCompactEnabled: true,
+          // Pass an explicit window override when selected, and leave the
+          // auto-compact switch and defaults to the native Claude profile.
           ...(requestedAutoCompactWindowTokens !== undefined
             ? { autoCompactWindow: requestedAutoCompactWindowTokens }
             : {}),

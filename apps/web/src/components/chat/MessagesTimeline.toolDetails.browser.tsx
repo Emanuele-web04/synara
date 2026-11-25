@@ -200,6 +200,8 @@ describe("MessagesTimeline tool details", () => {
             turnId: newTurn,
             tone: "tool",
             label: "Current tool",
+            // Running, so the working indicator below the request wears it.
+            toolStatus: "running",
             createdAt: "2026-09-07T00:02:02Z",
           },
         ],

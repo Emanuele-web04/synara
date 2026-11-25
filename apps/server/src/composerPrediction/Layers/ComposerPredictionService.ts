@@ -6,7 +6,7 @@
 //          `composerPrediction.ts`.
 // Layer: Server service
 
-import type { ThreadId, TurnId } from "@synara/contracts";
+import type { ComposerPredictionOutcome, ThreadId, TurnId } from "@synara/contracts";
 import { Cause, Clock, Deferred, Duration, Effect, Fiber, Layer, Option, Schema } from "effect";
 
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
@@ -17,9 +17,10 @@ import { ProjectionSnapshotQuery } from "../../orchestration/Services/Projection
 import { ServerSettingsService } from "../../serverSettings.ts";
 import {
   buildComposerPredictionConversation,
-  isComposerPredictionTurnCurrent,
   resolveComposerPredictionHedgeDelayMs,
   resolveComposerPredictionRouting,
+  resolveComposerPredictionTurnBlocker,
+  type ComposerPredictionTurnBlocker,
 } from "../composerPrediction.ts";
 import {
   ComposerPredictionService,
@@ -31,10 +32,9 @@ export const COMPOSER_PREDICTION_TIMEOUT = Duration.seconds(20);
 
 /**
  * How long a request waits before it reads the transcript and starts the provider CLI
- * (about 0.3 to 0.4 GB and 0.7 to 3 CPU seconds per run). A chat the user only passes
- * through, or starts typing in, cancels the request inside this window, so no process
- * starts; one that stays open gets its suggestion this much later, after the work that
- * opening the chat or settling the turn does.
+ * (about 0.3 to 0.4 GB and 0.7 to 3 CPU seconds per run). Leaving the chat or turn
+ * inside this window cancels the request before a process starts. Otherwise the delay
+ * gives opening the chat or settling the turn time to finish.
  */
 export const COMPOSER_PREDICTION_START_DELAY = Duration.seconds(1);
 
@@ -44,8 +44,37 @@ const ANSWER_CACHE_LIMIT = 64;
 /** Completed generation times kept per route to decide when a second attempt is worth it. */
 const RECENT_DURATION_SAMPLES = 5;
 
+interface ComposerPredictionAnswer {
+  readonly suggestion: string | null;
+  readonly outcome: ComposerPredictionOutcome;
+}
+
+/**
+ * Why a request got no answer this time, one content-free code per miss. Routing is here
+ * and not a `none`: it follows settings and the chat's model, which the user can change
+ * for the same turn, so a client must not remember it as the turn's answer.
+ */
+type ComposerPredictionUnavailableReason =
+  | ComposerPredictionTurnBlocker
+  | "no-routing"
+  | "no-conversation"
+  | "timeout"
+  | "generation-failed"
+  | "unexpected-failure";
+
+/** Misses that point at the provider rather than at the thread's state. */
+const FAILURE_REASONS: ReadonlySet<ComposerPredictionUnavailableReason> = new Set([
+  "timeout",
+  "generation-failed",
+  "unexpected-failure",
+]);
+
+/** The model's own answer: a suggestion, or its decision that there is none. */
+const modelAnswer = (suggestion: string | null): ComposerPredictionAnswer =>
+  suggestion ? { suggestion, outcome: "suggested" } : { suggestion: null, outcome: "none" };
+
 interface SharedPrediction {
-  readonly result: Deferred.Deferred<string | null>;
+  readonly result: Deferred.Deferred<ComposerPredictionAnswer>;
   fiber: Fiber.Fiber<void> | undefined;
   waiters: number;
 }
@@ -72,29 +101,50 @@ const make = Effect.fnUntraced(function* (options: { readonly startDelay: Durati
   const readThread = (threadId: ThreadId) =>
     snapshotQuery.getThreadShellById(threadId).pipe(Effect.map(Option.getOrUndefined));
 
-  const generateOnce = (threadId: ThreadId, expectedTurnId: TurnId) =>
-    Effect.gen(function* () {
+  const generateOnce = (
+    threadId: ThreadId,
+    expectedTurnId: TurnId,
+  ): Effect.Effect<ComposerPredictionAnswer> => {
+    // Logs the one reason code for this miss. Ids only: no provider detail, prompt, or reply.
+    const unavailable = (
+      reason: ComposerPredictionUnavailableReason,
+      generationMayHaveRun = FAILURE_REASONS.has(reason),
+    ) =>
+      (FAILURE_REASONS.has(reason) ? Effect.logWarning : Effect.logInfo)(
+        "Composer prediction unavailable",
+        { threadId, expectedTurnId, reason },
+      ).pipe(
+        Effect.as<ComposerPredictionAnswer>({
+          suggestion: null,
+          outcome: generationMayHaveRun ? "generation-unavailable" : "unavailable",
+        }),
+      );
+
+    return Effect.gen(function* () {
       const thread = yield* readThread(threadId);
-      if (!thread || !isComposerPredictionTurnCurrent(thread, expectedTurnId)) return null;
-      const finalReplyMessageId = thread.latestTurn?.assistantMessageId;
-      if (!finalReplyMessageId) return null;
+      const blocker = resolveComposerPredictionTurnBlocker(thread, expectedTurnId);
+      if (blocker !== null) return yield* unavailable(blocker);
+      const finalReplyMessageId = thread?.latestTurn?.assistantMessageId;
+      if (!thread || !finalReplyMessageId) return yield* unavailable("turn-incomplete");
 
       const routing = resolveComposerPredictionRouting({
         thread,
         settings: yield* serverSettings.getSettings,
       });
-      if (!routing) return null;
+      if (!routing) return yield* unavailable("no-routing");
       const routeKey = JSON.stringify([
         routing.modelSelection.instanceId ?? routing.modelSelection.provider,
         routing.modelSelection.model,
       ]);
       const answerKey = JSON.stringify([threadId, expectedTurnId, routeKey]);
-      if (answers.has(answerKey)) return answers.get(answerKey) ?? null;
+      if (answers.has(answerKey)) return modelAnswer(answers.get(answerKey) ?? null);
 
       yield* Effect.sleep(options.startDelay);
-      if (!isComposerPredictionTurnCurrent(yield* readThread(threadId), expectedTurnId)) {
-        return null;
-      }
+      const delayedBlocker = resolveComposerPredictionTurnBlocker(
+        yield* readThread(threadId),
+        expectedTurnId,
+      );
+      if (delayedBlocker !== null) return yield* unavailable(delayedBlocker);
 
       const context = yield* snapshotQuery.getThreadMentionContextById(threadId, {
         messageLimit: COMPOSER_PREDICTION_CONTEXT_BUDGET.messageLimit,
@@ -105,7 +155,7 @@ const make = Effect.fnUntraced(function* (options: { readonly startDelay: Durati
             finalReplyMessageId,
           })
         : null;
-      if (!conversation) return null;
+      if (!conversation) return yield* unavailable("no-conversation");
 
       const project = yield* snapshotQuery.getProjectShellById(thread.projectId);
       const cwd = Option.isSome(project)
@@ -148,31 +198,29 @@ const make = Effect.fnUntraced(function* (options: { readonly startDelay: Durati
               ),
             );
       const generated = yield* generation.pipe(Effect.timeoutOption(COMPOSER_PREDICTION_TIMEOUT));
-      if (Option.isNone(generated)) {
-        yield* Effect.logWarning("Composer prediction timed out", { threadId, expectedTurnId });
-        return null;
-      }
+      if (Option.isNone(generated)) return yield* unavailable("timeout");
 
       // The thread may have moved on while the model was thinking.
-      if (!isComposerPredictionTurnCurrent(yield* readThread(threadId), expectedTurnId)) {
-        return null;
-      }
+      const settledBlocker = resolveComposerPredictionTurnBlocker(
+        yield* readThread(threadId),
+        expectedTurnId,
+      );
+      if (settledBlocker !== null) return yield* unavailable(settledBlocker, true);
+      // Only a real answer from the model is remembered, "none" included.
       rememberAnswer(answerKey, generated.value.suggestion);
-      return generated.value.suggestion;
+      return modelAnswer(generated.value.suggestion);
     }).pipe(
       Effect.catchCause((cause) => {
         if (Cause.hasInterruptsOnly(cause)) return Effect.interrupt;
-        const error = Cause.squash(cause);
-        return Effect.logWarning("Composer prediction unavailable", {
-          threadId,
-          expectedTurnId,
-          // No provider detail: a CLI failure message can echo prompt or reply text.
-          reason: Schema.is(TextGenerationError)(error)
-            ? "text generation failed"
-            : "unexpected failure",
-        }).pipe(Effect.as(null));
+        // No provider detail: a CLI failure message can echo prompt or reply text.
+        return unavailable(
+          Schema.is(TextGenerationError)(Cause.squash(cause))
+            ? "generation-failed"
+            : "unexpected-failure",
+        );
       }),
     );
+  };
 
   // One generation per thread and turn. Every caller awaits the same result;
   // the generation is interrupted only once no caller is still waiting.
@@ -183,7 +231,7 @@ const make = Effect.fnUntraced(function* (options: { readonly startDelay: Durati
         let shared = pending.get(key);
         if (!shared) {
           const created: SharedPrediction = {
-            result: Deferred.makeUnsafe<string | null>(),
+            result: Deferred.makeUnsafe<ComposerPredictionAnswer>(),
             fiber: undefined,
             waiters: 0,
           };
@@ -218,9 +266,7 @@ const make = Effect.fnUntraced(function* (options: { readonly startDelay: Durati
     );
 
   const generate: ComposerPredictionServiceShape["generate"] = (input) =>
-    generateShared(input.threadId, input.expectedTurnId).pipe(
-      Effect.map((suggestion) => ({ suggestion })),
-    );
+    generateShared(input.threadId, input.expectedTurnId);
 
   return { generate } satisfies ComposerPredictionServiceShape;
 });

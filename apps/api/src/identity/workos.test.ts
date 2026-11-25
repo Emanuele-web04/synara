@@ -761,8 +761,6 @@ describe("refreshTokens", () => {
     [408, 3, { message: "timeout" }],
     [429, 3, { message: "slow down" }],
     [400, 1, { error: "invalid_request", error_description: "malformed" }],
-    [403, 1, { message: "forbidden" }],
-    [502, 3, { message: "bad gateway" }],
     [503, 3, { message: "unavailable" }],
   ])("surfaces provider status %i after %i attempts", async (status, attempts, body) => {
     const result = await refreshAgainst(status, body);

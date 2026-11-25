@@ -44,13 +44,37 @@ export type ReserveExternalMcpOperationResult =
   | { readonly kind: "idempotency_conflict"; readonly operation: ExternalMcpOperationRecord }
   | { readonly kind: "concurrency_limited"; readonly activeCount: number; readonly limit: number };
 
+// One external client's ownership of a thread it asked Synara to create. The operation
+// that creates it follows `AGENT_GATEWAY_OPERATION_TRANSITIONS`.
+//
+//   registerTask ─> planned ─markTaskStatus─> created
+//   planned | created ─failOperationAndTask, or caller-thread purge─> failed (terminal)
+//
+// `markTaskStatus` is unguarded: the operation's single dispatcher is its only writer.
+// `failOperationAndTask` and the purge in `profileStatsArchive.ts` guard on the live pair;
+// the lifecycle matrix in `ExternalMcpRepository.test.ts` pins both.
+export const EXTERNAL_MCP_TASK_TRANSITIONS = {
+  planned: ["created", "failed"],
+  created: ["failed"],
+  failed: [],
+} as const;
+
+export type ExternalMcpTaskStatus = keyof typeof EXTERNAL_MCP_TASK_TRANSITIONS;
+
+export function canTransitionExternalMcpTask(
+  from: ExternalMcpTaskStatus,
+  to: ExternalMcpTaskStatus,
+): boolean {
+  return (EXTERNAL_MCP_TASK_TRANSITIONS[from] as ReadonlyArray<ExternalMcpTaskStatus>).includes(to);
+}
+
 export interface ExternalMcpTaskRecord {
   readonly integrationId: string;
   readonly operationId: string;
   readonly requestId: string;
   readonly threadId: string;
   readonly projectId: string;
-  readonly status: "planned" | "created" | "failed";
+  readonly status: ExternalMcpTaskStatus;
   readonly createdAt: string;
   readonly updatedAt: string;
 }

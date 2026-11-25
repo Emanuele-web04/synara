@@ -71,6 +71,7 @@ export function orchestrationCommandLane(
     // so ready turn starts on other keys do not outrank a ready stop.
     case "thread.create":
     case "thread.turn.start":
+    case "thread.turn.resume":
     case "thread.checkpoint.revert":
     case "thread.conversation.rollback":
     case "thread.message.edit-and-resend":

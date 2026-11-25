@@ -59,6 +59,12 @@ describe("createDesktopPlatformBuildConfig", () => {
     assert.deepStrictEqual(linux.linux?.desktop, { entry: { StartupWMClass: "synara-remote" } });
   });
 
+  it("prunes unused Electron locales to the supported UI locales", () => {
+    for (const flavor of SYNARA_PACKAGED_DESKTOP_FLAVORS) {
+      const config = createDesktopPlatformBuildConfig({ platform: "mac", target: "dir", flavor });
+      assert.deepStrictEqual(config.electronLanguages, ["en-US", "en-GB", "en_GB"]);
+    }
+  });
   it("retains TypeScript runtime libraries on every desktop platform", () => {
     const require = createRequire(import.meta.url);
     for (const platform of ["mac", "linux", "win"] as const) {
@@ -120,6 +126,37 @@ describe("createDesktopPlatformBuildConfig", () => {
     assert.equal(dmg.writeUpdateInfo, false);
     assert.equal(mac.entitlements, MAC_ENTITLEMENTS_PATH);
     assert.equal(mac.entitlementsInherit, MAC_INHERITED_ENTITLEMENTS_PATH);
+    // Only Chromium's `.pak` data files skip their own signature; the
+    // framework's signature still seals them. No code may ever match.
+    assert.deepStrictEqual(mac.signIgnore, ["\\.pak$"]);
+    const skipsOwnSignature = (file: string) =>
+      (mac.signIgnore as string[]).some((pattern) => new RegExp(pattern).test(file));
+    const framework =
+      "/stage/Synara.app/Contents/Frameworks/Electron Framework.framework/Versions/A";
+    for (const data of [
+      `${framework}/Resources/am.lproj/locale.pak`,
+      `${framework}/Resources/resources.pak`,
+      "/stage/Synara.app/Contents/Frameworks/Electron Framework.framework/Resources/chrome_200_percent.pak",
+    ])
+      assert.equal(skipsOwnSignature(data), true, data);
+    for (const code of [
+      "/stage/Synara.app",
+      "/stage/Synara.app/Contents/MacOS/Synara",
+      "/stage/Synara.app/Contents/Frameworks/Electron Framework.framework",
+      `${framework}/Electron Framework`,
+      `${framework}/Libraries/libffmpeg.dylib`,
+      `${framework}/Helpers/chrome_crashpad_handler`,
+      "/stage/Synara.app/Contents/Frameworks/Synara Helper (Renderer).app",
+      "/stage/Synara.app/Contents/Frameworks/synara-window-material.node",
+      "/stage/Synara.app/Contents/Helpers/synara-appsnap-helper",
+      "/stage/Synara.app/Contents/Resources/cua-driver/cua-driver",
+      "/stage/Synara.app/Contents/Resources/cloudflared/cloudflared",
+      "/stage/Synara.app/Contents/Resources/app.asar",
+      "/stage/Synara.app/Contents/Resources/app.asar.unpacked/node_modules/node-pty/build/Release/pty.node",
+      "/stage/Synara.app/Contents/Resources/app.asar.unpacked/node_modules/@anthropic-ai/claude-agent-sdk-darwin-arm64/claude",
+      "/stage/Synara.app/Contents/Resources/tool.pak/helper",
+    ])
+      assert.equal(skipsOwnSignature(code), false, code);
     assert.equal(MAC_APPSNAP_HELPER_BUNDLE_PATH, "Contents/Helpers/synara-appsnap-helper");
     assert.deepStrictEqual(mac.binaries, [
       "Contents/Helpers/synara-appsnap-helper",
@@ -140,6 +177,7 @@ describe("createDesktopPlatformBuildConfig", () => {
     assert.ok(config.files?.includes(MAC_APPSNAP_HELPER_ASAR_EXCLUSION));
     assert.ok(config.files?.includes(MAC_WINDOW_MATERIAL_ADDON_ASAR_EXCLUSION));
     assert.ok(config.files?.includes("!apps/desktop/resources/cua-driver/**"));
+    assert.ok(config.files?.includes("!apps/desktop/prod-resources/cua-driver/**"));
     assert.deepStrictEqual(config.extraFiles, [
       {
         from: "apps/desktop/resources/cua-driver",

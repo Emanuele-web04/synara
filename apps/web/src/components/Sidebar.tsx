@@ -132,7 +132,6 @@ import {
   PROVIDER_DISPLAY_NAMES,
   ProjectId,
   SpaceId,
-  type ProviderKind,
   ThreadId,
   type ResolvedKeybindingsConfig,
   WS_GITHUB_PROJECT_PROVISIONING_CAPABILITY,
@@ -261,7 +260,7 @@ import { resolveComposerSlashRootBranch } from "../composerSlashCommands";
 import { dispatchThreadRename } from "../lib/threadRename";
 import { quotePosixShellArgument } from "../lib/shellQuote";
 import { useStableValue } from "~/hooks/useStableValue";
-import { DEFAULT_THREAD_TERMINAL_ID, type SidebarThreadSummary, type Thread } from "../types";
+import { type SidebarThreadSummary, type Thread } from "../types";
 import {
   useAutomationList,
   formatCadence,
@@ -348,16 +347,15 @@ import {
 } from "./SidebarGroupsSurface.logic";
 
 import { useProjectAgentSummaries } from "./chat/project/useProjectAgentSummaries";
-import { RenameDialog } from "./RenameDialog";
 import { EditProjectDialog, type EditProjectValue } from "./EditProjectDialog";
 import { RelocateProjectDialog } from "./RelocateProjectDialog";
 import { RenameThreadDialog } from "./RenameThreadDialog";
 import { SnoozeUntilDialog } from "./SnoozeUntilDialog";
 import { SNOOZE_PRESETS } from "../lib/threadSnooze";
-import ReleaseHistoryDialog from "./ReleaseHistoryDialog";
 import { GROUPS_ON, INBOX_ON, isBetaFeatureOn } from "../betaFeatures";
-import { WHATS_NEW_ENTRIES } from "../whatsNew/entries";
-import { sortEntriesByVersionDesc } from "../whatsNew/logic";
+import { sortEntriesByVersionDesc, type WhatsNewEntry } from "../whatsNew/logic";
+
+const LazyReleaseHistoryDialog = lazy(() => import("./ReleaseHistoryDialog"));
 import { SidebarSearchPalette, type SidebarSearchPaletteMode } from "./SidebarSearchPalette";
 import { useHandleNewChat } from "../hooks/useHandleNewChat";
 import { useHandleNewGroupChat } from "../hooks/useHandleNewGroupChat";
@@ -496,7 +494,6 @@ import {
 import { createClientPointMenuAnchor } from "~/lib/clientPointMenuAnchor";
 import {
   canCreateThreadHandoff,
-  canContinueThreadHandoff,
   resolveAvailableHandoffTargets,
   resolveThreadHandoffAvailability,
   resolveThreadHandoffBadgeLabel,
@@ -532,6 +529,7 @@ import {
   SIDEBAR_ROW_SNOOZE_REMINDER_CLASS_NAME,
   SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME,
   SIDEBAR_SECTION_LABEL_CLASS_NAME,
+  SIDEBAR_EMPTY_STATE_CLASS_NAME,
 } from "../sidebarRowStyles";
 import { AccountFooterControl } from "./account/AccountFooterControl";
 import { SettingsSidebarNav } from "./SettingsSidebarNav";
@@ -991,9 +989,15 @@ function ProjectSortMenu({
 
 const SYNARA_DOCS_URL = "https://trysynara.com/docs";
 
-// Latest curated releases surfaced directly in the help menu. Static data, so
-// computed once at module scope rather than per render.
-const HELP_MENU_RELEASE_ENTRIES = sortEntriesByVersionDesc(WHATS_NEW_ENTRIES).slice(0, 3);
+// Cached once the user opens the Help menu; keeps the 365 KB changelog out of initial boot.
+let cachedHelpMenuReleaseEntries: readonly WhatsNewEntry[] | null = null;
+function loadHelpMenuReleaseEntries(): Promise<readonly WhatsNewEntry[]> {
+  if (cachedHelpMenuReleaseEntries) return Promise.resolve(cachedHelpMenuReleaseEntries);
+  return import("../whatsNew/entries").then(({ WHATS_NEW_ENTRIES }) => {
+    cachedHelpMenuReleaseEntries = sortEntriesByVersionDesc(WHATS_NEW_ENTRIES).slice(0, 3);
+    return cachedHelpMenuReleaseEntries;
+  });
+}
 
 // Footer help menu; swapped out for the desktop-update pill while an update is
 // available (see SidebarFooter).
@@ -1013,6 +1017,9 @@ function SidebarHelpMenu({
   const { t } = useTranslation();
 
   const inRail = inRailProp ?? false;
+  const [releaseEntries, setReleaseEntries] = useState<readonly WhatsNewEntry[]>(
+    () => cachedHelpMenuReleaseEntries ?? [],
+  );
   // `openCount` keys the dialog so each open remounts the accordion — its rows
   // capture `defaultOpen` in mount state, so a stale mount would ignore a
   // newly selected version.
@@ -1028,7 +1035,13 @@ function SidebarHelpMenu({
 
   return (
     <>
-      <Menu>
+      <Menu
+        onOpenChange={(open) => {
+          if (open && releaseEntries.length === 0) {
+            void loadHelpMenuReleaseEntries().then(setReleaseEntries);
+          }
+        }}
+      >
         <SidebarIconButton
           render={<MenuTrigger />}
           icon={CircleQuestionIcon}
@@ -1051,7 +1064,7 @@ function SidebarHelpMenu({
             <div className="px-2 py-1 sm:text-ui leading-snug font-medium text-muted-foreground">
               {t("workspace:whatSNew")}
             </div>
-            {HELP_MENU_RELEASE_ENTRIES.map((entry) => (
+            {releaseEntries.map((entry) => (
               <MenuItem
                 key={entry.version}
                 className={SIDEBAR_CONTEXT_MENU_ITEM_CLASS_NAME}
@@ -1102,14 +1115,18 @@ function SidebarHelpMenu({
           </MenuGroup>
         </ComposerPickerMenuPopup>
       </Menu>
-      <ReleaseHistoryDialog
-        key={releaseHistory.openCount}
-        open={releaseHistory.open}
-        onOpenChange={(open) => {
-          setReleaseHistory((prev) => ({ ...prev, open }));
-        }}
-        defaultExpandedVersion={releaseHistory.version}
-      />
+      {releaseHistory.open ? (
+        <Suspense fallback={null}>
+          <LazyReleaseHistoryDialog
+            key={releaseHistory.openCount}
+            open={releaseHistory.open}
+            onOpenChange={(open) => {
+              setReleaseHistory((prev) => ({ ...prev, open }));
+            }}
+            defaultExpandedVersion={releaseHistory.version}
+          />
+        </Suspense>
+      ) : null}
     </>
   );
 }
@@ -1706,7 +1723,6 @@ export default function Sidebar() {
   const projectAdditionLockRef = useRef(false);
   const [renameDialogThreadId, setRenameDialogThreadId] = useState<ThreadId | null>(null);
   const [snoozeDialogThreadId, setSnoozeDialogThreadId] = useState<ThreadId | null>(null);
-  const [renameProjectDialogId, setRenameProjectDialogId] = useState<ProjectId | null>(null);
   const [projectAgentDialogState, setProjectAgentDialogState] = useState<{
     projectId: ProjectId;
     mode: "onboarding" | "edit";
@@ -3392,17 +3408,18 @@ export default function Sidebar() {
     [openRenameThreadDialog],
   );
 
-  const { prewarmThreadDetail: prewarmThreadDetailForIntent } = useThreadDetailPrewarm();
+  const { prewarmThreadDetail: prewarmThreadDetailForIntent, prewarmThreadDetailForActivation } =
+    useThreadDetailPrewarm();
 
   const primeThreadActivation = useCallback(
     (event: ReactPointerEvent<HTMLElement>, threadId: ThreadId) => {
       if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
         return;
       }
-      prewarmThreadDetailForIntent(threadId);
+      prewarmThreadDetailForActivation(threadId);
       setOptimisticActiveThreadId(threadId);
     },
-    [prewarmThreadDetailForIntent, setOptimisticActiveThreadId],
+    [prewarmThreadDetailForActivation, setOptimisticActiveThreadId],
   );
 
   // Segment-switch counterpart of primeThreadActivation: hovering/clicking a
@@ -3673,22 +3690,16 @@ export default function Sidebar() {
             providerStatuses,
           })
         : [];
-      const continueHandoffTargets = handoffTargets.filter((target) =>
-        canContinueThreadHandoff({
-          sourceProvider: thread.modelSelection.provider,
-          targetProvider: target.provider,
-        }),
-      );
       const handoffTargetById = new Map(
         handoffTargets.map((target) => [`handoff:${target.instanceId}`, target]),
       );
       const continueHandoffTargetById = new Map(
-        continueHandoffTargets.map((target) => [`handoff-here:${target.instanceId}`, target]),
+        handoffTargets.map((target) => [`handoff-here:${target.instanceId}`, target]),
       );
       const handoffItems = contextMenuGroup(
         { id: "handoff", label: t("workspace:handoff"), icon: THREAD_CONTEXT_MENU_ICONS.handoff },
         [
-          ...continueHandoffTargets.map((target) => ({
+          ...handoffTargets.map((target) => ({
             id: `handoff-here:${target.instanceId}`,
             label: t("workspace:inThisThread", { value0: target.label }),
             standaloneLabel: t("workspace:handoffToInThisThread", { value0: target.label }),
@@ -3696,13 +3707,10 @@ export default function Sidebar() {
           })),
           ...handoffTargets.map((target, index) => ({
             id: `handoff:${target.instanceId}`,
-            label:
-              continueHandoffTargets.length > 0
-                ? t("workspace:inANewThread", { value0: target.label })
-                : target.label,
+            label: t("workspace:inANewThread", { value0: target.label }),
             standaloneLabel: t("workspace:handoffTo", { value0: target.label }),
             icon: THREAD_CONTEXT_MENU_ICONS.handoff,
-            ...(index === 0 && continueHandoffTargets.length > 0 ? { separatorBefore: true } : {}),
+            ...(index === 0 ? { separatorBefore: true } : {}),
           })),
         ],
       );
@@ -6773,7 +6781,7 @@ export default function Sidebar() {
                   render={<button type="button" />}
                   data-thread-selection-safe
                   size="sm"
-                  className="h-7 flex-1 translate-x-0 justify-start rounded-lg pr-2 pl-8 text-left text-ui text-muted-foreground/79 hover:bg-transparent hover:text-foreground active:bg-transparent active:text-foreground"
+                  className="h-7 flex-1 translate-x-0 justify-start rounded-lg pr-2 pl-8 text-left text-ui text-muted-foreground hover:bg-transparent hover:text-foreground active:bg-transparent active:text-foreground"
                   onMouseDown={preventFocusOnMouseDown}
                   onClick={() => {
                     showMoreThreadsForProject(project.cwd, threadListExtraPages);
@@ -6788,7 +6796,7 @@ export default function Sidebar() {
                   data-thread-selection-safe
                   size="sm"
                   className={cn(
-                    "h-7 translate-x-0 justify-start rounded-lg text-left text-ui text-muted-foreground/79 hover:bg-transparent hover:text-foreground active:bg-transparent active:text-foreground",
+                    "h-7 translate-x-0 justify-start rounded-lg text-left text-ui text-muted-foreground hover:bg-transparent hover:text-foreground active:bg-transparent active:text-foreground",
                     // Keep the left indent when "Show less" is the only affordance left.
                     canShowMoreThreads ? "w-auto flex-none px-2" : "flex-1 pr-2 pl-8",
                   )}
@@ -7121,9 +7129,7 @@ export default function Sidebar() {
             </SidebarMenuItem>
           </SidebarMenu>
           {railSpacesProjectSidebarData.visibleEntries.length === 0 ? (
-            <div className="px-2 pt-4 text-center text-ui text-muted-foreground/58">
-              {t("workspace:noThreadsYet")}
-            </div>
+            <div className={SIDEBAR_EMPTY_STATE_CLASS_NAME}>{t("workspace:noThreadsYet")}</div>
           ) : null}
         </SidebarGroup>
       );
@@ -8613,7 +8619,7 @@ export default function Sidebar() {
                           aria-live="polite"
                           aria-label={t("workspace:emptyStates_loadingProjectsAriaLabel")}
                         >
-                          <div className="text-center text-ui text-muted-foreground/58">
+                          <div className="text-center text-ui text-muted-foreground">
                             {t("workspace:emptyStates_loadingProjects")}
                           </div>
                           <div className="mx-auto grid w-full max-w-42 gap-1.5 opacity-70">
@@ -8680,7 +8686,7 @@ export default function Sidebar() {
                       }}
                     >
                       <div className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden">
-                        <span className="truncate font-system-ui text-ui font-normal text-muted-foreground/79">
+                        <span className="truncate font-system-ui text-ui font-normal text-muted-foreground">
                           {t("workspace:general_chats")}
                         </span>
                         <DisclosureChevron
@@ -8744,7 +8750,7 @@ export default function Sidebar() {
                               {canShowMoreChatThreads ? (
                                 <SidebarMenuButton
                                   size="sm"
-                                  className="h-7 flex-1 justify-start rounded-lg pr-2 pl-8 text-left text-ui font-normal text-muted-foreground/79 hover:bg-transparent hover:text-foreground active:bg-transparent active:text-foreground"
+                                  className="h-7 flex-1 justify-start rounded-lg pr-2 pl-8 text-left text-ui font-normal text-muted-foreground hover:bg-transparent hover:text-foreground active:bg-transparent active:text-foreground"
                                   onMouseDown={preventFocusOnMouseDown}
                                   onClick={() =>
                                     setChatThreadListExtraPages(
@@ -8759,7 +8765,7 @@ export default function Sidebar() {
                                 <SidebarMenuButton
                                   size="sm"
                                   className={cn(
-                                    "h-7 justify-start rounded-lg text-left text-ui font-normal text-muted-foreground/79 hover:bg-transparent hover:text-foreground active:bg-transparent active:text-foreground",
+                                    "h-7 justify-start rounded-lg text-left text-ui font-normal text-muted-foreground hover:bg-transparent hover:text-foreground active:bg-transparent active:text-foreground",
                                     // Keep the left indent when "Show less" is the only affordance left.
                                     canShowMoreChatThreads
                                       ? "w-auto flex-none px-2"

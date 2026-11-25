@@ -41,8 +41,8 @@ import { deriveProviderUsageDisplayRows } from "~/lib/providerUsageDisplay";
 import {
   fetchAllProviderUsage,
   serverAllProviderUsageQueryOptions,
-  serverQueryKeys,
   serverSettingsQueryOptions,
+  setProviderUsageQueryData,
 } from "~/lib/serverReactQuery";
 import { cn } from "~/lib/utils";
 import { t, useTranslation } from "~/i18n";
@@ -227,10 +227,7 @@ export function ProviderUsageSettingsPanel() {
     onSuccess: (data) => {
       // The batch owns account membership. Keeping omitted previous snapshots
       // would restore accounts that were removed or disabled since the last fetch.
-      queryClient.setQueryData<readonly ServerProviderUsageSnapshot[]>(
-        serverQueryKeys.allProviderUsage(),
-        data,
-      );
+      setProviderUsageQueryData(queryClient, data);
     },
   });
 

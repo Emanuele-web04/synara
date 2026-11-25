@@ -12,6 +12,26 @@ export interface NotarySubmission {
   stapledSha256?: string;
 }
 export const payloadDigest = hashFile;
+/**
+ * `ditto` arguments for the archive uploaded to Apple's notary service. The
+ * archive is read once by Apple and discarded, so it trades a slightly larger
+ * upload for much less compression time: level 1 archived the 850 MB app in
+ * 6.8 s against 18.3 s at the default level, for a 9% larger file, and
+ * extracts to an identical bundle. The update ZIP that ships to users keeps
+ * the default level.
+ */
+export function appNotaryArchiveArgs(app: string, archive: string): string[] {
+  return [
+    "-c",
+    "-k",
+    "--sequesterRsrc",
+    "--keepParent",
+    "--zlibCompressionLevel",
+    "1",
+    app,
+    archive,
+  ];
+}
 export function appNotaryStateDirectory(app: string): string {
   // Bundle discovery treats a directory ending in .app as executable content.
   // Retained submission state must never masquerade as another app bundle.

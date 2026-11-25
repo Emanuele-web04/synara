@@ -1,4 +1,4 @@
-import { MessageId, ThreadId, type ProviderKind, type TurnId } from "@synara/contracts";
+import { MessageId, ThreadId, type ProviderKind } from "@synara/contracts";
 import { resolveTailUserMessageEditTarget } from "@synara/shared/conversationEdit";
 import { providerSupportsNativeTurnSteering } from "@synara/shared/providerMetadata";
 import { deriveAssociatedWorktreeMetadata } from "@synara/shared/threadWorkspace";
@@ -30,7 +30,7 @@ import {
   buildPlanImplementationThreadTitle,
 } from "../../proposedPlan";
 import type { LatestProposedPlanState } from "../../session-logic";
-import { buildSourceProposedPlanReference } from "../../session-logic";
+import { buildSourceProposedPlanReference, runningSessionActiveTurnId } from "../../session-logic";
 import { useStore } from "../../store";
 import { getThreadFromState } from "../../threadDerivation";
 import { truncateTitle } from "../../truncateTitle";
@@ -336,7 +336,10 @@ export function useChatTurnFollowUps({
         activeThread?.session?.provider ?? modelSelectionForPlanDispatch.provider;
       if (
         dispatchMode === "steer" &&
-        !providerSupportsNativeTurnSteering(livePlanProviderForSteerGate)
+        !providerSupportsNativeTurnSteering(
+          livePlanProviderForSteerGate,
+          activeThread?.session?.supportsNativeTurnSteering,
+        )
       ) {
         const nextSteerGate = {
           sawInterruptGap: false,
@@ -389,10 +392,7 @@ export function useChatTurnFollowUps({
       const editTarget = resolveTailUserMessageEditTarget({
         messages: activeThread.messages,
         messageId,
-        activeTurnId:
-          activeThread.session?.orchestrationStatus === "running"
-            ? (activeThread.session.activeTurnId ?? null)
-            : null,
+        activeTurnId: runningSessionActiveTurnId(activeThread.session),
       });
       if (!editTarget.editable) {
         setThreadError(activeThread.id, "Only the latest rollbackable user message can be edited.");
@@ -480,55 +480,77 @@ export function useChatTurnFollowUps({
   // calls replay from cache, so a paused run picks up where it stopped. Sent as
   // a pre-built chat turn so it takes the exact send path a queued turn does.
 
-  const onContinueFailedTurn = useCallback(
-    async (turnId: TurnId): Promise<boolean> => {
-      const current = getThreadFromState(useStore.getState(), threadId);
-      const handlers = lateComposerSendHandlersRef.current;
-      if (
-        !handlers ||
-        !isServerThread ||
-        !current ||
-        current.latestTurn?.turnId !== turnId ||
-        current.latestTurn.state !== "error" ||
-        current.session?.status === "running" ||
-        current.hasPendingApprovals ||
-        current.hasPendingUserInput
-      )
-        return false;
-      const prompt =
-        "Continue the interrupted task from the existing conversation and working state. First verify which operations have already completed; avoid repeating them and resume the remaining work.";
-      return handlers.send(undefined, "queue", {
-        id: randomUUID(),
-        kind: "chat",
+  // Resume (composer) and Continue task (failed-turn banner): the server resends
+  // a request that never reached the provider, or continues the interrupted or
+  // failed latest turn. Neither adds a chat message. A model picked meanwhile
+  // is saved first, through the provider handoff when it changes provider.
+  const onResumeTurn = useCallback(async (): Promise<boolean> => {
+    const api = readNativeApi();
+    const current = getThreadFromState(useStore.getState(), threadId);
+    if (
+      !api ||
+      !isServerThread ||
+      !current ||
+      sendInFlightRef.current ||
+      current.session?.status === "running" ||
+      current.hasPendingApprovals ||
+      current.hasPendingUserInput
+    )
+      return false;
+    const modelSelection = turnDispatchSettings.modelSelection;
+    const needsProviderHandoff = turnNeedsProviderHandoff({ thread: current, modelSelection });
+    if (needsProviderHandoff && canSendWithProviderHandoff?.(modelSelection) === false) {
+      return false;
+    }
+    sendInFlightRef.current = true;
+    setThreadError(current.id, null);
+    const resumeTurn = async () => {
+      if (needsProviderHandoff && prepareProviderHandoffForSend) {
+        await prepareProviderHandoffForSend(current, modelSelection);
+      }
+      await persistThreadSettingsForNextTurn({
+        // The handoff owns the model switch. Save modes only after it succeeds.
+        ...(needsProviderHandoff
+          ? {
+              runtimeMode: turnDispatchSettings.runtimeMode,
+              interactionMode: turnDispatchSettings.interactionMode,
+            }
+          : threadSettingsDispatchFields(turnDispatchSettings)),
+        threadId: current.id,
         createdAt: new Date().toISOString(),
-        previewText: prompt,
-        prompt,
-        images: [],
-        files: [],
-        assistantSelections: [],
-        browserAnnotations: [],
-        terminalContexts: [],
-        fileComments: [],
-        pastedTexts: [],
-        pullRequestContexts: [],
-        skills: [],
-        mentions: [],
-        selectedProvider,
-        selectedModel,
-        selectedPromptEffort,
-        ...queuedChatTurnDispatchFields(turnDispatchSettings, undefined),
       });
-    },
-    [
-      threadId,
-      isServerThread,
-      lateComposerSendHandlersRef,
-      selectedProvider,
-      selectedModel,
-      selectedPromptEffort,
-      turnDispatchSettings,
-    ],
-  );
+      await api.orchestration.dispatchCommand({
+        type: "thread.turn.resume",
+        commandId: newCommandId(),
+        threadId: current.id,
+        // This click is the consent a resent message needs to keep the computer
+        // access it asked for, checked against the current generation like a send.
+        computerControlGeneration: turnDispatchSettings.computerControlGeneration ?? 0,
+        createdAt: new Date().toISOString(),
+      });
+    };
+    // No `finally`: React Compiler cannot lower it (chatHotPath.compiler.test.ts).
+    try {
+      await resumeTurn();
+      sendInFlightRef.current = false;
+      return true;
+    } catch (err) {
+      sendInFlightRef.current = false;
+      if (!(err instanceof ProviderHandoffBackgroundTasksError)) {
+        setThreadError(current.id, err instanceof Error ? err.message : "Could not resume task.");
+      }
+      return false;
+    }
+  }, [
+    threadId,
+    isServerThread,
+    sendInFlightRef,
+    turnDispatchSettings,
+    canSendWithProviderHandoff,
+    prepareProviderHandoffForSend,
+    persistThreadSettingsForNextTurn,
+    setThreadError,
+  ]);
 
   const onResumeWorkflowRun = useCallback(async () => {
     if (!workflowRunState?.scriptPath || !workflowRunState.runId) return;
@@ -736,7 +758,7 @@ export function useChatTurnFollowUps({
   ]);
   return {
     onSubmitPlanFollowUp,
-    onContinueFailedTurn,
+    onResumeTurn,
     onEditUserMessage,
     onResumeWorkflowRun,
     onImplementPlanInNewThread,

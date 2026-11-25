@@ -16,8 +16,6 @@
 /output
 /playwright-report/
 /test-results/
-# capture-visual-matrix.mjs scratch output (dev tooling only, never committed)
-/tests/visual/evidence/
 
 # next.js
 /.next/

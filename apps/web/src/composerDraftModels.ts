@@ -379,11 +379,16 @@ export function normalizeProviderModelOptions(
             (typeof legacy?.serviceTier === "string" && legacy.serviceTier === "fast")
           ? true
           : undefined;
+  const codexServiceTier =
+    codexCandidate?.serviceTier === "ultrafast" ? ("ultrafast" as const) : undefined;
   const codex =
-    codexReasoningEffort !== undefined || codexFastMode !== undefined
+    codexReasoningEffort !== undefined ||
+    codexFastMode !== undefined ||
+    codexServiceTier !== undefined
       ? {
           ...(codexReasoningEffort !== undefined ? { reasoningEffort: codexReasoningEffort } : {}),
           ...(codexFastMode !== undefined ? { fastMode: codexFastMode } : {}),
+          ...(codexServiceTier !== undefined ? { serviceTier: codexServiceTier } : {}),
         }
       : undefined;
 

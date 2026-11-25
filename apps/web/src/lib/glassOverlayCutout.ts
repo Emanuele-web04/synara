@@ -185,18 +185,23 @@ export function installGlassOverlayCutout(root: HTMLElement): () => void {
   svg.append(defs);
   let frame: number | null = null;
   let idleFrames = 0;
+  let unchangedFrames = 0;
+  const observedOverlayElements = new Set<HTMLElement>();
 
-  const applyClipPaths = (next: Map<HTMLElement, CutoutBox>) => {
+  const applyClipPaths = (next: Map<HTMLElement, CutoutBox>): boolean => {
+    let changed = false;
     for (const [element, state] of applied) {
       if (next.has(element)) continue;
       element.style.clipPath = state.previous;
       state.definitions?.remove();
       applied.delete(element);
+      changed = true;
     }
     for (const [element, box] of next) {
       const signature = JSON.stringify(box);
       const state = applied.get(element) ?? { previous: element.style.clipPath, signature: "" };
       if (state.signature === signature) continue;
+      changed = true;
       state.signature = signature;
       state.definitions?.remove();
       if (box.rects.length === 1) {
@@ -224,6 +229,7 @@ export function installGlassOverlayCutout(root: HTMLElement): () => void {
       }
       applied.set(element, state);
     }
+    return changed;
   };
 
   const addCutout = (
@@ -252,7 +258,10 @@ export function installGlassOverlayCutout(root: HTMLElement): () => void {
     });
   };
 
-  const collectPortaledCutouts = (next: Map<HTMLElement, CutoutBox>): number => {
+  const collectPortaledCutouts = (
+    next: Map<HTMLElement, CutoutBox>,
+    activeOverlays: Set<HTMLElement>,
+  ): number => {
     // Only the portal containers are searched: the root holds the whole transcript.
     const overlays: HTMLElement[] = [];
     for (const child of document.body.children) {
@@ -270,6 +279,7 @@ export function installGlassOverlayCutout(root: HTMLElement): () => void {
         continue;
       }
       covering.push(overlay);
+      activeOverlays.add(overlay);
       let backed = backedOverlays.get(overlay);
       if (backed === undefined) {
         backed = isBackedByPortaledLayer(overlay, root);
@@ -284,13 +294,17 @@ export function installGlassOverlayCutout(root: HTMLElement): () => void {
     return covering.length;
   };
 
-  const collectInPageCutouts = (next: Map<HTMLElement, CutoutBox>): number => {
+  const collectInPageCutouts = (
+    next: Map<HTMLElement, CutoutBox>,
+    activeOverlays: Set<HTMLElement>,
+  ): number => {
     if (documentElement.dataset.windowTranslucency !== "window") return 0;
     let covering = 0;
     for (const wrapper of inPageOverlayWrappers) {
       const surface = wrapper.querySelector<HTMLElement>(IN_PAGE_SURFACE_SELECTOR);
       if (!surface || !wrapper.parentElement || !isCoveringOverlay(surface)) continue;
       covering += 1;
+      activeOverlays.add(surface);
       for (const sibling of wrapper.parentElement.children) {
         if (!(sibling instanceof HTMLElement) || sibling === wrapper) continue;
         // A closed Environment card can leave its preview rail visible. That chrome
@@ -303,26 +317,65 @@ export function installGlassOverlayCutout(root: HTMLElement): () => void {
     return covering;
   };
 
+  let overlayResizeObserver: ResizeObserver | null = null;
+  const syncOverlayResizeObservers = (activeElements: Set<HTMLElement>) => {
+    if (!overlayResizeObserver) return;
+    for (const el of observedOverlayElements) {
+      if (!activeElements.has(el)) {
+        overlayResizeObserver.unobserve(el);
+        observedOverlayElements.delete(el);
+      }
+    }
+    for (const el of activeElements) {
+      if (!observedOverlayElements.has(el)) {
+        overlayResizeObserver.observe(el);
+        observedOverlayElements.add(el);
+      }
+    }
+  };
+
   const tick = () => {
     frame = null;
     const next = new Map<HTMLElement, CutoutBox>();
+    const activeOverlays = new Set<HTMLElement>();
     const covering =
       documentElement.dataset.windowMaterial === "translucent"
-        ? collectPortaledCutouts(next) + collectInPageCutouts(next)
+        ? collectPortaledCutouts(next, activeOverlays) + collectInPageCutouts(next, activeOverlays)
         : 0;
-    applyClipPaths(next);
-    idleFrames = covering > 0 ? 0 : idleFrames + 1;
-    if (idleFrames > IDLE_FRAMES_BEFORE_STOP) return;
-    // Overlays move while they animate in, follow their anchor, and resize with their content,
-    // so the holes are re-read every frame for as long as one is showing.
+    syncOverlayResizeObservers(activeOverlays);
+    const changed = applyClipPaths(next);
+    if (covering > 0) {
+      idleFrames = 0;
+      unchangedFrames = changed ? 0 : unchangedFrames + 1;
+      // Stop spinning at 60–120fps once overlays settle; ResizeObserver,
+      // MutationObserver, window resize, and scroll events wake the loop
+      // immediately whenever any geometry or visibility changes.
+      if (unchangedFrames > IDLE_FRAMES_BEFORE_STOP) return;
+    } else {
+      unchangedFrames = 0;
+      idleFrames += 1;
+      if (idleFrames > IDLE_FRAMES_BEFORE_STOP) return;
+    }
     frame = requestAnimationFrame(tick);
   };
 
   const schedule = () => {
     idleFrames = 0;
+    unchangedFrames = 0;
     if (frame === null) frame = requestAnimationFrame(tick);
   };
   scheduleInstalledCutout = schedule;
+  if (typeof ResizeObserver !== "undefined") {
+    overlayResizeObserver = new ResizeObserver(schedule);
+    overlayResizeObserver.observe(root);
+  }
+  const onViewportChange = () => {
+    if (applied.size > 0 || inPageOverlayWrappers.size > 0) {
+      schedule();
+    }
+  };
+  window.addEventListener("resize", onViewportChange, { passive: true });
+  window.addEventListener("scroll", onViewportChange, { capture: true, passive: true });
 
   // Portaled overlays mount inside containers appended to the body, never inside the root, so
   // the root's own (very busy) subtree is not observed.
@@ -353,6 +406,10 @@ export function installGlassOverlayCutout(root: HTMLElement): () => void {
     bodyObserver.disconnect();
     containerObserver.disconnect();
     materialObserver.disconnect();
+    overlayResizeObserver?.disconnect();
+    observedOverlayElements.clear();
+    window.removeEventListener("resize", onViewportChange);
+    window.removeEventListener("scroll", onViewportChange, { capture: true });
     if (frame !== null) cancelAnimationFrame(frame);
     frame = null;
     scheduleInstalledCutout = null;

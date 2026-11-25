@@ -190,14 +190,24 @@ describe("classifyProviderSetup", () => {
     ).toBe("disabled");
   });
 
-  it("reports missing or unavailable binaries as not installed", () => {
+  it("calls a provider not installed only when its CLI was not found", () => {
     expect(classifyProviderSetup({ status: null, disabled: false })).toBe("not-installed");
+    expect(
+      classifyProviderSetup({
+        status: { available: false, installed: false, authStatus: "unknown" },
+        disabled: false,
+      }),
+    ).toBe("not-installed");
+  });
+
+  it("tells an installed but unusable CLI apart from a missing one", () => {
+    // A broken provider home, a failed health check, a timed-out probe: the CLI is there.
     expect(
       classifyProviderSetup({
         status: { available: false, authStatus: "unknown" },
         disabled: false,
       }),
-    ).toBe("not-installed");
+    ).toBe("unavailable");
   });
 
   it("waits for an in-flight probe before calling a provider without status not installed", () => {
@@ -206,7 +216,7 @@ describe("classifyProviderSetup", () => {
     );
     expect(
       classifyProviderSetup({
-        status: { available: false, authStatus: "unknown" },
+        status: { available: false, installed: false, authStatus: "unknown" },
         disabled: false,
         detecting: true,
       }),
@@ -222,7 +232,7 @@ describe("classifyProviderSetup", () => {
     );
     expect(
       classifyProviderSetup({
-        status: { available: false, authStatus: "unknown" },
+        status: { available: false, installed: false, authStatus: "unknown" },
         disabled: false,
         detectionFailed: true,
       }),
@@ -267,6 +277,7 @@ describe("summarizeProviderSetup", () => {
       connected: 1,
       needsSignIn: 1,
       notInstalled: 1,
+      unavailable: 0,
       detecting: 1,
       checkFailed: 1,
     });

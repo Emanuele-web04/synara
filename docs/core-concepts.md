@@ -95,10 +95,18 @@ decoration pauses while its chat is hidden.
   A definitive provider failure leaves a **Task interrupted** notice attached to its turn,
   including when no final assistant reply arrives. The notice survives reopening and session
   recovery; a ready connection does not mean the task finished or is being retried. An explicitly
-  announced provider retry remains active and shows **Provider retrying**. **Continue task** sends
-  a new instruction in the same conversation to verify prior operations and resume remaining work;
-  **Change model** opens the existing composer picker before sending. Earlier failure notices stay
-  in the transcript after later turns. User cancellation keeps its interrupted meaning.
+  announced provider retry remains active and shows **Provider retrying**. **Continue task** starts
+  a new turn in the same conversation that asks the agent to verify prior operations and resume
+  remaining work; that instruction goes to the provider only, so the chat gains no message.
+  **Change model** opens the existing composer picker before continuing. Earlier failure notices
+  stay in the transcript after later turns. User cancellation keeps its interrupted meaning.
+  After an interruption (Stop, quitting the app, a crash, or a restart), an empty composer's send
+  button becomes **Resume task** (filled play icon), and Enter does the same. It continues the
+  interrupted turn the same way, or sends the newest message again as written when it never
+  reached the provider (for example after **Unblock** abandoned a failed send). A resent message
+  keeps the plan it implements and its `/computer` access; the click counts as fresh consent, so
+  Resume from a remote device resends without computer access. A Stop double-click cannot
+  trigger it.
 - **Composer** — objectives, attachments, provider selection, model selection, and task controls
 - **Terminal** — a real shell opened in the task's working directory
 - **Browser** — a shared live page surface for previews, semantic automation, and page-declared
@@ -120,7 +128,8 @@ asking.
 
 After an unexpected server shutdown, Synara automatically continues ordinary chats that
 were actively running, using their saved conversation and provider selection. The continuation
-asks the agent to verify existing operations before repeating them. Chats waiting for approval
+asks the agent to verify existing operations before repeating them. It goes to the provider
+only, without a chat message; chats resumed after a confirmed quit continue the same way. Chats waiting for approval
 or an answer, chats still starting, archived chats, native subagents, delegated tasks, goals,
 and managed Hub or automation work are excluded from this fallback; their existing recovery or manual controls
 still apply. This starts a guarded continuation, not a replay of an in-flight tool call.
@@ -180,7 +189,7 @@ Multi-folder projects have these limits for now:
 
 - Worktree mode isolates only the primary folder. The chat works in a worktree of the primary
   folder, while the other folders are edited directly.
-- Only Codex and Claude can be granted the extra folders. Other providers refuse the chat instead
+- Codex, Claude and Antigravity can be granted the extra folders. Other providers refuse the chat instead
   of silently working without them.
 - **Edit project** adds and removes the other folders; the primary folder moves only with
   **Change project path**. A running chat picks up the new folder set on its next turn.
@@ -412,6 +421,10 @@ A task runs in one of two common environments.
 A worktree is another working directory attached to the same Git repository. It shares repository
 history while keeping files and branch state separate.
 
+When a managed worktree copies changes from an existing checkout, untracked nested repositories and
+linked worktrees stay in the source checkout. Relative symbolic links remain relative in the new
+checkout.
+
 Read the [Git worktrees guide](https://www.trysynara.com/docs/workflows/worktrees) before starting
 several tasks in the same repository.
 
@@ -493,6 +506,10 @@ The intended loop is:
 Create PR can include uncommitted changes and create a feature branch from the default branch.
 When you supply a PR title, Synara also uses it as the commit message unless a separate commit
 message was supplied. Providing both the title and description skips text generation for this flow.
+
+By default, the description of a pull request Synara creates ends with a "Created with Synara"
+link. Turn this off with **Add Synara attribution** in Settings. Synara never adds it twice and
+never edits an existing pull request; commits and branch names are not changed.
 
 Failed commit, push, and PR actions show the failed step and a copyable error until dismissed.
 Each action keeps its own error details when you switch workspaces and start another action.

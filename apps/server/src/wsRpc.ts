@@ -23,6 +23,7 @@ import { EditorLanguageService } from "./editor/languageService";
 import { requireNativeEditor } from "./editor/nativeEditorGate";
 import { readEventLoopStatus } from "./eventLoopMonitor";
 import { makeGitActionRunner } from "./git/gitActionRunner";
+import { makeDetachedWorktreeSetupStream } from "./git/worktreeSetupStream";
 import {
   pullRequestFromGitActionResult,
   refreshReopenedThreadPullRequest,
@@ -57,7 +58,6 @@ import {
   type GitRemoveWorktreeInput,
   type GitRunStackedActionResult,
   type GitHubProjectProvisionProgressEvent,
-  type GitWorktreeSetupProgressEvent,
   type ModelSelection,
   type OrchestrationCommand,
   type OrchestrationEvent,
@@ -209,7 +209,10 @@ import {
   OrchestrationCommandPreviouslyRejectedError,
   ProviderDeliveryRecoveryError,
 } from "./orchestration/Errors";
-import { makeDispatchCommandNormalizer } from "./orchestration/dispatchCommandNormalization";
+import {
+  makeDispatchCommandNormalizer,
+  withoutRemoteResumeComputerGrant,
+} from "./orchestration/dispatchCommandNormalization";
 import { sanitizeOrchestrationEventProviderOptions } from "./orchestration/providerOptionsSecurity";
 import { prepareQuitResume } from "./orchestration/quitResume";
 import { makeImportThreadHandler } from "./orchestration/importThreadRoute";
@@ -284,7 +287,7 @@ import {
 } from "./remoteSessions/sessionRegistry";
 import { HostConnectionRegistryService } from "./hostConnections/registry";
 import { makeHostConnectionsPort } from "./hostConnections/port";
-import { isOwnerRole, projectProviderStatusesForWsSession, requireOwnerRole } from "./wsOwnerOnly";
+import { isOwnerRole, projectProviderStatusesForWsSession } from "./wsOwnerOnly";
 import {
   negotiateWsCompatibility,
   parseWsNegotiateSearchParams,
@@ -1283,7 +1286,9 @@ const makeWsRpcHandlersLayer = () =>
           default:
             if (event.aggregateKind !== "thread") return Effect.succeed(Option.none());
             return projectionReadModelQuery
-              .getThreadShellById(ThreadId.makeUnsafe(String(event.aggregateId)))
+              .getThreadShellById(ThreadId.makeUnsafe(String(event.aggregateId)), {
+                includeLatestReplyPreview: true,
+              })
               .pipe(
                 Effect.map((thread) =>
                   Option.map(thread, (nextThread) => ({
@@ -1637,10 +1642,15 @@ const makeWsRpcHandlersLayer = () =>
                 return yield* Effect.fail(new WsRpcError({ message: GROUPS_BETA_ONLY_MESSAGE }));
               }
               const { command: normalizedCommand, prepareWorkspaceRoot } =
-                yield* normalizeDispatchCommand({ command });
+                yield* normalizeDispatchCommand({
+                  command: withoutRemoteResumeComputerGrant(command, principal.ownerId),
+                });
               // A paused/archived group's coordinator must not run turns —
               // the picker filters them out, but the server enforces it.
-              if (normalizedCommand.type === "thread.turn.start") {
+              if (
+                normalizedCommand.type === "thread.turn.start" ||
+                normalizedCommand.type === "thread.turn.resume"
+              ) {
                 yield* projectAgentService.assertGroupCoordinatorTurnAllowed({
                   threadId: normalizedCommand.threadId,
                 });
@@ -1682,7 +1692,10 @@ const makeWsRpcHandlersLayer = () =>
           ),
         [ORCHESTRATION_WS_METHODS.getShellSnapshot]: () =>
           rpcEffect(
-            projectionReadModelQuery.getShellSnapshot({ verifyEmptyThreads: true }),
+            projectionReadModelQuery.getShellSnapshot({
+              verifyEmptyThreads: true,
+              includeLatestReplyPreview: true,
+            }),
             "Failed to load orchestration shell snapshot",
           ),
         [ORCHESTRATION_WS_METHODS.getThreadDetailSnapshot]: (input) =>
@@ -1819,7 +1832,7 @@ const makeWsRpcHandlersLayer = () =>
                 onDroppedEvents: () => Effect.void,
               },
               snapshot: projectionReadModelQuery
-                .getShellSnapshot()
+                .getShellSnapshot({ includeLatestReplyPreview: true })
                 .pipe(
                   Effect.mapError((cause) => toWsRpcError(cause, "Failed to load shell snapshot")),
                 ),
@@ -1868,10 +1881,22 @@ const makeWsRpcHandlersLayer = () =>
                 streamKey: `${clientId}:orchestration.thread:${input.threadId}`,
                 tracker: resnapshotEscalationTracker,
               },
-              // Cursor resume: a client holding cached detail replays only the
-              // gap. Out-of-range cursors (negative or overflowing gap) fall
-              // back to the snapshot inside the stream factory.
+              // A client holding cached detail replays only the gap. The journal
+              // sequence is global, so confirm a wide gap against this thread's events.
               resumeFromSequence: input.afterSequence,
+              resumeReplayFits: (sequenceExclusive, throughSequenceInclusive, limit) =>
+                eventStore
+                  .canReplayThreadEventsInRange({
+                    threadId: input.threadId,
+                    sequenceExclusive,
+                    throughSequenceInclusive,
+                    limit,
+                  })
+                  .pipe(
+                    Effect.mapError((cause) =>
+                      toWsRpcError(cause, "Failed to verify thread replay range"),
+                    ),
+                  ),
               // Opted-in clients get the whole gap as one item and apply it in a
               // single store update, so a stale cached turn does not replay its
               // intermediate states on screen.
@@ -2461,40 +2486,22 @@ const makeWsRpcHandlersLayer = () =>
           rpcEffect(git.listBranches(input), "Failed to list branches"),
         [WS_METHODS.gitListRecentCommits]: (input) =>
           rpcEffect(git.listRecentCommits(input), "Failed to list recent commits"),
+        // The created worktree is the result; its status/PR refresh runs in the background.
         [WS_METHODS.gitCreateWorktree]: (input) =>
           rpcEffect(
-            refreshGitStatusAfter(
-              input.cwd,
-              git.withMutation(input.cwd, git.createWorktree(input)),
-            ),
+            git
+              .withMutation(input.cwd, git.createWorktree(input))
+              .pipe(Effect.tap(() => refreshGitStatusInBackground(input.cwd))),
             "Failed to create worktree",
           ),
         [WS_METHODS.gitCreateDetachedWorktree]: (input) =>
           bufferLiveUiStream(
-            Stream.callback<GitWorktreeSetupProgressEvent, WsRpcError>((queue) => {
-              const progressId = input.progressId ?? null;
-              return refreshGitStatusAfter(
-                input.cwd,
-                git.withMutation(
-                  input.cwd,
-                  git.createDetachedWorktree(input, {
-                    onPhase: (phase) =>
-                      Queue.offer(queue, { kind: "phase_started", progressId, phase }).pipe(
-                        Effect.asVoid,
-                      ),
-                  }),
-                ),
-              ).pipe(
-                Effect.matchCauseEffect({
-                  onFailure: (cause) =>
-                    Queue.fail(queue, toWsRpcError(cause, "Failed to create detached worktree")),
-                  onSuccess: (result) =>
-                    Queue.offer(queue, { kind: "completed", progressId, result }).pipe(
-                      Effect.andThen(Queue.end(queue)),
-                      Effect.asVoid,
-                    ),
-                }),
-              );
+            makeDetachedWorktreeSetupStream({
+              progressId: input.progressId ?? null,
+              create: (onPhase) =>
+                git.withMutation(input.cwd, git.createDetachedWorktree(input, { onPhase })),
+              refreshStatusInBackground: refreshGitStatusInBackground(input.cwd),
+              toError: (cause) => toWsRpcError(cause, "Failed to create detached worktree"),
             }),
             { label: "git.create-detached-worktree" },
           ),
