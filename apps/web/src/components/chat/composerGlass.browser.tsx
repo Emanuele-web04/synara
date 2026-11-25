@@ -211,3 +211,123 @@ describe("composer command menu surface", () => {
     },
   );
 });
+
+// The composer tray (the shell around the new-chat input card that also holds the landing
+// chips) is an opaque light grey on an opaque page, takes the stacked rail's tint on
+// whole-window glass, and a firm tint when the empty-chat backdrop paints behind it there. The
+// composer inside keeps its own material in every mode.
+function TrayFixture({
+  backdrop = false,
+  queued = false,
+}: {
+  backdrop?: boolean;
+  queued?: boolean;
+}) {
+  return (
+    <div
+      data-chat-composer-slot
+      data-composer-tray-host=""
+      {...(backdrop ? { "data-empty-chat-backdrop-host": "" } : {})}
+    >
+      <ComposerColumnFrame>
+        {queued ? (
+          <ComposerStackedPanel data-testid="tray-rail">Queued follow-up</ComposerStackedPanel>
+        ) : null}
+        <div
+          className="group relative z-[1] chat-composer-shell"
+          data-composer-tray=""
+          data-testid="tray"
+        >
+          <div className={COMPOSER_INPUT_SURFACE_CLASS_NAME} data-testid="tray-card">
+            Draft input
+          </div>
+        </div>
+      </ComposerColumnFrame>
+    </div>
+  );
+}
+
+function trayPart(name: "tray" | "tray-card" | "tray-rail"): HTMLElement {
+  const found = appRoot.querySelector<HTMLElement>(`[data-testid="${name}"]`);
+  if (!found) throw new Error(`Missing composer tray part: ${name}`);
+  return found;
+}
+
+describe("composer tray glass", () => {
+  it.each([
+    { theme: "light", transparent: false, material: "opaque", scope: "none" },
+    { theme: "dark", transparent: false, material: "opaque", scope: "none" },
+    { theme: "light", transparent: true, material: "translucent", scope: "sidebar" },
+    { theme: "dark", transparent: true, material: "translucent", scope: "sidebar" },
+  ])(
+    "stays an opaque grey without a blur layer ($theme, $scope)",
+    async ({ theme, transparent, material, scope }) => {
+      root.classList.toggle("dark", theme === "dark");
+      if (transparent) root.dataset.windowTransparent = "true";
+      else delete root.dataset.windowTransparent;
+      root.dataset.windowMaterial = material;
+      root.dataset.windowTranslucency = scope;
+      await render(<TrayFixture />, { container: appRoot });
+
+      expect(getComputedStyle(trayPart("tray"), "::before").backdropFilter).toBe("none");
+      await expect.poll(() => fillAlpha(trayPart("tray"))).toBe(1);
+    },
+  );
+
+  it("leaves the composer's own glass untouched inside the tray", async () => {
+    root.dataset.windowMaterial = "opaque";
+    root.dataset.windowTranslucency = "none";
+    await render(<TrayFixture />, { container: appRoot });
+
+    expect(getComputedStyle(trayPart("tray-card"), "::before").backdropFilter).not.toBe("none");
+    expect(fillAlpha(trayPart("tray-card"))).toBeLessThan(0.75);
+  });
+
+  it("takes the stacked rail's tint on whole-window glass", async () => {
+    sidebarGlass();
+    root.dataset.windowTranslucency = "window";
+    await render(<TrayFixture />, { container: appRoot });
+
+    expect(getComputedStyle(trayPart("tray"), "::before").backdropFilter).toBe("none");
+    await expect.poll(() => fillAlpha(trayPart("tray"))).toBeCloseTo(0.2, 2);
+  });
+
+  it("stays firm over the empty-chat backdrop on whole-window glass", async () => {
+    sidebarGlass();
+    root.dataset.windowTranslucency = "window";
+    await render(<TrayFixture backdrop />, { container: appRoot });
+
+    await expect.poll(() => fillAlpha(trayPart("tray"))).toBeCloseTo(0.88, 2);
+  });
+
+  // The queued follow-up rail reads as a tab of the tray: the tray's tone, no glass blur.
+  it.each([
+    { theme: "light", transparent: false, material: "opaque", scope: "none" },
+    { theme: "dark", transparent: true, material: "translucent", scope: "sidebar" },
+  ])(
+    "gives the queued rail the tray's tone ($theme, $scope)",
+    async ({ theme, transparent, material, scope }) => {
+      root.classList.toggle("dark", theme === "dark");
+      if (transparent) root.dataset.windowTransparent = "true";
+      else delete root.dataset.windowTransparent;
+      root.dataset.windowMaterial = material;
+      root.dataset.windowTranslucency = scope;
+      await render(<TrayFixture queued />, { container: appRoot });
+
+      expect(getComputedStyle(trayPart("tray-rail"), "::before").backdropFilter).toBe("none");
+      await expect.poll(() => fillAlpha(trayPart("tray-rail"))).toBe(1);
+      expect(getComputedStyle(trayPart("tray-rail")).backgroundColor).toBe(
+        getComputedStyle(trayPart("tray")).backgroundColor,
+      );
+    },
+  );
+
+  it("keeps the queued rail on the raised tint on whole-window glass", async () => {
+    sidebarGlass();
+    root.dataset.windowTranslucency = "window";
+    await render(<TrayFixture queued />, { container: appRoot });
+
+    await expect.poll(() => fillAlpha(trayPart("tray-rail"))).toBeCloseTo(0.2, 2);
+    await expect.poll(() => fillAlpha(trayPart("tray"))).toBeCloseTo(0.2, 2);
+  });
+});

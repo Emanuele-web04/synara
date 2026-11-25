@@ -3303,6 +3303,48 @@ diffs-container {
   corner-shape: round;
 }
 
+/* Composer tray: a soft, opaque grey background behind the unchanged composer and the chips
+   around it: the project / branch strip above it on the new chat, the permission / branch /
+   model row below it in started threads. The composer inside keeps its own surface, border,
+   shadow and radius; the tray only follows its corners. */
+:root {
+  --composer-tray-tone: color-mix(in oklab, var(--foreground) 2%, var(--background));
+  --composer-tray-border: color-mix(in srgb, var(--foreground) 3.5%, transparent);
+  /* Resolved here, from the block composer's radius, so the tray keeps rounded corners when
+     a started thread's one-line composer turns into a pill inside it. */
+  --composer-tray-radius: calc(var(--composer-radius) + 0.25rem + 1px);
+}
+
+.dark {
+  --composer-tray-tone: color-mix(in oklab, var(--foreground) 4%, var(--background));
+  --composer-tray-border: color-mix(in srgb, var(--foreground) 7%, transparent);
+}
+
+/* The queued follow-up rail above the tray reads as a tab of it: the tray's grey and hairline
+   instead of the composer glass, so the stack does not draw a third outline. Whole-window
+   glass keeps the rail's raised tint, which the tray takes there too (see below). */
+:root:not([data-window-translucency="window"])
+  [data-composer-tray-host]
+  .chat-composer-stacked-top {
+  background: var(--composer-tray-tone);
+  border-color: var(--composer-tray-border);
+}
+
+:root:not([data-window-translucency="window"])
+  [data-composer-tray-host]
+  .chat-composer-stacked-top::before {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+.chat-composer-shell[data-composer-tray] {
+  border-radius: var(--composer-tray-radius);
+  corner-shape: round;
+  padding: 0.25rem;
+  border: 1px solid var(--composer-tray-border);
+  background: var(--composer-tray-tone);
+}
+
 /* macOS Electron: leading inset for sidebar toggle + route nav past native traffic lights.
    Value is driven by --desktop-top-bar-traffic-light-gutter (inverse-scaled on View zoom). */
 :root[data-runtime="electron"] .desktop-top-bar-traffic-light-gutter {
@@ -3748,6 +3790,20 @@ diffs-container {
 /* The stacked rail stays the lighter continuation of the input. */
 :root[data-window-translucency="window"] .chat-composer-stacked-top {
   background: color-mix(in srgb, var(--app-glass-raised-surface) 50%, transparent);
+}
+
+/* The composer tray on whole-window glass: an opaque grey would sit on the window's coat as a
+   solid slab, so it takes the stacked rail's lighter continuation of the raised tint. Over the
+   empty-chat backdrop it takes a firm grey tint instead, so the dots stay out of the
+   composer's sheer glass. */
+:root[data-window-translucency="window"] .chat-composer-shell[data-composer-tray] {
+  background: color-mix(in srgb, var(--app-glass-raised-surface) 50%, transparent);
+}
+
+:root[data-window-translucency="window"]
+  [data-empty-chat-backdrop-host]
+  .chat-composer-shell[data-composer-tray] {
+  background: color-mix(in srgb, var(--composer-tray-tone) 88%, transparent);
 }
 
 /* Interactive raised surfaces (cards, selects) lift one more step on hover. */

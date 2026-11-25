@@ -6054,12 +6054,9 @@ export default function ChatView({
   const emptyLandingControls = showEmptyLandingControls ? (
     <div
       data-empty-landing-controls="true"
-      // Tray sitting in normal flow directly above the composer, full composer width so
-      // the project / environment / branch chips sit near the shell edges. Unfilled in
-      // both themes (chips float over the page), rounded on top only and flush against
-      // the input shell below. No overlap/underlay tricks — in dark mode a slice tucked
-      // behind the composer's translucent corners reads as a visible cut along the seam.
-      className="chat-composer-shell squircle mx-auto flex min-h-8 w-full min-w-0 flex-nowrap items-center gap-x-1.5 overflow-hidden !rounded-b-none !rounded-t-[var(--composer-radius)] px-1.5 py-1 transition-colors duration-150 ease-out motion-reduce:transition-none sm:min-h-7"
+      // Top strip of the composer tray on the empty landing: the project / environment /
+      // branch chips wrap above the normal new-chat composer card.
+      className="@container flex min-h-8 w-full min-w-0 flex-nowrap items-center gap-x-1.5 overflow-hidden px-1 pb-1 pt-0.5 sm:min-h-7"
     >
       {isLocalDraftThread ? <NewChatComputerPicker /> : null}
       {showContainerChatWorkspacePicker ? (
@@ -6369,6 +6366,28 @@ export default function ChatView({
         .length ?? 0)
     : (activeBackgroundTasks?.activeCount ?? 0);
 
+  // Started threads: the row under the composer card, inside the grey tray. Permission, branch
+  // controls (git threads), then model/effort and the context ring. The footer tiers measure
+  // this row.
+  const composerStatusRow = composerStatusBelow ? (
+    <div
+      ref={composerStatusRowRef}
+      data-chat-composer-status-row=""
+      className="@container flex min-h-8 w-full min-w-0 flex-wrap items-center gap-1 px-0.5 pb-0.5 pt-1"
+    >
+      <RuntimeUsageControls {...runtimeUsageControlsProps} className="shrink-0" />
+      {showTrailingBranchToolbar ? (
+        <BranchToolbar {...branchToolbarProps} className="min-w-0 flex-[1_0_9rem] px-1 py-0" />
+      ) : (
+        <div className="min-w-0 flex-1" />
+      )}
+      <div className="ml-auto flex shrink-0 items-center gap-2 pr-0.5">
+        {composerPickerControls}
+        {composerContextMeter}
+      </div>
+    </div>
+  ) : null;
+
   const composerSection = shouldRenderChatPaneContent ? (
     <div
       className={cn(isCenteredEmptyLanding ? "w-full overflow-visible" : "contents")}
@@ -6382,6 +6401,8 @@ export default function ChatView({
         onSubmit={onSend}
         className="relative z-10 w-full overflow-visible"
         data-chat-composer-form="true"
+        // The input sits in a grey tray; the stacked rail above it takes the tray's tone.
+        data-composer-tray-host=""
         data-chat-pane-scope={paneScopeId}
       >
         <ComposerColumnFrame>
@@ -6579,7 +6600,6 @@ export default function ChatView({
                 }}
               />
             ) : null}
-            {emptyLandingControls}
           </div>
           <div
             className={cn(
@@ -6590,9 +6610,12 @@ export default function ChatView({
               isThreadDragOverComposer && "ring-1 ring-info/65",
             )}
             aria-disabled={isSidechatExpired}
+            // Soft grey tray behind the composer (new chat and started threads alike).
+            data-composer-tray=""
             data-composer-layout={composerSingleRow ? "row" : undefined}
             {...threadMentionDropzoneProps}
           >
+            {emptyLandingControls}
             <div
               data-chat-composer-surface=""
               className={cn(
@@ -6852,6 +6875,7 @@ export default function ChatView({
                 />
               )}
             </div>
+            {composerStatusRow}
           </div>
         </ComposerColumnFrame>
       </form>
@@ -7358,40 +7382,8 @@ export default function ChatView({
                   >
                     <div className="pointer-events-auto">{composerSection}</div>
                   </div>
-                  <div className="pt-0.5" />
-                  {/* Row under the composer: permission, branch controls (git threads), then
-                      model/effort and the context ring. The footer tiers measure this row. It
-                      takes the composer's right inset so it stays under the composer while the
-                      Environment card or preview rail is docked. */}
-                  <div
-                    className={cn(
-                      CHAT_COLUMN_GUTTER_CLASS_NAME,
-                      ENVIRONMENT_CONTENT_INSET_MOTION_CLASS,
-                    )}
-                    style={contentInsetRightPx ? { paddingRight: contentInsetRightPx } : undefined}
-                  >
-                    <div className={COMPOSER_COLUMN_FRAME_CLASS_NAME}>
-                      <div
-                        ref={composerStatusRowRef}
-                        data-chat-composer-status-row=""
-                        className="@container flex min-h-9 w-full min-w-0 flex-wrap items-center gap-1 pb-1.5 pt-1"
-                      >
-                        <RuntimeUsageControls {...runtimeUsageControlsProps} className="shrink-0" />
-                        {showTrailingBranchToolbar ? (
-                          <BranchToolbar
-                            {...branchToolbarProps}
-                            className="min-w-0 flex-[1_0_9rem] px-1 py-0"
-                          />
-                        ) : (
-                          <div className="min-w-0 flex-1" />
-                        )}
-                        <div className="ml-auto flex shrink-0 items-center gap-2 pr-1">
-                          {composerPickerControls}
-                          {composerContextMeter}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
+                  {/* Gap under the composer tray; its status row lives inside the tray. */}
+                  <div className="pb-1.5" />
                 </div>
               </div>
             ) : null}

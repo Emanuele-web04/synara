@@ -9615,10 +9615,13 @@ describe("ChatView transcript geometry (full app)", () => {
       const editor = await waitForComposerEditor();
       const shell = queryComposerShell;
       await vi.waitFor(() => expect(shell().dataset.composerLayout).toBe("row"));
-      // Permission, model and context sit in the row under the composer, not in the pill.
+      // Permission, model and context sit in the tray's row under the pill, not in the pill.
       const statusRow = document.querySelector<HTMLElement>("[data-chat-composer-status-row]");
       expect(statusRow).not.toBeNull();
-      expect(shell().contains(statusRow)).toBe(false);
+      expect(shell().contains(statusRow)).toBe(true);
+      expect(shell().querySelector("[data-chat-composer-surface]")?.contains(statusRow)).toBe(
+        false,
+      );
 
       await userEvent.click(editor);
       // Short enough to fit the row's editor slot at any column width.
@@ -9709,10 +9712,13 @@ describe("ChatView transcript geometry (full app)", () => {
       )!;
       const statusRow = document.querySelector<HTMLElement>("[data-chat-composer-status-row]")!;
       const expectRowUnderComposer = () => {
+        // The row sits inside the composer tray, inset by the tray's border and padding.
         const shellRect = shell.getBoundingClientRect();
         const rowRect = statusRow.getBoundingClientRect();
-        expect(Math.abs(rowRect.left - shellRect.left)).toBeLessThanOrEqual(1);
-        expect(Math.abs(rowRect.right - shellRect.right)).toBeLessThanOrEqual(1);
+        expect(rowRect.left - shellRect.left).toBeGreaterThanOrEqual(0);
+        expect(rowRect.left - shellRect.left).toBeLessThanOrEqual(6);
+        expect(shellRect.right - rowRect.right).toBeGreaterThanOrEqual(0);
+        expect(shellRect.right - rowRect.right).toBeLessThanOrEqual(6);
       };
       expectRowUnderComposer();
       const shellRightBefore = shell.getBoundingClientRect().right;
