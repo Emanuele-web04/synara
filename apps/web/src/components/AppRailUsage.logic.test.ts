@@ -1,14 +1,9 @@
 import { DEFAULT_SERVER_SETTINGS_VIEW } from "@synara/contracts";
 import { deriveProviderInstances } from "@synara/shared/providerInstances";
 import { describe, expect, it } from "vitest";
-import { resolveEnvironmentProviderUsageSummary } from "./chat/environment/EnvironmentUsageSection.logic";
-
-import { deriveProviderUsageDisplayRows } from "~/lib/providerUsageDisplay";
-
 import {
   MAX_RAIL_USAGE_ACCOUNTS,
   getRailUsageAccounts,
-  selectRailUsageRows,
   resolveRailUsageAccounts,
   toggleRailUsageAccount,
 } from "./AppRailUsage.logic";
@@ -94,46 +89,5 @@ describe("toggleRailUsageAccount", () => {
     expect(
       toggleRailUsageAccount(["claudeAgent", "claude_work"], "codex", true, available),
     ).toEqual(["claudeAgent", "claude_work"]);
-  });
-});
-
-describe("selectRailUsageRows", () => {
-  const rowsFor = (...windows: ReadonlyArray<string>) =>
-    deriveProviderUsageDisplayRows([
-      {
-        provider: "codex",
-        updatedAt: "2026-10-02T12:00:00.000Z",
-        limits: windows.map((window) => ({ window, usedPercent: 60 })),
-      },
-    ]);
-  const rows = rowsFor("5h", "Weekly");
-  const labels = (...args: Parameters<typeof selectRailUsageRows>) =>
-    selectRailUsageRows(...args).map((row) => row.label);
-
-  it("draws weekly outside five-hour, or only the chosen window", () => {
-    expect(labels(rows, null, "both")).toEqual(["Weekly", "5h"]);
-    expect(labels(rows, null, "fiveHour")).toEqual(["5h"]);
-    expect(labels(rows, null, "weekly")).toEqual(["Weekly"]);
-  });
-
-  it("describes quota rows while preserving canonical window selection", () => {
-    const selected = selectRailUsageRows(rows, null, "both");
-    expect(selected.map((row) => row.label)).toEqual(["Weekly", "5h"]);
-    const summary = resolveEnvironmentProviderUsageSummary({
-      providerName: "Codex",
-      rows: selected,
-      snapshot: undefined,
-      hasUsageLines: true,
-    });
-    expect(summary.rows).toBe(selected);
-    expect(rows.map((row) => row.label)).toEqual(["5h", "Weekly"]);
-  });
-
-  it("falls back to the other account window, then to the primary row", () => {
-    const weeklyOnly = rows.filter((row) => row.label === "Weekly");
-    expect(labels(weeklyOnly, null, "fiveHour")).toEqual(["Weekly"]);
-    const monthly = rowsFor("Monthly");
-    expect(labels(monthly, monthly[0] ?? null, "weekly")).toEqual(["Monthly"]);
-    expect(labels([], null, "both")).toEqual([]);
   });
 });

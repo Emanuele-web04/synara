@@ -297,6 +297,48 @@
     background: var(--app-sidebar-chip-surface);
   }
 
+  .app-rail-usage-tile {
+    --rail-usage-rim: #f8f8f8;
+    --rail-usage-well: #ebebeb;
+    --rail-usage-outline: rgb(0 0 0 / 14%);
+    --rail-usage-outline-hover: rgb(0 0 0 / 24%);
+    --rail-usage-fill: rgb(0 0 0 / 15%);
+    --rail-usage-low-fill: rgb(180 35 50 / 27%);
+    --rail-usage-empty-outline: rgb(180 35 50 / 52%);
+    background: var(--rail-usage-rim);
+    box-shadow: inset 0 0 0 1px var(--rail-usage-outline);
+  }
+
+  .dark .app-rail-usage-tile {
+    --rail-usage-rim: #1c1c1c;
+    --rail-usage-well: #121212;
+    --rail-usage-outline: rgb(255 255 255 / 10%);
+    --rail-usage-outline-hover: rgb(255 255 255 / 20%);
+    --rail-usage-fill: rgb(255 255 255 / 19%);
+    --rail-usage-low-fill: rgb(255 100 114 / 34%);
+    --rail-usage-empty-outline: rgb(255 100 114 / 52%);
+  }
+
+  :where(button:hover) > .app-rail-usage-tile {
+    box-shadow: inset 0 0 0 1px var(--rail-usage-outline-hover);
+  }
+
+  .app-rail-usage-tile[data-usage-state="exhausted"] {
+    box-shadow: inset 0 0 0 1px var(--rail-usage-empty-outline);
+  }
+
+  .app-rail-usage-well {
+    background: var(--rail-usage-well);
+  }
+
+  .app-rail-usage-fill {
+    background: linear-gradient(to bottom, transparent, var(--rail-usage-fill) min(4px, 80%));
+  }
+
+  .app-rail-usage-tile[data-usage-state="low"] {
+    --rail-usage-fill: var(--rail-usage-low-fill);
+  }
+
   /* ─── Chat-surface header hairline (horizontal counterpart of the seam) ───────────
      Bottom divider for every chat-surface chrome bar (chat/dock/diff headers),
      same color as the vertical seam via --app-surface-divider. Painted as a 1px

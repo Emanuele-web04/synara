@@ -13,7 +13,7 @@ import {
 import { useMemo } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { useAppSettings, type RailUsageWindow } from "~/appSettings";
+import { useAppSettings } from "~/appSettings";
 import {
   MAX_RAIL_USAGE_ACCOUNTS,
   getRailUsageAccounts,
@@ -31,7 +31,6 @@ import {
   SettingsSection,
   SettingsSectionShell,
 } from "~/components/settings/SettingsPanelPrimitives";
-import { SettingsSegmentedControl } from "~/components/settings/SettingControls";
 import { Button } from "~/components/ui/button";
 import { Switch } from "~/components/ui/switch";
 import { useProviderUsageSummary } from "~/hooks/useProviderUsageSummary";
@@ -46,12 +45,6 @@ import {
 } from "~/lib/serverReactQuery";
 import { cn } from "~/lib/utils";
 import { t, useTranslation } from "~/i18n";
-
-const RAIL_USAGE_WINDOW_OPTIONS = [
-  { value: "both", label: "settings:both" },
-  { value: "fiveHour", label: "common:5h" },
-  { value: "weekly", label: "common:schedule_weekly" },
-] as const satisfies ReadonlyArray<{ value: RailUsageWindow; label: string }>;
 
 const PILL_CLASS_NAME = "shrink-0 rounded-full px-2 py-1 text-ui-sm font-medium leading-none";
 
@@ -292,21 +285,6 @@ export function ProviderUsageSettingsPanel() {
             />
           );
         })}
-        <SettingsListRow
-          title={t("settings:ring")}
-          description={t("settings:showBothLimitsAsTwoRingsOrASingle")}
-          actions={
-            <SettingsSegmentedControl
-              value={settings.railUsageWindow}
-              onValueChange={(value) => updateSettings({ railUsageWindow: value })}
-              ariaLabel={t("settings:sidebarUsageRing")}
-              options={RAIL_USAGE_WINDOW_OPTIONS.map((option) => ({
-                value: option.value,
-                label: t(option.label),
-              }))}
-            />
-          }
-        />
       </SettingsSection>
       <SettingsSection title="settings:usagePopovers">
         <SettingsListRow

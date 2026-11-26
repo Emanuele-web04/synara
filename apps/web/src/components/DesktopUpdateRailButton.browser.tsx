@@ -10,7 +10,6 @@ import { render } from "vitest-browser-react";
 const settings = vi.hoisted(() => ({
   codexHomePath: "",
   railUsageProviders: ["codex", "claudeAgent"],
-  railUsageWindow: "both",
 }));
 vi.mock("~/appSettings", async (importOriginal) => ({
   ...(await importOriginal<typeof import("~/appSettings")>()),

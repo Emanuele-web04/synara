@@ -1,7 +1,6 @@
-import { rateLimitWindowDisplayLabel } from "~/lib/rateLimits";
 // FILE: AppRailUsage.tsx
-// Purpose: Provider usage rings at the bottom of the app rail, above Help: the provider glyph inside a
-//          remaining-quota ring, a hover card with every limit, click opens Settings → Usage.
+// Purpose: Provider quota tiles at the bottom of the app rail, above Help. Each tile shows
+//          the tightest quota and opens Settings → Usage. Hover shows every limit.
 // Layer: App shell component
 // Depends on: the shared provider-usage menu model and panel content, so the rail reads the
 //             same numbers as the chat header chip, the Environment panel, and Settings.
@@ -10,7 +9,7 @@ import { DEFAULT_SERVER_SETTINGS_VIEW, type ServerProviderUsageSnapshot } from "
 import { deriveProviderInstances } from "@synara/shared/providerInstances";
 import { useQuery } from "@tanstack/react-query";
 
-import { useAppSettings, type RailUsageWindow } from "~/appSettings";
+import { useAppSettings } from "~/appSettings";
 import {
   serverAllProviderUsageQueryOptions,
   serverSettingsQueryOptions,
@@ -21,7 +20,6 @@ import { appRailButtonClassName } from "./AppRail";
 import {
   getRailUsageAccounts,
   resolveRailUsageAccounts,
-  selectRailUsageRows,
   type RailUsageAccount,
 } from "./AppRailUsage.logic";
 import { resolveEnvironmentProviderUsageSummary } from "./chat/environment/EnvironmentUsageSection.logic";
@@ -35,28 +33,17 @@ import {
   SIDEBAR_HOVER_CARD_TRIGGER_PROPS,
 } from "./sidebarHoverCardStyles";
 import { PreviewCard, PreviewCardPopup, PreviewCardTrigger } from "./ui/preview-card";
-import { StatusChip } from "./ui/status-chip";
 import { useTranslation } from "~/i18n";
 
-const NORMAL_RING_TONE = { stroke: "stroke-foreground", dot: "bg-foreground" };
-const CRITICAL_RING_TONE = { stroke: "stroke-red-500", dot: "bg-red-500" };
+const LOW_QUOTA_THRESHOLD = 20;
 
-// Geometry in px inside the rail's 36px button. Two tracks take a larger box, thinner
-// strokes and a smaller glyph, so the tracks keep a 2.25px gap and the glyph clears the
-// inner one.
-const SINGLE_RING = { size: 28, stroke: 2.5, svgClassName: "size-7", iconClassName: "size-3.5" };
-const DOUBLE_RING = { size: 34, stroke: 2.25, svgClassName: "size-8.5", iconClassName: "size-3" };
-const RING_SPACING = 4.5;
-
-function AppRailUsageRing({
+function AppRailUsageTile({
   account,
   snapshot,
-  window,
   onOpenUsageSettings,
 }: {
   account: RailUsageAccount;
   snapshot: ServerProviderUsageSnapshot | undefined;
-  window: RailUsageWindow;
   onOpenUsageSettings: () => void;
 }) {
   const { t } = useTranslation();
@@ -68,9 +55,9 @@ function AppRailUsageRing({
     providerSnapshot: snapshot ?? null,
   });
 
-  // A failed fetch keeps a dimmed, empty ring (its card says why) so a chosen provider does
+  // A failed fetch keeps the dimmed tile visible (its card says why) so a selected provider does
   // not vanish on a network blip. Otherwise nothing displayable (still loading, signed out,
-  // or no usage source) means no ring.
+  // or no usage source) keeps the tile hidden.
   const unavailable = snapshot?.status === "error";
   if (!unavailable && model.rows.length === 0 && model.usageLines.length === 0) {
     return null;
@@ -85,12 +72,15 @@ function AppRailUsageRing({
     },
     t,
   );
-  const rings = selectRailUsageRows(model.rows, model.primaryRow, window).map((row) => ({
-    row,
-    tone: row.remainingTone === "danger" ? CRITICAL_RING_TONE : NORMAL_RING_TONE,
-  }));
-  const ring = rings.length > 1 ? DOUBLE_RING : SINGLE_RING;
-  const outerRadius = (ring.size - ring.stroke) / 2;
+  const remainingPercent = model.primaryRow?.remainingPercent;
+  const usageState =
+    remainingPercent === undefined
+      ? "empty"
+      : remainingPercent === 0
+        ? "exhausted"
+        : remainingPercent <= LOW_QUOTA_THRESHOLD
+          ? "low"
+          : "normal";
 
   return (
     <PreviewCard>
@@ -108,52 +98,27 @@ function AppRailUsageRing({
           />
         }
       >
-        <svg
-          viewBox={`0 0 ${ring.size} ${ring.size}`}
-          className={cn("-rotate-90", ring.svgClassName)}
-          fill="none"
+        <span
+          className="app-rail-usage-tile pointer-events-none absolute inset-0 rounded-[inherit]"
+          data-usage-state={usageState}
           aria-hidden
         >
-          {rings.length === 0 ? (
-            <circle
-              cx={ring.size / 2}
-              cy={ring.size / 2}
-              r={outerRadius}
-              strokeWidth={ring.stroke}
-              className="stroke-current opacity-15"
-            />
-          ) : null}
-          {rings.map(({ row, tone }, index) => (
-            <g key={row.id}>
-              <circle
-                cx={ring.size / 2}
-                cy={ring.size / 2}
-                r={outerRadius - index * RING_SPACING}
-                strokeWidth={ring.stroke}
-                className="stroke-current opacity-15"
+          <span className="app-rail-usage-well absolute inset-[3px] overflow-hidden rounded-[5px]">
+            {remainingPercent !== undefined && remainingPercent > 0 ? (
+              <span
+                className="app-rail-usage-fill absolute inset-x-0 bottom-0 transition-[height] duration-500 motion-reduce:transition-none"
+                style={{ height: `${remainingPercent}%` }}
               />
-              {row.remainingPercent > 0 ? (
-                <circle
-                  cx={ring.size / 2}
-                  cy={ring.size / 2}
-                  r={outerRadius - index * RING_SPACING}
-                  strokeWidth={ring.stroke}
-                  strokeLinecap="round"
-                  pathLength={100}
-                  strokeDasharray={`${row.remainingPercent} 100`}
-                  className={cn(
-                    "transition-[stroke-dasharray] duration-500 motion-reduce:transition-none",
-                    tone.stroke,
-                  )}
-                />
-              ) : null}
-            </g>
-          ))}
-        </svg>
-        <span className={cn("absolute flex", ring.iconClassName)}>
+            ) : null}
+          </span>
+        </span>
+        <span className="relative flex size-4">
           <ProviderIcon
             provider={provider}
-            className={cn("size-full", unavailable && "opacity-50")}
+            className={cn(
+              "size-full",
+              usageState === "exhausted" ? "opacity-35" : unavailable && "opacity-50",
+            )}
           />
           <ProviderAccountDot
             accentColor={instance.raw.accentColor}
@@ -164,7 +129,7 @@ function AppRailUsageRing({
       </PreviewCardTrigger>
       <PreviewCardPopup
         {...SIDEBAR_HOVER_CARD_POPUP_PROPS}
-        // The rings sit at the rail's foot, so the card grows upward from them.
+        // The tiles sit at the rail's foot, so the card grows upward from them.
         align="end"
         sideOffset={6}
         className={SIDEBAR_HOVER_CARD_SURFACE_CLASS_NAME}
@@ -176,16 +141,6 @@ function AppRailUsageRing({
               <span className="shrink-0 text-ui-sm text-muted-foreground">{snapshot.planName}</span>
             ) : null}
           </div>
-          {rings.length > 1 ? (
-            <div className="flex items-center gap-3 text-muted-foreground">
-              {rings.map(({ row, tone }, index) => (
-                <StatusChip key={row.id} dotClassName={tone.dot}>
-                  {rateLimitWindowDisplayLabel(row.label, t)} ·{" "}
-                  {index === 0 ? t("common:outer") : t("common:inner")}
-                </StatusChip>
-              ))}
-            </div>
-          ) : null}
           <ProviderUsagePanelContent
             provider={provider}
             rateLimits={model.rateLimits}
@@ -203,7 +158,7 @@ function AppRailUsageRing({
   );
 }
 
-/** Sits above Help: a ring per selected account, with the windows chosen in Settings → Usage. */
+/** Sits above Help with a quota tile per account selected in Settings → Usage. */
 export function AppRailUsage({ onOpenUsageSettings }: { onOpenUsageSettings: () => void }) {
   const { t } = useTranslation();
   const { settings } = useAppSettings();
@@ -236,7 +191,7 @@ export function AppRailUsage({ onOpenUsageSettings }: { onOpenUsageSettings: () 
   return (
     <>
       {accounts.map((account) => (
-        <AppRailUsageRing
+        <AppRailUsageTile
           key={account.instance.instanceId}
           account={account}
           snapshot={(account.instance.driver === "antigravity"
@@ -247,7 +202,6 @@ export function AppRailUsage({ onOpenUsageSettings }: { onOpenUsageSettings: () 
               entry.provider === account.instance.driver &&
               (entry.instanceId ?? entry.provider) === account.instance.instanceId,
           )}
-          window={settings.railUsageWindow}
           onOpenUsageSettings={onOpenUsageSettings}
         />
       ))}

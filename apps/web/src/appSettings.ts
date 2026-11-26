@@ -226,10 +226,6 @@ export type FollowUpBehavior = typeof FollowUpBehavior.Type;
 export const MessageTrailAudioSource = Schema.Literals(["off", "system", "microphone", "both"]);
 export type MessageTrailAudioSource = typeof MessageTrailAudioSource.Type;
 export const DEFAULT_FOLLOW_UP_BEHAVIOR: FollowUpBehavior = "queue";
-/** Which account windows each app-rail usage ring draws: both, or only one of them. */
-export const RailUsageWindow = Schema.Literals(["both", "fiveHour", "weekly"]);
-export type RailUsageWindow = typeof RailUsageWindow.Type;
-export const DEFAULT_RAIL_USAGE_WINDOW: RailUsageWindow = "both";
 // What plain Enter does while a composer voice note is recording: "stop" only
 // transcribes into the draft, "send" also sends the draft once transcribed.
 export const VoiceEnterBehavior = Schema.Literals(["stop", "send"]);
@@ -497,13 +493,16 @@ export const AppSettingsSchema = Schema.Struct({
   railUsageProviders: PersistedProviderKindList.pipe(
     withDefaults((): ReadonlyArray<ProviderKind> => ["codex", "claudeAgent"]),
   ),
-  // Accounts whose usage rings sit at the bottom of the app rail. Null migrates the
-  // legacy provider ids to their default accounts; an empty list explicitly hides all rings.
+  // Accounts whose quota tiles sit at the bottom of the app rail. Null migrates the
+  // legacy provider ids to their default accounts; an empty list explicitly hides all tiles.
   railUsageInstanceIds: Schema.NullOr(PersistedProviderInstanceIdList).pipe(
     withDefaults(() => null),
   ),
-  railUsageWindow: RailUsageWindow.pipe(withDefaults(() => DEFAULT_RAIL_USAGE_WINDOW)),
-  // Usage popovers (rail rings, chat header, branch toolbar) open on the limit rows only;
+  // Preserve the old window choice when round-tripping settings with older clients.
+  railUsageWindow: Schema.Literals(["both", "fiveHour", "weekly"]).pipe(
+    withDefaults(() => "both" as const),
+  ),
+  // Usage popovers (rail tiles, chat header, branch toolbar) open on the limit rows only;
   // reset credits, credits, and token totals sit behind a "Details" toggle. The toggle
   // writes back here, so the last choice sticks; Settings → Usage exposes it too.
   usageDetailsDefaultOpen: Schema.Boolean.pipe(withDefaults(() => false)),
