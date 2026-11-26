@@ -1107,7 +1107,7 @@ describe("AcpSessionRuntime", () => {
     ),
   );
 
-  it.effect("does not open assistant segments for reasoning chunks before tool calls", () =>
+  it.effect("settles reasoning before tool calls without opening an assistant segment", () =>
     Effect.gen(function* () {
       const runtime = yield* AcpSessionRuntime;
       yield* runtime.start();
@@ -1117,9 +1117,10 @@ describe("AcpSessionRuntime", () => {
       });
       expect(promptResult).toMatchObject({ stopReason: "end_turn" });
 
-      const notes = Array.from(yield* Stream.runCollect(Stream.take(runtime.getEvents(), 3)));
+      const notes = Array.from(yield* Stream.runCollect(Stream.take(runtime.getEvents(), 4)));
       expect(notes.map((note) => note._tag)).toEqual([
         "ContentDelta",
+        "ReasoningItemCompleted",
         "ToolCallUpdated",
         "ToolCallUpdated",
       ]);
@@ -1127,7 +1128,8 @@ describe("AcpSessionRuntime", () => {
       expect(reasoningDelta?._tag).toBe("ContentDelta");
       if (reasoningDelta?._tag === "ContentDelta") {
         expect(reasoningDelta.streamKind).toBe("reasoning_text");
-        expect(reasoningDelta.itemId).toBeUndefined();
+        expect(reasoningDelta.itemId).toMatch(/^acp-reasoning:/u);
+        expect(notes[1]).toMatchObject({ itemId: reasoningDelta.itemId });
       }
     }).pipe(
       Effect.provide(
