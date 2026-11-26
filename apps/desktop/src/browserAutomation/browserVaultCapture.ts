@@ -75,6 +75,13 @@ export class BrowserVaultCapture {
     }
   }
 
+  isHumanControlled(runtime: BrowserAutomationVisibleRuntime): boolean {
+    for (const page of this.pages) {
+      if (page.runtime.webContents === runtime.webContents) return page.lastAgentActivity === 0;
+    }
+    return false;
+  }
+
   noteHumanActivity(threadId: string): void {
     for (const page of this.pages) {
       if (page.runtime.threadId === threadId) page.lastAgentActivity = 0;

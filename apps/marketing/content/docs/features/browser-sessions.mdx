@@ -3,7 +3,13 @@ title: Browser logins & sessions
 description: Manage saved accounts, import browser cookies deliberately, and understand shared sessions and optional Safari setup.
 ---
 
-Tabs and browser tool access belong to a task, but cookies and signed-in sessions are shared across Synara browser tabs and agent workflows. Moving a tab between the floating browser and right dock does not create a separate session.
+The desktop browser uses one local Chromium profile for all chats in the same Synara app. Sign in to a site in one chat and you can open the same site, already signed in, in another. Each chat owns its tabs and tool access. Stable and Beta have separate profiles.
+
+Chromium stores site data and honors the expiry dates on persistent cookies. On a clean quit, Synara also saves compatible session cookies from direct sign-ins and imports when secure OS storage is available. Signing out on the site takes effect in the other chats and carries over to the next launch. After an interrupted run, Synara discards the previous session-cookie snapshot. A site can still expire or revoke a login.
+
+## Email suggestions
+
+After you type an email address and submit a supported login form, click the login field or press the down arrow on a later visit to choose that address. Suggestions are limited to the same origin and are available across chats. Synara respects forms that turn autocomplete off. It encrypts the address history locally when secure OS storage is available. Otherwise, suggestions last until you quit the app.
 
 ## Saved logins
 
@@ -33,8 +39,6 @@ Cookie import is available through the desktop browser’s **Saved logins** dial
 6. Check the imported and skipped counts. Confirm the page’s signed-in state afterward; some cookies cannot transfer and the site may still require a fresh sign-in.
 
 Imported sessions are shared across Synara browser tabs and agent workflows. Choosing **This site** narrows the copied domains; it does not create a private session for that task.
-
-Compatible imported session cookies can be restored after a clean app shutdown using secure local storage. An interrupted run’s session-cookie snapshot is discarded, and unavailable secure storage can prevent restoration. Import does not guarantee that every website remains signed in after a restart.
 
 ## Optional Safari setup on macOS
 

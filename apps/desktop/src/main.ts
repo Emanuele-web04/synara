@@ -305,6 +305,8 @@ import { BrowserSessionRestore } from "./browserAutomation/browserSessionRestore
 import { createCookieSessionBackend } from "./browserAutomation/electronCookieSession";
 import { BrowserVault } from "./browserAutomation/browserVault";
 import { BrowserVaultCapture } from "./browserAutomation/browserVaultCapture";
+import { BrowserEmailHistory } from "./browserAutomation/browserEmailHistory";
+import { registerLoginEmailMenu } from "./browserAutomation/loginEmailMenu";
 import { registerBrowserVaultIpc } from "./browserVaultIpc";
 import { registerSafariAccessIpc } from "./safariAccessIpc";
 import { showInFileManager } from "./showInFileManager";
@@ -660,8 +662,21 @@ const browserOsKeyStore = {
 const browserVault = new BrowserVault(Path.join(BASE_DIR, "browser-vault"), browserOsKeyStore);
 let browserSessionRestore: BrowserSessionRestore | undefined;
 const browserVaultCapture = new BrowserVaultCapture(browserVault);
+const browserEmailHistory = new BrowserEmailHistory(
+  Path.join(userDataPath, "browser-emails.enc"),
+  browserOsKeyStore,
+);
 const browserManager = new DesktopBrowserManager({
-  onRuntimeReady: (runtime) => browserVaultCapture.register(runtime),
+  onRuntimeReady: (runtime) => {
+    const unregisterCapture = browserVaultCapture.register(runtime);
+    const unregisterEmails = registerLoginEmailMenu(runtime.webContents, browserEmailHistory, () =>
+      browserVaultCapture.isHumanControlled(runtime),
+    );
+    return () => {
+      unregisterEmails();
+      unregisterCapture();
+    };
+  },
   onHumanControl: (threadId) => browserVaultCapture.noteHumanActivity(threadId),
   annotationPreloadPath: annotationGuestPreload,
   beforeInputEvent: (event, input) => {
@@ -5218,7 +5233,13 @@ async function shutdownDesktopRuntime(reason: string): Promise<void> {
         await shutdownBrowserServices({
           revokeHost: () => disposeBrowserHostPipeServerForShutdown(reason),
           closePages: () => browserManager.dispose(),
-          stopCapture: () => browserVaultCapture.dispose(),
+          stopCapture: async () => {
+            try {
+              await browserVaultCapture.dispose();
+            } finally {
+              await browserEmailHistory.flush();
+            }
+          },
           clearKeys: () => browserVault.dispose(),
         });
       } finally {
@@ -5226,7 +5247,12 @@ async function shutdownDesktopRuntime(reason: string): Promise<void> {
           session.fromPartition(BROWSER_SESSION_PARTITION),
         ).dispose();
       }
-      await browserSessionRestore?.shutdown();
+      try {
+        await browserSessionRestore?.shutdown();
+      } catch {
+        // The dirty marker keeps a failed checkpoint out of the next launch.
+        console.warn("[Synara browser] Could not save session cookies for the next launch.");
+      }
       restoreStdIoCapture?.();
       if (betaDiagnostics) {
         trackBetaDiagnostics("app.exit", { kind: "lifecycle" });
@@ -5967,8 +5993,6 @@ function registerIpcHandlers(): void {
         } catch (error) {
           const allowed = [
             "Secure browser session storage is unavailable.",
-            "Browser session metadata could not be read.",
-            "Browser session metadata is unsupported.",
             "Secure browser session persistence failed.",
           ];
           console.warn(
@@ -6520,8 +6544,7 @@ if (!hasSingleInstanceLock) {
   });
 }
 
-// Restores the imported browser session's cookies. Never rejects: a failure or timeout
-// leaves the browser without saved cookies, as before.
+// A failed or timed-out profile restore must still let the first window open.
 async function restoreBrowserSession(restore: BrowserSessionRestore): Promise<void> {
   try {
     let restoreTimer: NodeJS.Timeout | undefined;
@@ -6529,19 +6552,19 @@ async function restoreBrowserSession(restore: BrowserSessionRestore): Promise<vo
       await Promise.race([
         restore.initialize().finally(() => clearTimeout(restoreTimer)),
         new Promise<never>((_, reject) => {
-          restoreTimer = setTimeout(
-            () => reject(new Error("Browser session restoration timed out.")),
-            BROWSER_SESSION_RESTORE_TIMEOUT_MS,
-          );
+          restoreTimer = setTimeout(() => {
+            // The first page can navigate after the deadline. Retire the cookie
+            // backend before releasing it so a late restore cannot replay a login.
+            restore.dispose();
+            reject(new Error("Browser session restoration timed out."));
+          }, BROWSER_SESSION_RESTORE_TIMEOUT_MS);
         }),
       ]);
     } finally {
       clearTimeout(restoreTimer);
     }
   } catch {
-    console.warn(
-      "[Synara browser] Secure session restoration is unavailable; no saved session cookies were restored.",
-    );
+    console.warn("[Synara browser] Secure session restoration did not complete.");
   }
 }
 
@@ -6570,6 +6593,7 @@ async function bootstrap(browserNetworkGuardReady: Promise<void>): Promise<void>
     createCookieSessionBackend(BROWSER_SESSION_PARTITION),
     browserOsKeyStore,
   );
+  app.once("will-quit", () => browserSessionRestore?.dispose());
   // Saved cookies feed neither the backend nor the window, so they are restored while the
   // backend starts. Browser tools and the first window wait for them below, so no page in
   // the browser partition loads before they are back.
