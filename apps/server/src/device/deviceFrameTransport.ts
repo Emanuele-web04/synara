@@ -29,6 +29,7 @@ export class DeviceFrameTransport extends FrameTransport<string, DeviceStreamFra
   constructor(options: DeviceFrameTransportOptions = {}) {
     super({
       encode: (deviceId, frame) =>
+        frame.encodedEnvelope ??
         encodeDeviceFrame({
           header: {
             deviceId,

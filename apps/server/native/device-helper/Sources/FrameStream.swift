@@ -24,8 +24,9 @@ enum FrameEnvelope {
   static let headerFixedBytes = 17
   static let maxDeviceIdBytes = 255
 
-  /// Serializes one payload with its header. Little-endian throughout.
-  static func encode(
+  /// Serializes one payload with its 4-byte length prefix and header in a single
+  /// allocation so the socket writer emits one syscall per frame. Little-endian throughout.
+  static func encodeLengthPrefixed(
     deviceId: [UInt8],
     sequence: UInt32,
     timestampMs: Double,
@@ -37,7 +38,9 @@ enum FrameEnvelope {
     if keyframe { flags |= flagKeyframe }
     if codecConfig { flags |= flagCodecConfig }
 
-    var data = Data(capacity: headerFixedBytes + deviceId.count + payload.count)
+    let envelopeLength = UInt32(headerFixedBytes + deviceId.count + payload.count)
+    var data = Data(capacity: 4 + Int(envelopeLength))
+    withUnsafeBytes(of: envelopeLength.littleEndian) { data.append(contentsOf: $0) }
     withUnsafeBytes(of: magic.littleEndian) { data.append(contentsOf: $0) }
     data.append(version)
     data.append(flags)
@@ -143,9 +146,7 @@ final class FrameSocketWriter {
       self.stateLock.unlock()
       guard canWrite else { return }
 
-      var length = UInt32(payload.count).littleEndian
-      let header = withUnsafeBytes(of: &length) { Data($0) }
-      if !self.writeAll(header) || !self.writeAll(payload) {
+      if !self.writeAll(payload) {
         self.stateLock.lock()
         self.closed = true
         let shouldClose = !self.descriptorClosed
@@ -206,6 +207,7 @@ final class FrameStream {
   private let deviceIdBytes: [UInt8]
   private let writer: FrameSocketWriter
   private let keyframeIntervalSeconds: Double
+  private let maxDimension: Int
   private let encodeQueue = DispatchQueue(label: "dev.synara.device-helper.encode")
 
   private let damageCallbackUUID = NSUUID()
@@ -214,10 +216,17 @@ final class FrameStream {
   private var surfaceRegistered = false
 
   private var session: VTCompressionSession?
+  private var sourcePixelWidth = 0
+  private var sourcePixelHeight = 0
   private let startedAt = CFAbsoluteTimeGetCurrent()
   private var sequence: UInt32 = 0
   private var lastKeyframeAt: Double = -.greatestFiniteMagnitude
+  private var forceNextKeyframe = false
   private var encodingInFlight = false
+  /// Latest surface received while an encode was already running. Coalesced
+  /// rather than discarded so rapid bursts never lose the final resting frame
+  /// and the encoder stays saturated back-to-back instead of skipping vsyncs.
+  private var pendingSurface: Unmanaged<AnyObject>?
   private var streamGeneration: UInt64 = 0
   private var stopped = false
   private var emittedFrameCount = 0
@@ -226,6 +235,7 @@ final class FrameStream {
 
   private(set) var pixelWidth = 0
   private(set) var pixelHeight = 0
+  private(set) var hardwareAccelerated = false
   var emittedFrames: Int { withStateLock { emittedFrameCount } }
   var droppedBusyFrames: Int { withStateLock { droppedBusyFrameCount } }
 
@@ -233,7 +243,8 @@ final class FrameStream {
     descriptor: NSObject,
     deviceId: String,
     writer: FrameSocketWriter,
-    keyframeIntervalSeconds: Double
+    keyframeIntervalSeconds: Double,
+    maxDimension: Int = 1600
   ) throws {
     guard let idBytes = deviceId.data(using: .utf8),
       idBytes.count <= FrameEnvelope.maxDeviceIdBytes,
@@ -245,16 +256,35 @@ final class FrameStream {
     self.deviceIdBytes = Array(idBytes)
     self.writer = writer
     self.keyframeIntervalSeconds = keyframeIntervalSeconds
+    self.maxDimension = maxDimension
+  }
+
+  /// Compute even target dimensions bounded by `maxDimension` on the longest edge.
+  private static func scaledDimensions(width: Int, height: Int, maxDimension: Int) -> (Int, Int) {
+    guard maxDimension > 0 else { return (max(2, width & ~1), max(2, height & ~1)) }
+    let longest = max(width, height)
+    guard longest > maxDimension else { return (max(2, width & ~1), max(2, height & ~1)) }
+    let scale = Double(maxDimension) / Double(longest)
+    let scaledW = max(2, Int((Double(width) * scale).rounded()) & ~1)
+    let scaledH = max(2, Int((Double(height) * scale).rounded()) & ~1)
+    return (scaledW, scaledH)
   }
 
   func start() throws {
     guard let surface = descriptor.currentFramebufferSurface() else {
       throw SimulatorError.displayUnavailable("display has no framebuffer surface yet")
     }
-    pixelWidth = IOSurfaceGetWidth(surface)
-    pixelHeight = IOSurfaceGetHeight(surface)
+    let srcW = IOSurfaceGetWidth(surface)
+    let srcH = IOSurfaceGetHeight(surface)
+    let (targetW, targetH) = Self.scaledDimensions(
+      width: srcW, height: srcH, maxDimension: maxDimension)
+    sourcePixelWidth = srcW
+    sourcePixelHeight = srcH
+    pixelWidth = targetW
+    pixelHeight = targetH
     try encodeQueue.sync {
-      try startSessionOnQueue(width: pixelWidth, height: pixelHeight)
+      try startSessionOnQueue(
+        width: targetW, height: targetH, scaling: targetW != srcW || targetH != srcH)
     }
 
     // Prime with a first frame so a consumer sees the screen immediately rather
@@ -298,15 +328,30 @@ final class FrameStream {
     }
   }
 
+  /// Force an immediate IDR keyframe (with preceding SPS/PPS) on the live
+  /// session without tearing down the socket or VideoToolbox encoder.
+  func requestKeyframe() {
+    let isRunning = withStateLock { () -> Bool in
+      guard !stopped else { return false }
+      forceNextKeyframe = true
+      return true
+    }
+    guard isRunning, let current = descriptor.currentFramebufferSurface() else { return }
+    encode(surface: current)
+  }
+
   func stop() {
-    let shouldStop = withStateLock {
-      if stopped { return false }
+    let stalePending = withStateLock { () -> (Bool, Unmanaged<AnyObject>?) in
+      if stopped { return (false, nil) }
       stopped = true
       streamGeneration &+= 1
       encodingInFlight = false
-      return true
+      let pending = pendingSurface
+      pendingSurface = nil
+      return (true, pending)
     }
-    guard shouldStop else { return }
+    stalePending.1?.release()
+    guard stalePending.0 else { return }
 
     if damageRegistered {
       let selector = NSSelectorFromString("unregisterDamageRectanglesCallbackWithUUID:")
@@ -336,14 +381,21 @@ final class FrameStream {
 
   var droppedSocketFrames: Int { writer.droppedFrames }
 
-  private func startSessionOnQueue(width: Int, height: Int) throws {
+  private func startSessionOnQueue(width: Int, height: Int, scaling: Bool) throws {
+    if let existing = self.session {
+      VTCompressionSessionInvalidate(existing)
+      self.session = nil
+    }
+    let encoderSpec: [CFString: Any] = [
+      kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder: kCFBooleanTrue!
+    ]
     var created: VTCompressionSession?
     let status = VTCompressionSessionCreate(
       allocator: kCFAllocatorDefault,
       width: Int32(width),
       height: Int32(height),
       codecType: kCMVideoCodecType_H264,
-      encoderSpecification: nil,
+      encoderSpecification: encoderSpec as CFDictionary,
       imageBufferAttributes: nil,
       compressedDataAllocator: nil,
       outputCallback: nil,
@@ -359,6 +411,11 @@ final class FrameStream {
       value: kVTProfileLevel_H264_Baseline_AutoLevel)
     VTSessionSetProperty(
       session, key: kVTCompressionPropertyKey_AllowFrameReordering, value: kCFBooleanFalse)
+    VTSessionSetProperty(
+      session, key: kVTCompressionPropertyKey_MaxFrameDelayCount, value: 1 as CFNumber)
+    VTSessionSetProperty(
+      session, key: kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality,
+      value: kCFBooleanTrue)
     // Keyframes come from one place: the forced one in `encodeOnQueue`, whose
     // timer any keyframe resets. A frame-count limit (120) and a duration limit
     // equal to the forced interval each added their own keyframe, so they
@@ -371,29 +428,72 @@ final class FrameStream {
       value: (keyframeIntervalSeconds * 2) as CFNumber)
     VTSessionSetProperty(
       session, key: kVTCompressionPropertyKey_ExpectedFrameRate, value: 60 as CFNumber)
+
+    // Target a crisp interactive UI bitrate (~6 bits per pixel-second, clamped
+    // to 3–12 Mbps) so keyframes stay sharp without multi-megabyte socket spikes.
+    let targetBitRate = max(3_000_000, min(12_000_000, width * height * 6))
+    VTSessionSetProperty(
+      session, key: kVTCompressionPropertyKey_AverageBitRate, value: targetBitRate as CFNumber)
+    let bytesPerSecondLimit = (targetBitRate / 8) * 2
+    VTSessionSetProperty(
+      session, key: kVTCompressionPropertyKey_DataRateLimits,
+      value: [bytesPerSecondLimit, 1] as CFArray)
+
+    if scaling {
+      let transferProps: [CFString: Any] = [
+        kVTPixelTransferPropertyKey_ScalingMode: kVTScalingMode_Normal
+      ]
+      VTSessionSetProperty(
+        session, key: kVTCompressionPropertyKey_PixelTransferProperties,
+        value: transferProps as CFDictionary)
+    }
+
     VTCompressionSessionPrepareToEncodeFrames(session)
+
+    var rawHW: UnsafeMutableRawPointer?
+    let hwStatus = VTSessionCopyProperty(
+      session, key: kVTCompressionPropertyKey_UsingHardwareAcceleratedVideoEncoder,
+      allocator: kCFAllocatorDefault, valueOut: &rawHW)
+    if hwStatus == noErr, let rawHW {
+      let value = Unmanaged<CFBoolean>.fromOpaque(rawHW).takeRetainedValue()
+      hardwareAccelerated = value == kCFBooleanTrue
+    } else {
+      hardwareAccelerated = false
+    }
+    if !hardwareAccelerated {
+      logDiagnostic(
+        "VideoToolbox fell back to software H.264 encoder for \(width)x\(height)")
+    }
 
     self.session = session
   }
 
-  /// Encodes one surface. Returns immediately when an encode is already in
-  /// flight: dropping is the correct response to a display that outruns the
-  /// encoder, since only the newest frame matters.
+  /// Encodes one surface. When an encode is already in flight, retains the
+  /// newest surface as `pendingSurface` so it runs immediately once the current
+  /// encode finishes instead of silently dropping the latest display update.
   private func encode(surface: IOSurfaceRef) {
-    let generation = withStateLock { () -> UInt64? in
-      if stopped { return nil }
+    let retained = Unmanaged.passRetained(surface as AnyObject)
+    let action = withStateLock { () -> (UInt64?, Unmanaged<AnyObject>?) in
+      if stopped { return (nil, retained) }
       if encodingInFlight {
-        droppedBusyFrameCount += 1
-        return nil
+        let superseded = pendingSurface
+        if superseded != nil {
+          droppedBusyFrameCount += 1
+        }
+        pendingSurface = retained
+        return (nil, superseded)
       }
       encodingInFlight = true
-      return streamGeneration
+      return (streamGeneration, nil)
     }
-    guard let generation else { return }
+    action.1?.release()
+    guard let generation = action.0 else { return }
 
-    // The surface must be retained across the async hop: the simulator may
-    // recycle it as soon as this callback returns.
-    let retained = Unmanaged.passRetained(surface as AnyObject)
+    dispatchEncode(retained: retained, generation: generation)
+  }
+
+  private func dispatchEncode(retained: Unmanaged<AnyObject>, generation: UInt64) {
+    let surface = unsafeBitCast(retained.takeUnretainedValue(), to: IOSurfaceRef.self)
     encodeQueue.async { [weak self] in
       defer {
         retained.release()
@@ -404,7 +504,27 @@ final class FrameStream {
   }
 
   private func encodeOnQueue(surface: IOSurfaceRef, generation: UInt64) {
-    guard accepts(generation: generation), let session, !writer.isClosed else { return }
+    guard accepts(generation: generation), !writer.isClosed else { return }
+
+    let srcW = IOSurfaceGetWidth(surface)
+    let srcH = IOSurfaceGetHeight(surface)
+    if srcW != sourcePixelWidth || srcH != sourcePixelHeight {
+      let (targetW, targetH) = Self.scaledDimensions(
+        width: srcW, height: srcH, maxDimension: maxDimension)
+      do {
+        try startSessionOnQueue(
+          width: targetW, height: targetH, scaling: targetW != srcW || targetH != srcH)
+        sourcePixelWidth = srcW
+        sourcePixelHeight = srcH
+        pixelWidth = targetW
+        pixelHeight = targetH
+        withStateLock { forceNextKeyframe = true }
+      } catch {
+        logDiagnostic("failed to recreate encoder for \(srcW)x\(srcH): \(error)")
+        return
+      }
+    }
+    guard let session else { return }
 
     var unmanagedBuffer: Unmanaged<CVPixelBuffer>?
     let status = CVPixelBufferCreateWithIOSurface(
@@ -417,13 +537,17 @@ final class FrameStream {
 
     var properties: [CFString: Any]? = nil
     let keyframeDue = withStateLock { () -> Bool in
+      if forceNextKeyframe {
+        forceNextKeyframe = false
+        lastKeyframeAt = elapsed
+        return true
+      }
       guard elapsed - lastKeyframeAt >= keyframeIntervalSeconds else { return false }
       lastKeyframeAt = elapsed
       return true
     }
     if keyframeDue {
-      // Periodic keyframes bound how long a late joiner waits for a decodable
-      // picture and give the consumer a resync point after dropped frames.
+      // Periodic or on-demand keyframes bound resync recovery and late-joiner wait.
       properties = [kVTEncodeFrameOptionKey_ForceKeyFrame: kCFBooleanTrue!]
     }
 
@@ -548,7 +672,7 @@ final class FrameStream {
     guard let nextSequence else { return false }
     let timestampMs = (CFAbsoluteTimeGetCurrent() - startedAt) * 1000
     let message = payload.withUnsafeBytes { buffer in
-      FrameEnvelope.encode(
+      FrameEnvelope.encodeLengthPrefixed(
         deviceId: deviceIdBytes, sequence: nextSequence, timestampMs: timestampMs,
         keyframe: keyframe, codecConfig: codecConfig, payload: buffer)
     }
@@ -557,8 +681,22 @@ final class FrameStream {
   }
 
   private func finishEncoding(generation: UInt64) {
-    withStateLock {
-      if acceptsGenerationLocked(generation) { encodingInFlight = false }
+    let next = withStateLock { () -> Unmanaged<AnyObject>? in
+      guard acceptsGenerationLocked(generation) else {
+        let stale = pendingSurface
+        pendingSurface = nil
+        stale?.release()
+        return nil
+      }
+      if let queued = pendingSurface {
+        pendingSurface = nil
+        return queued
+      }
+      encodingInFlight = false
+      return nil
+    }
+    if let next {
+      dispatchEncode(retained: next, generation: generation)
     }
   }
 

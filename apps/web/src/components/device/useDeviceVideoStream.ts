@@ -5,8 +5,8 @@
 // Depends on: DevicePanel.logic frame gate, deviceFrameSource transport
 
 import type { DeviceUdid } from "@synara/contracts";
-import type { DeviceFrame } from "@synara/shared/deviceFrame";
-import { useEffect, useRef, useState } from "react";
+import type { DeviceFrame, DeviceFrameTouchPhase } from "@synara/shared/deviceFrame";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
   createDeviceFrameGateState,
@@ -79,12 +79,23 @@ function isWebCodecsAvailable(): boolean {
   );
 }
 
+/**
+ * Above this pending decode backlog, delta frames only add display latency;
+ * ask the server for a fresh IDR keyframe so playback snaps back to real time.
+ */
+const MAX_DECODE_QUEUE_SIZE = 6;
+
 export function useDeviceVideoStream(input: {
   readonly canvasRef: React.RefObject<HTMLCanvasElement | null>;
   /** Null unsubscribes and tears the decoder down. */
   readonly udid: DeviceUdid | null;
   readonly enabled: boolean;
-}): { readonly status: DeviceVideoStatus; readonly dimensions: DeviceVideoDimensions | null } {
+}): {
+  readonly status: DeviceVideoStatus;
+  readonly dimensions: DeviceVideoDimensions | null;
+  /** Send a live touch event over the open frame socket; returns false if unavailable. */
+  readonly sendTouch: (phase: DeviceFrameTouchPhase, x: number, y: number) => boolean;
+} {
   const { canvasRef, udid, enabled } = input;
   const [status, setStatus] = useState<DeviceVideoStatus>({ kind: "idle" });
   const [dimensions, setDimensions] = useState<DeviceVideoDimensions | null>(null);
@@ -92,14 +103,21 @@ export function useDeviceVideoStream(input: {
   // Generation guards every async callback: a decoder output or socket message
   // from a torn-down stream must not paint over the current one.
   const generationRef = useRef(0);
+  const sourceRef = useRef<DeviceFrameSource | null>(null);
+
+  const sendTouch = useCallback((phase: DeviceFrameTouchPhase, x: number, y: number): boolean => {
+    return sourceRef.current?.sendTouch?.(phase, x, y) ?? false;
+  }, []);
 
   useEffect(() => {
     if (!enabled || udid === null) {
+      sourceRef.current = null;
       setStatus({ kind: "idle" });
       setDimensions(null);
       return;
     }
     if (!isWebCodecsAvailable()) {
+      sourceRef.current = null;
       setStatus({ kind: "unsupported" });
       return;
     }
@@ -116,12 +134,17 @@ export function useDeviceVideoStream(input: {
     let pendingFrame: VideoFrame | null = null;
     let paintRequest: number | null = null;
     let streaming = false;
+    let cachedCanvas: HTMLCanvasElement | null = null;
+    let cachedContext: CanvasRenderingContext2D | null = null;
 
-    const openFrameSource = () =>
-      createDeviceFrameSource({
+    const openFrameSource = () => {
+      const next = createDeviceFrameSource({
         udid,
         handlers: { onFrame: handleFrame, onReset: handleReset },
       });
+      sourceRef.current = next;
+      return next;
+    };
     // The codec-config frame carries SPS/PPS only, with no slice data, so it
     // cannot itself be decoded as a key chunk — WebCodecs rejects it with "a key
     // frame is required after configure()". Hold the parameter sets and prepend
@@ -152,8 +175,12 @@ export function useDeviceVideoStream(input: {
           canvas.height = height;
           setDimensions({ width, height });
         }
-        const context = canvas.getContext("2d");
-        context?.drawImage(videoFrame, 0, 0);
+        if (cachedCanvas !== canvas) {
+          cachedCanvas = canvas;
+          // Opaque backing store skips per-frame alpha compositing in Chromium.
+          cachedContext = canvas.getContext("2d", { alpha: false });
+        }
+        cachedContext?.drawImage(videoFrame, 0, 0);
         if (!streaming) {
           streaming = true;
           setStatus({ kind: "streaming" });
@@ -232,7 +259,11 @@ export function useDeviceVideoStream(input: {
         // No `description`: omitting it selects Annex-B, matching what the
         // helper writes out of VideoToolbox. Supplying one would switch the
         // decoder to length-prefixed AVCC samples and every frame would fail.
-        next.configure({ codec, optimizeForLatency: true });
+        next.configure({
+          codec,
+          optimizeForLatency: true,
+          hardwareAcceleration: "prefer-hardware",
+        });
       } catch (error) {
         failStream(
           error instanceof Error ? error.message : "The video decoder could not be configured.",
@@ -247,6 +278,11 @@ export function useDeviceVideoStream(input: {
 
     const submit = (frame: DeviceFrame, keyframe: boolean) => {
       if (!decoder || decoder.state !== "configured") return;
+      if (!keyframe && decoder.decodeQueueSize > MAX_DECODE_QUEUE_SIZE) {
+        gate = { ...gate, phase: "awaiting-keyframe" };
+        source?.requestResync();
+        return;
+      }
       let data = frame.payload;
       if (keyframe && pendingParameterSets) {
         const combined = new Uint8Array(pendingParameterSets.byteLength + data.byteLength);
@@ -332,6 +368,7 @@ export function useDeviceVideoStream(input: {
       }
       const current = source;
       source = null;
+      if (sourceRef.current === current) sourceRef.current = null;
       current?.close();
       teardownDecoder();
       gate = createDeviceFrameGateState();
@@ -356,10 +393,11 @@ export function useDeviceVideoStream(input: {
       generationRef.current += 1;
       document.removeEventListener("visibilitychange", handleVisibilityChange);
       if (reconnectTimer !== null) clearTimeout(reconnectTimer);
+      if (sourceRef.current === source) sourceRef.current = null;
       source?.close();
       teardownDecoder();
     };
   }, [canvasRef, udid, enabled]);
 
-  return { status, dimensions };
+  return { status, dimensions, sendTouch };
 }

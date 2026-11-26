@@ -62,7 +62,8 @@ On start the helper emits `{"jsonrpc":"2.0","method":"ready","params":{"protocol
 | `ping`              | –                                                                                                           | `{ok, pid}`                                                               |
 | `list`              | –                                                                                                           | `{devices: [{udid, name, state, booted, runtime, deviceType}]}`           |
 | `attach`            | `udid`                                                                                                      | display geometry + `capabilities` (below)                                 |
-| `stream.start`      | `socketPath`, `keyframeIntervalSeconds?` (2.0)                                                              | `{pixelWidth, pixelHeight, codec, socketPath}`                            |
+| `stream.start`      | `socketPath`, `keyframeIntervalSeconds?` (8.0), `maxDimension?` (1600)                                      | `{pixelWidth, pixelHeight, codec, socketPath, hardwareAccelerated}`       |
+| `stream.keyframe`   | –                                                                                                           | `{ok}`                                                                    |
 | `stream.stop`       | –                                                                                                           | `{running: false, emittedFrames, droppedBusyFrames, droppedSocketFrames}` |
 | `stream.stats`      | –                                                                                                           | as above, plus `running: true` while streaming                            |
 | `tap`               | `x`, `y`, `holdMs?` (80)                                                                                    | `{ok}`                                                                    |

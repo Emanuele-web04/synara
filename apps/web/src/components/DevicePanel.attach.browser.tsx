@@ -14,7 +14,12 @@ import { render } from "vitest-browser-react";
 import type { DeviceFrameSourceOptions } from "~/lib/deviceFrameSource";
 
 const transport = vi.hoisted(() => ({
-  sources: [] as Array<DeviceFrameSourceOptions & { close: ReturnType<typeof vi.fn> }>,
+  sources: [] as Array<
+    DeviceFrameSourceOptions & {
+      close: ReturnType<typeof vi.fn>;
+      sendTouch: ReturnType<typeof vi.fn>;
+    }
+  >,
   getThreadState: vi.fn(),
 }));
 
@@ -24,8 +29,9 @@ vi.mock("~/nativeApi", () => ({
 vi.mock("~/lib/deviceFrameSource", () => ({
   createDeviceFrameSource: (options: DeviceFrameSourceOptions) => {
     const close = vi.fn();
-    transport.sources.push({ ...options, close });
-    return { close, requestResync: vi.fn() };
+    const sendTouch = vi.fn(() => true);
+    transport.sources.push({ ...options, close, sendTouch });
+    return { close, requestResync: vi.fn(), sendTouch };
   },
 }));
 
@@ -217,5 +223,49 @@ describe("simulator attach first frame", () => {
     await expect
       .element(mounted.getByText("Simulator decoder failed", { exact: true }))
       .toBeVisible();
+  });
+
+  it("streams live touch down, move, and up directly on the frame socket", async () => {
+    await mount(state(SLIM_2, 1, null));
+    const source = transport.sources[0]!;
+    prime(source);
+    await expect.poll(() => document.querySelector("canvas")?.width).toBe(40);
+    const canvas = document.querySelector("canvas")!;
+    const rect = canvas.getBoundingClientRect();
+
+    canvas.dispatchEvent(
+      new PointerEvent("pointerdown", {
+        bubbles: true,
+        pointerId: 1,
+        button: 0,
+        clientX: rect.left + rect.width * 0.5,
+        clientY: rect.top + rect.height * 0.5,
+      }),
+    );
+    expect(source.sendTouch).toHaveBeenCalledTimes(1);
+    expect(source.sendTouch.mock.calls[0]?.[0]).toBe("down");
+
+    canvas.dispatchEvent(
+      new PointerEvent("pointermove", {
+        bubbles: true,
+        pointerId: 1,
+        button: 0,
+        clientX: rect.left + rect.width * 0.5,
+        clientY: rect.top + rect.height * 0.25,
+      }),
+    );
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    expect(source.sendTouch.mock.calls.some(([phase]) => phase === "move")).toBe(true);
+
+    canvas.dispatchEvent(
+      new PointerEvent("pointerup", {
+        bubbles: true,
+        pointerId: 1,
+        button: 0,
+        clientX: rect.left + rect.width * 0.5,
+        clientY: rect.top + rect.height * 0.2,
+      }),
+    );
+    expect(source.sendTouch.mock.calls.at(-1)?.[0]).toBe("up");
   });
 });

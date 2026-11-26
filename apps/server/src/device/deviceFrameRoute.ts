@@ -19,15 +19,12 @@
  */
 import {
   DEVICE_FRAME_RESYNC_MESSAGE,
+  DEVICE_FRAME_TOUCH_MESSAGE,
   DEVICE_FRAME_WS_PATH,
   DEVICE_FRAME_WS_UDID_PARAM,
+  type DeviceFrameTouchPhase,
 } from "@synara/shared/deviceFrame";
-import {
-  decodeFrameResyncRequest,
-  makeFrameSink,
-  type FrameByteStream,
-  type FrameSink,
-} from "@synara/shared/frameTransport";
+import { makeFrameSink, type FrameByteStream, type FrameSink } from "@synara/shared/frameTransport";
 import { Effect, Layer } from "effect";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 
@@ -36,16 +33,72 @@ import { frameSocketByteStream } from "../frameSocketByteStream.ts";
 import { DeviceService } from "./Services/DeviceService.ts";
 import type { DeviceFrameSink } from "./deviceFrameTransport.ts";
 
-/** A resync request is a few dozen bytes; anything larger is not one. */
+/** Client control messages on the frame socket are tiny JSON envelopes. */
 const MAX_CLIENT_MESSAGE_BYTES = 1_024;
+/** Mirrors DeviceCoordinate upper bound in `@synara/contracts`. */
+const MAX_TOUCH_COORDINATE = 20_000;
+
+export type DeviceFrameClientMessage =
+  | { readonly kind: "resync" }
+  | {
+      readonly kind: "touch";
+      readonly phase: DeviceFrameTouchPhase;
+      readonly x: number;
+      readonly y: number;
+    };
+
+function isTouchPhase(value: unknown): value is DeviceFrameTouchPhase {
+  return value === "down" || value === "move" || value === "up";
+}
+
+function isValidCoordinate(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isFinite(value) &&
+    value >= 0 &&
+    value <= MAX_TOUCH_COORDINATE
+  );
+}
 
 /**
- * Parse a client message on the frame socket. Returns the request kind, or
- * null for anything unrecognized, which the caller ignores rather than
- * treating as a protocol error.
+ * Parse a client message on the frame socket (keyframe resync or live touch).
+ * Returns null for anything unrecognized or out of bounds, which the caller
+ * ignores rather than treating as a protocol error.
+ */
+export function decodeDeviceFrameClientMessage(
+  message: string | Uint8Array,
+): DeviceFrameClientMessage | null {
+  const text = typeof message === "string" ? message : Buffer.from(message).toString("utf8");
+  if (text.length > MAX_CLIENT_MESSAGE_BYTES) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== "object" || parsed === null) return null;
+  const record = parsed as Record<string, unknown>;
+  if (record.type === DEVICE_FRAME_RESYNC_MESSAGE) {
+    return { kind: "resync" };
+  }
+  if (
+    record.type === DEVICE_FRAME_TOUCH_MESSAGE &&
+    isTouchPhase(record.phase) &&
+    isValidCoordinate(record.x) &&
+    isValidCoordinate(record.y)
+  ) {
+    return { kind: "touch", phase: record.phase, x: record.x, y: record.y };
+  }
+  return null;
+}
+
+/**
+ * Parse a client resync request on the frame socket. Returns "resync", or
+ * null for anything else.
  */
 export function decodeResyncRequest(message: string | Uint8Array): "resync" | null {
-  return decodeFrameResyncRequest(message, DEVICE_FRAME_RESYNC_MESSAGE, MAX_CLIENT_MESSAGE_BYTES);
+  const decoded = decodeDeviceFrameClientMessage(message);
+  return decoded?.kind === "resync" ? "resync" : null;
 }
 
 export interface DeviceFrameSocketWriter {
@@ -124,19 +177,24 @@ export function makeDeviceFrameRouteLayer<R = never, E = never>(options: {
                 unsubscribe();
               }),
             );
-            // The only thing a client may send is a resync request, when its
-            // decoder hits a sequence gap or an error. Handled here rather than
-            // as an RPC because it is a property of this stream, and because a
-            // frozen canvas should not depend on a second socket being healthy.
-            // Anything unrecognized is ignored: a stray message must not kill a
-            // stream.
+            // Client messages on the uncompressed frame socket carry keyframe
+            // resyncs and low-latency live touch events (`down` / `move` / `up`),
+            // keeping both off the compressed JSON-RPC socket. Anything
+            // unrecognized is ignored so a stray message never kills a stream.
             yield* socket.run((message) => {
-              if (decodeResyncRequest(message) === null) return;
-              Effect.runFork(
-                Effect.promise(() =>
-                  deviceService.value.manager.requestKeyframe(udid).catch(() => undefined),
-                ),
-              );
+              const decoded = decodeDeviceFrameClientMessage(message);
+              if (decoded === null) return;
+              if (decoded.kind === "resync") {
+                Effect.runFork(
+                  Effect.promise(() =>
+                    deviceService.value.manager.requestKeyframe(udid).catch(() => undefined),
+                  ),
+                );
+                return;
+              }
+              void deviceService.value.manager
+                .touch(udid, { phase: decoded.phase, x: decoded.x, y: decoded.y })
+                .catch(() => undefined);
             });
             return HttpServerResponse.empty();
           });

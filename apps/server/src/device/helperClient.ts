@@ -51,6 +51,7 @@ export const HELPER_METHODS = {
   list: "list",
   attach: "attach",
   streamStart: "stream.start",
+  streamKeyframe: "stream.keyframe",
   streamStop: "stream.stop",
   streamStats: "stream.stats",
   tap: "tap",
@@ -405,11 +406,10 @@ export class HelperClient {
             timestampMs: header.timestampMs,
             keyframe: header.keyframe,
             codecConfig: header.codecConfig,
-            // Envelope stripped: the transport re-encodes one with the routing
-            // device id it already has, so forwarding the record whole would
-            // leave a second header in front of the access unit and every frame
-            // would fail to decode.
             data: payload,
+            // Pass the wire envelope through untouched when its deviceId already
+            // matches the stream so the transport avoids copying every frame.
+            ...(header.deviceId === udid ? { encodedEnvelope: record } : {}),
           });
         }
       });

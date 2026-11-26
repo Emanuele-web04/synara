@@ -40,6 +40,12 @@ export interface DeviceStreamFrame {
   readonly keyframe: boolean;
   readonly codecConfig: boolean;
   readonly data: Uint8Array;
+  /**
+   * Optional pre-encoded `@synara/shared/deviceFrame` envelope straight from
+   * the native helper. When present, `DeviceFrameTransport` forwards it without
+   * allocating a second copy.
+   */
+  readonly encodedEnvelope?: Uint8Array;
 }
 
 export type DeviceFrameListener = (frame: DeviceStreamFrame) => void;
@@ -84,6 +90,8 @@ export interface DeviceListOptions {
 
 /** The screen edge a gesture starts on; iOS reads it as the OS edge gesture. */
 export type DeviceTouchEdge = "top" | "left" | "bottom" | "right";
+
+export type DeviceTouchPhase = "down" | "move" | "up";
 
 export interface DeviceInputOptions {
   readonly signal?: AbortSignal;
@@ -202,6 +210,14 @@ export interface DeviceBackend {
 
   /** `holdMs` above ~500 is a long press. */
   tap(udid: string, x: number, y: number, options?: DeviceTapOptions): Promise<void>;
+  /** Live finger contact (`down` / `move` / `up`) for interactive pane tracking. */
+  touch?(
+    udid: string,
+    phase: DeviceTouchPhase,
+    x: number,
+    y: number,
+    options?: DeviceInputOptions,
+  ): Promise<void>;
   swipe(udid: string, gesture: DeviceSwipeGesture, options?: DeviceInputOptions): Promise<void>;
   /**
    * Keystrokes through HID. Only printable ASCII has a key, and the guest
@@ -263,6 +279,8 @@ export interface DeviceBackend {
 
   attachStream(udid: string, onFrame: DeviceFrameListener): Promise<void>;
   detachStream(udid: string): Promise<void>;
+  /** Force an in-place IDR keyframe on a running stream without rebuilding it. */
+  requestKeyframe?(udid: string): Promise<void>;
 
   /**
    * Called when a running stream ends without being detached (the helper

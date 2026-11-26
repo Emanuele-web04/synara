@@ -250,10 +250,12 @@ final class HelperSession {
     return device
   }
 
-  func requireHID() throws -> SynaraHIDBridge {
+  func requireHID(verifySession: Bool = true) throws -> SynaraHIDBridge {
     // Verify first: a stale boot session re-attaches and replaces `hid`, so
     // the guard must read the post-verification client, not the old one.
-    try verifyBootSession()
+    if verifySession {
+      try verifyBootSession()
+    }
     guard let hid else {
       throw RPCError(.notAttached, "HID input is unavailable for this simulator")
     }
@@ -308,7 +310,11 @@ final class HelperSession {
     return surface
   }
 
-  func startStream(socketPath: String, keyframeIntervalSeconds: Double) throws -> [String: Any] {
+  func startStream(
+    socketPath: String,
+    keyframeIntervalSeconds: Double,
+    maxDimension: Int
+  ) throws -> [String: Any] {
     let device = try requireDevice()
     guard let displayDescriptor else {
       throw RPCError(.notAttached, "not attached to a simulator; call 'attach' first")
@@ -324,7 +330,8 @@ final class HelperSession {
         descriptor: displayDescriptor,
         deviceId: device.udid,
         writer: writer,
-        keyframeIntervalSeconds: keyframeIntervalSeconds)
+        keyframeIntervalSeconds: keyframeIntervalSeconds,
+        maxDimension: maxDimension)
       try frameStream.start()
     } catch {
       writer.close()
@@ -337,7 +344,16 @@ final class HelperSession {
       "pixelHeight": frameStream.pixelHeight,
       "codec": "h264-annexb",
       "socketPath": socketPath,
+      "hardwareAccelerated": frameStream.hardwareAccelerated,
     ]
+  }
+
+  func requestKeyframe() throws -> [String: Any] {
+    guard let stream else {
+      throw RPCError(.invalidRequest, "no stream is running")
+    }
+    stream.requestKeyframe()
+    return ["ok": true]
   }
 
   func stopStream() -> [String: Any] {
@@ -349,6 +365,7 @@ final class HelperSession {
       "emittedFrames": stream.emittedFrames,
       "droppedBusyFrames": stream.droppedBusyFrames,
       "droppedSocketFrames": stream.droppedSocketFrames,
+      "hardwareAccelerated": stream.hardwareAccelerated,
     ]
     stream.stop()
     self.stream = nil
@@ -364,6 +381,7 @@ final class HelperSession {
       "droppedSocketFrames": stream.droppedSocketFrames,
       "pixelWidth": stream.pixelWidth,
       "pixelHeight": stream.pixelHeight,
+      "hardwareAccelerated": stream.hardwareAccelerated,
     ]
   }
 
@@ -419,9 +437,12 @@ func handle(method: String, params: Params, session: HelperSession) throws -> An
   case "stream.start":
     return try session.startStream(
       socketPath: try params.string("socketPath"),
-      // ~2s between keyframes: a late joiner waits at most that long, without
-      // paying the bitrate cost of frequent I-frames.
-      keyframeIntervalSeconds: params.optionalDouble("keyframeIntervalSeconds", default: 2.0))
+      // Longer natural GOP now that `stream.keyframe` forces an in-place IDR on demand.
+      keyframeIntervalSeconds: params.optionalDouble("keyframeIntervalSeconds", default: 8.0),
+      maxDimension: params.optionalInt("maxDimension", default: 1600))
+
+  case "stream.keyframe":
+    return try session.requestKeyframe()
 
   case "stream.stop":
     return session.stopStream()
@@ -439,13 +460,14 @@ func handle(method: String, params: Params, session: HelperSession) throws -> An
     return ["ok": true]
 
   case "touch":
-    let hid = try session.requireHID()
     let phase = try params.string("phase")
     let touchX = try params.normalized("x")
     let touchY = try params.normalized("y")
     guard phase == "down" || phase == "move" || phase == "up" else {
       throw RPCError(.invalidParams, "phase must be one of down, move, up")
     }
+    // Skip boot-session recheck on high-frequency drag moves; down and up still verify.
+    let hid = try session.requireHID(verifySession: phase != "move")
     try withHIDDelivery(hid) {
       hid.sendTouch(x: touchX, y: touchY, down: phase != "up")
     }

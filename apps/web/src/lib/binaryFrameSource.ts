@@ -86,6 +86,12 @@ export interface BinaryFrameSource {
    * actually went out.
    */
   readonly requestResync: () => boolean;
+  /**
+   * Send a small JSON control message (e.g. live touch input) directly on the
+   * uncompressed frame socket when open. Returns false if the socket is closed
+   * or still connecting.
+   */
+  readonly sendJson: (payload: unknown) => boolean;
   /** Idempotent; a source is single-use and cannot be restarted after close. */
   readonly close: () => void;
 }
@@ -189,6 +195,15 @@ export function createBinaryFrameSource<Frame>(
         return false;
       }
       return sendResync();
+    },
+    sendJson: (payload: unknown) => {
+      if (closed || !open) return false;
+      try {
+        socket.send(JSON.stringify(payload));
+        return true;
+      } catch {
+        return false;
+      }
     },
     close: () => {
       if (closed) return;

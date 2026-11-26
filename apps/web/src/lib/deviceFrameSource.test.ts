@@ -237,4 +237,24 @@ describe("resync requests", () => {
 
     expect(source.requestResync()).toBe(false);
   });
+
+  it("sends live touch events only while the frame socket is open", () => {
+    const { socket, send, source } = subscribeWithClock(0);
+
+    expect(source.sendTouch("down", 100, 200)).toBe(false);
+    expect(send).not.toHaveBeenCalled();
+
+    socket.emit("open", {});
+    expect(source.sendTouch("down", 100, 200)).toBe(true);
+    expect(source.sendTouch("move", 105, 190)).toBe(true);
+    expect(source.sendTouch("up", 105, 190)).toBe(true);
+    expect(send.mock.calls.map(([raw]) => JSON.parse(raw as string))).toEqual([
+      { type: "device.frame.touch", phase: "down", x: 100, y: 200 },
+      { type: "device.frame.touch", phase: "move", x: 105, y: 190 },
+      { type: "device.frame.touch", phase: "up", x: 105, y: 190 },
+    ]);
+
+    source.close();
+    expect(source.sendTouch("up", 105, 190)).toBe(false);
+  });
 });
