@@ -163,6 +163,10 @@ type RgbColor = {
   blue: number;
 };
 
+type RgbaColor = RgbColor & {
+  alpha: number;
+};
+
 const BLACK: RgbColor = { blue: 0, green: 0, red: 0 };
 const WHITE: RgbColor = { blue: 255, green: 255, red: 255 };
 const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
@@ -175,6 +179,12 @@ const CONTRAST_CURVE_BASELINE: Record<ThemeVariant, number> = {
   dark: 60,
   light: 45,
 };
+/**
+ * The two foreground steps a palette can under-light, measured against the primary surface
+ * they are drawn on. Accent-coloured links and icons carry meaning, so they hold WCAG AA's
+ * 4.5:1; the muted step is a de-emphasised label, so it holds the 3:1 floor instead.
+ */
+const FOREGROUND_CONTRAST_FLOORS = { accent: 4.5, muted: 3 } as const;
 const SURFACE_UNDER_BASE_ALPHA: Record<ThemeVariant, number> = {
   dark: 0.16,
   light: 0.04,
@@ -1006,10 +1016,11 @@ export function buildResolvedThemeTokens(
   variant: ThemeVariant,
 ): ResolvedThemeTokens {
   const computedTheme = buildComputedTheme(pack.theme, variant);
-  const derived =
+  const rawDerived =
     variant === "light"
       ? buildLightDerivedTokens(computedTheme)
       : buildDarkDerivedTokens(computedTheme);
+  const derived = floorForegroundTokens(rawDerived, computedTheme.surface);
   const panel = buildPanelBackground(computedTheme);
   const codexVariables = buildCodexCssVariables(computedTheme, derived, panel);
 
@@ -1364,6 +1375,113 @@ function buildDarkDerivedTokens(theme: ReturnType<typeof buildComputedTheme>) {
     textForegroundSecondary: formatRgba(theme.ink, 0.65 + theme.contrast * 0.1),
     textForegroundTertiary: formatRgba(theme.ink, 0.42 + theme.contrast * 0.13),
   };
+}
+
+/**
+ * Floors the two foreground pairs on the primary surface. A palette that already clears its
+ * floor passes through string for string; only a failing step moves, and it moves the least
+ * amount that clears the floor. This applies to a user-authored palette as well: the stored
+ * and shared hexes are never rewritten, but what renders is always readable.
+ */
+function floorForegroundTokens(derived: ThemeDerivedTokens, surface: RgbColor): ThemeDerivedTokens {
+  const accent = liftForegroundContrast(
+    derived.textAccent,
+    surface,
+    FOREGROUND_CONTRAST_FLOORS.accent,
+  );
+  const muted = liftForegroundContrast(
+    derived.textForegroundSecondary,
+    surface,
+    FOREGROUND_CONTRAST_FLOORS.muted,
+  );
+
+  return {
+    ...derived,
+    // Links and accent icons share one colour, as do both muted steps; floor each pair once.
+    iconAccent: accent,
+    iconSecondary: muted,
+    textAccent: accent,
+    textForegroundSecondary: muted,
+  };
+}
+
+function liftForegroundContrast(value: string, background: RgbColor, floor: number): string {
+  if (contrastAgainstSurface(value, background) >= floor) {
+    return value;
+  }
+
+  const color = parseColorValue(value);
+  // A sheer step that fails only because it is too sheer keeps its hue: raise the alpha first.
+  if (color.alpha < 1) {
+    for (
+      let thousandths = Math.round(color.alpha * 1000) + 1;
+      thousandths <= 1000;
+      thousandths += 1
+    ) {
+      const candidate = formatRgba(color, thousandths / 1000);
+      if (contrastAgainstSurface(candidate, background) >= floor) {
+        return candidate;
+      }
+    }
+  }
+
+  // Otherwise step the colour away from the surface, keeping the palette's hue and taking the
+  // first 1/255 step that clears the floor.
+  const awayFromSurface = relativeLuminance(color) > relativeLuminance(background) ? WHITE : BLACK;
+  for (let step = 1; step <= 255; step += 1) {
+    const candidate = formatOpaqueRgb(mixRgb(color, awayFromSurface, step / 255));
+    if (contrastAgainstSurface(candidate, background) >= floor) {
+      return candidate;
+    }
+  }
+
+  return formatOpaqueRgb(awayFromSurface);
+}
+
+function contrastAgainstSurface(value: string, background: RgbColor): number {
+  const { alpha, blue, green, red } = parseColorValue(value);
+  // Composite without rounding: the ratio is measured on the blend, as a renderer blends it.
+  const composited = {
+    blue: background.blue + (blue - background.blue) * alpha,
+    green: background.green + (green - background.green) * alpha,
+    red: background.red + (red - background.red) * alpha,
+  };
+  const lighter = Math.max(relativeLuminance(composited), relativeLuminance(background));
+  const darker = Math.min(relativeLuminance(composited), relativeLuminance(background));
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
+function relativeLuminance(color: RgbColor): number {
+  return (
+    0.2126 * linearChannel(color.red) +
+    0.7152 * linearChannel(color.green) +
+    0.0722 * linearChannel(color.blue)
+  );
+}
+
+function linearChannel(value: number): number {
+  const channel = value / 255;
+  return channel <= 0.03928 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+}
+
+function parseColorValue(value: string): RgbaColor {
+  const trimmed = value.trim();
+  if (HEX_COLOR_RE.test(trimmed)) {
+    return { ...parseHexColor(trimmed), alpha: 1 };
+  }
+
+  const channels = /^rgba?\(([^)]+)\)$/.exec(trimmed);
+  if (!channels) {
+    throw new Error(`Unsupported theme colour: ${value}`);
+  }
+
+  const [red, green, blue, alpha] = (channels[1] ?? "")
+    .split(",")
+    .map((part) => Number.parseFloat(part));
+  if (red === undefined || green === undefined || blue === undefined) {
+    throw new Error(`Unsupported theme colour: ${value}`);
+  }
+  return { alpha: alpha !== undefined && Number.isFinite(alpha) ? alpha : 1, blue, green, red };
 }
 
 function buildSurfaceUnder(
