@@ -13342,14 +13342,8 @@ describe("ChatView transcript geometry (full app)", () => {
       viewport: DEFAULT_VIEWPORT,
       snapshot: { ...snapshot, threads: [{ ...snapshot.threads[0]!, session: null }] },
     });
-    // The shell carries its own instance of the backdrop as the window's atmosphere, so the
-    // empty landing's copy is the one outside it.
-    const backdrop = (root: ParentNode = document) =>
-      [...root.querySelectorAll("[data-empty-chat-backdrop]")].find(
-        (el) => !el.closest("[data-shell-atmosphere]"),
-      ) ?? null;
-    const shellAtmosphere = () => document.querySelector("[data-shell-atmosphere]");
-    const background = () => backdrop();
+    const shellAtmosphere = () => document.querySelector<HTMLElement>("[data-shell-atmosphere]");
+    const background = () => document.querySelector("[data-empty-chat-backdrop]");
     const styleOf = () => background()?.getAttribute("data-empty-chat-backdrop") ?? null;
     const storedSettings = () => JSON.parse(localStorage.getItem("synara:app-settings:v1") ?? "{}");
     const option = (name: string) => page.getByRole("radio", { name, exact: true });
@@ -13360,9 +13354,9 @@ describe("ChatView transcript geometry (full app)", () => {
     try {
       await expect.poll(styleOf).toBe("temple");
       const trayControls = () =>
-        [...document.querySelectorAll("[data-empty-chat-backdrop-host]")]
-          .find((host) => !host.closest("[data-shell-atmosphere]"))
-          ?.querySelector("[data-composer-tray-host] [data-empty-landing-controls]") ?? null;
+        document.querySelector(
+          "[data-empty-chat-backdrop-host] [data-composer-tray-host] [data-empty-landing-controls]",
+        );
       await expect.poll(trayControls, { timeout: 3_000 }).not.toBeNull();
       expect(getComputedStyle(trayControls()!).textShadow).toBe("none");
       await goToSettings();
@@ -13377,6 +13371,7 @@ describe("ChatView transcript geometry (full app)", () => {
       await goToChat();
       await expect.element(page.getByTestId("empty-landing-heading")).toBeVisible();
       expect(background()).toBeNull();
+      expect(shellAtmosphere()).toBeNull();
       await goToSettings();
       await expect.element(option("Off")).toHaveAttribute("aria-checked", "true");
       await page.getByRole("button", { name: "Reset Empty chat background to default" }).click();
@@ -13385,8 +13380,20 @@ describe("ChatView transcript geometry (full app)", () => {
       await expect.poll(styleOf).toBe("temple");
       useTerminalStateStore.getState().openTerminalThreadPage(THREAD_ID, { terminalOnly: false });
       await expect.poll(background).toBeNull();
-      // The atmosphere on the shell is not the empty landing's backdrop and stays.
-      expect(shellAtmosphere()).not.toBeNull();
+      const atmosphere = shellAtmosphere()!;
+      expect(atmosphere).not.toHaveAttribute("data-empty-chat-backdrop-host");
+      const { left, top, width, height } = atmosphere.getBoundingClientRect();
+      // Make the clip hit-testable. In the app the whole effect is pointer-transparent.
+      atmosphere.style.pointerEvents = "auto";
+      atmosphere.style.zIndex = "100";
+      try {
+        expect(document.elementFromPoint(left + width / 2, top + height / 2)).not.toBe(atmosphere);
+        expect(document.elementFromPoint(left + width / 2, top + 2)).toBe(atmosphere);
+        expect(document.elementFromPoint(left + 2, top + height / 2)).toBe(atmosphere);
+      } finally {
+        atmosphere.style.removeProperty("pointer-events");
+        atmosphere.style.removeProperty("z-index");
+      }
       useTerminalStateStore.getState().setTerminalWorkspaceTab(THREAD_ID, "chat");
       await expect.poll(background).not.toBeNull();
     } finally {

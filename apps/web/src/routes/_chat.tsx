@@ -688,7 +688,12 @@ function ChatRouteLayout() {
   // the existing <Sidebar> offcanvas slide and resize run unchanged below the strip and are
   // clipped at the rail. The strip height reaches CSS as a variable (see index.css).
   return (
-    <ChatShell defaultOpen open={resolvedSidebarOpen} onOpenChange={handleSidebarOpenChange}>
+    <ChatShell
+      defaultOpen
+      open={resolvedSidebarOpen}
+      onOpenChange={handleSidebarOpenChange}
+      showAtmosphere={!isMobile}
+    >
       <ThreadRetentionMaintenanceToast />
       <ChatRouteGlobalShortcuts />
       <AppRailSlotProvider value={railSlot}>

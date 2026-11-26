@@ -231,12 +231,8 @@
     opacity: 0;
   }
 
-  /* Rail layout, modeled on Codex. Three tones: the shell (top band + rail) is the lightest
-     in dark and a soft grey in light, the thread panel sits a step toward the surface, and
-     the route body is the surface itself. Panel, route body, and right dock form one inset
-     block under the top band: a hairline border, rounded corners, and a
-     small shell gap to the window's right and bottom edges. Route headers keep rendering
-     their titles and actions, now on the shell band above the block. */
+  /* Panel, route body and right dock form one inset block under the shell's top band.
+     A hairline, rounded corners and a small gap separate it from the frame. */
   [data-sidebar-layout="rail"] {
     /* The frame is the theme's own surface, not a step off it: a themed app should read as
        that palette the moment the window opens, and the block's hairline is what draws the
@@ -264,9 +260,6 @@
   }
 
   .dark [data-sidebar-layout="rail"] {
-    --app-rail-shell-tone: var(--color-background-surface);
-    --app-rail-panel-background: var(--color-background-surface);
-    --app-rail-inset-border: color-mix(in srgb, var(--color-text-foreground) 16%, transparent);
     --app-rail-inset-border-hover: color-mix(
       in srgb,
       var(--color-text-foreground) 24%,
@@ -997,11 +990,11 @@
     --sidebar-accent-foreground: var(--color-text-foreground, var(--foreground));
     --sidebar-border: var(--border);
     --sidebar-ring: var(--ring);
-    /* Deepened toward the theme's ink before thinning: a dense glass that still lets the
-       desktop bleed through, and that keeps the palette's hue instead of going charcoal. */
+    /* Deepened toward black before thinning: a dense charcoal glass that still lets
+       the desktop bleed through rather than a thin dark tint. */
     --app-sidebar-surface: color-mix(
       in srgb,
-      color-mix(in srgb, var(--card) 80%, var(--color-text-foreground)) 72%,
+      color-mix(in srgb, var(--card) 80%, var(--color-black)) 72%,
       transparent
     );
     --color-background-button-secondary-hover: var(--secondary);
@@ -4208,16 +4201,25 @@ diffs-container {
   color: color-mix(in oklab, var(--foreground) 35%, black);
 }
 
-/* The empty-chat backdrop as the window's atmosphere: one layer inside the shell root at
-   z-index -1, so it paints above the frame's own fill and below every block. Only the frame
-   band and the rail column ever show it — a transcript, panel, dialog, menu or the composer
-   covers it — and it stays inert, so it cannot swallow a click or a ripple. */
+/* Clip the atmosphere to the top band, rail and outer gaps, including on transparent
+   windows where the content surfaces cannot cover it. */
 .app-shell-atmosphere {
   position: absolute;
   inset: 0;
   z-index: -1;
-  overflow: hidden;
   pointer-events: none;
+  clip-path: polygon(
+    0 0,
+    100% 0,
+    100% 100%,
+    0 100%,
+    0 var(--app-top-strip-height),
+    var(--app-rail-width) var(--app-top-strip-height),
+    var(--app-rail-width) calc(100% - var(--app-rail-inset-gap)),
+    calc(100% - var(--app-rail-inset-gap)) calc(100% - var(--app-rail-inset-gap)),
+    calc(100% - var(--app-rail-inset-gap)) var(--app-top-strip-height),
+    0 var(--app-top-strip-height)
+  );
   /* The empty chat prints the dots at full strength across a page of whitespace; in the
      frame's narrow slices they would read as a painted strip, so the atmosphere keeps a
      third of that weight. */
