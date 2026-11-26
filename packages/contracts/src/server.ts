@@ -367,6 +367,47 @@ export type ServerListProviderUsageInput = typeof ServerListProviderUsageInput.T
 export const ServerListProviderUsageResult = Schema.Array(ServerProviderUsageSnapshot);
 export type ServerListProviderUsageResult = typeof ServerListProviderUsageResult.Type;
 
+// A CLIProxyAPI hub that pools several Codex/Claude subscription accounts. The management
+// key stays in the server's secret store; clients only ever see the id, label, and URL.
+export const ServerUsageHubAccount = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  // Stable per hub and account, shaped like a provider instance id so clients can keep it in
+  // the same selections (sidebar usage rings) as local accounts. Also set as `usage.instanceId`.
+  key: ProviderInstanceId,
+  email: Schema.optional(TrimmedNonEmptyString),
+  usage: ServerProviderUsageSnapshot,
+});
+export type ServerUsageHubAccount = typeof ServerUsageHubAccount.Type;
+
+export const ServerUsageHub = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  label: TrimmedNonEmptyString,
+  url: TrimmedNonEmptyString,
+  checkedAt: IsoDateTime,
+  accounts: Schema.Array(ServerUsageHubAccount),
+  // Set when the hub itself could not be read; the hub keeps its row so it stays removable.
+  error: Schema.optional(TrimmedNonEmptyString),
+});
+export type ServerUsageHub = typeof ServerUsageHub.Type;
+
+export const ServerListUsageHubsInput = Schema.Struct({
+  forceRefresh: Schema.optional(Schema.Boolean),
+});
+export type ServerListUsageHubsInput = typeof ServerListUsageHubsInput.Type;
+
+export const ServerListUsageHubsResult = Schema.Array(ServerUsageHub);
+export type ServerListUsageHubsResult = typeof ServerListUsageHubsResult.Type;
+
+export const ServerAddUsageHubInput = Schema.Struct({
+  url: TrimmedNonEmptyString.check(Schema.isMaxLength(2048)),
+  managementKey: TrimmedNonEmptyString.check(Schema.isMaxLength(4096)),
+  label: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(80))),
+});
+export type ServerAddUsageHubInput = typeof ServerAddUsageHubInput.Type;
+
+export const ServerRemoveUsageHubInput = Schema.Struct({ id: TrimmedNonEmptyString });
+export type ServerRemoveUsageHubInput = typeof ServerRemoveUsageHubInput.Type;
+
 export const ServerLocalServerAddress = Schema.Struct({
   host: TrimmedNonEmptyString,
   port: PositiveInt,

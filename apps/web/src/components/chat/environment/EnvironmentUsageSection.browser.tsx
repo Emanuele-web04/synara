@@ -41,6 +41,95 @@ function createQueryClient(): QueryClient {
 }
 
 describe("EnvironmentUsageSection", () => {
+  it("reads usage hubs only for providers that hubs pool", async () => {
+    const listUsageHubs = vi.fn(async () => []);
+    vi.stubGlobal("nativeApi", { server: { listUsageHubs } });
+    try {
+      for (const provider of ["cursor", "claudeAgent"] as const) {
+        const queryClient = createQueryClient();
+        queryClient.setQueryData(serverQueryKeys.allProviderUsage(), []);
+        queryClient.setQueryData(serverQueryKeys.settings(), DEFAULT_SERVER_SETTINGS_VIEW);
+        const screen = await render(
+          <QueryClientProvider client={queryClient}>
+            <EnvironmentUsageSection provider={provider} />
+          </QueryClientProvider>,
+        );
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        await screen.unmount();
+      }
+      expect(listUsageHubs).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("lists the active provider's hub accounts after the local ones", async () => {
+    const queryClient = createQueryClient();
+    queryClient.setQueryData(serverQueryKeys.allProviderUsage(), [
+      {
+        ...snapshot("claudeAgent", [{ window: "5h", usedPercent: 10, windowDurationMins: 300 }]),
+        instanceId: "claudeAgent",
+      },
+    ]);
+    queryClient.setQueryData(serverQueryKeys.settings(), DEFAULT_SERVER_SETTINGS_VIEW);
+    const hubAccount = (
+      key: string,
+      email: string,
+      provider: "claudeAgent" | "codex",
+      fiveHour: number,
+      weekly: number,
+    ) => ({
+      id: `${email}.json`,
+      key,
+      email,
+      usage: {
+        ...snapshot(provider, [
+          { window: "5h", usedPercent: fiveHour, windowDurationMins: 300 },
+          { window: "Weekly", usedPercent: weekly, windowDurationMins: 10_080 },
+        ]),
+        instanceId: key,
+      },
+    });
+    queryClient.setQueryData(serverQueryKeys.usageHubs(), [
+      {
+        id: "hub-1",
+        label: "Home hub",
+        url: "https://hub.example.ts.net:8318",
+        checkedAt: "2026-08-30T12:00:00.000Z",
+        accounts: [
+          hubAccount("hub_a", "claude_acc1", "claudeAgent", 2, 2),
+          hubAccount("hub_b", "claude_acc2", "claudeAgent", 65, 85),
+          hubAccount("hub_c", "alpha@example.com", "codex", 10, 10),
+        ],
+      },
+    ]);
+
+    await render(
+      <QueryClientProvider client={queryClient}>
+        <EnvironmentUsageSection provider="claudeAgent" />
+      </QueryClientProvider>,
+    );
+
+    await expect
+      .element(page.getByRole("button", { name: /^Claude usage: 5h 90% remaining/ }))
+      .toBeVisible();
+    await expect
+      .element(
+        page.getByRole("button", {
+          name: /^Claude · claude_acc1 \(Home hub\) usage: 5h 98% remaining, Weekly 98% remaining/,
+        }),
+      )
+      .toBeVisible();
+    await expect
+      .element(
+        page.getByRole("button", {
+          name: /^Claude · claude_acc2 \(Home hub\) usage: 5h 35% remaining, Weekly 15% remaining/,
+        }),
+      )
+      .toBeVisible();
+    expect(page.getByText(/alpha@example\.com/).query()).toBeNull();
+  });
+
   it("shows one live warning on its account even without a usage snapshot, then clears on recovery", async () => {
     const queryClient = createQueryClient();
     queryClient.setQueryData(serverQueryKeys.allProviderUsage(), []);

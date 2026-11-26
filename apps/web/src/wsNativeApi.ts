@@ -864,6 +864,9 @@ export function createWsNativeApi(): NativeApi {
       listProviderUsage: (input) => executionRequest(WS_METHODS.serverListProviderUsage, input),
       consumeCodexResetCredit: (input) =>
         executionRequest(WS_METHODS.serverConsumeCodexResetCredit, input),
+      listUsageHubs: (input) => executionRequest(WS_METHODS.serverListUsageHubs, input),
+      addUsageHub: (input) => executionRequest(WS_METHODS.serverAddUsageHub, input),
+      removeUsageHub: (input) => executionRequest(WS_METHODS.serverRemoveUsageHub, input),
       getDiagnostics: () => executionRequest(WS_METHODS.serverGetDiagnostics),
       readThreadDiagnostics: (input) =>
         executionRequest(WS_METHODS.serverReadThreadDiagnostics, input),

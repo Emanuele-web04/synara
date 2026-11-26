@@ -4,6 +4,7 @@ import type {
   ServerConfig,
   ServerConsumeCodexResetCreditInput,
   ServerListProviderUsageInput,
+  ServerListUsageHubsInput,
   ServerProviderUsageSnapshot,
   ServerProviderStatus,
   ServerStopLocalServerInput,
@@ -43,6 +44,7 @@ export const serverQueryKeys = {
     ["server", "providerUsage", provider ?? null, homePath ?? null] as const,
   providerUsageRoot: () => ["server", "providerUsage"] as const,
   allProviderUsage: () => ["server", "allProviderUsage"] as const,
+  usageHubs: () => ["server", "usageHubs"] as const,
   scopedProviderUsage: (scope: ProviderUsageScope) =>
     ["server", "allProviderUsage", scope] as const,
   profileStats: (utcOffsetMinutes: number) =>
@@ -661,6 +663,22 @@ export function serverUsageAnalyticsQueryOptions(
 
 // Single-provider surfaces use scoped batches so Antigravity's CLI can't delay unrelated quota.
 // Other surfaces keep the shared full-batch cache.
+export async function fetchUsageHubs(input: ServerListUsageHubsInput = {}) {
+  return ensureNativeApi().server.listUsageHubs(input);
+}
+
+/** Pooled accounts on configured usage hubs; polled like local provider usage. */
+export function serverUsageHubsQueryOptions() {
+  return queryOptions({
+    queryKey: serverQueryKeys.usageHubs(),
+    staleTime: 60_000,
+    refetchInterval: 60_000,
+    refetchOnWindowFocus: false,
+    retry: false,
+    queryFn: () => fetchUsageHubs(),
+  });
+}
+
 export function serverAllProviderUsageQueryOptions(
   input:
     | boolean

@@ -66,3 +66,40 @@ it("shows remote provider usage without editing this app's usage preferences", a
     client.clear();
   }
 });
+
+it("keeps the local refresh when the usage hub read fails", async () => {
+  const listProviderUsage = vi.fn(async () => [
+    {
+      provider: "opencode",
+      updatedAt: "2026-11-26T12:00:00.000Z",
+      status: "ok",
+      source: "test",
+      limits: [],
+      usageLines: [{ label: "Fresh allowance", value: "9 credits" }],
+    },
+  ]);
+  const listUsageHubs = vi.fn(async () => {
+    throw new Error("Could not read the saved usage hubs.");
+  });
+  vi.stubGlobal("nativeApi", { server: { listProviderUsage, listUsageHubs } });
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, enabled: false } } });
+  client.setQueryData(serverQueryKeys.settings(), DEFAULT_SERVER_SETTINGS);
+  client.setQueryData(serverQueryKeys.allProviderUsage(), []);
+  client.setQueryData(serverQueryKeys.usageHubs(), []);
+  try {
+    await render(
+      <QueryClientProvider client={client}>
+        <ProviderUsageSettingsPanel />
+      </QueryClientProvider>,
+    );
+    expect(listProviderUsage).not.toHaveBeenCalled();
+    expect(page.getByText("Fresh allowance").query()).toBeNull();
+    await page.getByRole("button", { name: "Refresh" }).click();
+    // Short timeout: the list's own 60s poll would otherwise fill it in without Refresh.
+    await expect.element(page.getByText("Fresh allowance"), { timeout: 3_000 }).toBeVisible();
+    expect(listUsageHubs).toHaveBeenCalledWith({ forceRefresh: true });
+  } finally {
+    vi.unstubAllGlobals();
+    client.clear();
+  }
+});

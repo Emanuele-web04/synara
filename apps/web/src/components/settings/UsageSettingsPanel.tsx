@@ -11,6 +11,7 @@ import { SegmentedPicker } from "../SegmentedPicker";
 import { BillingSettingsPanel, SYNARA_PLAN_SECTION_ID } from "./BillingSettingsPanel";
 import { ProviderUsageSettingsPanel } from "./ProviderUsageSettingsPanel";
 import { UsageAnalyticsPanel } from "./UsageAnalyticsPanel";
+import { UsageHubsSection } from "./UsageHubsSection";
 
 type UsageTab = "overview" | "analytics" | "billing";
 
@@ -52,6 +53,7 @@ export function UsageSettingsPanel({
         ) : (
           <div className="space-y-6">
             <ProviderUsageSettingsPanel />
+            <UsageHubsSection />
             {overviewExtra}
           </div>
         )}

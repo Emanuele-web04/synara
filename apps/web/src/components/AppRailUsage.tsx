@@ -14,13 +14,16 @@ import { useAppSettings, type RailUsageWindow } from "~/appSettings";
 import {
   serverAllProviderUsageQueryOptions,
   serverSettingsQueryOptions,
+  serverUsageHubsQueryOptions,
 } from "~/lib/serverReactQuery";
+import { USAGE_HUB_ACCOUNT_KEY_PREFIX } from "~/lib/usageHubs";
 import { cn } from "~/lib/utils";
 
 import { appRailButtonClassName } from "./AppRail";
 import {
   railUsageRingTone,
   getRailUsageAccounts,
+  getRailUsageHubAccounts,
   resolveRailUsageAccounts,
   selectRailUsageRows,
   type RailUsageAccount,
@@ -68,10 +71,10 @@ function AppRailUsageRing({
 }) {
   const { t } = useTranslation();
 
-  const { instance, label } = account;
-  const provider = instance.driver;
+  const { label } = account;
+  const provider = account.driver;
   const model = useProviderUsageMenuModel(provider, {
-    instanceId: instance.instanceId,
+    instanceId: account.id,
     providerSnapshot: snapshot ?? null,
   });
 
@@ -163,7 +166,7 @@ function AppRailUsageRing({
             className={cn("size-full", unavailable && "opacity-50")}
           />
           <ProviderAccountDot
-            accentColor={instance.raw.accentColor}
+            accentColor={account.accentColor}
             always={account.dotted}
             className="absolute -top-0.5 -right-1 size-1.5 ring-0"
           />
@@ -215,23 +218,30 @@ export function AppRailUsage({ onOpenUsageSettings }: { onOpenUsageSettings: () 
   const { t } = useTranslation();
   const { settings } = useAppSettings();
   const settingsQuery = useQuery(serverSettingsQueryOptions());
-  const accounts = resolveRailUsageAccounts(
-    settings.railUsageInstanceIds ?? settings.railUsageProviders,
-    getRailUsageAccounts(
+  const selectedIds = settings.railUsageInstanceIds ?? settings.railUsageProviders;
+  // Poll hubs only when one of their accounts is chosen.
+  const hubsQuery = useQuery({
+    ...serverUsageHubsQueryOptions(),
+    enabled: selectedIds.some((id) => id.startsWith(USAGE_HUB_ACCOUNT_KEY_PREFIX)),
+  });
+  const accounts = resolveRailUsageAccounts(selectedIds, [
+    ...getRailUsageAccounts(
       deriveProviderInstances(settingsQuery.data ?? DEFAULT_SERVER_SETTINGS_VIEW),
       settings.disabledProviders,
       t,
     ),
-  );
+    ...getRailUsageHubAccounts(hubsQuery.data, settings.disabledProviders),
+  ]);
+  const localAccounts = accounts.filter((account) => !account.hubSnapshot);
   const otherUsage = useQuery(
     serverAllProviderUsageQueryOptions({
-      enabled: accounts.some(({ instance }) => instance.driver !== "antigravity"),
+      enabled: localAccounts.some(({ driver }) => driver !== "antigravity"),
       scope: "other",
     }),
   );
   const antigravityUsage = useQuery(
     serverAllProviderUsageQueryOptions({
-      enabled: accounts.some(({ instance }) => instance.driver === "antigravity"),
+      enabled: localAccounts.some(({ driver }) => driver === "antigravity"),
       scope: "antigravity",
     }),
   );
@@ -244,16 +254,16 @@ export function AppRailUsage({ onOpenUsageSettings }: { onOpenUsageSettings: () 
     <>
       {accounts.map((account) => (
         <AppRailUsageRing
-          key={account.instance.instanceId}
+          key={account.id}
           account={account}
-          snapshot={(account.instance.driver === "antigravity"
-            ? antigravityUsage.data
-            : otherUsage.data
-          )?.find(
-            (entry) =>
-              entry.provider === account.instance.driver &&
-              (entry.instanceId ?? entry.provider) === account.instance.instanceId,
-          )}
+          snapshot={
+            account.hubSnapshot ??
+            (account.driver === "antigravity" ? antigravityUsage.data : otherUsage.data)?.find(
+              (entry) =>
+                entry.provider === account.driver &&
+                (entry.instanceId ?? entry.provider) === account.id,
+            )
+          }
           window={settings.railUsageWindow}
           onOpenUsageSettings={onOpenUsageSettings}
         />

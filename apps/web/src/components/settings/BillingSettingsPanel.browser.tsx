@@ -36,6 +36,7 @@ vi.mock("../account/accountDialogStore", () => ({
 vi.mock("./ProviderUsageSettingsPanel", () => ({
   ProviderUsageSettingsPanel: () => <p>Provider limits</p>,
 }));
+vi.mock("./UsageHubsSection", () => ({ UsageHubsSection: () => null }));
 
 const disabled: AccountBillingStatus = {
   provider: "polar",

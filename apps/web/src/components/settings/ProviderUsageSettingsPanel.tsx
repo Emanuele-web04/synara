@@ -17,7 +17,9 @@ import { useAppSettings, type RailUsageWindow } from "~/appSettings";
 import {
   MAX_RAIL_USAGE_ACCOUNTS,
   getRailUsageAccounts,
+  getRailUsageHubAccounts,
   resolveRailUsageAccounts,
+  retainSavedRailUsageIds,
   toggleRailUsageAccount,
 } from "~/components/AppRailUsage.logic";
 import { ProviderAccountAvatar } from "~/components/ProviderAccountMark";
@@ -40,8 +42,11 @@ import { RotateCcwIcon, TriangleAlertIcon } from "~/lib/icons";
 import { deriveProviderUsageDisplayRows } from "~/lib/providerUsageDisplay";
 import {
   fetchAllProviderUsage,
+  fetchUsageHubs,
   serverAllProviderUsageQueryOptions,
+  serverQueryKeys,
   serverSettingsQueryOptions,
+  serverUsageHubsQueryOptions,
   setProviderUsageQueryData,
 } from "~/lib/serverReactQuery";
 import { cn } from "~/lib/utils";
@@ -207,27 +212,40 @@ export function ProviderUsageSettingsPanel() {
       ),
     [serverSettingsQuery.data],
   );
-  const railUsageAccounts = getRailUsageAccounts(
-    [...providerInstances.values()],
+  const usageHubsQuery = useQuery(serverUsageHubsQueryOptions());
+  const hubRailUsageAccounts = getRailUsageHubAccounts(
+    usageHubsQuery.data,
     settings.disabledProviders,
-    t,
   );
-  // Disabled accounts keep their saved choice; only deleted accounts are discarded.
-  const savedRailUsageInstanceIds = (
-    settings.railUsageInstanceIds ?? settings.railUsageProviders
-  ).filter((instanceId) => providerInstances.has(instanceId));
+  const railUsageAccounts = [
+    ...getRailUsageAccounts([...providerInstances.values()], settings.disabledProviders, t),
+    ...hubRailUsageAccounts,
+  ];
+  const savedRailUsageInstanceIds = retainSavedRailUsageIds(
+    settings.railUsageInstanceIds ?? settings.railUsageProviders,
+    new Set(providerInstances.keys()),
+    usageHubsQuery.data,
+  );
   const railUsageInstanceIds = resolveRailUsageAccounts(
     settings.railUsageInstanceIds ?? settings.railUsageProviders,
     railUsageAccounts,
-  ).map((account) => account.instance.instanceId);
+  ).map((account) => account.id);
   const railUsageFull = railUsageInstanceIds.length >= MAX_RAIL_USAGE_ACCOUNTS;
   const usageQuery = useQuery(serverAllProviderUsageQueryOptions());
   const refreshMutation = useMutation({
-    mutationFn: () => fetchAllProviderUsage({ forceRefresh: true }),
-    onSuccess: (data) => {
+    mutationFn: async () => {
+      // A failing hub read must not throw away the local refresh, and vice versa.
+      const [data, hubs] = await Promise.allSettled([
+        fetchAllProviderUsage({ forceRefresh: true }),
+        fetchUsageHubs({ forceRefresh: true }),
+      ]);
       // The batch owns account membership. Keeping omitted previous snapshots
       // would restore accounts that were removed or disabled since the last fetch.
-      setProviderUsageQueryData(queryClient, data);
+      if (data.status === "fulfilled") setProviderUsageQueryData(queryClient, data.value);
+      if (hubs.status === "fulfilled") {
+        queryClient.setQueryData(serverQueryKeys.usageHubs(), hubs.value);
+      }
+      if (data.status === "rejected") throw data.reason;
     },
   });
 
@@ -247,7 +265,8 @@ export function ProviderUsageSettingsPanel() {
 
   const showInitialLoading = usageQuery.isPending && !usageQuery.data;
 
-  const isRefreshing = usageQuery.isFetching || refreshMutation.isPending;
+  const isRefreshing =
+    usageQuery.isFetching || usageHubsQuery.isFetching || refreshMutation.isPending;
 
   const appUsageSettings = (
     <>
@@ -255,16 +274,16 @@ export function ProviderUsageSettingsPanel() {
         translateTitle={false}
         title={t("settings:sidebarUsageAccountLimit", { count: MAX_RAIL_USAGE_ACCOUNTS })}
       >
-        {railUsageAccounts.map(({ instance, label }) => {
-          const checked = railUsageInstanceIds.includes(instance.instanceId);
+        {railUsageAccounts.map(({ id, driver, accentColor, label }) => {
+          const checked = railUsageInstanceIds.includes(id);
           return (
             <SettingsListRow
-              key={instance.instanceId}
+              key={id}
               title={
                 <span className="flex items-center gap-2">
                   <ProviderAccountAvatar
-                    provider={instance.driver}
-                    accentColor={instance.raw.accentColor}
+                    provider={driver}
+                    accentColor={accentColor}
                     className="size-6"
                   />
                   <span className="truncate">{label}</span>
@@ -278,7 +297,7 @@ export function ProviderUsageSettingsPanel() {
                     updateSettings({
                       railUsageInstanceIds: toggleRailUsageAccount(
                         savedRailUsageInstanceIds,
-                        instance.instanceId,
+                        id,
                         Boolean(next),
                         railUsageAccounts,
                       ),

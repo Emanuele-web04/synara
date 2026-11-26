@@ -3,13 +3,11 @@
 
 import {
   DEFAULT_SERVER_SETTINGS_VIEW,
+  type ProviderInstanceId,
   type ProviderKind,
   type ServerProviderUsageSnapshot,
 } from "@synara/contracts";
-import {
-  deriveProviderInstances,
-  type ResolvedProviderInstance,
-} from "@synara/shared/providerInstances";
+import { deriveProviderInstances } from "@synara/shared/providerInstances";
 import { providerUsageDisplayName } from "@synara/shared/providerUsage";
 import { useQuery } from "@tanstack/react-query";
 
@@ -23,7 +21,9 @@ import { MenuTrigger } from "~/components/ui/menu";
 import {
   serverAllProviderUsageQueryOptions,
   serverSettingsQueryOptions,
+  serverUsageHubsQueryOptions,
 } from "~/lib/serverReactQuery";
+import { flattenUsageHubAccounts } from "~/lib/usageHubs";
 
 import { resolveEnvironmentProviderUsageSummary } from "./EnvironmentUsageSection.logic";
 import {
@@ -36,20 +36,22 @@ import {
 import { useTranslation } from "~/i18n";
 
 function EnvironmentUsageAccountRow({
-  instance,
+  provider,
+  instanceId,
   snapshot,
   label,
   rateLimitStatus,
 }: {
-  instance: ResolvedProviderInstance;
+  provider: ProviderKind;
+  /** A provider instance id, or a usage hub account's key. */
+  instanceId: ProviderInstanceId;
   snapshot: ServerProviderUsageSnapshot | undefined;
   label: string;
   rateLimitStatus: RateLimitStatus | null;
 }) {
   const { t, formatLocale } = useTranslation();
-  const provider = instance.driver;
   const model = useProviderUsageMenuModel(provider, {
-    instanceId: instance.instanceId,
+    instanceId,
     providerSnapshot: snapshot,
   });
   const summary = resolveEnvironmentProviderUsageSummary(
@@ -139,6 +141,11 @@ export function EnvironmentUsageSection({
 
   const usageQuery = useQuery(serverAllProviderUsageQueryOptions());
   const settingsQuery = useQuery(serverSettingsQueryOptions());
+  const hubsQuery = useQuery({
+    ...serverUsageHubsQueryOptions(),
+    // Hubs pool only Codex and Claude accounts.
+    enabled: provider === "codex" || provider === "claudeAgent",
+  });
   const providerInstances = deriveProviderInstances(
     settingsQuery.data ?? DEFAULT_SERVER_SETTINGS_VIEW,
   ).filter((instance) => instance.enabled && instance.driver === provider);
@@ -174,7 +181,7 @@ export function EnvironmentUsageSection({
         : instance.displayName;
     return [
       {
-        instance,
+        id: instance.instanceId,
         snapshot,
         accountRateLimitStatus,
         label: showAccountName
@@ -184,14 +191,27 @@ export function EnvironmentUsageSection({
     ];
   });
 
-  if (accounts.length === 0) return null;
+  // Hub accounts of this provider follow the local ones. Chats never run on them, so they
+  // never carry this chat's rate-limit warning.
+  const hubAccounts = flattenUsageHubAccounts(hubsQuery.data)
+    .filter(({ account }) => account.usage.provider === provider)
+    .map(({ account, name }) => ({
+      id: account.key,
+      snapshot: account.usage,
+      accountRateLimitStatus: null,
+      label: t("common:symbol9", { value0: providerUsageDisplayName(provider), value1: name }),
+    }));
+  const rows = [...accounts, ...hubAccounts];
+
+  if (rows.length === 0) return null;
 
   return (
     <EnvironmentLabeledSection label={t("chat:general_usage")}>
-      {accounts.map(({ instance, snapshot, label, accountRateLimitStatus }) => (
+      {rows.map(({ id, snapshot, label, accountRateLimitStatus }) => (
         <EnvironmentUsageAccountRow
-          key={instance.instanceId}
-          instance={instance}
+          key={id}
+          provider={provider}
+          instanceId={id}
           snapshot={snapshot}
           label={label}
           rateLimitStatus={accountRateLimitStatus}

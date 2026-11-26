@@ -231,6 +231,7 @@ import { ProviderAdapterRegistry } from "./provider/Services/ProviderAdapterRegi
 import { ProviderHealth } from "./provider/Services/ProviderHealth";
 import { ProviderService } from "./provider/Services/ProviderService";
 import { consumeCodexResetCreditEffect, listProviderUsage } from "./providerUsage";
+import { makeUsageHubs } from "./providerUsage/usageHubs";
 import { getProviderUsageSnapshot } from "./providerUsageSnapshot";
 import { ProfileStatsQuery } from "./profileStats";
 import { RecapStatsQuery } from "./recapStats";
@@ -265,7 +266,11 @@ import { ThreadDiagnosticsQuery } from "./diagnostics/Services/ThreadDiagnostics
 import { makeOwnerThreadDiagnosticReader } from "./diagnostics/ownerThreadDiagnostics";
 import { OrchestrationEventStore } from "./persistence/Services/OrchestrationEventStore";
 import { ProviderRuntimeEventRepository } from "./persistence/Services/ProviderRuntimeEvents";
-import { requireUsageAnalyticsAccess, requireWsOwnerSession } from "./wsOwnerAuthorization";
+import {
+  requireUsageAnalyticsAccess,
+  requireWsOwnerSession,
+  usageHubsListInputForSession,
+} from "./wsOwnerAuthorization";
 import { connectorsForPairedClient } from "./mcpConnectors/pairedClientView";
 import {
   WsRequestAdmissionMiddleware,
@@ -1304,6 +1309,7 @@ const makeWsRpcHandlersLayer = () =>
 
       const rpcEffect = <A, E, R>(effect: Effect.Effect<A, E, R>, fallbackMessage: string) =>
         effect.pipe(Effect.mapError((cause) => toWsRpcError(cause, fallbackMessage)));
+      const usageHubs = yield* makeUsageHubs;
 
       /**
        * The account RPCs are owner-only, entirely — reads included; see
@@ -2805,6 +2811,21 @@ const makeWsRpcHandlersLayer = () =>
           rpcEffect(listProviderUsage(input), "Failed to load provider usage"),
         [WS_METHODS.serverConsumeCodexResetCredit]: (input) =>
           rpcEffect(consumeCodexResetCreditEffect(input), "Failed to use Codex reset"),
+        [WS_METHODS.serverListUsageHubs]: (input) =>
+          usageHubsListInputForSession(input).pipe(
+            Effect.flatMap((sessionInput) =>
+              rpcEffect(usageHubs.list(sessionInput), "Failed to load usage hubs"),
+            ),
+          ),
+        // The management key reaches every pooled account, so only the owner manages hubs.
+        [WS_METHODS.serverAddUsageHub]: (input) =>
+          requireWsOwnerSession.pipe(
+            Effect.andThen(rpcEffect(usageHubs.add(input), "Failed to add the usage hub")),
+          ),
+        [WS_METHODS.serverRemoveUsageHub]: (input) =>
+          requireWsOwnerSession.pipe(
+            Effect.andThen(rpcEffect(usageHubs.remove(input), "Failed to remove the usage hub")),
+          ),
         [WS_METHODS.serverGetDiagnostics]: () =>
           requireWsOwnerSession.pipe(
             Effect.andThen(

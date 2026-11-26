@@ -343,6 +343,11 @@ import type {
   ServerGetProviderUsageSnapshotResult,
   ServerListProviderUsageInput,
   ServerListProviderUsageResult,
+  ServerListUsageHubsInput,
+  ServerListUsageHubsResult,
+  ServerAddUsageHubInput,
+  ServerUsageHub,
+  ServerRemoveUsageHubInput,
   ServerGetSettingsResult,
   ServerListLocalServersResult,
   ServerListWorktreesResult,
@@ -1457,6 +1462,9 @@ export interface NativeApi {
     consumeCodexResetCredit: (
       input: ServerConsumeCodexResetCreditInput,
     ) => Promise<ServerConsumeCodexResetCreditResult>;
+    listUsageHubs: (input: ServerListUsageHubsInput) => Promise<ServerListUsageHubsResult>;
+    addUsageHub: (input: ServerAddUsageHubInput) => Promise<ServerUsageHub>;
+    removeUsageHub: (input: ServerRemoveUsageHubInput) => Promise<void>;
     getDiagnostics: () => Promise<ServerDiagnosticsResult>;
     readThreadDiagnostics: (
       input: ServerReadThreadDiagnosticsInput,

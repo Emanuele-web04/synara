@@ -2,7 +2,11 @@ import { Effect } from "effect";
 import { describe, expect, it, vi } from "vitest";
 
 import { CurrentWsSessionRole } from "./wsConnectionSessions";
-import { requireUsageAnalyticsAccess, requireWsOwnerSession } from "./wsOwnerAuthorization";
+import {
+  requireUsageAnalyticsAccess,
+  requireWsOwnerSession,
+  usageHubsListInputForSession,
+} from "./wsOwnerAuthorization";
 
 describe("owner-only read admission", () => {
   it("requires the connection owner role before calling a reader", async () => {
@@ -30,4 +34,17 @@ it("keeps external provider session analytics owner-only", async () => {
   await expect(check("mac", "owner")).resolves.toBeUndefined();
   await expect(check("synara", "client")).resolves.toBeUndefined();
   await expect(check(undefined, "client")).resolves.toBeUndefined();
+});
+
+it("lets only the owner force a usage hub refresh", async () => {
+  const check = (forceRefresh: boolean | undefined, role: "owner" | "client") =>
+    Effect.runPromise(
+      usageHubsListInputForSession(forceRefresh === undefined ? {} : { forceRefresh }).pipe(
+        Effect.provideService(CurrentWsSessionRole, role),
+      ),
+    );
+
+  await expect(check(true, "owner")).resolves.toEqual({ forceRefresh: true });
+  await expect(check(true, "client")).resolves.toEqual({ forceRefresh: false });
+  await expect(check(undefined, "owner")).resolves.toEqual({ forceRefresh: false });
 });
