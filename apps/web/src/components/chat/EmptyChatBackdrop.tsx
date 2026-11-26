@@ -35,6 +35,9 @@ const SHARPEN_RADIUS_CELLS = 4;
 const LIGHT_INK_SOFTEN = 0.28;
 const LIGHT_PAPER_PERCENT = 9;
 const LIGHT_SKY_MASK = "linear-gradient(to bottom, transparent 0%, #000 42%)";
+// Less ink in the quiet zones and softer dots elsewhere keep the whole scene readable.
+const DARK_TEMPLE_OPACITY = 0.35;
+const DIMMED_QUIET_FLOOR = 0.6;
 // The sunlit ground just below the temple outshines the rest; ease it down slightly.
 // [x, y] in pane fractions, [rx, ry] radii in pane fractions, and how much to remove.
 const GROUND_DIM = { x: 0.55, y: 0.6, rx: 0.16, ry: 0.07, amount: 0.18 } as const;
@@ -54,7 +57,7 @@ const SCENE_LEVELS = {
     sharpenFrom: 0,
     sharpenTo: 0,
     thinRight: 0,
-    quietFloor: 0.6,
+    quietFloor: 0.3,
   },
   // Light inks the shadows, like print. An unsharp mask outlines the columns, roof and
   // hills, and a steep curve keeps the ink crisp.
@@ -76,13 +79,13 @@ const SCENE_LEVELS = {
     sharpenTo: 0.36,
     // Extra thinning toward the bottom-right corner, where the hills are darkest.
     thinRight: 0.45,
-    quietFloor: 0.6,
+    quietFloor: DIMMED_QUIET_FLOOR,
   },
 } as const;
-// Dimmed zones behind marked landing elements: padding and soft edge width (how much of the
-// scene stays inside is per theme, `quietFloor`; dimmed rather than erased).
-// The landing controls (project and environment chips) sit over the foreground too.
-const QUIET_SELECTOR = "[data-empty-chat-backdrop-quiet], [data-empty-landing-controls]";
+// Dark Temple quiets the full tray so the scene recedes beneath its translucent surface.
+const QUIET_TEXT_SELECTOR = "[data-empty-chat-backdrop-quiet]";
+const DARK_TEMPLE_QUIET_SELECTOR = `${QUIET_TEXT_SELECTOR}, [data-composer-tray]`;
+const QUIET_SELECTOR = `${QUIET_TEXT_SELECTOR}, [data-empty-landing-controls]`;
 const QUIET_PADDING_PX = 12;
 const QUIET_FEATHER_PX = 72;
 const RIPPLE_SPEED_PX_PER_MS = 0.5;
@@ -205,9 +208,9 @@ function unionRect(a: CellRect, b: CellRect): CellRect {
 }
 
 // Content boxes of the marked landing elements, in container coordinates.
-function measureQuietZones(host: Element, origin: DOMRect): DOMRect[] {
+function measureQuietZones(host: Element, origin: DOMRect, selector: string): DOMRect[] {
   const zones: DOMRect[] = [];
-  for (const element of host.querySelectorAll(QUIET_SELECTOR)) {
+  for (const element of host.querySelectorAll(selector)) {
     // Union of the children, so a wide wrapper only clears what it actually shows.
     const parts = element.children.length > 0 ? Array.from(element.children) : [element];
     let left = Infinity;
@@ -527,6 +530,7 @@ export function EmptyChatBackdrop(props: { style: EmptyChatBackdropStyle }) {
   const reduceMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
   const { accent } = activeTheme.theme;
   const isDark = resolvedTheme === "dark";
+  const darkTemple = isDark && style === "temple";
   const dotRadius = (isDark ? SCENE_LEVELS.dark : SCENE_LEVELS.light).dot;
   const skyMask = !isDark && style === "temple" ? LIGHT_SKY_MASK : null;
 
@@ -708,15 +712,18 @@ export function EmptyChatBackdrop(props: { style: EmptyChatBackdropStyle }) {
       let density: Uint8Array | null;
       let gradient: GradientField | null = null;
       if (style === "gradient") {
-        const zones = measureQuietZones(host, container.getBoundingClientRect());
-        const levels = isDark ? SCENE_LEVELS.dark : SCENE_LEVELS.light;
-        gradient = buildGradientField(cols, rows, zones, levels.quietFloor);
+        const zones = measureQuietZones(host, container.getBoundingClientRect(), QUIET_SELECTOR);
+        gradient = buildGradientField(cols, rows, zones, DIMMED_QUIET_FLOOR);
         density = new Uint8Array(cols * rows);
       } else {
         scenePromise ??= loadImage(SCENE_SRC);
         const scene = await scenePromise;
         if (disposed || !scene) return;
-        const zones = measureQuietZones(host, container.getBoundingClientRect());
+        const zones = measureQuietZones(
+          host,
+          container.getBoundingClientRect(),
+          darkTemple ? DARK_TEMPLE_QUIET_SELECTOR : QUIET_SELECTOR,
+        );
         density = buildDensity(scene, cols, rows, isDark, zones);
       }
       if (!density || disposed) return;
@@ -828,7 +835,7 @@ export function EmptyChatBackdrop(props: { style: EmptyChatBackdropStyle }) {
       if (frameId !== 0) cancelAnimationFrame(frameId);
       window.clearTimeout(timerId);
     };
-  }, [accent, isDark, reduceMotion, style]);
+  }, [accent, darkTemple, isDark, reduceMotion, style]);
 
   return (
     <div
@@ -855,6 +862,7 @@ export function EmptyChatBackdrop(props: { style: EmptyChatBackdropStyle }) {
         ref={canvasRef}
         className="absolute top-0 left-0 [image-rendering:pixelated]"
         style={{
+          opacity: darkTemple ? DARK_TEMPLE_OPACITY : undefined,
           maskImage: [
             `radial-gradient(circle at center, #000 ${dotRadius}px, transparent ${dotRadius + 0.4}px)`,
             ...(skyMask ? [skyMask] : []),
