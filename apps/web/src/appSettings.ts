@@ -121,6 +121,8 @@ export const MAX_CUSTOM_MODEL_LENGTH = 256;
 export const MIN_CHAT_FONT_SIZE_PX = 11;
 export const MAX_CHAT_FONT_SIZE_PX = 18;
 export const DEFAULT_CHAT_FONT_SIZE_PX = 13;
+export const MIN_EMPTY_CHAT_BACKDROP_INTENSITY = 10;
+const DEFAULT_EMPTY_CHAT_BACKDROP_INTENSITY = 100;
 export const MIN_TERMINAL_FONT_SIZE_PX = 10;
 export const MAX_TERMINAL_FONT_SIZE_PX = 22;
 export const DEFAULT_TERMINAL_FONT_SIZE_PX = 12;
@@ -422,6 +424,9 @@ export const AppSettingsSchema = Schema.Struct({
   // Which empty-chat backdrop shows while `showAsciiBackground` is on.
   emptyChatBackdropStyle: EmptyChatBackdropStyle.pipe(
     withDefaults(() => "temple" as const satisfies EmptyChatBackdropStyle),
+  ),
+  emptyChatBackdropIntensity: Schema.Number.pipe(
+    withDefaults(() => DEFAULT_EMPTY_CHAT_BACKDROP_INTENSITY),
   ),
   confirmThreadDelete: Schema.Boolean.pipe(withDefaults(() => true)),
   // Opt-in: archiving a task also releases its worktree when nothing else uses it.
@@ -1614,6 +1619,15 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
     ompBinaryPath: normalizeProviderBinaryPathOverride("omp", settings.ompBinaryPath),
     uiDensity: normalizeUiDensityValue(settings.uiDensity),
     chatWidth: normalizeChatWidthModeValue(settings.chatWidth),
+    emptyChatBackdropIntensity: Number.isFinite(settings.emptyChatBackdropIntensity)
+      ? Math.min(
+          DEFAULT_EMPTY_CHAT_BACKDROP_INTENSITY,
+          Math.max(
+            MIN_EMPTY_CHAT_BACKDROP_INTENSITY,
+            Math.round(settings.emptyChatBackdropIntensity),
+          ),
+        )
+      : DEFAULT_EMPTY_CHAT_BACKDROP_INTENSITY,
     agentCursorFillColor: normalizeCursorHexColor(settings.agentCursorFillColor),
     agentCursorRimColor: normalizeCursorHexColor(settings.agentCursorRimColor),
     chatFontSizePx: normalizeChatFontSizePx(settings.chatFontSizePx),

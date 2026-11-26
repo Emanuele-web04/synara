@@ -13360,10 +13360,24 @@ describe("ChatView transcript geometry (full app)", () => {
       expect(getComputedStyle(trayControls()!).textShadow).toBe("none");
       await goToSettings();
       await expect.element(option("Temple")).toHaveAttribute("aria-checked", "true");
+      const intensity = page.getByRole("slider", { name: "Backdrop intensity" });
+      await expect.element(intensity).toHaveAttribute("aria-valuenow", "100");
+      (intensity.element() as HTMLElement).focus();
+      await userEvent.keyboard("{Home}");
+      await expect.poll(() => storedSettings().emptyChatBackdropIntensity).toBe(10);
+      await goToChat();
+      await expect
+        .poll(() => background() && getComputedStyle(background()!).opacity, { timeout: 3_000 })
+        .toBe("0.1");
+      await goToSettings();
+      await expect.element(intensity).toHaveAttribute("aria-valuenow", "10");
       await option("Gradient").click();
       await expect.poll(() => storedSettings().emptyChatBackdropStyle).toBe("gradient");
       await goToChat();
       await expect.poll(styleOf).toBe("gradient");
+      await expect
+        .poll(() => background() && getComputedStyle(background()!).opacity, { timeout: 3_000 })
+        .toBe("0.1");
       await goToSettings();
       await option("Off").click();
       await expect.poll(() => storedSettings().showAsciiBackground).toBe(false);
@@ -13372,7 +13386,10 @@ describe("ChatView transcript geometry (full app)", () => {
       expect(background()).toBeNull();
       await goToSettings();
       await expect.element(option("Off")).toHaveAttribute("aria-checked", "true");
+      await expect.element(intensity).toBeDisabled();
+      await page.getByRole("button", { name: "Reset Backdrop intensity to default" }).click();
       await page.getByRole("button", { name: "Reset Empty chat background to default" }).click();
+      await expect.element(intensity).toHaveAttribute("aria-valuenow", "100");
       await expect.element(option("Temple")).toHaveAttribute("aria-checked", "true");
       await goToChat();
       await expect.poll(styleOf).toBe("temple");

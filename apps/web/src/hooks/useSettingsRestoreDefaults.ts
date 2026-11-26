@@ -103,6 +103,9 @@ export function useSettingsRestoreDefaults({
     settings.emptyChatBackdropStyle !== defaults.emptyChatBackdropStyle
       ? ["Empty chat background"]
       : []),
+    ...(settings.emptyChatBackdropIntensity !== defaults.emptyChatBackdropIntensity
+      ? ["settings:emptyChatBackdropIntensity"]
+      : []),
     ...(settings.uiDensity !== defaults.uiDensity ? ["settings:changed_uiDensity"] : []),
     ...(settings.chatWidth !== defaults.chatWidth ? ["settings:chatWidth"] : []),
     ...(settings.desktopAppIcon !== defaultDesktopAppIcon ? ["settings:appIcon"] : []),

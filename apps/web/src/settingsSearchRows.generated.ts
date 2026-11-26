@@ -187,6 +187,12 @@ export const GENERATED_SETTINGS_SEARCH_ROWS: readonly GeneratedSettingsSearchRow
     description: "settings:asciiBackgroundDescription",
   },
   {
+    target: "setting-empty-chat-backdrop-intensity",
+    section: "appearance",
+    title: "settings:emptyChatBackdropIntensity",
+    description: "settings:emptyChatBackdropIntensityDescription",
+  },
+  {
     target: "setting-message-trail-sound",
     section: "appearance",
     title: "settings:messageTrailSound",
