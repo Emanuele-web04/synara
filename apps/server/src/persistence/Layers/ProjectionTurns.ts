@@ -11,6 +11,8 @@ import {
   GetProjectionPendingTurnStartInput,
   GetProjectionTurnByTurnIdInput,
   ListProjectionTurnsByThreadInput,
+  ProjectionAgentWaitSnapshot,
+  ProjectionAgentWaitTarget,
   ProjectionPendingTurnStart,
   ProjectionTurn,
   ProjectionTurnById,
@@ -337,6 +339,69 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
           `,
   });
 
+  const getAgentWaitSnapshots = SqlSchema.findAll({
+    Request: Schema.Struct({
+      targets: Schema.Array(ProjectionAgentWaitTarget),
+      resolveUnpinned: Schema.Boolean,
+    }),
+    Result: Schema.Struct({
+      ...ProjectionAgentWaitSnapshot.fields,
+      threadExists: SqliteBoolean,
+    }),
+    execute: ({ targets, resolveUnpinned }) => sql`
+      WITH targets (position, thread_id, turn_id, pending_message_id) AS (
+        VALUES ${sql.csv(
+          targets.map(
+            (target, index) =>
+              sql`(${index}, ${target.threadId}, ${target.turnId}, ${target.pendingMessageId})`,
+          ),
+        )}
+      )
+      SELECT
+        targets.thread_id AS "threadId",
+        threads.thread_id IS NOT NULL AS "threadExists",
+        turns.turn_id AS "turnId",
+        turns.pending_message_id AS "pendingMessageId",
+        CASE
+          WHEN startup.status = 'error' THEN 'error'
+          WHEN startup.status IN ('stopped', 'interrupted') THEN 'interrupted'
+          ELSE turns.state
+        END AS state,
+        startup.last_error AS error
+      FROM targets
+      LEFT JOIN projection_threads AS threads
+        ON threads.thread_id = targets.thread_id AND threads.deleted_at IS NULL
+      LEFT JOIN projection_turns AS turns ON turns.row_id = CASE
+        WHEN targets.turn_id IS NOT NULL THEN (
+          SELECT turn.row_id FROM projection_turns AS turn
+          WHERE turn.thread_id = threads.thread_id AND turn.turn_id = targets.turn_id
+        )
+        WHEN targets.pending_message_id IS NOT NULL THEN (
+          SELECT turn.row_id FROM projection_turns AS turn
+          WHERE turn.thread_id = threads.thread_id
+            AND turn.pending_message_id = targets.pending_message_id
+          ORDER BY turn.turn_id IS NOT NULL DESC, turn.requested_at DESC, turn.row_id DESC
+          LIMIT 1
+        )
+        WHEN ${resolveUnpinned ? 1 : 0} = 1 THEN (
+          SELECT turn.row_id FROM projection_turns AS turn
+          WHERE turn.thread_id = threads.thread_id
+            AND (turn.turn_id IS NOT NULL OR (
+              turn.state = 'pending' AND turn.pending_message_id IS NOT NULL
+              AND turn.checkpoint_turn_count IS NULL
+            ))
+          ORDER BY turn.requested_at DESC, (turn.turn_id IS NULL) DESC, turn.turn_id DESC, turn.row_id DESC
+          LIMIT 1
+        )
+      END
+      LEFT JOIN projection_thread_sessions AS startup
+        ON startup.thread_id = threads.thread_id AND turns.turn_id IS NULL
+        AND turns.pending_message_id IS NOT NULL AND startup.active_turn_id IS NULL
+        AND startup.updated_at >= turns.requested_at
+      ORDER BY targets.position
+    `,
+  });
+
   const clearCheckpointTurnConflictRow = SqlSchema.void({
     Request: ClearCheckpointTurnConflictInput,
     execute: ({ threadId, turnId, checkpointTurnCount }) =>
@@ -508,6 +573,21 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
     );
   };
 
+  const getManyAgentWaitSnapshots: ProjectionTurnRepositoryShape["getManyAgentWaitSnapshots"] = (
+    input,
+  ) =>
+    input.targets.length === 0
+      ? Effect.succeed([])
+      : getAgentWaitSnapshots(input).pipe(
+          Effect.mapError(
+            toPersistenceSqlOrDecodeError(
+              "ProjectionTurnRepository.getManyAgentWaitSnapshots:query",
+              "ProjectionTurnRepository.getManyAgentWaitSnapshots:decodeRows",
+            ),
+          ),
+          Effect.map((rows) => rows.map(({ threadExists, ...row }) => (threadExists ? row : null))),
+        );
+
   const clearCheckpointTurnConflict: ProjectionTurnRepositoryShape["clearCheckpointTurnConflict"] =
     (input) =>
       clearCheckpointTurnConflictRow(input).pipe(
@@ -531,6 +611,7 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
     getByTurnId,
     getManyByTurnId,
     getManyWaitSnapshot,
+    getManyAgentWaitSnapshots,
     clearCheckpointTurnConflict,
     deleteByThreadId,
   } satisfies ProjectionTurnRepositoryShape;
