@@ -4237,8 +4237,7 @@ const UserMessageBody = memo(function UserMessageBody(props: {
   );
 });
 
-// An answered agent question: the question as a left bubble and the submitted
-// answer as a right bubble, both dashed so they read as part of the agent's run.
+// Show answered agent questions inline with the run that requested them.
 function UserInputExchange(props: {
   items: ReadonlyArray<WorkLogUserInputExchangeItem>;
   chatTypographyStyle: CSSProperties;
@@ -4249,31 +4248,47 @@ function UserInputExchange(props: {
 
   return (
     <div className="flex min-w-0 flex-col gap-2 py-0.5">
-      {props.items.map((item) => (
-        <div key={item.id} className="flex min-w-0 flex-col gap-2">
-          <div className={cn(USER_INPUT_EXCHANGE_BUBBLE_CLASS_NAME, "self-start")}>
-            <p className={MUTED_LABEL_TEXT_CLASS_NAME} style={props.labelStyle}>
-              {item.header}
-            </p>
-            <p className="whitespace-pre-wrap break-words" style={props.chatTypographyStyle}>
-              {item.question}
-            </p>
-            {item.options.length > 0 ? (
-              <p className="text-muted-foreground" style={props.labelStyle}>
-                {item.options.join(" · ")}
+      {props.items.map((item) => {
+        // Antigravity choice activities can store the question as both title and body.
+        const compact =
+          item.answer !== null &&
+          item.options.length > 0 &&
+          item.header.trim() === item.question.trim();
+        const answer = (
+          <p className="whitespace-pre-wrap break-words" style={props.answerTypographyStyle}>
+            {item.answer ?? t("chat:noAnswer")}
+          </p>
+        );
+        return (
+          <div key={item.id} className="flex min-w-0 flex-col gap-2">
+            <div className={cn(USER_INPUT_EXCHANGE_BUBBLE_CLASS_NAME, "self-start")}>
+              {!compact && (
+                <p className={MUTED_LABEL_TEXT_CLASS_NAME} style={props.labelStyle}>
+                  {item.header}
+                </p>
+              )}
+              <p className="whitespace-pre-wrap break-words" style={props.chatTypographyStyle}>
+                {item.question}
               </p>
-            ) : null}
+              {compact
+                ? answer
+                : item.options.length > 0 && (
+                    <p className="text-muted-foreground" style={props.labelStyle}>
+                      {item.options.join(" · ")}
+                    </p>
+                  )}
+            </div>
+            {!compact && (
+              <div className={cn(USER_INPUT_EXCHANGE_BUBBLE_CLASS_NAME, "self-end")}>
+                <p className={MUTED_LABEL_TEXT_CLASS_NAME} style={props.labelStyle}>
+                  {t("chat:answer")}
+                </p>
+                {answer}
+              </div>
+            )}
           </div>
-          <div className={cn(USER_INPUT_EXCHANGE_BUBBLE_CLASS_NAME, "self-end")}>
-            <p className={MUTED_LABEL_TEXT_CLASS_NAME} style={props.labelStyle}>
-              {t("chat:answer")}
-            </p>
-            <p className="whitespace-pre-wrap break-words" style={props.answerTypographyStyle}>
-              {item.answer ?? t("chat:noAnswer")}
-            </p>
-          </div>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
