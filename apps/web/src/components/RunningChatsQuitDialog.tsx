@@ -6,7 +6,7 @@
 // and the persisted quit app settings.
 
 import { AlertDialog as AlertDialogPrimitive } from "@base-ui/react/alert-dialog";
-import { useId, useState } from "react";
+import { useId } from "react";
 
 import { useAppSettings } from "~/appSettings";
 import { APP_DISPLAY_NAME } from "~/branding";
@@ -38,6 +38,8 @@ export interface RunningChatsQuitDialogProps {
   readonly chats: ReadonlyArray<RunningChatQuitSummary> | null;
   /** Quit was confirmed and is being finalized; the dialog stays visible but inert. */
   readonly quitting?: boolean;
+  readonly quietQuit: boolean;
+  readonly onQuietQuitChange: (checked: boolean) => void;
   readonly onStay: () => void;
   readonly onQuit: (decision: RunningChatsQuitDecision) => void;
 }
@@ -57,6 +59,8 @@ const CHECKBOX_CLASS =
 export function RunningChatsQuitDialog({
   chats,
   quitting = false,
+  quietQuit,
+  onQuietQuitChange,
   onStay,
   onQuit,
 }: RunningChatsQuitDialogProps) {
@@ -86,6 +90,8 @@ export function RunningChatsQuitDialog({
                 chats={chats}
                 copy={copy}
                 quitting={quitting}
+                quietQuit={quietQuit}
+                onQuietQuitChange={onQuietQuitChange}
                 onQuit={onQuit}
               />
             ) : null}
@@ -122,11 +128,15 @@ function RunningChatsQuitDialogContent({
   chats,
   copy,
   quitting,
+  quietQuit,
+  onQuietQuitChange,
   onQuit,
 }: {
   readonly chats: ReadonlyArray<RunningChatQuitSummary>;
   readonly copy: RunningChatsQuitCopy;
   readonly quitting: boolean;
+  readonly quietQuit: boolean;
+  readonly onQuietQuitChange: (checked: boolean) => void;
   readonly onQuit: (decision: RunningChatsQuitDecision) => void;
 }) {
   const { t } = useTranslation();
@@ -135,9 +145,6 @@ function RunningChatsQuitDialogContent({
   const resume = settings.resumeChatsAfterQuit;
   const resumeCheckboxId = useId();
   const quietQuitCheckboxId = useId();
-  // A choice about this quit, not a preference written the moment it is ticked:
-  // ticking it and pressing Stay must not switch the question off for good.
-  const [quietQuit, setQuietQuit] = useState(!settings.askBeforeQuitting);
 
   return (
     <>
@@ -169,7 +176,7 @@ function RunningChatsQuitDialogContent({
           id={quietQuitCheckboxId}
           checked={quietQuit}
           disabled={quitting}
-          onCheckedChange={setQuietQuit}
+          onCheckedChange={onQuietQuitChange}
           className="mt-3"
           label={t("workspace:quit_quietLabel")}
         />
@@ -201,12 +208,7 @@ function RunningChatsQuitDialogContent({
             size="sm"
             className={cn(uiFont, "gap-1.5")}
             disabled={quitting}
-            onClick={() => {
-              if (quietQuit !== !settings.askBeforeQuitting) {
-                updateSettings({ askBeforeQuitting: !quietQuit });
-              }
-              onQuit({ resume: chats.length > 0 && resume });
-            }}
+            onClick={() => onQuit({ resume: chats.length > 0 && resume })}
           >
             {copy.quitLabel}
             <span aria-hidden className={KEY_HINT_CLASS}>

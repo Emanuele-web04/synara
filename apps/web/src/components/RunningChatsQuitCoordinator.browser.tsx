@@ -39,12 +39,15 @@ afterEach(() => {
   else window.localStorage.setItem(APP_SETTINGS_STORAGE_KEY, originalStoredSettings);
 });
 
-function installBridge(options: { readonly beginQuit?: boolean } = {}) {
+function installBridge(options: { readonly beginQuit?: boolean | "reject" } = {}) {
   let request: ((payload: DesktopQuitConfirmationReference) => void) | undefined;
   let repeat: ((payload: DesktopQuitConfirmationReference) => void) | undefined;
   let withdrawn: ((payload: DesktopQuitConfirmationReference) => void) | undefined;
   const reply = vi.fn();
-  const beginQuitConfirmation = vi.fn(async () => options.beginQuit !== false);
+  const beginQuitConfirmation = vi.fn(async () => {
+    if (options.beginQuit === "reject") throw new Error("IPC disconnected");
+    return options.beginQuit !== false;
+  });
   window.desktopBridge = {
     onQuitConfirmationRequest: (listener) => {
       request = listener;
@@ -177,13 +180,16 @@ it("asks while a chat is running, and remembers turning the question off only on
       .toBeVisible();
     await page.getByRole("checkbox", { name: "Quit without asking" }).click();
     await page.getByRole("button", { name: "Quit", exact: true }).click();
-    expect(window.localStorage.getItem(APP_SETTINGS_STORAGE_KEY)).toContain(
-      '"askBeforeQuitting":false',
-    );
+    await expect
+      .poll(() => window.localStorage.getItem(APP_SETTINGS_STORAGE_KEY))
+      .toContain('"askBeforeQuitting":false');
+    await expect.element(page.getByRole("alertdialog")).not.toBeInTheDocument();
 
     bridge.request("q3");
-    await expect.element(page.getByRole("alertdialog"), { timeout: 5000 }).not.toBeInTheDocument();
-    expect(bridge.reply).toHaveBeenCalledWith({ requestId: "q3", phase: "decision", allow: true });
+    await expect
+      .poll(() => bridge.reply.mock.lastCall?.[0])
+      .toEqual({ requestId: "q3", phase: "decision", allow: true });
+    await expect.element(page.getByRole("alertdialog")).not.toBeInTheDocument();
   } finally {
     await screen.unmount();
   }
@@ -203,6 +209,7 @@ it("quits through the interrupt path whether the question is clicked or answered
       bridge.request("q1");
       await expect.element(page.getByRole("alertdialog"), { timeout: 5000 }).toBeVisible();
 
+      await page.getByRole("checkbox", { name: "Quit without asking" }).click();
       if (answer === "click") {
         await page.getByRole("button", { name: "Quit", exact: true }).click();
       } else {
@@ -216,6 +223,9 @@ it("quits through the interrupt path whether the question is clicked or answered
         phase: "decision",
         allow: true,
       });
+      expect(window.localStorage.getItem(APP_SETTINGS_STORAGE_KEY)).toContain(
+        '"askBeforeQuitting":false',
+      );
       await expect
         .element(page.getByRole("alertdialog"), { timeout: 5000 })
         .not.toBeInTheDocument();
@@ -256,6 +266,7 @@ it("stops nothing when the desktop has already closed the question", async () =>
     bridge.request("q1");
     await expect.element(page.getByRole("alertdialog"), { timeout: 5000 }).toBeVisible();
 
+    await page.getByRole("checkbox", { name: "Quit without asking" }).click();
     await page.getByRole("button", { name: "Quit", exact: true }).click();
 
     await expect
@@ -270,9 +281,31 @@ it("stops nothing when the desktop has already closed the question", async () =>
     });
     await expect.element(page.getByRole("alertdialog"), { timeout: 5000 }).not.toBeInTheDocument();
 
+    expect(window.localStorage.getItem(APP_SETTINGS_STORAGE_KEY) ?? "").not.toContain(
+      '"askBeforeQuitting":false',
+    );
+
     bridge.request("q2");
     await expect.element(page.getByRole("alertdialog"), { timeout: 5000 }).toBeVisible();
     expect(bridge.reply).toHaveBeenCalledWith({ requestId: "q2", phase: "ready" });
+  } finally {
+    await screen.unmount();
+  }
+});
+
+it("leaves the chats running and clears the question if the commit request rejects", async () => {
+  const bridge = installBridge({ beginQuit: "reject" });
+  storeOneRunningChat("Fix the tray");
+  const screen = await renderCoordinator();
+  try {
+    bridge.request("q1");
+    await expect.element(page.getByRole("alertdialog")).toBeVisible();
+    await page.getByRole("button", { name: "Quit", exact: true }).click();
+    await expect
+      .poll(() => bridge.reply.mock.lastCall?.[0])
+      .toEqual({ requestId: "q1", phase: "decision", allow: false });
+    await expect.element(page.getByRole("alertdialog")).not.toBeInTheDocument();
+    expect(stopRunningChatsForQuit).not.toHaveBeenCalled();
   } finally {
     await screen.unmount();
   }
