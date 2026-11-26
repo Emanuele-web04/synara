@@ -340,6 +340,14 @@ type ProviderRuntimeTestProposedPlan = ProviderRuntimeTestThread["proposedPlans"
 type ProviderRuntimeTestActivity = ProviderRuntimeTestThread["activities"][number];
 type ProviderRuntimeTestCheckpoint = ProviderRuntimeTestThread["checkpoints"][number];
 
+// Activity payloads are decoded JSON, so a status read has to narrow first.
+function activityStatus(activity: ProviderRuntimeTestActivity): string | undefined {
+  const payload: unknown = activity.payload;
+  if (typeof payload !== "object" || payload === null || Array.isArray(payload)) return undefined;
+  const status = (payload as { readonly status?: unknown }).status;
+  return typeof status === "string" ? status : undefined;
+}
+
 function singleLineFileDiff(path: string): string {
   return [
     `diff --git a/${path} b/${path}`,
@@ -4728,9 +4736,10 @@ describe("ProviderRuntimeIngestion", () => {
     );
   });
 
-  it("does not project reasoning content deltas into transcript work rows", async () => {
+  it("streams a reasoning row for a provider with no reasoning item lifecycle", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
+    const activityId = "provider-reasoning:thread-1:thought-1";
 
     harness.emit({
       type: "content.delta",
@@ -4764,12 +4773,87 @@ describe("ProviderRuntimeIngestion", () => {
       ),
     );
 
-    expect(
-      thread.activities.some(
-        (activity: ProviderRuntimeTestActivity) => activity.id === "evt-reasoning-delta",
-      ),
-    ).toBe(false);
+    const thoughts = thread.activities.filter(
+      (activity: ProviderRuntimeTestActivity) => activity.id === activityId,
+    );
+    expect(thoughts).toHaveLength(1);
+    expect(thoughts[0]).toMatchObject({
+      kind: "task.progress",
+      summary: "Reasoning trace",
+      payload: {
+        status: "completed",
+        detail: "checking files",
+        data: { toolCallId: "thought-1" },
+      },
+    });
+    // Reasoning is its own row: it never enters the assistant message text.
     expect(thread.messages).toHaveLength(0);
+  });
+
+  it("never publishes Codex raw reasoning, with or without a summary", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+    const rawOnly = "reasoning-raw-only";
+    const rawThenSummary = "reasoning-raw-and-summary";
+    const emitRaw = (itemId: string, eventId: string) =>
+      harness.emit({
+        type: "content.delta",
+        eventId: asEventId(eventId),
+        provider: "codex",
+        createdAt: now,
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-raw"),
+        itemId: asItemId(itemId),
+        payload: { streamKind: "reasoning_text", delta: "raw chain of thought" },
+      });
+
+    emitRaw(rawOnly, "evt-raw-only-1");
+    emitRaw(rawThenSummary, "evt-raw-and-summary-1");
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-raw-and-summary-2"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-raw"),
+      itemId: asItemId(rawThenSummary),
+      payload: { streamKind: "reasoning_summary_text", summaryIndex: 0, delta: "**Plan**" },
+    });
+    for (const itemId of [rawOnly, rawThenSummary]) {
+      harness.emit({
+        type: "item.completed",
+        eventId: asEventId(`evt-raw-completed-${itemId}`),
+        provider: "codex",
+        createdAt: now,
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-raw"),
+        itemId: asItemId(itemId),
+        payload: { itemType: "reasoning", status: "completed", title: "Reasoning" },
+      });
+    }
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-raw-turn-completed"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-raw"),
+      payload: { state: "completed" },
+    });
+
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.activities.some(
+        (activity: ProviderRuntimeTestActivity) => activity.id === "evt-raw-turn-completed",
+      ),
+    );
+    const reasoningRows = thread.activities.filter(
+      (activity: ProviderRuntimeTestActivity) => activity.summary === "Reasoning trace",
+    );
+    // The item with a summary shows the summary; the raw-only item shows nothing.
+    expect(reasoningRows.map((activity) => activity.id)).toEqual([
+      `provider-reasoning:thread-1:${rawThenSummary}`,
+    ]);
+    expect(JSON.stringify(reasoningRows)).not.toContain("raw chain of thought");
   });
 
   it("streams one coalesced Claude reasoning row and keeps its position when it completes", async () => {
@@ -4882,7 +4966,7 @@ describe("ProviderRuntimeIngestion", () => {
     };
     const activityId = "provider-reasoning:thread-1:opencode-thought-1";
     const firstAt = "2026-10-03T10:00:30.000Z";
-    const completedItemAt = "2026-10-03T10:00:30.200Z";
+    const completedItemAt = "2026-10-03T10:00:30.600Z";
     const appendDelta = (eventId: string, createdAt: string, delta: string) =>
       Effect.runPromise(
         harness.runtimeEventRepository.append({
@@ -4895,15 +4979,18 @@ describe("ProviderRuntimeIngestion", () => {
       );
 
     await appendDelta("opencode-reasoning-1", firstAt, "Reading the adapter ");
-    await appendDelta("opencode-reasoning-2", "2026-10-03T10:00:30.100Z", "boundary.");
+    await appendDelta("opencode-reasoning-2", "2026-10-03T10:00:30.300Z", "boundary.");
     await harness.startIngestion();
     await harness.drain();
-    // OpenCode publishes no live reasoning preview.
+    // Every provider streams its reasoning while the item is still open.
     expect(
       (await harness.readProjectedThread())?.activities.find(
         (activity) => activity.id === activityId,
       ),
-    ).toBeUndefined();
+    ).toMatchObject({
+      createdAt: firstAt,
+      payload: { status: "inProgress", detail: "Reading the adapter boundary." },
+    });
 
     if (completion !== "turn-only") {
       await Effect.runPromise(
@@ -4936,7 +5023,8 @@ describe("ProviderRuntimeIngestion", () => {
     const thoughts = thread?.activities.filter((activity) => activity.id === activityId);
     expect(thoughts).toHaveLength(1);
     expect(thoughts?.[0]).toMatchObject({
-      createdAt: completion === "turn-only" ? firstAt : completedItemAt,
+      // The row opens at the first reasoning delta and keeps that position.
+      createdAt: firstAt,
       kind: "task.progress",
       summary: "Reasoning trace",
       payload: {
@@ -5256,7 +5344,8 @@ describe("ProviderRuntimeIngestion", () => {
     const stableActivityId = "provider-reasoning:thread-1:antigravity-reasoning-1";
     const thread = await waitForThread(harness.engine, (entry) =>
       entry.activities.some(
-        (activity: ProviderRuntimeTestActivity) => activity.id === stableActivityId,
+        (activity: ProviderRuntimeTestActivity) =>
+          activity.id === stableActivityId && activityStatus(activity) === "completed",
       ),
     );
 
@@ -5333,7 +5422,8 @@ describe("ProviderRuntimeIngestion", () => {
     const stableActivityId = "provider-reasoning:thread-1:reasoning-buffered-1";
     const thread = await waitForThread(harness.engine, (entry) =>
       entry.activities.some(
-        (activity: ProviderRuntimeTestActivity) => activity.id === stableActivityId,
+        (activity: ProviderRuntimeTestActivity) =>
+          activity.id === stableActivityId && activityStatus(activity) === "completed",
       ),
     );
     const reasoningActivities = thread.activities.filter(
@@ -5395,13 +5485,11 @@ describe("ProviderRuntimeIngestion", () => {
       });
 
       const stableActivityId = "provider-reasoning:thread-1:reasoning-aborted-1";
-      const thread = await waitForThread(
-        harness.engine,
-        (entry) =>
-          (type !== "turn.completed" || publishedActivities.length >= 2) &&
-          entry.activities.some(
-            (activity: ProviderRuntimeTestActivity) => activity.id === stableActivityId,
-          ),
+      const thread = await waitForThread(harness.engine, (entry) =>
+        entry.activities.some(
+          (activity: ProviderRuntimeTestActivity) =>
+            activity.id === stableActivityId && activityStatus(activity) !== "inProgress",
+        ),
       );
 
       expect(
@@ -5416,11 +5504,11 @@ describe("ProviderRuntimeIngestion", () => {
         },
       });
       if (type === "turn.completed") {
+        // The row opens as a live preview and is settled in place, never appended
+        // a second time.
         expect(
-          publishedActivities.filter(
-            (id) => id === stableActivityId || id === "evt-aborted-reasoning-terminal",
-          ),
-        ).toEqual([stableActivityId, "evt-aborted-reasoning-terminal"]);
+          publishedActivities.filter((id) => id === stableActivityId).length,
+        ).toBeGreaterThanOrEqual(2);
       }
     },
   );
@@ -5456,7 +5544,8 @@ describe("ProviderRuntimeIngestion", () => {
     const stableActivityId = "provider-reasoning:thread-1:reasoning-errored-1";
     const thread = await waitForThread(harness.engine, (entry) =>
       entry.activities.some(
-        (activity: ProviderRuntimeTestActivity) => activity.id === stableActivityId,
+        (activity: ProviderRuntimeTestActivity) =>
+          activity.id === stableActivityId && activityStatus(activity) === "failed",
       ),
     );
 
@@ -5471,75 +5560,6 @@ describe("ProviderRuntimeIngestion", () => {
         detail: "**Preserve this failed summary**\n\n<!-- -->",
       },
     });
-  });
-
-  it("does not project unsupported or unidentified reasoning lifecycle rows", async () => {
-    const harness = await createHarness();
-    const now = new Date().toISOString();
-
-    harness.emit({
-      type: "item.started",
-      eventId: asEventId("evt-pi-reasoning-started"),
-      provider: "pi",
-      createdAt: now,
-      threadId: asThreadId("thread-1"),
-      turnId: asTurnId("turn-reasoning"),
-      itemId: asItemId("pi-reasoning-1"),
-      payload: {
-        itemType: "reasoning",
-        status: "inProgress",
-        title: "Reasoning",
-      },
-    });
-    harness.emit({
-      type: "item.completed",
-      eventId: asEventId("evt-pi-reasoning-completed"),
-      provider: "pi",
-      createdAt: now,
-      threadId: asThreadId("thread-1"),
-      turnId: asTurnId("turn-reasoning"),
-      itemId: asItemId("pi-reasoning-1"),
-      payload: {
-        itemType: "reasoning",
-        status: "completed",
-        title: "Reasoning",
-      },
-    });
-    harness.emit({
-      type: "item.started",
-      eventId: asEventId("evt-codex-reasoning-without-item-id"),
-      provider: "codex",
-      createdAt: now,
-      threadId: asThreadId("thread-1"),
-      turnId: asTurnId("turn-reasoning"),
-      payload: {
-        itemType: "reasoning",
-        status: "inProgress",
-        title: "Reasoning",
-      },
-    });
-    harness.emit({
-      type: "turn.completed",
-      eventId: asEventId("evt-reasoning-filter-turn-completed"),
-      provider: "codex",
-      createdAt: now,
-      threadId: asThreadId("thread-1"),
-      turnId: asTurnId("turn-reasoning"),
-      payload: { state: "completed" },
-    });
-
-    const thread = await waitForThread(harness.engine, (entry) =>
-      entry.activities.some(
-        (activity: ProviderRuntimeTestActivity) =>
-          activity.id === "evt-reasoning-filter-turn-completed",
-      ),
-    );
-
-    expect(
-      thread.activities.filter(
-        (activity: ProviderRuntimeTestActivity) => activity.summary === "Reasoning trace",
-      ),
-    ).toHaveLength(0);
   });
 
   it("uses assistant item completion detail when no assistant deltas were streamed", async () => {
@@ -10239,10 +10259,10 @@ describe("ProviderRuntimeIngestion", () => {
         thread?.messages.find((message) => message.id === "assistant:ambiguous-item"),
       ).toMatchObject({ text: "Still", streaming: true });
       expect(
-        thread?.activities.some(
+        thread?.activities.find(
           (activity) => activity.id === "provider-reasoning:thread-1:ambiguous-thought",
-        ),
-      ).toBe(false);
+        )?.payload,
+      ).toMatchObject({ status: "inProgress", detail: "Thinking" });
 
       // The live turn still finalizes normally when its own terminal arrives.
       await push(harness, {
