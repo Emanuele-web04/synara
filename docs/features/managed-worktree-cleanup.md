@@ -12,12 +12,20 @@ and commit match the worktree's current branch and HEAD. Local ancestry alone is
 not sufficient, so squash and rebase merges use the same exact-commit check.
 
 Dirty files, detached HEADs, missing pull request data, lookup failures, live
-terminals, enabled continuation automations, and other active owners preserve the
-worktree. Cleanup rechecks ownership, work, settings and Git state before removal.
-It saves a recovery snapshot for the current commit and uses ordinary Git
+terminals, enabled continuation automations, active provider work, and other
+active owners preserve the worktree. Automatic removal, including the older
+archived-thread retention path, rechecks ownership, work, settings and Git state
+under the same lifecycle fence as running turns.
+
+Ignored files are not part of the recovery snapshot unless `.worktreeinclude`
+lists them, and ordinary Git worktree removal still deletes them. A worktree
+with ignored files outside `.worktreeinclude` is therefore kept.
+
+Cleanup saves a recovery snapshot for the current commit and uses ordinary Git
 worktree removal without force. A snapshot or removal failure preserves the
-worktree instead of treating cleanup as successful.
+worktree instead of treating cleanup as successful. Merge cleanup preserves the
+local branch ref; recovery snapshots expire after 30 days.
 
 This setting removes eligible worktree directories; it does not automatically
-merge branches or delete branches. Explicit removal remains available through
-the existing Worktrees controls.
+merge branches. Explicit removal remains available through the existing
+Worktrees controls.

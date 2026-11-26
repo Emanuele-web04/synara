@@ -2,7 +2,8 @@ name: Native managed worktree cleanup
 on:
   pull_request:
     paths:
-      - "apps/server/src/managedWorktrees*"
+      - "apps/server/src/managedWorktree*"
+      - "apps/server/src/worktreeLifecycle*"
       - ".github/workflows/managed-cleanup-live.yml"
 permissions:
   contents: read
