@@ -2832,6 +2832,52 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
   });
 
   describe("checkAntigravityProviderStatus", () => {
+    it.effect("probes an account in the home its profile directory supplies", () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "provider-health-antigravity-home-",
+        });
+        const homes: Array<string | undefined> = [];
+        const layer = makeProviderHealthLive().pipe(
+          Layer.provideMerge(
+            ServerSettingsService.layerTest({
+              ...allProvidersDisabledServerSettings,
+              providerInstances: {
+                agy_work: {
+                  driver: "antigravity",
+                  displayName: "Work",
+                  enabled: true,
+                  config: { profileDir: "/accounts/work" },
+                },
+              },
+            }),
+          ),
+          Layer.provideMerge(ServerConfig.layerTest(process.cwd(), baseDir)),
+          Layer.provideMerge(
+            mockSpawnerLayer((args, _command, env) => {
+              homes.push(env?.HOME);
+              return args.join(" ") === "--version"
+                ? { stdout: "1.5.18\n", stderr: "", code: 0 }
+                : { stdout: "gemini-4-neon-high\tGemini 4 Neon (High)\n", stderr: "", code: 0 };
+            }),
+          ),
+        );
+        const statuses = yield* TestClock.withLive(
+          Effect.gen(function* () {
+            const providerHealth = yield* ProviderHealth;
+            return yield* providerHealth.refresh;
+          }).pipe(Effect.provide(layer)),
+        );
+
+        assert.deepStrictEqual(homes, ["/accounts/work", "/accounts/work"]);
+        assert.strictEqual(
+          statuses.find((status) => status.instanceId === "agy_work")?.authStatus,
+          "authenticated",
+        );
+      }),
+    );
+
     it.effect("passes configured instance environment to the Antigravity version probe", () =>
       Effect.gen(function* () {
         const status = yield* checkAntigravityProviderStatus("/custom/bin/agy", {

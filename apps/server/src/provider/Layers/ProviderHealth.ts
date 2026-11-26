@@ -3408,11 +3408,15 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
                 instance.environment,
               ),
             );
-          case "antigravity":
+          case "antigravity": {
+            // `agy` keeps its sign-in under the account's home, which a profile
+            // directory supplies only through the launch options.
+            const antigravityOptions = providerStartOptionsFromInstance(instance)?.antigravity;
             return checkProviderInstanceWhenEnabled(
               instance,
-              checkAntigravityProviderStatus(binaryPath, instance.environment),
+              checkAntigravityProviderStatus(binaryPath, antigravityOptions?.environment),
             );
+          }
           case "grok": {
             const grokOptions = providerStartOptionsFromInstance(instance)?.grok;
             return checkProviderInstanceWhenEnabled(
