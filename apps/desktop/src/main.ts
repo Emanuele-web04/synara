@@ -303,6 +303,7 @@ import { MacUpdateInstallHandoff } from "./macUpdateInstallHandoff";
 import { BROWSER_SESSION_PARTITION, DesktopBrowserManager } from "./browserManager";
 import { BrowserSessionRestore } from "./browserAutomation/browserSessionRestore";
 import { createCookieSessionBackend } from "./browserAutomation/electronCookieSession";
+import { registerBrowserHybridPasskeys } from "./browserHybridPasskeys";
 import { configureBrowserTouchId, registerBrowserPasskeyAccounts } from "./browserPasskeys";
 import { BrowserVault } from "./browserAutomation/browserVault";
 import { BrowserVaultCapture } from "./browserAutomation/browserVaultCapture";
@@ -6764,7 +6765,14 @@ if (hasSingleInstanceLock) {
         browserSession,
         isHumanBrowserPage,
       );
-      app.once("will-quit", disposePasskeyAccounts);
+      const disposeHybridPasskeys = registerBrowserHybridPasskeys(
+        browserSession,
+        isHumanBrowserPage,
+      );
+      app.once("will-quit", () => {
+        disposeHybridPasskeys();
+        disposePasskeyAccounts();
+      });
       const browserNetworkGuardReady = getBetterwrightNetworkGuard(browserSession).initialize();
       // Observed below and in bootstrap; this keeps an early return from leaving it unobserved.
       browserNetworkGuardReady.catch(() => undefined);

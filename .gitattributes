@@ -1,2 +1,4 @@
 bun.lock text eol=lf
 .githooks/* text eol=lf
+# The native patch is hashed byte-for-byte; a single space denotes an empty context line.
+apps/desktop/patches/electron-hybrid/*.patch text eol=lf whitespace=-blank-at-eol

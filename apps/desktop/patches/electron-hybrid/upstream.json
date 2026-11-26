@@ -1,0 +1,17 @@
+{
+  "electronVersion": "43.8.12",
+  "electronCommit": "4b97c76b671623589f62ff81c0bda400c4799114",
+  "chromiumVersion": "150.0.7871.250",
+  "chromiumCommit": "f916f1b7136907af19d96b95b891533d091d932a",
+  "patch": "native-hybrid.patch",
+  "patchSha256": "0ea2be0bdf5ff953cd72938779dcaf83c05a87b823f6be7116f90363c9751035",
+  "source": {
+    "repository": "https://github.com/nightly-labs/electron-hybrid",
+    "tag": "v44.4.5-hybrid.1",
+    "commit": "5c495a1c5583b5db2e320b9bfc3c5917ba4545ce",
+    "path": "patches/native-hybrid.patch",
+    "sha256": "2912354d5755ff404894cd0629fb7ac641914aff70d097f4ca9c8587d628f7bc",
+    "electronCommit": "694f45852a0f1726cd23bfd379854de489cccb65",
+    "license": "LICENSE-Nightly-Labs"
+  }
+}

@@ -38,6 +38,7 @@ import {
 } from "./lib/desktop-platform-build-config.ts";
 import { stageCloudflared } from "./lib/cloudflared.ts";
 import { stageMacWebAuthnProfile } from "./lib/mac-webauthn-profile.ts";
+import { hybridArchiveMetadata, verifyMacHybridElectron } from "./lib/mac-hybrid-electron.ts";
 import { stageDesktopRuntimeResources } from "./lib/desktop-runtime-resources.ts";
 import {
   SYNARA_PACKAGED_DESKTOP_FLAVORS,
@@ -1214,6 +1215,27 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
 
   yield* Effect.log(`[desktop-artifact] Packaging stage: ${stageRoot}`);
   const stageAppDir = path.join(stageRoot, "app");
+  // Freeze the selected runtime before verification so a concurrent rebuild cannot
+  // replace a verified archive while the rest of the desktop payload is being staged.
+  const hybridRuntimeInput =
+    options.platform === "mac" ? process.env.SYNARA_MAC_HYBRID_RUNTIME : undefined;
+  let hybridArchive: string | undefined;
+  if (hybridRuntimeInput) {
+    const stagedRuntime = path.join(stageRoot, "hybrid-runtime");
+    const archive = yield* Effect.try({
+      try: () => hybridArchiveMetadata(options.arch).archive,
+      catch: (cause) => new BuildScriptError({ message: "Invalid hybrid runtime target.", cause }),
+    });
+    yield* fs.makeDirectory(stagedRuntime);
+    for (const name of [archive, "manifest.json", "LICENSE-Nightly-Labs"]) {
+      yield* fs.copyFile(path.join(hybridRuntimeInput, name), path.join(stagedRuntime, name));
+    }
+    hybridArchive = yield* Effect.tryPromise({
+      try: () => verifyMacHybridElectron(stagedRuntime, options.arch, electronVersion),
+      catch: (cause) =>
+        new BuildScriptError({ message: "Invalid macOS hybrid Electron runtime.", cause }),
+    });
+  }
   const stageResourcesDir = path.join(stageAppDir, "apps/desktop/resources");
   const distDirs = {
     desktopDist: path.join(repoRoot, "apps/desktop/dist-electron"),
@@ -1376,6 +1398,17 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     options.flavor,
     macProfile ? path.resolve(macProfile) : undefined,
   );
+  if (hybridArchive) {
+    resolvedBuildConfig.buildConfig.electronDist = hybridArchive;
+    const extraResources = resolvedBuildConfig.buildConfig.extraResources as Record<
+      string,
+      string
+    >[];
+    extraResources.push({
+      from: path.join(path.dirname(hybridArchive), "LICENSE-Nightly-Labs"),
+      to: "licenses/electron-hybrid-LICENSE.txt",
+    });
+  }
 
   const stagePackageJson: StagePackageJson = {
     ...artifactIdentity.packageMetadata,

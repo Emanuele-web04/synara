@@ -1,0 +1,62 @@
+name: Build macOS Electron with phone passkeys
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Both slices share an Electron checkout and its compiler cache on the builder.
+concurrency:
+  group: mac-hybrid-electron
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: [self-hosted, macOS, synara-electron-builder]
+    timeout-minutes: 1440
+    strategy:
+      max-parallel: 1
+      fail-fast: false
+      matrix:
+        arch: [arm64, x64]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: package.json
+      - name: Build the pinned Electron distribution
+        shell: bash
+        env:
+          TARGET_ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          node scripts/build-mac-hybrid-electron.ts \
+            --source "${ELECTRON_SRC:?Set ELECTRON_SRC on the dedicated macOS builder}" \
+            --arch "$TARGET_ARCH" --output "$RUNNER_TEMP/hybrid-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$TARGET_ARCH"
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - name: Exercise the new runtime in a Synara tab
+        shell: bash
+        timeout-minutes: 10
+        env:
+          TARGET_ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          bun install --frozen-lockfile --ignore-scripts --filter '@synara/desktop'
+          electron_version=$(node -p 'require("./apps/desktop/package.json").dependencies.electron')
+          archive="$RUNNER_TEMP/hybrid-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$TARGET_ARCH/electron-v$electron_version-darwin-$TARGET_ARCH.zip"
+          dist=$(mktemp -d "$RUNNER_TEMP/synara-hybrid-smoke.XXXXXX")
+          trap 'rm -rf -- "$dist"' EXIT
+          /usr/bin/ditto -x -k "$archive" "$dist"
+          SYNARA_HYBRID_ELECTRON_DIST="$dist" bun run --cwd apps/desktop smoke:browser-hybrid-passkey --simulate-focus
+      - uses: actions/upload-artifact@v7
+        with:
+          name: mac-hybrid-electron-${{ matrix.arch }}
+          path: ${{ runner.temp }}/hybrid-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.arch }}/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 90

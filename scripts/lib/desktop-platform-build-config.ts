@@ -184,6 +184,8 @@ export function createDesktopPlatformBuildConfig(
       x64ArchFiles:
         "Contents/{Helpers/synara-appsnap-helper,Frameworks/synara-window-material.node,Resources/cua-driver/cua-driver,Resources/cloudflared/cloudflared}",
       extendInfo: {
+        NSBluetoothAlwaysUsageDescription:
+          "Synara uses Bluetooth to connect to your nearby phone when you scan a passkey QR code.",
         NSMicrophoneUsageDescription: MICROPHONE_USAGE_DESCRIPTION,
         NSAudioCaptureUsageDescription: AUDIO_CAPTURE_USAGE_DESCRIPTION,
         NSScreenCaptureUsageDescription:

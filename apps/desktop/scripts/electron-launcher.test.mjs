@@ -131,7 +131,15 @@ describe("macOS Electron launcher signature", () => {
       signingCommands.every(({ options }) => options.timeout === 60_000),
       true,
     );
-    assert.equal(JSON.parse(readFileSync(fixture.metadataPath, "utf8")).launcherVersion, 9);
+    assert.ok(
+      fixture.commands
+        .slice(0, fixture.commands.indexOf(signingCommands[0]))
+        .some(
+          ({ command, arguments_ }) =>
+            command === "plutil" && arguments_[1] === "NSBluetoothAlwaysUsageDescription",
+        ),
+    );
+    assert.equal(JSON.parse(readFileSync(fixture.metadataPath, "utf8")).launcherVersion, 10);
     assert.equal(
       readFileSync(join(bundle, "Contents", "Resources", "icon.icns"), "utf8"),
       "synara icon",
@@ -224,7 +232,7 @@ describe("macOS Electron launcher signature", () => {
     const fixture = createLauncherFixture(t);
     const executable = fixture.build();
     const metadata = JSON.parse(readFileSync(fixture.metadataPath, "utf8"));
-    writeFileSync(fixture.metadataPath, JSON.stringify({ ...metadata, launcherVersion: 8 }));
+    writeFileSync(fixture.metadataPath, JSON.stringify({ ...metadata, launcherVersion: 9 }));
     fixture.commands.length = 0;
 
     assert.equal(fixture.build(), executable);
@@ -232,7 +240,7 @@ describe("macOS Electron launcher signature", () => {
       fixture.commands.some(({ command }) => command === "/usr/bin/codesign"),
       true,
     );
-    assert.equal(JSON.parse(readFileSync(fixture.metadataPath, "utf8")).launcherVersion, 9);
+    assert.equal(JSON.parse(readFileSync(fixture.metadataPath, "utf8")).launcherVersion, 10);
   });
 
   for (const [label, cdhashes, expectReset] of [

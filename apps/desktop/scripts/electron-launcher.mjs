@@ -33,7 +33,7 @@ const desktopFlavor = resolveSynaraDesktopFlavor({
 const desktopIdentity = synaraSourceDesktopIdentity(synaraDesktopIdentity(desktopFlavor));
 const APP_DISPLAY_NAME = desktopIdentity.displayName;
 const APP_BUNDLE_ID = desktopIdentity.bundleId;
-const LAUNCHER_VERSION = 9;
+const LAUNCHER_VERSION = 10;
 // Kept in sync with BRAND_ASSET_PATHS.productionMacIconComposer and the macOS
 // icon constants in scripts/lib/desktop-platform-build-config.ts. The packaged
 // build compiles the same asset; this launcher does it for dev and Canary,
@@ -189,6 +189,12 @@ function patchMainBundleInfoPlist(appBundlePath, iconPath, runCommand) {
   setPlistString(infoPlistPath, "CFBundleName", APP_DISPLAY_NAME, runCommand);
   setPlistString(infoPlistPath, "CFBundleIdentifier", APP_BUNDLE_ID, runCommand);
   setPlistString(infoPlistPath, "CFBundleIconFile", "icon.icns", runCommand);
+  setPlistString(
+    infoPlistPath,
+    "NSBluetoothAlwaysUsageDescription",
+    "Synara uses Bluetooth to connect to your nearby phone when you scan a passkey QR code.",
+    runCommand,
+  );
   setPlistString(
     infoPlistPath,
     "NSMicrophoneUsageDescription",

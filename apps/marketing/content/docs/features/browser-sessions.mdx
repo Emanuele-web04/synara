@@ -34,7 +34,8 @@ Saved login deletion and vault locking affect the saved-password vault. They do 
 Use the site's **Sign in with a passkey** action. The available choices depend on the operating system, the authenticator and the site.
 
 - On compatible Windows 11 systems, Windows offers Windows Hello, a security key, or a nearby phone. Choose the phone option and scan the system QR code. Both devices need Bluetooth and an internet connection. [Microsoft passkey support](https://learn.microsoft.com/en-us/windows/security/identity-protection/passkeys/)
-- A macOS Synara build signed with its channel's passkey provisioning profile can create and use a passkey on that Mac with Touch ID. When Chromium asks which account to use, select it in the native account menu. These credentials are local to that app and Mac. The standard macOS Electron runtime does not provide the phone QR flow for third-party sites.
+- **Phone on macOS.** In builds with the phone-passkey runtime, Synara opens a QR dialog when a site requests a passkey and accepts a nearby phone. Check the site name in the dialog, scan with the phone’s camera, and confirm on the phone. Keep Bluetooth and internet access enabled on both devices. Allow Synara to use Bluetooth if macOS asks. The website completes the login in the original tab. **Cancel** or Escape closes the request.
+- **Touch ID on macOS.** Builds signed with the channel’s passkey provisioning profile can create and use a passkey locally on that Mac. When Chromium offers several accounts, choose one in the native account menu.
 
 ## Import an existing browser session
 

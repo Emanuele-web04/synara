@@ -17,6 +17,7 @@
     "smoke-test": "node scripts/smoke-test.mjs",
     "smoke:browser-lifecycle": "bun build scripts/browser-lifecycle-smoke.ts --target=node --external=electron --external=betterwright --external=betterwright/* --external=ws --external=effect --outfile=.smoke/browser-lifecycle.mjs && electron .smoke/browser-lifecycle.mjs",
     "smoke:browser-profile": "bun build src/browserAutomation/loginEmailGuest.ts --format=cjs --target=node --external=electron --outfile=.smoke/login-email-guest.cjs && bun build scripts/browser-profile-smoke.ts --target=node --external=electron --external=betterwright --outfile=.smoke/browser-profile.mjs && node scripts/run-browser-profile-smoke.mjs",
+    "smoke:browser-hybrid-passkey": "node scripts/run-browser-hybrid-passkey-smoke.mjs",
     "smoke:browser-viewport": "bun build scripts/browser-viewport-smoke.ts --target=node --external=electron --external=betterwright --outfile=.smoke/browser-viewport.mjs && electron .smoke/browser-viewport.mjs",
     "smoke:remote-resources": "bun build scripts/remote-resource-smoke.ts --target=node --external=electron --outfile=.smoke/remote-resources.mjs && electron .smoke/remote-resources.mjs"
   },
@@ -27,6 +28,7 @@
     "electron-updater": "^6.6.2",
     "i18next": "26.4.4",
     "undici": "8.10.2",
+    "uqr": "0.1.3",
     "ws": "^8.21.0"
   },
   "devDependencies": {
