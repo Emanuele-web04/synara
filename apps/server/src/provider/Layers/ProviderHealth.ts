@@ -155,6 +155,9 @@ type ProviderStatuses = ReadonlyArray<ServerProviderStatus>;
 const DISABLED_PROVIDER_STATUS_MESSAGE = "Provider is disabled in Synara settings.";
 // `agy acp`, which Synara drives Antigravity through, shipped in 1.5.0.
 const MINIMUM_ANTIGRAVITY_CLI_VERSION = "1.5.0";
+// `agy` exits non-zero and prints one of these when the account behind its home
+// has no sign-in. Any other failure only means Synara could not tell.
+const ANTIGRAVITY_SIGN_IN_REQUIRED = /please sign in|authentication required/iu;
 
 const PROVIDERS = [
   CODEX_PROVIDER,
@@ -2255,6 +2258,23 @@ export const checkAntigravityProviderStatus = (
         version: parsedVersion,
         checkedAt,
         message: "Antigravity CLI is installed, authenticated, and returned available models.",
+      } satisfies ServerProviderStatus;
+    }
+    const modelsOutput =
+      Result.isSuccess(models) && Option.isSome(models.success)
+        ? `${models.success.value.stdout}\n${models.success.value.stderr}`
+        : "";
+    if (ANTIGRAVITY_SIGN_IN_REQUIRED.test(modelsOutput)) {
+      return {
+        provider: ANTIGRAVITY_PROVIDER,
+        instanceId: ANTIGRAVITY_PROVIDER,
+        driver: ANTIGRAVITY_PROVIDER,
+        status: "error",
+        available: true,
+        authStatus: "unauthenticated",
+        version: parsedVersion,
+        checkedAt,
+        message: "Antigravity CLI is installed, but this account is signed out.",
       } satisfies ServerProviderStatus;
     }
     return {

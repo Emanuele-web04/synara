@@ -2832,6 +2832,47 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
   });
 
   describe("checkAntigravityProviderStatus", () => {
+    it.effect("reports the account as signed out when the CLI asks for a sign-in", () =>
+      Effect.gen(function* () {
+        const status = yield* checkAntigravityProviderStatus("/custom/bin/agy");
+        assert.strictEqual(status.status, "error");
+        assert.strictEqual(status.available, true);
+        assert.strictEqual(status.authStatus, "unauthenticated");
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args) => {
+            const joined = args.join(" ");
+            if (joined === "--version") return { stdout: "1.5.18\n", stderr: "", code: 0 };
+            if (joined === "models")
+              return {
+                stdout: "",
+                stderr:
+                  "Fetching available models...\nError: Please sign in to view available models.",
+                code: 1,
+              };
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+      ),
+    );
+
+    it.effect("keeps an unknown login when the model list fails for another reason", () =>
+      Effect.gen(function* () {
+        const status = yield* checkAntigravityProviderStatus("/custom/bin/agy");
+        assert.strictEqual(status.status, "warning");
+        assert.strictEqual(status.authStatus, "unknown");
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args) => {
+            const joined = args.join(" ");
+            if (joined === "--version") return { stdout: "1.5.18\n", stderr: "", code: 0 };
+            if (joined === "models") return { stdout: "", stderr: "network unreachable", code: 1 };
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+      ),
+    );
+
     it.effect("passes configured instance environment to the Antigravity version probe", () =>
       Effect.gen(function* () {
         const status = yield* checkAntigravityProviderStatus("/custom/bin/agy", {
