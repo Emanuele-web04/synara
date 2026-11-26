@@ -27,6 +27,7 @@ import {
   ProjectId,
   type ProjectAgentOverview,
   type ServerConfig,
+  type ServerProviderStatus,
   type ServerSettingsPatch,
   type ServerSettingsView,
   SpaceId,
@@ -193,6 +194,20 @@ interface TestFixture {
 let fixture: TestFixture;
 const wsRequests: WsRequestEnvelope["body"][] = [];
 const wsLink = ws.link(/ws(s)?:\/\/.*/);
+
+// The open provider-status subscription, so a test can push a server snapshot the
+// way the real server does, after the client has already rendered an earlier one.
+let providerStatusStream: {
+  client: Parameters<typeof sendEffectRpcChunk>[0];
+  requestId: string;
+} | null = null;
+
+function pushProviderStatuses(providers: ServerConfig["providers"]): void {
+  if (!providerStatusStream) {
+    throw new Error("The provider status stream is not open.");
+  }
+  sendEffectRpcChunk(providerStatusStream.client, providerStatusStream.requestId, { providers });
+}
 
 interface ViewportSpec {
   name: string;
@@ -1684,6 +1699,7 @@ const worker = setupWorker(
         return;
       }
       if (method === WS_METHODS.subscribeServerProviderStatuses) {
+        providerStatusStream = { client, requestId: parsed.request.id };
         if (fixture.providerStatusesSnapshot) {
           sendEffectRpcChunk(client, parsed.request.id, {
             providers: fixture.providerStatusesSnapshot,
@@ -2572,6 +2588,7 @@ describe("ChatView transcript geometry (full app)", () => {
     // hover card and intercept transcript clicks. Park it before mounting.
     await userEvent.hover(document.body, { position: { x: 0, y: 0 } });
     wsRequests.length = 0;
+    providerStatusStream = null;
     useComposerDraftStore.setState({
       draftsByThreadId: {},
       draftThreadsByThreadId: {},
@@ -17106,5 +17123,66 @@ describe("ChatView transcript geometry (full app)", () => {
         }
       },
     );
+  });
+
+  // Issue #959: a startup probe times out and warns, then the same provider answers
+  // ready on a later poll. The warning is raised from the provider status stream, so
+  // that stream - not a timer - has to withdraw it, and the user can dismiss it while
+  // it shows.
+  const TIMEOUT_WARNING =
+    "Could not verify Codex authentication status. Timed out while running command.";
+
+  const timeoutWarning = {
+    provider: "codex",
+    instanceId: "codex",
+    driver: "codex",
+    status: "warning",
+    available: true,
+    authStatus: "unknown",
+    checkedAt: NOW_ISO,
+    message: TIMEOUT_WARNING,
+  } satisfies ServerProviderStatus;
+
+  const recovered = {
+    provider: "codex",
+    instanceId: "codex",
+    driver: "codex",
+    status: "ready",
+    available: true,
+    authStatus: "authenticated",
+    supportsAutoRuntimeMode: true,
+    checkedAt: new Date(BASE_TIME_MS + 5_000).toISOString(),
+  } satisfies ServerProviderStatus;
+
+  it("withdraws a provider health warning when the same provider reports ready", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-provider-health" as MessageId,
+        targetText: "provider health warning",
+      }),
+      configureFixture: (nextFixture) => {
+        nextFixture.serverConfig = { ...nextFixture.serverConfig, providers: [timeoutWarning] };
+        nextFixture.providerStatusesSnapshot = [timeoutWarning];
+      },
+    });
+
+    try {
+      await expect.element(page.getByText(TIMEOUT_WARNING)).toBeVisible();
+
+      // The channel that raised the warning withdraws it when the provider recovers.
+      pushProviderStatuses([recovered]);
+      await expect.element(page.getByText(TIMEOUT_WARNING)).not.toBeInTheDocument();
+
+      // A later probe times out again: it warns again, and the warning can be dismissed.
+      pushProviderStatuses([
+        { ...timeoutWarning, checkedAt: new Date(BASE_TIME_MS + 10_000).toISOString() },
+      ]);
+      await expect.element(page.getByText(TIMEOUT_WARNING)).toBeVisible();
+      await page.getByRole("button", { name: "Dismiss provider status" }).click();
+      await expect.element(page.getByText(TIMEOUT_WARNING)).not.toBeInTheDocument();
+    } finally {
+      await mounted.cleanup();
+    }
   });
 });
