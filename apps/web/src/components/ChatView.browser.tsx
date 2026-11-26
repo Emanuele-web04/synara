@@ -13190,12 +13190,11 @@ describe("ChatView transcript geometry (full app)", () => {
       const targetId = ThreadId.makeUnsafe(mounted.router.state.location.pathname.slice(1));
       if (reusesDraft) expect(targetId).toBe(OTHER_THREAD_ID);
       else expect(targetId).not.toBe(OTHER_THREAD_ID);
-      const draft = useComposerDraftStore.getState().getDraftThread(targetId);
       // A reopened draft keeps the workspace it already had. A new chat takes the project's
       // environment — its saved local/worktree choice and the branch its checkout is on —
       // and never the worktree of the chat on screen.
       await vi.waitFor(() =>
-        expect(draft).toMatchObject({
+        expect(useComposerDraftStore.getState().getDraftThread(targetId)).toMatchObject({
           projectId: PROJECT_ID,
           ...(reusesDraft
             ? { branch: "feature/draft", worktreePath: draftWorkspace, envMode: "worktree" }
