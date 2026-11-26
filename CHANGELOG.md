@@ -1,5 +1,32 @@
 # Changelog
 
+## 1.6.8 — 2026-11-25
+
+**Faster backend startup, Remote reconnects and workspace search, with smaller desktop downloads carried forward from 1.6.6.**
+
+### Added
+
+- New chats offer two accent-colored backdrops, **Temple** and animated **Gradient**, under **Settings → Appearance → Empty chat background**. **Off** stays selected for users who disabled the old backdrop. Reduced motion keeps the image still. A soft tray groups the composer with its controls. ([#2307](https://github.com/Emanuele-web04/synara/pull/2307), [#2306](https://github.com/Emanuele-web04/synara/pull/2306))
+
+### Changed
+
+- On Apple Silicon with Node 26.8.1, median backend cold startup against an existing database went from **505 ms to 379 ms (−25%)**. Content search across 10,321 files went from **489 ms to 367 ms (−25%)**. A mixed workload with 10 concurrent clients handled **587 vs. 474 requests/s (+24%)**. CI now enforces server bundle and startup budgets. ([#2298](https://github.com/Emanuele-web04/synara/pull/2298))
+- In a simulated 80 ms network, median Remote reconnect with a cached credential went from **583 ms to 341 ms (−42%)**. In a separate simulated cellular fallback from an unresponsive LAN route to the relay, it went from **2.00 s to 0.74 s (−63%)**. The client's first WebSocket retry waits **100 ms** instead of 500 ms and can retry immediately when connectivity returns or the view becomes visible. ([#2298](https://github.com/Emanuele-web04/synara/pull/2298))
+- The desktop packaging savings introduced in **1.6.6** carry forward. From 1.6.5 to 1.6.7, published installers went from **338 MB to 271 MB** for Apple Silicon DMG, **266 MB to 219 MB** for Windows x64 and **351 MB to 295 MB** for Linux x64. In a separate unsigned local Apple Silicon comparison, the updater ZIP was **21% smaller** and the installed app used **27% fewer bytes**. ([#2288](https://github.com/Emanuele-web04/synara/pull/2288), [v1.6.5 assets](https://github.com/Emanuele-web04/synara/releases/tag/v1.6.5), [v1.6.7 assets](https://github.com/Emanuele-web04/synara/releases/tag/v1.6.7))
+- Empty-chat backdrop rendering does less work. In headless Chromium at 2560 × 1440, median Gradient setup fell from **65.1 ms to 51.8 ms** and the Temple ripple callback from **14.0 ms to 11.9 ms**. ([#2312](https://github.com/Emanuele-web04/synara/pull/2312))
+
+### Fixed
+
+- Steering a live Claude turn can move blocking foreground commands and subagents into the background while they continue running. In one live Sonnet 5 test, a steer during a long command received an answer in **9.4 s**, down from about **60 s**. A model request already in progress can still delay delivery. Claude imports also preserve the original dates of messages materialized from queued commands. ([#2308](https://github.com/Emanuele-web04/synara/pull/2308), [#2302](https://github.com/Emanuele-web04/synara/pull/2302))
+- The current tool run stays expandable in the transcript while the working indicator shows the active call. Long chats retain recent **Thread created** cards and delegated-task notices within their activity window. ([#2297](https://github.com/Emanuele-web04/synara/pull/2297), [#2309](https://github.com/Emanuele-web04/synara/pull/2309))
+- Submitting the new-branch dialog in chat keeps the action inside that dialog. ([#2306](https://github.com/Emanuele-web04/synara/pull/2306))
+- Fresh Remote pairing proofs tolerate up to one minute of forward clock skew on the connecting device. Proof expiry, the host challenge and owner approval still apply. The local host log records rate-limited failure categories. Only Desktop Beta can report those codes when sharing is enabled. ([#2305](https://github.com/Emanuele-web04/synara/pull/2305))
+- Service changes cover account refresh after device sign-out and aggregate Remote pairing failures by stage and HTTP status in the analytics dashboard. These changes take effect through their respective service deployments. ([#2304](https://github.com/Emanuele-web04/synara/pull/2304), [#2303](https://github.com/Emanuele-web04/synara/pull/2303))
+
+### Verification
+
+Publication requires workspace and server checks, native packaging, provenance and packaged startup. macOS requires signing and notarization. Windows x64 uses the version-scoped unsigned exception and requires Microsoft Defender scanning. Manual installation, installed-app upgrades and live provider sessions require separate verification.
+
 ## 1.6.7 — 2026-11-25
 
 **Windows browser-import hardening, more reliable Antigravity answers, and cleaner macOS shutdown.**

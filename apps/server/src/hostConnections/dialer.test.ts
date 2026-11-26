@@ -22,6 +22,15 @@ describe("remote dialer through native TLS and the host gateway", () => {
     expect(input.requestGrant).not.toHaveBeenCalled();
   });
 
+  it("does not request a grant for an already cancelled dial", async () => {
+    const input = await fixture();
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(dialHost({ ...input, signal: controller.signal })).rejects.toThrow();
+    expect(input.requestGrant).not.toHaveBeenCalled();
+  });
+
   it("mints and authorizes under the paired root before carrying application frames", async () => {
     const input = await fixture();
     const session = await dialHost(input);
@@ -98,5 +107,63 @@ describe("remote dialer through native TLS and the host gateway", () => {
     await expect(dialHost(input)).rejects.toMatchObject({ detail: { stage: "handshake" } });
     expect(input.authorize).toHaveBeenCalledOnce();
     expect(input.sessions.size).toBe(0);
+  });
+
+  it("returns an account grant refusal before opening the route", async () => {
+    const input = await fixture();
+    const onRequest = vi.fn((_request: http.IncomingMessage, response: http.ServerResponse) =>
+      response.writeHead(503).end(),
+    );
+    const refusing = http.createServer(onRequest);
+    refusing.listen(0, "127.0.0.1");
+    await once(refusing, "listening");
+    cleanups.push(() => new Promise<void>((resolve) => refusing.close(() => resolve())));
+    const address = refusing.address() as { port: number };
+    const refusal = new Error("Account subscription required");
+    input.requestGrant.mockRejectedValue(refusal);
+
+    await expect(
+      dialHost({
+        ...input,
+        host: {
+          ...input.host,
+          endpoints: [{ url: `http://127.0.0.1:${address.port}`, transport: "lan" }],
+        },
+      }),
+    ).rejects.toMatchObject({ detail: { stage: "grant" }, cause: refusal });
+    expect(onRequest).not.toHaveBeenCalled();
+  });
+
+  it("reuses a valid cached session credential on reconnect without fetching a grant", async () => {
+    const input = await fixture();
+    const first = await dialHost(input);
+    expect(input.requestGrant).toHaveBeenCalledTimes(1);
+    first.socket.terminate();
+
+    const second = await dialHost({
+      ...input,
+      cachedCredential: {
+        credential: first.credential,
+        expiresAtSeconds: first.credentialExpiresAtSeconds,
+      },
+    });
+    expect(input.requestGrant).toHaveBeenCalledTimes(1);
+    expect(second.credential).toBe(first.credential);
+    expect(second.environmentId).toBe(environmentId);
+    second.socket.terminate();
+  });
+
+  it("falls back to a fresh grant and mint when a cached credential is rejected by the host", async () => {
+    const input = await fixture();
+    const session = await dialHost({
+      ...input,
+      cachedCredential: {
+        credential: "invalid.cached.credential",
+        expiresAtSeconds: Math.floor(Date.now() / 1000) + 600,
+      },
+    });
+    expect(input.requestGrant).toHaveBeenCalledTimes(1);
+    expect(session.environmentId).toBe(environmentId);
+    session.socket.terminate();
   });
 });

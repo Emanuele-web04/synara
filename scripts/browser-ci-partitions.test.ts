@@ -171,7 +171,6 @@ describe("browser CI partitions", () => {
     expect(shards.flatMap(({ configured }) => configured).toSorted()).toEqual(all);
 
     const expectedPins = {
-      "src/components/chat/AsciiWaveBackground.browser.tsx": 10,
       "src/components/chat/group/GroupSettingsDialog.browser.tsx": 10,
       "src/components/SafariAccessOnboarding.browser.tsx": 10,
       "src/components/settings/SyncKeyPairingPanel.browser.tsx": 10,

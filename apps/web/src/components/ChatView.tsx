@@ -317,7 +317,7 @@ import { RenameThreadDialog } from "./RenameThreadDialog";
 import { hasUnseenSnoozeReturn, resolveThreadProjectLabel } from "./Sidebar.logic";
 import { SidebarHeaderNavigationControls } from "./SidebarHeaderNavigationControls";
 import { SynaraLogo } from "@synara/profile-ui/logo";
-import { AsciiWaveBackground } from "./chat/AsciiWaveBackground";
+import { EmptyChatBackdrop } from "./chat/EmptyChatBackdrop";
 import { SponsorLandingBanner } from "./SponsorLandingBanner";
 import TerminalWorkspaceTabs from "./TerminalWorkspaceTabs";
 import { ThreadWorktreeHandoffDialog } from "./ThreadWorktreeHandoffDialog";
@@ -6122,12 +6122,9 @@ export default function ChatView({
   const emptyLandingControls = showEmptyLandingControls ? (
     <div
       data-empty-landing-controls="true"
-      // Tray sitting in normal flow directly above the composer, full composer width so
-      // the project / environment / branch chips sit near the shell edges. Unfilled in
-      // both themes (chips float over the page), rounded on top only and flush against
-      // the input shell below. No overlap/underlay tricks — in dark mode a slice tucked
-      // behind the composer's translucent corners reads as a visible cut along the seam.
-      className="chat-composer-shell squircle mx-auto flex min-h-8 w-full min-w-0 flex-nowrap items-center gap-x-1.5 overflow-hidden !rounded-b-none !rounded-t-[var(--composer-radius)] px-1.5 py-1 transition-colors duration-150 ease-out motion-reduce:transition-none sm:min-h-7"
+      // Top strip of the composer tray on the empty landing: the project / environment /
+      // branch chips wrap above the normal new-chat composer card.
+      className="@container flex min-h-8 w-full min-w-0 flex-nowrap items-center gap-x-1.5 overflow-hidden px-1 pb-1 pt-0.5 sm:min-h-7"
     >
       {isLocalDraftThread ? <NewChatComputerPicker /> : null}
       {showContainerChatWorkspacePicker ? (
@@ -6414,6 +6411,28 @@ export default function ChatView({
         .length ?? 0)
     : (activeBackgroundTasks?.activeCount ?? 0);
 
+  // Started threads: the row under the composer card, inside the grey tray. Permission, branch
+  // controls (git threads), then model/effort and the context ring. The footer tiers measure
+  // this row.
+  const composerStatusRow = composerStatusBelow ? (
+    <div
+      ref={composerStatusRowRef}
+      data-chat-composer-status-row=""
+      className="@container flex min-h-8 w-full min-w-0 flex-wrap items-center gap-1 px-0.5 pb-0.5 pt-1"
+    >
+      <RuntimeUsageControls {...runtimeUsageControlsProps} className="shrink-0" />
+      {showTrailingBranchToolbar ? (
+        <BranchToolbar {...branchToolbarProps} className="min-w-0 flex-[1_0_9rem] px-1 py-0" />
+      ) : (
+        <div className="min-w-0 flex-1" />
+      )}
+      <div className="ml-auto flex min-w-0 shrink items-center gap-2 pr-0.5">
+        {composerPickerControls}
+        {composerContextMeter}
+      </div>
+    </div>
+  ) : null;
+
   const composerSection = shouldRenderChatPaneContent ? (
     <div
       className={cn(isCenteredEmptyLanding ? "w-full overflow-visible" : "contents")}
@@ -6427,6 +6446,8 @@ export default function ChatView({
         onSubmit={onSend}
         className="relative z-10 w-full overflow-visible"
         data-chat-composer-form="true"
+        // The input sits in a grey tray; the stacked rail above it takes the tray's tone.
+        data-composer-tray-host=""
         data-chat-pane-scope={paneScopeId}
       >
         <ComposerColumnFrame>
@@ -6632,7 +6653,6 @@ export default function ChatView({
                 }}
               />
             ) : null}
-            {emptyLandingControls}
           </div>
           <div
             className={cn(
@@ -6643,9 +6663,12 @@ export default function ChatView({
               isThreadDragOverComposer && "ring-1 ring-info/65",
             )}
             aria-disabled={isSidechatExpired}
+            // Soft grey tray behind the composer (new chat and started threads alike).
+            data-composer-tray=""
             data-composer-layout={composerSingleRow ? "row" : undefined}
             {...threadMentionDropzoneProps}
           >
+            {emptyLandingControls}
             <div
               data-chat-composer-surface=""
               className={cn(
@@ -6911,6 +6934,7 @@ export default function ChatView({
                 />
               )}
             </div>
+            {composerStatusRow}
           </div>
         </ComposerColumnFrame>
       </form>
@@ -7137,7 +7161,7 @@ export default function ChatView({
                 )}
               >
                 {settings.showAsciiBackground && !terminalWorkspaceTerminalTabActive ? (
-                  <AsciiWaveBackground />
+                  <EmptyChatBackdrop style={settings.emptyChatBackdropStyle} />
                 ) : null}
                 {/* The heading floats centered in the space above the composer, which is
                     anchored to the bottom of the pane (with its workspace-tools rail
@@ -7146,10 +7170,15 @@ export default function ChatView({
                 <div className="relative flex min-h-0 flex-1 items-center justify-center">
                   {/* Pinned to the top so the heading stays optically centered; hidden on
                       short panes where it would crowd the heading. */}
-                  <div className="absolute inset-x-0 top-4 flex justify-center px-6 [@media(max-height:620px)]:hidden">
+                  <div
+                    data-empty-chat-backdrop-quiet=""
+                    className="absolute inset-x-0 top-4 flex justify-center px-6 [@media(max-height:620px)]:hidden"
+                  >
                     <SponsorLandingBanner className="w-full max-w-[520px]" />
                   </div>
                   <div
+                    // The dithered backdrop keeps a clear zone behind the heading for contrast.
+                    data-empty-chat-backdrop-quiet=""
                     className={cn(
                       "flex flex-col items-center gap-4 px-6 text-center select-none",
                       CHAT_COLUMN_FRAME_CLASS_NAME,
@@ -7207,7 +7236,7 @@ export default function ChatView({
                     </h2>
                   </div>
                 </div>
-                {/* Positioned so it paints above the ASCII background. */}
+                {/* Positioned so it paints above the empty chat background. */}
                 <div className="relative w-full shrink-0 pb-3 sm:pb-4">
                   {activeThread.error ? (
                     <div className="flex shrink-0 justify-center px-3 pt-2">
@@ -7416,40 +7445,8 @@ export default function ChatView({
                   >
                     <div className="pointer-events-auto">{composerSection}</div>
                   </div>
-                  <div className="pt-0.5" />
-                  {/* Row under the composer: permission, branch controls (git threads), then
-                      model/effort and the context ring. The footer tiers measure this row. It
-                      takes the composer's right inset so it stays under the composer while the
-                      Environment card or preview rail is docked. */}
-                  <div
-                    className={cn(
-                      CHAT_COLUMN_GUTTER_CLASS_NAME,
-                      ENVIRONMENT_CONTENT_INSET_MOTION_CLASS,
-                    )}
-                    style={contentInsetRightPx ? { paddingRight: contentInsetRightPx } : undefined}
-                  >
-                    <div className={COMPOSER_COLUMN_FRAME_CLASS_NAME}>
-                      <div
-                        ref={composerStatusRowRef}
-                        data-chat-composer-status-row=""
-                        className="@container flex min-h-9 w-full min-w-0 flex-wrap items-center gap-1 pb-1.5 pt-1"
-                      >
-                        <RuntimeUsageControls {...runtimeUsageControlsProps} className="shrink-0" />
-                        {showTrailingBranchToolbar ? (
-                          <BranchToolbar
-                            {...branchToolbarProps}
-                            className="min-w-0 flex-[1_0_9rem] px-1 py-0"
-                          />
-                        ) : (
-                          <div className="min-w-0 flex-1" />
-                        )}
-                        <div className="ml-auto flex min-w-0 shrink items-center gap-2 pr-1">
-                          {composerPickerControls}
-                          {composerContextMeter}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
+                  {/* Gap under the composer tray; its status row lives inside the tray. */}
+                  <div className="pb-1.5" />
                 </div>
               </div>
             ) : null}

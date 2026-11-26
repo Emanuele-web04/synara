@@ -8686,6 +8686,60 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
+  it("creates a branch without sending the draft from the composer tray", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      initialEntry: `/${THREAD_ID}?view=editor`,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-create-branch-with-draft" as MessageId,
+        targetText: "existing message",
+      }),
+    });
+    const git = readNativeApi()!.git;
+    const createBranch = vi.spyOn(git, "createBranch").mockResolvedValue(undefined);
+    const checkout = vi.spyOn(git, "checkout").mockResolvedValue(undefined);
+
+    try {
+      const editor = page.getByTestId("composer-editor");
+      const draft = "keep this draft unsent";
+      await userEvent.fill(editor, draft);
+      await expect.element(page.getByRole("button", { name: "Send message" })).toBeEnabled();
+      const trigger = await waitForElement(
+        () =>
+          document.querySelector<HTMLButtonElement>(
+            '[data-chat-composer-status-row] button[data-slot="combobox-trigger"]',
+          ),
+        "Unable to find the composer branch selector.",
+      );
+      await vi.waitFor(() => expect(trigger.disabled).toBe(false));
+      trigger.click();
+      await page
+        .getByRole("button", { name: "Create and checkout new branch", exact: false })
+        .click();
+      await page.getByLabelText("Branch name").fill("feature/keep-draft");
+      const escapedSubmit = vi.fn();
+      // Observe the submit before any asynchronous composer dispatch can hide a leak.
+      window.addEventListener("submit", escapedSubmit);
+      try {
+        await page.getByRole("button", { name: "Create and switch", exact: true }).click();
+      } finally {
+        window.removeEventListener("submit", escapedSubmit);
+      }
+
+      expect(escapedSubmit).not.toHaveBeenCalled();
+      await expect.poll(() => checkout.mock.calls.length).toBe(1);
+      expect(createBranch).toHaveBeenCalledWith(
+        expect.objectContaining({ branch: "feature/keep-draft" }),
+      );
+      expect(hasDispatchedCommandType("thread.turn.start")).toBe(false);
+      expect(editor.element().textContent).toContain(draft);
+    } finally {
+      createBranch.mockRestore();
+      checkout.mockRestore();
+      await mounted.cleanup();
+    }
+  });
+
   it("warns before sending from a settled thread on another branch", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
@@ -13282,34 +13336,46 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
-  it("disables the ASCII landing decoration from Appearance and releases it on the terminal tab", async () => {
+  it("switches the empty chat backdrop style from Appearance and releases it on the terminal tab", async () => {
     const snapshot = addThreadToSnapshot(createDraftOnlySnapshot(), THREAD_ID);
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
       snapshot: { ...snapshot, threads: [{ ...snapshot.threads[0]!, session: null }] },
     });
-    const background = () => document.querySelector("canvas.font-mono");
+    const background = () => document.querySelector("[data-empty-chat-backdrop]");
+    const styleOf = () => background()?.getAttribute("data-empty-chat-backdrop") ?? null;
+    const storedSettings = () => JSON.parse(localStorage.getItem("synara:app-settings:v1") ?? "{}");
+    const option = (name: string) => page.getByRole("radio", { name, exact: true });
+    const goToSettings = () =>
+      mounted.router.navigate({ to: "/settings", search: { section: "appearance" } });
+    const goToChat = () =>
+      mounted.router.navigate({ to: "/$threadId", params: { threadId: THREAD_ID } });
     try {
-      await expect.poll(background).not.toBeNull();
-      await mounted.router.navigate({ to: "/settings", search: { section: "appearance" } });
-      const toggle = page.getByRole("switch", { name: "ASCII background", exact: true });
-      await expect.element(toggle).toBeChecked();
-      await toggle.click();
-      await expect
-        .poll(
-          () =>
-            JSON.parse(localStorage.getItem("synara:app-settings:v1") ?? "{}").showAsciiBackground,
-        )
-        .toBe(false);
-      await mounted.router.navigate({ to: "/$threadId", params: { threadId: THREAD_ID } });
+      await expect.poll(styleOf).toBe("temple");
+      const trayControls = () =>
+        document.querySelector(
+          "[data-empty-chat-backdrop-host] [data-composer-tray-host] [data-empty-landing-controls]",
+        );
+      await expect.poll(trayControls, { timeout: 3_000 }).not.toBeNull();
+      expect(getComputedStyle(trayControls()!).textShadow).toBe("none");
+      await goToSettings();
+      await expect.element(option("Temple")).toHaveAttribute("aria-checked", "true");
+      await option("Gradient").click();
+      await expect.poll(() => storedSettings().emptyChatBackdropStyle).toBe("gradient");
+      await goToChat();
+      await expect.poll(styleOf).toBe("gradient");
+      await goToSettings();
+      await option("Off").click();
+      await expect.poll(() => storedSettings().showAsciiBackground).toBe(false);
+      await goToChat();
       await expect.element(page.getByTestId("empty-landing-heading")).toBeVisible();
       expect(background()).toBeNull();
-      await mounted.router.navigate({ to: "/settings", search: { section: "appearance" } });
-      await expect.element(toggle).not.toBeChecked();
-      await page.getByRole("button", { name: "Reset ASCII background to default" }).click();
-      await expect.element(toggle).toBeChecked();
-      await mounted.router.navigate({ to: "/$threadId", params: { threadId: THREAD_ID } });
-      await expect.poll(background).not.toBeNull();
+      await goToSettings();
+      await expect.element(option("Off")).toHaveAttribute("aria-checked", "true");
+      await page.getByRole("button", { name: "Reset Empty chat background to default" }).click();
+      await expect.element(option("Temple")).toHaveAttribute("aria-checked", "true");
+      await goToChat();
+      await expect.poll(styleOf).toBe("temple");
       useTerminalStateStore.getState().openTerminalThreadPage(THREAD_ID, { terminalOnly: false });
       await expect.poll(background).toBeNull();
       useTerminalStateStore.getState().setTerminalWorkspaceTab(THREAD_ID, "chat");

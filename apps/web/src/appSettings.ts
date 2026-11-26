@@ -153,6 +153,8 @@ export type SidebarProjectSortOrder = typeof SidebarProjectSortOrder.Type;
 export const DEFAULT_SIDEBAR_PROJECT_SORT_ORDER: SidebarProjectSortOrder = "manual";
 export const SidebarThreadSortOrder = Schema.Literals(["updated_at", "created_at"]);
 export const ComputerPreviewSize = Schema.Literals(["compact", "large"]);
+export const EmptyChatBackdropStyle = Schema.Literals(["temple", "gradient"]);
+export type EmptyChatBackdropStyle = typeof EmptyChatBackdropStyle.Type;
 export type ComputerPreviewSize = typeof ComputerPreviewSize.Type;
 export const DEFAULT_COMPUTER_PREVIEW_SIZE: ComputerPreviewSize = "compact";
 export const AgentCursorColorMode = Schema.Literals(["stock", "custom"]);
@@ -417,6 +419,10 @@ export const AppSettingsSchema = Schema.Struct({
   // open-thread tab strip.
   showOpenThreadTabs: Schema.Boolean.pipe(withDefaults(() => true)),
   showAsciiBackground: Schema.Boolean.pipe(withDefaults(() => true)),
+  // Which empty-chat backdrop shows while `showAsciiBackground` is on.
+  emptyChatBackdropStyle: EmptyChatBackdropStyle.pipe(
+    withDefaults(() => "temple" as const satisfies EmptyChatBackdropStyle),
+  ),
   confirmThreadDelete: Schema.Boolean.pipe(withDefaults(() => true)),
   // Opt-in: archiving a task also releases its worktree when nothing else uses it.
   archiveDeletesOrphanedWorktree: Schema.Boolean.pipe(withDefaults(() => false)),

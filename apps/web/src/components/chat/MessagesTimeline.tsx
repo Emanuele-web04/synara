@@ -1830,7 +1830,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           // Creation milestones are reserved for the end-of-turn recap card.
           // The provider's actual Synara MCP tool rows remain visible here.
           // Handoff boundaries render as the divider above, not as work rows.
-          // The run the working indicator wears is left to it until it settles.
+          // The call the working indicator wears is left to it; the rest of its
+          // run stays here, folded into a summary the reader can open.
           const groupedEntries = withoutLiveToolCallRun(
             standaloneWorkGroupListEntries(row.groupedEntries),
             groupId === liveToolCallGroupId ? liveToolCallChunkId : null,
@@ -2326,7 +2327,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         (() => {
           const messageText = resolveAssistantMessageDisplayText(row);
           const buildWorkDisplay = (allWorkEntries: WorkLogEntry[], workGroupId: string | null) => {
-            // The run the working indicator wears is left to it until it settles.
+            // The call the working indicator wears is left to it; the rest of its
+            // run stays here, folded into a summary the reader can open.
             const workEntries = withoutLiveToolCallRun(
               allWorkEntries,
               workGroupId !== null && workGroupId === liveToolCallGroupId

@@ -3312,13 +3312,14 @@ describe("findLiveToolCallTarget", () => {
       ? {
           groupId: found.groupId,
           chunkId: found.chunkId,
+          entryOnly: found.entryOnly === true,
           entry: found.display?.entry.id ?? null,
           tone: found.display?.tone ?? null,
         }
       : null;
   };
 
-  it("claims the live run and wears its running call", () => {
+  it("wears only the running call and leaves the rest of its run in history", () => {
     expect(
       target([
         messageRowOf("u1", "user"),
@@ -3330,25 +3331,20 @@ describe("findLiveToolCallTarget", () => {
         ]),
         workingRow,
       ]),
-    ).toEqual({ groupId: "g1", chunkId: "w2", entry: "w3", tone: "running" });
+    ).toEqual({ groupId: "g1", chunkId: "w3", entryOnly: true, entry: "w3", tone: "running" });
   });
 
   it("prefers a running earlier call over a finished later one", () => {
     expect(
       target([groupRow("g1", [tool("w1", running), tool("w2", running), tool("w3")]), workingRow]),
-    ).toEqual({ groupId: "g1", chunkId: "w1", entry: "w2", tone: "running" });
+    ).toEqual({ groupId: "g1", chunkId: "w2", entryOnly: true, entry: "w2", tone: "running" });
   });
 
-  it("keeps the claim but reads Thinking once every call finished", () => {
-    expect(target([groupRow("g1", [tool("w1"), tool("w2")]), workingRow])).toEqual({
-      groupId: "g1",
-      chunkId: "w1",
-      entry: null,
-      tone: null,
-    });
-    expect(target([groupRow("g1", [tool("w1", { toolStatus: "completed" })]), workingRow])).toEqual(
-      { groupId: "g1", chunkId: "w1", entry: null, tone: null },
-    );
+  it("leaves the whole run in history once every call finished", () => {
+    expect(target([groupRow("g1", [tool("w1"), tool("w2")]), workingRow])).toBeNull();
+    expect(
+      target([groupRow("g1", [tool("w1", { toolStatus: "completed" })]), workingRow]),
+    ).toBeNull();
   });
 
   it("wears the newest call when it failed, until another call runs", () => {
@@ -3359,29 +3355,28 @@ describe("findLiveToolCallTarget", () => {
     });
     expect(target([groupRow("g1", [tool("w1"), failed]), workingRow])).toEqual({
       groupId: "g1",
-      chunkId: "w1",
+      chunkId: "w2",
+      entryOnly: true,
       entry: "w2",
       tone: "failed",
     });
     expect(
       target([groupRow("g1", [tool("w1"), failed, tool("w3", running)]), workingRow]),
-    ).toMatchObject({ entry: "w3", tone: "running" });
+    ).toMatchObject({ chunkId: "w3", entry: "w3", tone: "running" });
     // A failure older than the newest finished call no longer speaks.
-    expect(target([groupRow("g1", [failed, tool("w3")]), workingRow])).toMatchObject({
-      entry: null,
-    });
+    expect(target([groupRow("g1", [failed, tool("w3")]), workingRow])).toBeNull();
   });
 
   it("shows a Codex status only while it is the newest entry", () => {
     const status = tool("status", { itemType: "command_execution", label: "Command execution" });
     expect(target([groupRow("g1", [tool("w1"), status]), workingRow])).toMatchObject({
+      chunkId: "status",
       entry: "status",
       tone: "status",
     });
-    expect(target([groupRow("g1", [status, tool("w2")]), workingRow])).toMatchObject({
-      entry: null,
-    });
+    expect(target([groupRow("g1", [status, tool("w2")]), workingRow])).toBeNull();
     expect(target([groupRow("g1", [status, tool("w2", running)]), workingRow])).toMatchObject({
+      chunkId: "w2",
       entry: "w2",
       tone: "running",
     });
@@ -3394,7 +3389,7 @@ describe("findLiveToolCallTarget", () => {
         groupRow("g1", [tool("think", { tone: "thinking" }), tool("w1", running)]),
         workingRow,
       ]),
-    ).toEqual({ groupId: "g1", chunkId: "w1", entry: "w1", tone: "running" });
+    ).toEqual({ groupId: "g1", chunkId: "w1", entryOnly: true, entry: "w1", tone: "running" });
   });
 
   it("claims an assistant message's inline run, never its leading one", () => {
@@ -3409,7 +3404,8 @@ describe("findLiveToolCallTarget", () => {
 
     expect(target([withInline, workingRow])).toEqual({
       groupId: "g1",
-      chunkId: "w1",
+      chunkId: "w2",
+      entryOnly: true,
       entry: "w2",
       tone: "running",
     });
@@ -3484,7 +3480,11 @@ describe("findLiveToolCallTarget", () => {
       rows.find((row) => row.kind === "working");
 
     expect(workingRowOf(live)).toMatchObject({
-      liveToolCall: { chunkId: "w1", display: { tone: "running", entry: { id: "w2" } } },
+      liveToolCall: {
+        chunkId: "w2",
+        entryOnly: true,
+        display: { tone: "running", entry: { id: "w2" } },
+      },
     });
     expect(workingRowOf(idle)).toBeUndefined();
     expect(findLiveToolCallTarget(idle)).toBeNull();
@@ -3513,9 +3513,14 @@ describe("live tail claim", () => {
   const claim = { groupId: "g1", chunkId: "w1", display: null };
   const claimingWorkingRow: MessagesTimelineRow = { ...workingRow, liveToolCall: claim };
 
-  it("leaves a group everything before the claimed run", () => {
+  it("removes the claimed entry, or the whole run when asked", () => {
     const entries = [tool("w1"), tool("think", { tone: "thinking" }), tool("w2"), tool("w3")];
     expect(withoutLiveToolCallRun(entries, "w2").map((entry) => entry.id)).toEqual(["w1", "think"]);
+    expect(withoutLiveToolCallRun(entries, "w2", true).map((entry) => entry.id)).toEqual([
+      "w1",
+      "think",
+      "w3",
+    ]);
     expect(withoutLiveToolCallRun(entries, null)).toBe(entries);
     expect(withoutLiveToolCallRun(entries, "missing")).toBe(entries);
   });
@@ -3528,6 +3533,9 @@ describe("live tail claim", () => {
       groupedEntries: [tool("w1"), tool("w2")],
     };
     expect(isWorkRowYieldedToLiveToolCall(row, { groupId: "g1", chunkId: "w1" })).toBe(true);
+    expect(
+      isWorkRowYieldedToLiveToolCall(row, { groupId: "g1", chunkId: "w1", entryOnly: true }),
+    ).toBe(false);
     expect(isWorkRowYieldedToLiveToolCall(row, { groupId: "g1", chunkId: "w2" })).toBe(false);
     expect(isWorkRowYieldedToLiveToolCall(row, { groupId: "g2", chunkId: "w1" })).toBe(false);
     expect(isWorkRowYieldedToLiveToolCall(row, null)).toBe(false);

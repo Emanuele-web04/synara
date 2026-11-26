@@ -3129,10 +3129,10 @@ describe("WsTransport", () => {
   });
 
   it("uses bounded exponential reconnect backoff", () => {
-    expect(getReconnectRetryDelayMs(0)).toBe(500);
-    expect(getReconnectRetryDelayMs(1)).toBe(1_000);
-    expect(getReconnectRetryDelayMs(3)).toBe(4_000);
-    expect(getReconnectRetryDelayMs(4)).toBe(5_000);
+    expect(getReconnectRetryDelayMs(0)).toBe(100);
+    expect(getReconnectRetryDelayMs(1)).toBe(200);
+    expect(getReconnectRetryDelayMs(3)).toBe(800);
+    expect(getReconnectRetryDelayMs(6)).toBe(5_000);
     expect(getReconnectRetryDelayMs(100)).toBe(5_000);
   });
 
@@ -4173,7 +4173,7 @@ describe("terminal remote recovery", () => {
     const transport = new WsTransport(remoteUrl);
     try {
       await vi.advanceTimersByTimeAsync(60_000);
-      expect(fetch).toHaveBeenCalledTimes(15);
+      expect(fetch).toHaveBeenCalledTimes(17);
       expect(sockets).toHaveLength(0);
     } finally {
       await transport.dispose();

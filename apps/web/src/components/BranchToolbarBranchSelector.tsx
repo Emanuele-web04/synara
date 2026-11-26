@@ -977,6 +977,7 @@ export function BranchToolbarBranchSelector({
               className="space-y-3"
               onSubmit={(event) => {
                 event.preventDefault();
+                event.stopPropagation();
                 const nextName = createBranchName.trim();
                 if (!nextName || branchByName.has(nextName)) {
                   return;

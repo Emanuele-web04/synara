@@ -212,6 +212,9 @@ failed connection, reconnection or pairing can also carry one fixed `failure` st
 the network kind (`wifi`, `cellular`, `wired`, `other`, `none`) and the connection
 path (`local` network, account-published `direct` endpoint or managed `tunnel`). These
 are fixed categories, never the address, hostname or network name. The
+Product dashboard's **Why things failed** table groups pairing by local or
+remote mode when the client reports it. Remote pairing rows include the
+reported failure stage and HTTP status when available. The
 dashboard counts installations active in the last 24 hours, 7 days and 30 days, and
 installations that sent a chat request in those windows. These are rolling windows
 ending now, not calendar-day, calendar-week or calendar-month totals. One person using

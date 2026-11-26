@@ -17,11 +17,15 @@ import {
   sendBoundedRelayFrame,
   type RelaySocket,
 } from "../relaySocket";
-import type { DialedSession } from "./dialer";
+import type { CachedSessionCredential, DialedSession } from "./dialer";
 
 export const HOST_CONNECTION_WS_PATH_PREFIX = "/ws/remote/";
 export const REMOTE_ATTACHMENT_QUERY = "remoteAttachment";
-type Connector = (client: WsBootstrapNegotiateInput, signal: AbortSignal) => Promise<DialedSession>;
+type Connector = (
+  client: WsBootstrapNegotiateInput,
+  signal: AbortSignal,
+  options?: { readonly cachedCredential?: CachedSessionCredential | undefined },
+) => Promise<DialedSession>;
 interface DesiredConnection {
   readonly hostName: string;
   readonly connect: Connector;
@@ -29,6 +33,7 @@ interface DesiredConnection {
   readonly executionScope?: RemoteExecutionScope;
   resourceFactory?: (session: DialedSession) => Promise<RemoteResourcePool>;
   resource?: Promise<RemoteResourcePool> | undefined;
+  cachedCredential?: CachedSessionCredential | undefined;
   state: HostConnectionState;
   failures: number;
   retryAt: number;
@@ -179,9 +184,15 @@ export class HostConnectionRegistry {
       throw new Error("Remote renderer connection limit reached");
     this.#opening.set(hostId, opening + 1);
     try {
+      const cachedCredential =
+        desired.cachedCredential &&
+        desired.cachedCredential.expiresAtSeconds * 1000 > Date.now() + 60_000
+          ? desired.cachedCredential
+          : undefined;
       const session = await desired.connect(
         client,
         signal ? AbortSignal.any([desired.lifetime.signal, signal]) : desired.lifetime.signal,
+        cachedCredential ? { cachedCredential } : undefined,
       );
       if (
         desired.lifetime.signal.aborted ||
@@ -191,6 +202,10 @@ export class HostConnectionRegistry {
         session.socket.terminate();
         throw new Error("Remote connection cancelled");
       }
+      desired.cachedCredential = {
+        credential: session.credential,
+        expiresAtSeconds: session.credentialExpiresAtSeconds,
+      };
       desired.state = "connected";
       desired.failures = 0;
       desired.retryAt = 0;
@@ -422,11 +437,16 @@ export class HostConnectionRegistry {
     this.#attachments.delete(id);
     clearTimeout(entry.timer);
     entry.detach?.();
-    if (code === 4503 || code === 4403 || code === 1008)
-      void this.#desired.get(entry.hostId)?.resource?.then(
-        (pool) => pool.close(),
-        () => {},
-      );
+    if (code === 4503 || code === 4403 || code === 1008) {
+      const desired = this.#desired.get(entry.hostId);
+      if (desired) {
+        desired.cachedCredential = undefined;
+        void desired.resource?.then(
+          (pool) => pool.close(),
+          () => {},
+        );
+      }
+    }
     if (entry.local?.readyState === WebSocket.OPEN) entry.local.close(closeCode(code), reason);
     if (entry.session.socket.readyState === WebSocket.OPEN)
       entry.session.socket.close(closeCode(code), reason);
