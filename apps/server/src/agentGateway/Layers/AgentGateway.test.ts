@@ -4976,6 +4976,40 @@ describe("AgentGateway", () => {
     },
   );
 
+  it.effect("returns pending progress before a 60-second caller times out", () => {
+    const running = makeThreadShell("thread-long-wait", {
+      latestTurn: {
+        turnId: TurnId.makeUnsafe("turn-long-wait"),
+        state: "running",
+        requestedAt: NOW,
+        startedAt: NOW,
+        completedAt: null,
+        assistantMessageId: null,
+      },
+    });
+    const { gatewayLayer, makeHarness } = makeHarnessLayer([
+      makeThreadShell("thread-parent"),
+      running,
+    ]);
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const fiber = yield* harness
+        .callTool({
+          token: "token-parent",
+          name: "synara_wait_for_threads",
+          args: { threadIds: [running.id], timeoutMs: 60_000 },
+        })
+        .pipe(Effect.forkChild);
+      yield* TestClock.adjust("30 seconds");
+      const response = yield* Fiber.join(fiber);
+      assert.isFalse(isToolError(response.result));
+      const result = toolResultJson(response.result);
+      assert.equal(result.allTerminal, false);
+      assert.equal(result.timedOut, true);
+      assert.deepEqual(result.runIds, ["turn-long-wait"]);
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
   it.effect("fails a long wait when a pinned thread is deleted between polls", () => {
     const running = makeThreadShell("thread-deleted-during-wait", {
       latestTurn: {

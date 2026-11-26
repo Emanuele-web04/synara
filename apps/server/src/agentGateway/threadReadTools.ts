@@ -1,5 +1,6 @@
 import {
   SYNARA_GATEWAY_MAX_THREADS_PER_OPERATION,
+  SYNARA_GATEWAY_MAX_WAIT_MS,
   SYNARA_GATEWAY_MAX_THREADS_PER_TURN,
   ThreadId,
   ProjectId,
@@ -7,7 +8,7 @@ import {
   type OrchestrationThreadShell,
   type ProviderKind,
 } from "@synara/contracts";
-import { Effect, Option } from "effect";
+import { Clock, Effect, Option } from "effect";
 
 import {
   isOrdinaryProjectRow,
@@ -52,6 +53,8 @@ import {
 
 const LIST_THREADS_DEFAULT_LIMIT = 50;
 const LIST_THREADS_MAX_LIMIT = 200;
+// Leave time for the progress response before the caller's 60-second tool deadline.
+const WAIT_PROGRESS_INTERVAL_MS = 30_000;
 
 export interface ThreadReadToolsInput {
   readonly snapshotQuery: ProjectionSnapshotQueryShape;
@@ -204,7 +207,7 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
           providers,
           limits: {
             maxThreadsPerOperation: SYNARA_GATEWAY_MAX_THREADS_PER_OPERATION,
-            maxWaitMs: 60_000,
+            maxWaitMs: SYNARA_GATEWAY_MAX_WAIT_MS,
             oneCreationPlanPerActiveTurn: false,
             maxThreadsPerActiveTurn: SYNARA_GATEWAY_MAX_THREADS_PER_TURN,
           },
@@ -430,8 +433,8 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
           timeoutMs: {
             type: "integer",
             minimum: 0,
-            maximum: 60_000,
-            description: "Long-poll duration; defaults to 30000ms.",
+            maximum: SYNARA_GATEWAY_MAX_WAIT_MS,
+            description: `Upper bound for this wait. Pending work returns progress after at most ${WAIT_PROGRESS_INTERVAL_MS}ms of polling.`,
           },
         },
         required: ["threadIds"],
@@ -451,8 +454,11 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
         if (waitInput.runIds && waitInput.runIds.length !== waitInput.threadIds.length) {
           throw new ToolInputError('Argument "runIds" must have the same length as "threadIds".');
         }
-        const timeoutMs = waitInput.timeoutMs ?? 30_000;
-        const deadline = Date.now() + timeoutMs;
+        const timeoutMs = Math.min(
+          waitInput.timeoutMs ?? WAIT_PROGRESS_INTERVAL_MS,
+          WAIT_PROGRESS_INTERVAL_MS,
+        );
+        const deadline = (yield* Clock.currentTimeMillis) + timeoutMs;
         const pinned = yield* Effect.forEach(waitInput.threadIds, (threadId, index) =>
           snapshotQuery.getThreadShellById(threadId).pipe(
             Effect.mapError((error) => new ToolInputError(errorText(error))),
@@ -544,8 +550,10 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
 
         let results = yield* readPinnedStates();
         let pollDelayMs = 200;
-        while (results.some((result) => !result.terminal) && Date.now() < deadline) {
-          yield* Effect.sleep(Math.min(pollDelayMs, Math.max(1, deadline - Date.now())));
+        while (results.some((result) => !result.terminal)) {
+          const remainingMs = deadline - (yield* Clock.currentTimeMillis);
+          if (remainingMs <= 0) break;
+          yield* Effect.sleep(Math.min(pollDelayMs, remainingMs));
           results = yield* readPinnedStates();
           pollDelayMs = Math.min(1_000, Math.ceil(pollDelayMs * 1.5));
         }
