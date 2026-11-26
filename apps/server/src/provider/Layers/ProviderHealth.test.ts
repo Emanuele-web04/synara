@@ -2832,13 +2832,14 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
   });
 
   describe("checkAntigravityProviderStatus", () => {
-    it.effect("probes an account in the home its profile directory supplies", () =>
+    it.effect("scopes Antigravity model probes to configured account homes", () =>
       Effect.gen(function* () {
         const fileSystem = yield* FileSystem.FileSystem;
         const baseDir = yield* fileSystem.makeTempDirectoryScoped({
           prefix: "provider-health-antigravity-home-",
         });
-        const homes: Array<string | undefined> = [];
+        const versionHomes: Array<string | undefined> = [];
+        const modelHomes: Array<string | undefined> = [];
         const layer = makeProviderHealthLive().pipe(
           Layer.provideMerge(
             ServerSettingsService.layerTest({
@@ -2850,16 +2851,27 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
                   enabled: true,
                   config: { profileDir: "/accounts/work" },
                 },
+                agy_unconfigured: {
+                  driver: "antigravity",
+                  displayName: "Unconfigured",
+                  enabled: true,
+                },
               },
             }),
           ),
           Layer.provideMerge(ServerConfig.layerTest(process.cwd(), baseDir)),
           Layer.provideMerge(
             mockSpawnerLayer((args, _command, env) => {
-              homes.push(env?.HOME);
-              return args.join(" ") === "--version"
-                ? { stdout: "1.5.18\n", stderr: "", code: 0 }
-                : { stdout: "gemini-4-neon-high\tGemini 4 Neon (High)\n", stderr: "", code: 0 };
+              if (args.join(" ") === "--version") {
+                versionHomes.push(env?.HOME);
+                return { stdout: "1.5.18\n", stderr: "", code: 0 };
+              }
+              modelHomes.push(env?.HOME);
+              return {
+                stdout: "gemini-4-neon-high\tGemini 4 Neon (High)\n",
+                stderr: "",
+                code: 0,
+              };
             }),
           ),
         );
@@ -2870,11 +2882,16 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
           }).pipe(Effect.provide(layer)),
         );
 
-        assert.deepStrictEqual(homes, ["/accounts/work", "/accounts/work"]);
+        assert.include(versionHomes, "/accounts/work");
+        assert.deepStrictEqual(modelHomes, ["/accounts/work"]);
         assert.strictEqual(
           statuses.find((status) => status.instanceId === "agy_work")?.authStatus,
           "authenticated",
         );
+        const unconfigured = statuses.find((status) => status.instanceId === "agy_unconfigured");
+        assert.strictEqual(unconfigured?.status, "error");
+        assert.strictEqual(unconfigured?.available, true);
+        assert.strictEqual(unconfigured?.authStatus, "unauthenticated");
       }),
     );
 

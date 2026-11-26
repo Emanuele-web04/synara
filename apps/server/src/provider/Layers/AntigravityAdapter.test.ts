@@ -1118,6 +1118,52 @@ describe("Antigravity ACP adapter", () => {
     );
   });
 
+  it.each([undefined, "  "])(
+    "keeps the current session when a second account has no usable home (%s)",
+    async (home) => {
+      const fake = makeControllableRuntime();
+      const threadId = ThreadId.makeUnsafe("thread-agy-rejected-replacement");
+      await runWithAdapter({ makeRuntime: fake.makeRuntime }, (adapter) =>
+        Effect.gen(function* () {
+          yield* adapter.startSession(startInput(threadId));
+          const refused = yield* adapter
+            .startSession(
+              startInput(threadId, {
+                providerInstanceId: "agy_work",
+                ...(home === undefined
+                  ? {}
+                  : { providerOptions: { antigravity: { environment: { HOME: home } } } }),
+              }),
+            )
+            .pipe(Effect.flip);
+          expect(refused.message).toContain("no home directory of its own");
+          expect(yield* adapter.hasSession(threadId)).toBe(true);
+          expect(fake.runtimeInputs).toHaveLength(1);
+        }),
+      );
+    },
+  );
+
+  it("does not launch model discovery for a second account without a home", async () => {
+    const fake = makeControllableRuntime();
+    let helperCalls = 0;
+    const runHelper = async () => {
+      helperCalls += 1;
+      return { stdout: "", stderr: "", code: 0 };
+    };
+    await runWithAdapter({ makeRuntime: fake.makeRuntime, runHelper }, (adapter) =>
+      Effect.gen(function* () {
+        const refused = yield* adapter.listModels!({
+          provider: "antigravity",
+          instanceId: "agy_work",
+        }).pipe(Effect.flip);
+        expect(refused.message).toContain("no home directory of its own");
+        expect(fake.runtimeInputs).toHaveLength(0);
+        expect(helperCalls).toBe(0);
+      }),
+    );
+  });
+
   it("starts a second account in the home its launch options carry", async () => {
     const fake = makeControllableRuntime();
     await runWithAdapter({ makeRuntime: fake.makeRuntime }, (adapter) =>
