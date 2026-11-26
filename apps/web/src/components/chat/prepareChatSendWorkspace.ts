@@ -68,7 +68,6 @@ interface Input {
     typeof useComposerDraftStore.getState
   >["clearProjectDraftThreadId"];
   setDraftThreadContext: ReturnType<typeof useComposerDraftStore.getState>["setDraftThreadContext"];
-  activeRootBranch: string | null;
   gitBranchSourceCwd: string | null;
   setStoreThreadError: (threadId: ThreadId, error: string | null) => void;
   queryClient: QueryClient;
@@ -102,7 +101,6 @@ export async function prepareChatSendWorkspace({
   syncServerShellSnapshot,
   clearProjectDraftThreadId,
   setDraftThreadContext,
-  activeRootBranch,
   gitBranchSourceCwd,
   setStoreThreadError,
   queryClient,
@@ -202,7 +200,7 @@ export async function prepareChatSendWorkspace({
     nextThreadEnvMode === "local" &&
     nextThreadWorktreePath === null;
   let currentActiveGitBranchForSend = currentActiveGitBranch;
-  let worktreeSourceBranch = activeRootBranch;
+  let worktreeSourceBranch: string | null = null;
 
   if (isFirstMessage && isContainerLandingProject && firstSendTarget.kind !== "current") {
     if (firstSendTarget.kind === "create-project") {
@@ -280,22 +278,25 @@ export async function prepareChatSendWorkspace({
     nextAssociatedWorktreeRef = null;
   }
 
-  // The branch query can finish just after the user chooses New worktree. Use the
-  // resolved active branch at send time instead of rejecting an otherwise valid fast send,
-  // reading the project's checkout when the chat has no base branch of its own yet.
-  if (
-    isFirstMessage &&
-    nextThreadEnvMode === "worktree" &&
-    !nextThreadWorktreePath &&
-    !nextThreadBranch
-  ) {
-    if (!worktreeSourceBranch && gitBranchSourceCwd) {
-      const gitStatus = await queryClient
-        .fetchQuery({ ...gitStatusQueryOptions(gitBranchSourceCwd), staleTime: 0 })
-        .catch(() => null);
-      worktreeSourceBranch = gitStatus?.branch ?? null;
+  const shouldCreateWorktree =
+    isFirstMessage && nextThreadEnvMode === "worktree" && !nextThreadWorktreePath;
+  if (shouldCreateWorktree) {
+    // The picker can lag behind a checkout change, or show the selected ref before
+    // branches load. Only fresh status can tell us whether to copy the source edits.
+    try {
+      const status = await queryClient.fetchQuery({
+        ...gitStatusQueryOptions(targetProjectCwdForSend),
+        staleTime: 0,
+      });
+      worktreeSourceBranch = status.branch;
+    } catch {
+      setStoreThreadError(
+        threadIdForSend,
+        "Unable to determine the current branch. Try again before sending.",
+      );
+      return false;
     }
-    nextThreadBranch = worktreeSourceBranch;
+    nextThreadBranch ??= worktreeSourceBranch;
   }
 
   // A settled local thread keeps its historical branch until the user resumes it, so the
@@ -326,15 +327,7 @@ export async function prepareChatSendWorkspace({
     }
   }
 
-  const baseBranchForWorktree =
-    isFirstMessage && nextThreadEnvMode === "worktree" && !nextThreadWorktreePath
-      ? nextThreadBranch
-      : null;
-
-  // In worktree mode, require an explicit base branch so we don't silently
-  // fall back to local execution when branch selection is missing.
-  const shouldCreateWorktree =
-    isFirstMessage && nextThreadEnvMode === "worktree" && !nextThreadWorktreePath;
+  const baseBranchForWorktree = shouldCreateWorktree ? nextThreadBranch : null;
   if (shouldCreateWorktree && !nextThreadBranch) {
     setStoreThreadError(
       threadIdForSend,

@@ -4792,7 +4792,6 @@ export default function ChatView({
     currentActiveGitBranch,
     isContainerLandingProject,
     syncServerShellSnapshot,
-    activeRootBranch,
     gitBranchSourceCwd,
     setStoreThreadError,
     queryClient,

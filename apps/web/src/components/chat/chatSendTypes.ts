@@ -100,7 +100,6 @@ export interface ChatTurnSubmissionInput {
   currentActiveGitBranch: string | null;
   isContainerLandingProject: boolean;
   syncServerShellSnapshot: ReturnType<typeof useStore.getState>["syncServerShellSnapshot"];
-  activeRootBranch: string | null;
   gitBranchSourceCwd: string | null;
   setStoreThreadError: (threadId: ThreadId, error: string | null) => void;
   queryClient: QueryClient;

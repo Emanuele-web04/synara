@@ -21,7 +21,7 @@ const project: Project = {
   scripts: [],
 };
 
-function prepare(branch: string | null, activeRootBranch: string | null, queryClient: QueryClient) {
+function prepare(branch: string | null, cachedBranch: string | null, queryClient: QueryClient) {
   return prepareChatSendWorkspace({
     activeThread: { id: threadId, branch, worktreePath: null } as Thread,
     isServerThread: false,
@@ -44,13 +44,12 @@ function prepare(branch: string | null, activeRootBranch: string | null, queryCl
     runtimeModeForSend: "full-access",
     envModeForSend: "worktree",
     resolvedThreadWorkingDirectory: null,
-    currentActiveGitBranch: activeRootBranch,
+    currentActiveGitBranch: cachedBranch,
     isContainerLandingProject: false,
     api: {} as Parameters<typeof prepareChatSendWorkspace>[0]["api"],
     syncServerShellSnapshot: vi.fn(),
     clearProjectDraftThreadId: vi.fn(),
     setDraftThreadContext: vi.fn(),
-    activeRootBranch,
     gitBranchSourceCwd: project.cwd,
     setStoreThreadError: vi.fn(),
     queryClient,
@@ -71,10 +70,48 @@ describe("preparing a new worktree chat", () => {
 
   it("does not copy checkout changes for an explicitly different branch", async () => {
     const queryClient = new QueryClient();
+    vi.spyOn(queryClient, "fetchQuery").mockResolvedValue({ branch: "main" });
 
     await expect(prepare("topic", "main", queryClient)).resolves.toMatchObject({
       baseBranchForWorktree: "topic",
       worktreeCopiesLocalChanges: false,
     });
+  });
+
+  it("uses the current checkout rather than a stale branch list for an unselected base", async () => {
+    const queryClient = new QueryClient();
+    vi.spyOn(queryClient, "fetchQuery").mockResolvedValue({ branch: "topic" });
+
+    await expect(prepare(null, "main", queryClient)).resolves.toMatchObject({
+      baseBranchForWorktree: "topic",
+      worktreeCopiesLocalChanges: true,
+    });
+  });
+
+  it("keeps an explicit base but does not copy edits from a different current checkout", async () => {
+    const queryClient = new QueryClient();
+    vi.spyOn(queryClient, "fetchQuery").mockResolvedValue({ branch: "main" });
+
+    await expect(prepare("topic", "topic", queryClient)).resolves.toMatchObject({
+      baseBranchForWorktree: "topic",
+      worktreeCopiesLocalChanges: false,
+    });
+  });
+
+  it("copies edits for an explicit current base even when the branch list has not loaded", async () => {
+    const queryClient = new QueryClient();
+    vi.spyOn(queryClient, "fetchQuery").mockResolvedValue({ branch: "main" });
+
+    await expect(prepare("main", null, queryClient)).resolves.toMatchObject({
+      baseBranchForWorktree: "main",
+      worktreeCopiesLocalChanges: true,
+    });
+  });
+
+  it("does not proceed if the checkout status is unavailable", async () => {
+    const queryClient = new QueryClient();
+    vi.spyOn(queryClient, "fetchQuery").mockRejectedValue(new Error("disconnected"));
+
+    await expect(prepare("main", "main", queryClient)).resolves.toBe(false);
   });
 });
