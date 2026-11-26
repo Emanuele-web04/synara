@@ -42,6 +42,19 @@ instance deleted after import. The browser keeps its existing local credentials 
 the server acknowledges the import. Older builds can discard this receipt metadata
 when rewriting the settings file, so replay protection depends on a supporting build.
 
+## Idle provider sessions
+
+The server checks for stale provider sessions every five minutes. Set
+`SYNARA_PROVIDER_SESSION_REAPER_MS` in the server environment to change how long
+a session must be inactive before the sweep can stop it. Use a non-negative
+whole number of milliseconds. Unset or invalid values use the 30-minute default.
+Set it to `0` to disable the sweep.
+
+The separate runtime idle timer still uses `SYNARA_PROVIDER_RUNTIME_IDLE_STOP_MS`
+and defaults to ten minutes. To turn off both idle cleanup mechanisms, set both
+environment variables to `0` before starting the server. Idle provider processes
+can then continue to hold memory until they stop for another reason.
+
 ## Crash recovery
 
 Crash recovery distinguishes previous-process turns from work started by pending

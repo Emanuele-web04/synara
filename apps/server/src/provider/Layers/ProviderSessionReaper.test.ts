@@ -7,7 +7,8 @@ import {
   TurnId,
   type OrchestrationThreadShell,
 } from "@synara/contracts";
-import { Effect, Exit, FileSystem, Layer, Option, Scope, Stream } from "effect";
+import { ConfigProvider, Effect, Exit, FileSystem, Layer, Option, Scope, Stream } from "effect";
+import { TestClock } from "effect/testing";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
@@ -30,7 +31,7 @@ import { ProviderSessionReaper } from "../Services/ProviderSessionReaper";
 import { ProviderService, type ProviderServiceShape } from "../Services/ProviderService";
 import { makeProviderServiceLive } from "./ProviderService.ts";
 import { ProviderSessionDirectoryLive } from "./ProviderSessionDirectory.ts";
-import { makeProviderSessionReaperLive } from "./ProviderSessionReaper";
+import { makeProviderSessionReaperLive, ProviderSessionReaperLive } from "./ProviderSessionReaper";
 
 const unsupported = () => Effect.die(new Error("Unsupported test call")) as never;
 
@@ -56,15 +57,18 @@ function makeThreadShell(input: {
   } as unknown as OrchestrationThreadShell;
 }
 
-function makeLayer(input: {
-  readonly threadShell: OrchestrationThreadShell;
-  readonly directory: ProviderSessionDirectoryShape;
-  readonly providerService: ProviderServiceShape;
-}) {
-  return makeProviderSessionReaperLive({
+function makeLayer(
+  input: {
+    readonly threadShell: OrchestrationThreadShell;
+    readonly directory: ProviderSessionDirectoryShape;
+    readonly providerService: ProviderServiceShape;
+  },
+  reaperLayer = makeProviderSessionReaperLive({
     inactivityThresholdMs: 1,
     sweepIntervalMs: 60_000,
-  }).pipe(
+  }),
+) {
+  return reaperLayer.pipe(
     Layer.provide(Layer.succeed(ProviderSessionDirectory, input.directory)),
     Layer.provide(Layer.succeed(ProviderService, input.providerService)),
     Layer.provide(
@@ -164,6 +168,86 @@ function makeFakeAdapter(provider: ProviderKind) {
 }
 
 describe("ProviderSessionReaperLive", () => {
+  it.each([
+    { setting: undefined, thresholdMs: 1_800_000 },
+    { setting: "", thresholdMs: 1_800_000 },
+    { setting: "-1", thresholdMs: 1_800_000 },
+    { setting: "off", thresholdMs: 1_800_000 },
+    { setting: "3600000", thresholdMs: 3_600_000 },
+    { setting: "0", thresholdMs: null },
+  ])(
+    "applies the reaper threshold with environment value $setting",
+    async ({ setting, thresholdMs }) => {
+      const threadId = ThreadId.makeUnsafe("thread-reaper-config");
+      const lastSeenAt = "2026-01-01T00:00:00.000Z";
+      const listBindings = vi.fn<ProviderSessionDirectoryShape["listBindings"]>(() =>
+        Effect.succeed([
+          {
+            threadId,
+            provider: "codex",
+            providerInstanceId: "codex",
+            status: "running",
+            lastSeenAt,
+          },
+        ]),
+      );
+      const stopRuntimeSession = vi.fn<NonNullable<ProviderServiceShape["stopRuntimeSession"]>>(
+        () => Effect.void,
+      );
+      const layer = makeLayer(
+        {
+          threadShell: makeThreadShell({ threadId, activeTurnId: null }),
+          directory: {
+            upsert: () => unsupported(),
+            getProvider: () => unsupported(),
+            getBinding: () => unsupported(),
+            remove: () => unsupported(),
+            listThreadIds: () => unsupported(),
+            listBindings,
+          },
+          providerService: makeProviderServiceStub({
+            stopSession: () => unsupported(),
+            stopRuntimeSession,
+          }),
+        },
+        ProviderSessionReaperLive,
+      );
+
+      await Effect.gen(function* () {
+        const sweepIntervalMs = 300_000;
+        const boundary = Date.parse(lastSeenAt) + (thresholdMs ?? 1_800_000);
+        yield* TestClock.setTime(boundary - sweepIntervalMs);
+        const reaper = yield* ProviderSessionReaper;
+        yield* reaper.start();
+        yield* TestClock.adjust(sweepIntervalMs - 1);
+        expect(stopRuntimeSession).not.toHaveBeenCalled();
+
+        yield* TestClock.adjust(1);
+        if (thresholdMs === null) {
+          expect(listBindings).not.toHaveBeenCalled();
+          expect(stopRuntimeSession).not.toHaveBeenCalled();
+        } else {
+          expect(stopRuntimeSession).toHaveBeenCalledExactlyOnceWith({
+            threadId,
+            onlyIfIdleSince: lastSeenAt,
+          });
+        }
+      }).pipe(
+        Effect.provide(layer),
+        Effect.provide(
+          ConfigProvider.layer(
+            ConfigProvider.fromEnv({
+              env: setting === undefined ? {} : { SYNARA_PROVIDER_SESSION_REAPER_MS: setting },
+            }),
+          ),
+        ),
+        Effect.provide(TestClock.layer()),
+        Effect.scoped,
+        Effect.runPromise,
+      );
+    },
+  );
+
   it("skips stale sessions with active turns", async () => {
     const threadId = ThreadId.makeUnsafe("thread-reaper-active");
     const turnId = TurnId.makeUnsafe("turn-reaper-active");
