@@ -13342,7 +13342,14 @@ describe("ChatView transcript geometry (full app)", () => {
       viewport: DEFAULT_VIEWPORT,
       snapshot: { ...snapshot, threads: [{ ...snapshot.threads[0]!, session: null }] },
     });
-    const background = () => document.querySelector("[data-empty-chat-backdrop]");
+    // The shell carries its own instance of the backdrop as the window's atmosphere, so the
+    // empty landing's copy is the one outside it.
+    const backdrop = (root: ParentNode = document) =>
+      [...root.querySelectorAll("[data-empty-chat-backdrop]")].find(
+        (el) => !el.closest("[data-shell-atmosphere]"),
+      ) ?? null;
+    const shellAtmosphere = () => document.querySelector("[data-shell-atmosphere]");
+    const background = () => backdrop();
     const styleOf = () => background()?.getAttribute("data-empty-chat-backdrop") ?? null;
     const storedSettings = () => JSON.parse(localStorage.getItem("synara:app-settings:v1") ?? "{}");
     const option = (name: string) => page.getByRole("radio", { name, exact: true });
@@ -13353,9 +13360,9 @@ describe("ChatView transcript geometry (full app)", () => {
     try {
       await expect.poll(styleOf).toBe("temple");
       const trayControls = () =>
-        document.querySelector(
-          "[data-empty-chat-backdrop-host] [data-composer-tray-host] [data-empty-landing-controls]",
-        );
+        [...document.querySelectorAll("[data-empty-chat-backdrop-host]")]
+          .find((host) => !host.closest("[data-shell-atmosphere]"))
+          ?.querySelector("[data-composer-tray-host] [data-empty-landing-controls]") ?? null;
       await expect.poll(trayControls, { timeout: 3_000 }).not.toBeNull();
       expect(getComputedStyle(trayControls()!).textShadow).toBe("none");
       await goToSettings();
@@ -13378,6 +13385,8 @@ describe("ChatView transcript geometry (full app)", () => {
       await expect.poll(styleOf).toBe("temple");
       useTerminalStateStore.getState().openTerminalThreadPage(THREAD_ID, { terminalOnly: false });
       await expect.poll(background).toBeNull();
+      // The atmosphere on the shell is not the empty landing's backdrop and stays.
+      expect(shellAtmosphere()).not.toBeNull();
       useTerminalStateStore.getState().setTerminalWorkspaceTab(THREAD_ID, "chat");
       await expect.poll(background).not.toBeNull();
     } finally {
