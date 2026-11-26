@@ -122,6 +122,9 @@ function mergedWorktreeCandidate(input: {
 }): Effect.Effect<ManagedWorktreeRemovalCandidate | null, Error> {
   return Effect.gen(function* () {
     const owners = input.ownersByPath.get(input.entry.path) ?? [];
+    // Deleted owners still count: their provider work may be settling, and the
+    // lifecycle fence does not stop calls that are already running.
+    if (owners.some((thread) => thread.busy !== false)) return null;
     const liveOwners = owners.filter((thread) => !isDeletedManagedWorktreeThread(thread));
     if (
       liveOwners.length === 0 ||
@@ -604,6 +607,8 @@ export function pruneArchivedManagedWorktrees(input: {
   readonly git: GitCoreShape;
   readonly mergeCleanup?: ManagedWorktreeMergeCleanup;
   readonly readThreads?: () => Effect.Effect<ReadonlyArray<ManagedWorktreeThreadRef>, Error>;
+  /** Deletion cleanup runs before the owner row is purged. */
+  readonly onlyDeletedThreadId?: string;
 }): Effect.Effect<ReadonlyArray<ServerManagedWorktree>, Error> {
   return Effect.gen(function* () {
     const inventory = yield* listManagedWorktrees(input);
@@ -645,7 +650,13 @@ export function pruneArchivedManagedWorktrees(input: {
         canonicalByRecordedPath,
       }),
     ];
-    if (mergeCleanup && (yield* mergeCleanup.enabled)) {
+    const scopedCandidates = input.onlyDeletedThreadId
+      ? removalCandidates.filter(
+          (candidate) =>
+            candidate.reason === "deleted" && candidate.thread.id === input.onlyDeletedThreadId,
+        )
+      : removalCandidates;
+    if (!input.onlyDeletedThreadId && mergeCleanup && (yield* mergeCleanup.enabled)) {
       for (const entry of inventory) {
         if (removalCandidates.some((candidate) => candidate.entry.path === entry.path)) continue;
         const candidate = yield* mergedWorktreeCandidate({
@@ -658,7 +669,7 @@ export function pruneArchivedManagedWorktrees(input: {
       }
     }
     const guardedCandidates: ManagedWorktreeRemovalCandidate[] = [];
-    for (const candidate of removalCandidates) {
+    for (const candidate of scopedCandidates) {
       if (candidate.thread.busy !== false) continue;
       if (mergeCleanup && candidate.reason !== "deleted") {
         const protectedThread = yield* mergeCleanup.isProtected(candidate.thread.id).pipe(
@@ -679,6 +690,9 @@ export function pruneArchivedManagedWorktrees(input: {
         const canonical = yield* canonicalizeThreadWorktreePaths(threads);
         const ownersByPath = indexWorktreeOwners(threads, canonical);
         const owners = ownersByPath.get(candidate.entry.path) ?? [];
+        // Every owner, deleted included, must be explicitly idle before a shared
+        // checkout is removed. A busy deleted owner can still be running work.
+        if (owners.some((thread) => thread.busy !== false)) return false;
         if (owners.some(isActiveManagedWorktreeThread)) return false;
         const owner = threads.find((thread) => thread.id === candidate.thread.id);
         if (!owner) return false;
@@ -763,6 +777,7 @@ export function pruneProjectedArchivedManagedWorktrees(input: {
   readonly snapshotQuery: ProjectionSnapshotQueryShape;
   readonly git: GitCoreShape;
   readonly mergeCleanup?: ManagedWorktreeMergeCleanup;
+  readonly onlyDeletedThreadId?: string;
 }): Effect.Effect<ReadonlyArray<ServerManagedWorktree>, Error> {
   return Effect.gen(function* () {
     // Deliberately not the shell snapshot: it hides soft-deleted threads, and a
@@ -775,6 +790,7 @@ export function pruneProjectedArchivedManagedWorktrees(input: {
       git: input.git,
       readThreads: input.snapshotQuery.listManagedWorktreeThreads,
       ...(input.mergeCleanup ? { mergeCleanup: input.mergeCleanup } : {}),
+      ...(input.onlyDeletedThreadId ? { onlyDeletedThreadId: input.onlyDeletedThreadId } : {}),
     });
   });
 }

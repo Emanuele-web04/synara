@@ -173,6 +173,7 @@ describe("managed worktrees", () => {
     "closed",
     "lookup-failed",
     "shared-unmerged",
+    "shared-busy-deleted",
     "protected",
     "detached",
     "restored-during-snapshot",
@@ -202,6 +203,18 @@ describe("managed worktrees", () => {
       thread,
       ...(scenario === "shared-unmerged"
         ? [{ ...thread, id: "sibling", lastKnownPr: { ...pr, url: pr.url + "2" } }]
+        : []),
+      ...(scenario === "shared-busy-deleted"
+        ? [
+            {
+              ...thread,
+              id: "deleted-sibling",
+              archivedAt: null,
+              deletedAt: "2026-10-09T00:00:00Z",
+              lastKnownPr: null,
+              busy: true,
+            },
+          ]
         : []),
     ];
     let restored = false;
@@ -454,6 +467,50 @@ describe("managed worktrees", () => {
     );
 
     expect(removals).toEqual([paths[1]]);
+  });
+
+  it("scopes deletion cleanup to the requested deleted owner", async () => {
+    const { root, paths } = await makeManagedRoot(3);
+    const removals: string[] = [];
+    const git = makeGit({ removals });
+    const threads = [
+      {
+        id: "deleted-a",
+        worktreePath: paths[0],
+        associatedWorktreePath: paths[0],
+        archivedAt: null,
+        deletedAt: "2026-08-01T00:00:00.000Z",
+        busy: false,
+      },
+      {
+        id: "deleted-b",
+        worktreePath: paths[1],
+        associatedWorktreePath: paths[1],
+        archivedAt: null,
+        deletedAt: "2026-08-02T00:00:00.000Z",
+        busy: false,
+      },
+      {
+        id: "archived",
+        worktreePath: paths[2],
+        associatedWorktreePath: paths[2],
+        archivedAt: "2026-08-03T00:00:00.000Z",
+        deletedAt: null,
+        busy: false,
+      },
+    ] as unknown as OrchestrationThread[];
+
+    await Effect.runPromise(
+      pruneArchivedManagedWorktrees({
+        worktreesDir: root,
+        snapshotsDir: path.join(root, "snapshots"),
+        threads,
+        git,
+        onlyDeletedThreadId: "deleted-a",
+      }),
+    );
+
+    expect(removals).toEqual([paths[0]]);
   });
 
   it("removes the emptied per-worktree parent after an automatic removal", async () => {

@@ -1223,12 +1223,13 @@ const makeWsRpcHandlersLayer = () =>
       const pruneInFlight = yield* Ref.make(false);
       const startPruneManagedWorktrees = Effect.gen(function* () {
         const shouldStart = yield* Ref.modify(pruneInFlight, (inFlight) => [!inFlight, true]);
-        if (!shouldStart) return;
+        if (!shouldStart) return false;
         yield* pruneManagedWorktrees.pipe(
           Effect.ensuring(Ref.set(pruneInFlight, false)),
           Effect.forkDetach,
           Effect.asVoid,
         );
+        return true;
       });
       const getOrchestrationHighWaterSequence = orchestrationEngine.getEventHighWaterSequence.pipe(
         Effect.mapError((cause) =>
@@ -2788,12 +2789,14 @@ const makeWsRpcHandlersLayer = () =>
             Effect.gen(function* () {
               // Inventory reads stay fast: the merge sweep does GitHub lookups and
               // runs detached so opening the panel never waits on the network.
-              yield* startPruneManagedWorktrees;
+              const started = yield* startPruneManagedWorktrees;
+              const cleanupPending = started || (yield* Ref.get(pruneInFlight));
               return {
                 worktrees: yield* listManagedWorktrees({
                   worktreesDir: config.worktreesDir,
                   git,
                 }),
+                ...(cleanupPending ? { cleanupPending: true } : {}),
               };
             }),
             "Failed to list managed worktrees",

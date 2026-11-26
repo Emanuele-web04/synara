@@ -143,6 +143,24 @@ const make = Effect.gen(function* () {
       );
     });
 
+  const pruneDeletedThreadWorktreeBeforePurge = (threadId: string) =>
+    pruneProjectedArchivedManagedWorktrees({
+      ...(mergeCleanup ? { mergeCleanup } : {}),
+      homeDir: serverConfig.homeDir,
+      worktreesDir: serverConfig.worktreesDir,
+      snapshotQuery: projectionSnapshotQuery,
+      git,
+      onlyDeletedThreadId: threadId,
+    }).pipe(
+      Effect.asVoid,
+      Effect.catch((error) =>
+        Effect.logWarning("thread deletion cleanup skipped managed worktree reclaim", {
+          threadId,
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      ),
+    );
+
   const refreshCommandReadModelAfterPurge = (threadId: string) =>
     orchestrationEngine.refreshCommandReadModel().pipe(
       Effect.asVoid,
@@ -281,12 +299,10 @@ const make = Effect.gen(function* () {
     const { threadId } = event.payload;
     yield* detachThreadDevice(threadId);
     const cleanupSucceeded = yield* cleanupThreadBeforePurge(threadId);
-    // Reclaim while the soft-deleted projection row still names the worktree.
-    // Dirty managed worktrees are snapped and left with a warning (no force).
-    yield* pruneManagedWorktreesAfterLifecycle({
-      eventType: event.type,
-      threadId,
-    });
+    // Reclaim the deleted owner's checkout while its soft-deleted projection row
+    // still names it. This pass is synchronous and never calls GitHub; the full
+    // merged/retention sweep runs detached after the purge.
+    yield* pruneDeletedThreadWorktreeBeforePurge(threadId);
     if (!cleanupSucceeded) {
       yield* Effect.logWarning("thread deletion cleanup deferred stats archive purge", {
         threadId,
@@ -294,6 +310,10 @@ const make = Effect.gen(function* () {
       return;
     }
     yield* purgeThreadData(event);
+    yield* pruneManagedWorktreesAfterLifecycle({
+      eventType: event.type,
+      threadId,
+    });
   });
 
   const processLifecycleEvent = (event: ThreadLifecycleCleanupEvent) =>

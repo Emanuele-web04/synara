@@ -252,6 +252,8 @@ export type ServerManagedWorktree = typeof ServerManagedWorktree.Type;
 
 export const ServerListWorktreesResult = Schema.Struct({
   worktrees: Schema.Array(ServerManagedWorktree),
+  /** A detached cleanup sweep is still running; clients can refresh again shortly. */
+  cleanupPending: Schema.optional(Schema.Boolean),
 });
 export type ServerListWorktreesResult = typeof ServerListWorktreesResult.Type;
 

@@ -412,6 +412,9 @@ export function serverWorktreesQueryOptions() {
       return api.server.listWorktrees();
     },
     staleTime: 30_000,
+    // The list returns before the detached cleanup finishes; poll until the
+    // server reports the sweep is done so removed checkouts disappear.
+    refetchInterval: (query) => (query.state.data?.cleanupPending ? 2_000 : false),
     refetchOnWindowFocus: true,
     refetchOnReconnect: true,
   });
