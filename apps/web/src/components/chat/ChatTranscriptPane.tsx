@@ -21,7 +21,12 @@ import {
   type TouchEventHandler,
   type WheelEventHandler,
 } from "react";
-import { type MessageTrailAudioSource, type TimestampFormat } from "../../appSettings";
+import {
+  DEFAULT_TRANSCRIPT_DETAIL,
+  type MessageTrailAudioSource,
+  type TimestampFormat,
+  type TranscriptDetail,
+} from "../../appSettings";
 import { type TurnDiffSummary, type WorktreeSetupSnapshot } from "../../types";
 import { ArrowDownIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
@@ -62,7 +67,7 @@ interface ChatTranscriptPaneProps {
   /** The newest card with subagents at work; drives the floating "N running" chip. */
   runningSubagentRun?: { entryId: string; runningCount: number } | null;
   subagentThread?: ComponentProps<typeof MessagesTimeline>["subagentThread"];
-  collapseFinishedTurns?: boolean;
+  transcriptDetail?: TranscriptDetail;
   activeTurnStartedAt: string | null;
   agentActivityDetail?: AgentActivityDetail | null;
   contentInsetRightPx?: ComponentProps<typeof MessagesTimeline>["contentInsetRightPx"];
@@ -171,7 +176,7 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
   subagentRun,
   runningSubagentRun,
   subagentThread,
-  collapseFinishedTurns,
+  transcriptDetail,
   activeTurnStartedAt,
   agentActivityDetail,
   contentInsetRightPx,
@@ -418,7 +423,7 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
               activeTurnId={activeTurnId ?? null}
               activeTurnInProgress={activeTurnInProgress}
               {...(liveSubagentRunEntryIds ? { liveSubagentRunEntryIds } : {})}
-              collapseFinishedTurns={collapseFinishedTurns !== false}
+              transcriptDetail={transcriptDetail ?? DEFAULT_TRANSCRIPT_DETAIL}
               activeTurnStartedAt={activeTurnStartedAt}
               listRef={listRef}
               {...(timelineControllerRef ? { controllerRef: timelineControllerRef } : {})}

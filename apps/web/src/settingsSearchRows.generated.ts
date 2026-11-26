@@ -259,10 +259,10 @@ export const GENERATED_SETTINGS_SEARCH_ROWS: readonly GeneratedSettingsSearchRow
     description: "settings:showTokenByTokenOutputWhileAResponseIs",
   },
   {
-    target: "setting-fold-finished-turns",
+    target: "setting-transcript-detail",
     section: "behavior",
-    title: "settings:foldFinishedTurns",
-    description: "settings:hideAFinishedTurnSToolCallsAndIntermediate2",
+    title: "settings:transcriptDetail",
+    description: "settings:chooseHowMuchOfEachTurnSToolCallsAnd",
   },
   {
     target: "setting-move-sent-messages-to-top",

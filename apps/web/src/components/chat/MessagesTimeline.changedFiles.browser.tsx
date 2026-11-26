@@ -10,6 +10,7 @@ import { render } from "vitest-browser-react";
 
 import type { TimelineEntry } from "../../session-logic";
 import { MessagesTimeline } from "./MessagesTimeline";
+import { createTimelineHost } from "./MessagesTimeline.testHost";
 
 const ASSISTANT_MESSAGE_ID = MessageId.makeUnsafe("changed-files-assistant");
 const VISIBLE_FILE_PATHS = Array.from(
@@ -84,12 +85,8 @@ function ChangedFilesTimeline({
   );
 }
 
-function createTimelineHost(): HTMLDivElement {
-  const host = document.createElement("div");
-  host.style.cssText = "display:flex;width:700px;height:520px;overflow:hidden;";
-  document.body.append(host);
-  return host;
-}
+const timelineHost = () =>
+  createTimelineHost("display:flex;width:700px;height:520px;overflow:hidden;");
 
 describe("MessagesTimeline changed files", () => {
   afterEach(() => {
@@ -97,7 +94,7 @@ describe("MessagesTimeline changed files", () => {
   });
 
   it("does not mount overflow rows until the user expands them", async () => {
-    const host = createTimelineHost();
+    const host = timelineHost();
     const screen = await render(<ChangedFilesTimeline />, { container: host });
 
     try {
@@ -129,7 +126,7 @@ describe("MessagesTimeline changed files", () => {
   });
 
   it("keeps two overflow rows mounted without a trivial expansion", async () => {
-    const host = createTimelineHost();
+    const host = timelineHost();
     const overflowFilePaths = OVERFLOW_FILE_PATHS.slice(0, 2);
     const screen = await render(<ChangedFilesTimeline overflowFilePaths={overflowFilePaths} />, {
       container: host,

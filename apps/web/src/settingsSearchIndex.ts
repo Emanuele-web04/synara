@@ -155,7 +155,7 @@ export const ROW_EXTRA_KEYWORDS: Readonly<Record<string, readonly string[]>> = {
   "setting-follow-up-behavior": ["settings:chooseWhetherMessagesSentDuringAnActiveTurnWait"],
   "setting-enter-while-dictating": ["settings:chooseWhatEnterDoesWhileAVoiceNoteIs2"],
   "setting-assistant-output": ["settings:showTokenByTokenOutputWhileAResponseIs2"],
-  "setting-fold-finished-turns": ["settings:hideAFinishedTurnSToolCallsAndIntermediate"],
+  "setting-transcript-detail": ["settings:chooseHowMuchOfEachTurnSToolCallsAnd"],
   "setting-effort-slider": ["settings:showReasoningEffortAsASliderInTheComposer"],
   "setting-composer-suggestions": ["settings:showAPredictedNextMessageInTheEmptyComposerAfter"],
   "setting-automatically-open-simulator": [

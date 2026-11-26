@@ -3,7 +3,6 @@
 // Layer: Chat presentation helpers
 // Exports: agent activity detection, formatting, and timeline compaction
 
-import type { ProviderKind } from "@synara/contracts";
 import { normalizeCompactToolLabel } from "../../lib/toolCallLabel";
 import type { WorkLogEntry } from "../../session-logic";
 
@@ -36,8 +35,13 @@ function subagentProgressTitle(entry: Pick<WorkLogEntry, "subagentProgress">): s
 }
 
 export function isReasoningUpdateWorkEntry(
-  entry: Pick<WorkLogEntry, "label" | "toolTitle">,
+  entry: Pick<WorkLogEntry, "label" | "toolTitle"> & Pick<Partial<WorkLogEntry>, "reasoningStatus">,
 ): boolean {
+  // Activities that carry their own reasoning item type are reasoning by
+  // construction; the heading match only rescues older stored rows.
+  if (entry.reasoningStatus !== undefined) {
+    return true;
+  }
   const heading = normalizeWorkText(entry.toolTitle ?? entry.label);
   return (
     heading === "reasoning" ||
@@ -148,7 +152,6 @@ export function formatAgentActivityEntrySummary(entry: WorkLogEntry): string | n
 
 export function deriveAgentActivityTimelineState(
   entries: ReadonlyArray<WorkLogEntry>,
-  provider?: ProviderKind,
 ): AgentActivityTimelineState {
   const timelineWorkEntries: WorkLogEntry[] = [];
   const detailById = new Map<string, AgentActivityDetail>();
@@ -274,7 +277,6 @@ export function deriveAgentActivityTimelineState(
           toolTitle: "Reasoning trace",
           preview: reasoningPreview,
           tone: "tool" as const,
-          ...(provider === "codex" ? { codexReasoning: true as const } : {}),
         }
       : entry;
     timelineWorkEntries.push(displayEntry);

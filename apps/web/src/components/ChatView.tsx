@@ -1685,8 +1685,8 @@ export default function ChatView({
   );
   const [openAgentActivityId, setOpenAgentActivityId] = useState<string | null>(null);
   const agentActivityTimelineState = useMemo(
-    () => deriveAgentActivityTimelineState(workLogEntries, threadProvider),
-    [workLogEntries, threadProvider],
+    () => deriveAgentActivityTimelineState(workLogEntries),
+    [workLogEntries],
   );
   const openAgentActivityDetail = openAgentActivityId
     ? (agentActivityTimelineState.detailById.get(openAgentActivityId) ?? null)
@@ -7290,7 +7290,7 @@ export default function ChatView({
                     // scrolls to these agents; one indicator is enough.
                     runningSubagentRun={runningAgents.count > 0 ? null : runningSubagentRun}
                     subagentThread={subagentThread}
-                    collapseFinishedTurns={settings.collapseFinishedTurns}
+                    transcriptDetail={settings.transcriptDetail}
                     activeTurnStartedAt={activeWorkStartedAt}
                     listRef={legendListRef}
                     timelineControllerRef={timelineControllerRef}

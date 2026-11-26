@@ -350,6 +350,25 @@ describe("isGitTextGenerationSettingsDirty", () => {
   });
 });
 
+describe("transcript detail level", () => {
+  const stored = (raw: Record<string, unknown>) =>
+    normalizeStoredAppSettings(Schema.decodeUnknownSync(AppSettingsSchema)(raw));
+
+  it("defaults to the standard level", () => {
+    expect(stored({}).transcriptDetail).toBe("standard");
+  });
+
+  it('migrates a saved "keep finished turns expanded" preference to the full level', () => {
+    expect(stored({ collapseFinishedTurns: false }).transcriptDetail).toBe("full");
+    expect(stored({ collapseFinishedTurns: false })).not.toHaveProperty("collapseFinishedTurns");
+  });
+
+  it("keeps an explicit level over the legacy boolean", () => {
+    const settings = stored({ collapseFinishedTurns: false, transcriptDetail: "messages" });
+    expect(settings.transcriptDetail).toBe("messages");
+  });
+});
+
 describe("removed settings", () => {
   it("ignores a code review list width stored before widths became fractions", () => {
     const decoded = Schema.decodeUnknownSync(AppSettingsSchema)({
