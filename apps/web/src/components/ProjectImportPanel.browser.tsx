@@ -86,7 +86,9 @@ describe("project import panel", () => {
     await render(<ProjectImportPanel onBusyChange={vi.fn()} onResult={onResult} />);
     expect(api.listProjectImports).not.toHaveBeenCalled();
     await page.getByRole("button", { name: "Find projects" }).click();
-    expect(api.listProjectImports).toHaveBeenCalledWith({ providers: ["codex", "claudeAgent"] });
+    expect(api.listProjectImports).toHaveBeenCalledWith({
+      providers: ["codex", "claudeAgent", "devin"],
+    });
     await expect.element(page.getByRole("checkbox", { name: "Select Synara" })).toBeChecked();
     await page.getByRole("button", { name: "Remove all" }).click();
     await expect.element(page.getByRole("button", { name: "Import selected" })).toBeDisabled();
