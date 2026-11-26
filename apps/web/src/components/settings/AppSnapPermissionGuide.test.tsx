@@ -30,17 +30,15 @@ describe("AppSnapPermissionGuide", () => {
     expect(renderGuide("accessibility", "26.5.1")).toContain("Open Accessibility settings");
   });
 
-  it("names the second page where 27.3 splits the grant, and only there", () => {
-    expect(renderGuide("accessibility", "27.0.1")).not.toContain(
-      "System & App Protection Override",
-    );
+  it("directs desktop control to the override pane and keeps app access limited from 27.3", () => {
     expect(renderGuide("accessibility", "27.2.9")).not.toContain(
-      "System & App Protection Override",
+      "System &amp; App Protection Override",
     );
-    // Static markup escapes the ampersand in the page's own title.
-    expect(renderGuide("accessibility", "27.3.1")).toContain(
-      "look for it under System &amp; App Protection Override",
-    );
+    const guide = renderGuide("accessibility", "27.3.1");
+    expect(guide).toContain("Open Privacy &amp; Security settings");
+    expect(guide).toContain("open System &amp; App Protection Override");
+    expect(guide).toContain("Choose Apps and select only the apps Synara should control");
+    expect(guide).not.toContain("Open Accessibility settings");
   });
 
   it("asks for the list's own add control, never a drag", () => {

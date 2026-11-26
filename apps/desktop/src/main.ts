@@ -369,7 +369,7 @@ import { AUDIO_TRAIL_BETA_FEATURE, isBetaFeatureEnabled } from "@synara/shared/b
 import { hardenBrowserAnnotationWebviewPreferences } from "./browserAnnotations/webviewSecurity";
 import { LOCAL_HTML_PREVIEW_SCHEME } from "./localHtmlPreviewProtocol";
 import {
-  APP_SNAP_SETTINGS_PANE_URLS,
+  resolveAppSnapSettingsPaneUrl,
   registerAppSnapIpcHandlers,
   sendAppSnapCaptured,
   sendAppSnapError,
@@ -2258,8 +2258,8 @@ function initializeDesktopAppSnap(): void {
     appBundlePath: resolveAppSnapAppBundlePath(),
     shortcutRegistry: globalShortcut,
     openSettingsPane: (pane) => {
-      const paneUrl = APP_SNAP_SETTINGS_PANE_URLS[pane];
-      if (paneUrl) void shell.openExternal(paneUrl).catch(() => undefined);
+      const paneUrl = resolveAppSnapSettingsPaneUrl(pane, process.getSystemVersion());
+      void shell.openExternal(paneUrl).catch(() => undefined);
     },
     // Best effort: quit System Settings after a permission setup session lands
     // every grant, so the user is not left staring at a pane they are done with.
@@ -5931,8 +5931,7 @@ function registerIpcHandlers(): void {
   if (appSnapManager) {
     registerAppSnapIpcHandlers(ipcMain, appSnapManager, {
       openPermissionSettingsPane: (pane) => {
-        const paneUrl = APP_SNAP_SETTINGS_PANE_URLS[pane];
-        if (!paneUrl) return Promise.resolve(false);
+        const paneUrl = resolveAppSnapSettingsPaneUrl(pane, process.getSystemVersion());
         return shell
           .openExternal(paneUrl)
           .then(() => true)

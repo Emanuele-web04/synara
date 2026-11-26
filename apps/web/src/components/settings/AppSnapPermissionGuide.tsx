@@ -1,13 +1,12 @@
 // FILE: AppSnapPermissionGuide.tsx
 // Purpose: Guided macOS permission setup shared by AppSnap and Computer control — deep-links
-//          the exact System Settings pane and explains granting access to this installed build.
+//          System Settings and explains granting access to this installed build.
 // Layer: Settings UI component
 
 import type { DesktopAppSnapSettingsPane } from "@synara/contracts";
 import {
   computerPermissionForPane,
-  computerPermissionPaneMessageKey,
-  computerPermissionSplitPaneMessageKey,
+  computerPermissionPaneKey,
 } from "@synara/shared/computerGrants";
 
 import { Button } from "~/components/ui/button";
@@ -27,10 +26,9 @@ export function AppSnapPermissionGuide(props: {
 
   const app = props.appDisplayName;
   const permission = computerPermissionForPane(props.pane);
-  const paneLabel = t(computerPermissionPaneMessageKey(permission, props.osVersion));
-  // One deep link opens one pane, so where a release split the grant across two
-  // pages the second is named in the step that follows.
-  const splitPaneLabel = computerPermissionSplitPaneMessageKey(permission, props.osVersion);
+  const paneKey = computerPermissionPaneKey(permission, props.osVersion);
+  const paneLabel = t(`settings:${paneKey}`);
+  const opensPrivacySettings = paneKey === "systemAndAppProtectionOverride";
   const steps = [
     <Button
       key="open-settings"
@@ -39,12 +37,15 @@ export function AppSnapPermissionGuide(props: {
       variant="outline"
       onClick={props.onOpenSettings}
     >
-      {t("settings:openSettings", { value0: paneLabel })}
+      {opensPrivacySettings
+        ? t("settings:permissionGuideOpenPrivacySettings")
+        : t("settings:openSettings", { value0: paneLabel })}
     </Button>,
+    ...(opensPrivacySettings
+      ? [t("settings:permissionGuideSelectPane", { value0: paneLabel })]
+      : []),
     t("settings:permissionGuideEnableInstalledApp", { app }),
-    ...(splitPaneLabel === null
-      ? []
-      : [t("settings:permissionGuideSplitGrant", { app, value0: t(splitPaneLabel) })]),
+    ...(opensPrivacySettings ? [t("settings:permissionGuideChooseApps", { app })] : []),
     t("settings:permissionGuideCompleteAuthentication"),
   ];
 

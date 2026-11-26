@@ -81,6 +81,7 @@ export function computerGrantsBlockControl(permissions: readonly ComputerPermiss
 export type ComputerPermissionPaneKey =
   | "accessibility"
   | "deviceControlAndDataAccess"
+  | "systemAndAppProtectionOverride"
   | "screenRecording"
   | "screenAndSystemAudioRecording"
   | "inputMonitoring";
@@ -112,20 +113,7 @@ function macOsVersion(version: string | null | undefined): { major: number; mino
   return { major, minor };
 }
 
-/**
- * Which page holds a grant on this macOS, so a surface can name the page the
- * user has to open instead of the page an older version had.
- *
- * Thresholds come from the pages and from Apple's notes: macOS 27.0.1 opens
- * "Device Control and Data Access" for `Privacy_Accessibility`, and the
- * November 2026 notes say 27.3 splits that page into "System & App Protection
- * Override" and "Accessibility" — the latter is the grant's own name, and it is
- * the one this answers with from 27.3 on because a deep link opens one pane;
- * `computerPermissionSplitPaneMessageKey` names the sibling. Sequoia renamed
- * screen recording; input monitoring has never moved. A null version keeps the
- * pre-rename names, the only fallback that is a real page on some supported
- * macOS.
- */
+/** Which System Settings page to use for Synara's grant on this macOS. */
 export function computerPermissionPaneKey(
   permission: ComputerPermission,
   osVersion?: string | null,
@@ -133,32 +121,18 @@ export function computerPermissionPaneKey(
   const version = macOsVersion(osVersion) ?? { major: 0, minor: 0 };
   switch (permission) {
     case "accessibility":
-      return version.major === 27 && version.minor < 3
-        ? "deviceControlAndDataAccess"
-        : "accessibility";
+      // From 27.3, Accessibility is for assistive technology. Apple DTS directs
+      // other products using these facilities to System & App Protection Override:
+      // https://developer.apple.com/forums/thread/857997
+      if (version.major > 27 || (version.major === 27 && version.minor >= 3)) {
+        return "systemAndAppProtectionOverride";
+      }
+      return version.major === 27 ? "deviceControlAndDataAccess" : "accessibility";
     case "screenRecording":
       return version.major >= 15 ? "screenAndSystemAudioRecording" : "screenRecording";
     case "inputMonitoring":
       return "inputMonitoring";
   }
-}
-
-/**
- * The second page a split leaves the same grant on, or null where one page holds
- * it. macOS 27.3 splits Device Control and Data Access into "System & App
- * Protection Override" and "Accessibility", and Apple's November 2026 note does
- * not say which half files a given app, so copy that names one page for 27.3 on
- * has to name the other as well. Both titles come from that announcement: no
- * 27.3 build was available to read them off a window.
- */
-export function computerPermissionSplitPaneMessageKey(
-  permission: ComputerPermission,
-  osVersion?: string | null,
-): string | null {
-  const version = macOsVersion(osVersion);
-  if (permission !== "accessibility" || version === null) return null;
-  const split = version.major > 27 || (version.major === 27 && version.minor >= 3);
-  return split ? "settings:systemAndAppProtectionOverride" : null;
 }
 
 /** The `settings:` message a page's name is translated by; `settings:<key>`. */

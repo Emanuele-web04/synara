@@ -4,6 +4,7 @@
 // Depends on: Electron IPC and DesktopAppSnapManager.
 
 import type { IpcMain, WebContents } from "electron";
+import { computerPermissionPaneKey } from "@synara/shared/computerGrants";
 import type {
   DesktopAppSnapCapture,
   DesktopAppSnapErrorEvent,
@@ -19,12 +20,24 @@ import { APPSNAP_IPC_CHANNELS } from "./ipcChannels";
 const MAX_MACOS_WINDOW_ID = 0xffff_ffff;
 const MAX_PERMISSION_KINDS = 8;
 
-export const APP_SNAP_SETTINGS_PANE_URLS: Record<DesktopAppSnapSettingsPane, string> = {
+const APP_SNAP_SETTINGS_PANE_URLS: Record<DesktopAppSnapSettingsPane, string> = {
   accessibility: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
   "input-monitoring": "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent",
   "screen-recording":
     "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
 };
+
+export function resolveAppSnapSettingsPaneUrl(
+  pane: DesktopAppSnapSettingsPane,
+  osVersion: string,
+): string {
+  // On 27.3+, do not use the obsolete Accessibility sub-pane URL for Synara.
+  // Open the parent settings page; the guide names the pane to select.
+  return pane === "accessibility" &&
+    computerPermissionPaneKey("accessibility", osVersion) === "systemAndAppProtectionOverride"
+    ? "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension"
+    : APP_SNAP_SETTINGS_PANE_URLS[pane];
+}
 
 export interface AppSnapIpcHandlerOptions {
   openPermissionSettingsPane: (pane: DesktopAppSnapSettingsPane) => Promise<boolean>;

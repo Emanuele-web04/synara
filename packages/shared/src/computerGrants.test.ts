@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import {
   computerPermissionPaneKey,
   computerPermissionPaneMessageKey,
-  computerPermissionSplitPaneMessageKey,
   computerPermissionSetupMessage,
   computerGrantsBlockControl,
   computerStaleGrantAdvice,
@@ -141,37 +140,16 @@ describe("naming the System Settings pane a grant lives in", () => {
     }
   });
 
-  it("names the sibling page from 27.3 on, where one release splits the grant in two", () => {
-    // Apple's 16 November 2026 note splits Device Control and Data Access into
-    // "System & App Protection Override" and "Accessibility" and does not say
-    // which half files an app. Both titles come from that note: no 27.3 build
-    // was available to read them off a window.
-    expect(computerPermissionSplitPaneMessageKey("accessibility", "27.2")).toBeNull();
-    for (const version of ["27.3", "27.3.1", "27.3.2", "27.4", "28.0"]) {
-      expect(computerPermissionSplitPaneMessageKey("accessibility", version)).toBe(
+  it("routes Synara's desktop control to System & App Protection Override from 27.3", () => {
+    expect(computerPermissionPaneKey("accessibility", "27.2")).toBe("deviceControlAndDataAccess");
+    for (const version of ["27.3", "27.3.1", "27.4", "28.0"]) {
+      expect(computerPermissionPaneMessageKey("accessibility", version)).toBe(
         "settings:systemAndAppProtectionOverride",
       );
     }
-    expect(computerPermissionSplitPaneMessageKey("accessibility", undefined)).toBeNull();
-    expect(computerPermissionSplitPaneMessageKey("screenRecording", "27.3")).toBeNull();
-  });
-
-  it("keeps grant names for prose about the grant, whatever macOS calls the page", () => {
-    // "macOS may ask to allow Screen Recording" describes the request, and no
-    // prompt has ever been titled after the page.
-    expect(computerPermissionPaneMessageKey("accessibility", "27.0.1")).toBe(
-      "settings:deviceControlAndDataAccess",
+    expect(computerPermissionPaneKey("screenRecording", "27.3")).toBe(
+      "screenAndSystemAudioRecording",
     );
-  });
-
-  it("reads the minor version, because a page has been renamed mid-major", () => {
-    // Apple's November 2026 notes split Device Control and Data Access in 27.3,
-    // and one of the two halves carries the name "Accessibility" again. Naming a
-    // page a release removed is the bug this resolver exists to prevent; naming
-    // one that release has is why the minor version is read at all. Which half
-    // holds the grant is an expectation, not something this resolver can see.
-    expect(computerPermissionPaneKey("accessibility", "27.2")).toBe("deviceControlAndDataAccess");
-    expect(computerPermissionPaneKey("accessibility", "27.3.1")).toBe("accessibility");
-    expect(computerPermissionPaneKey("accessibility", "28.0")).toBe("accessibility");
+    expect(computerPermissionPaneKey("inputMonitoring", "27.3")).toBe("inputMonitoring");
   });
 });

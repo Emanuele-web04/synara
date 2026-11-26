@@ -22,7 +22,7 @@ final class GrantCoach: NSObject {
         super.init()
     }
     private var headline: String {
-        "Turn on \(appName) in the list above."
+        "Turn on \(appName) in the permission list."
     }
     private var hint: String {
         "Not listed? Press Add and choose \(appName)."
