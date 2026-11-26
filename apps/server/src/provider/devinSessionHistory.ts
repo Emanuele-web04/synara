@@ -54,10 +54,13 @@ function epochSecondsToIso(value: unknown): string | null {
 }
 
 /** The store path an account with this launch environment writes to. */
-export function devinStorePathForEnvironment(environment: NodeJS.ProcessEnv): string {
+export function devinStorePathForEnvironment(
+  environment: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform = process.platform,
+): string {
   const home = environment.HOME?.trim() || environment.USERPROFILE?.trim() || os.homedir();
   const dataHome =
-    process.platform === "win32"
+    platform === "win32"
       ? environment.LOCALAPPDATA?.trim() || home
       : environment.XDG_DATA_HOME?.trim() || path.join(home, ".local", "share");
   return path.join(dataHome, "devin", "cli", "sessions.db");
