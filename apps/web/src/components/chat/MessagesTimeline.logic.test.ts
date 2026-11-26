@@ -2566,7 +2566,7 @@ describe("deriveMessagesTimelineRows", () => {
     expect(collapsedSignature(messageRow(rows, "a2")!)).toEqual(["narration:a1", "work:w1"]);
   });
 
-  it.each(["standard", "full"] as const)(
+  it.each(["messages", "standard", "full"] as const)(
     "puts MCP proposals in the answer recap at detail level %s",
     (transcriptDetail) => {
       const createdAt = "2026-01-01T00:00:02Z";

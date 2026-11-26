@@ -1231,8 +1231,7 @@ export function deriveMessagesTimelineRows(input: {
   worktreeSetup: WorktreeSetupSnapshot | null;
   worktreeSetupOpen: boolean;
   activeTurnInProgress?: boolean;
-  // How much of the turn's work the transcript shows. Every level keeps the
-  // work reachable by expanding the turn.
+  // How much of the turn's work the transcript shows.
   transcriptDetail?: TranscriptDetail;
   activeTurnId?: TurnId | null | undefined;
   activeTurnStartedAt: string | null;
@@ -1536,7 +1535,7 @@ export function deriveMessagesTimelineRows(input: {
 
   if (input.conversationOnly !== true) {
     const detail = input.transcriptDetail ?? DEFAULT_TRANSCRIPT_DETAIL;
-    if (detail === "messages") stripWorkRows(nextRows);
+    if (detail === "messages") hideNonActionableWorkRows(nextRows);
     collapseSettledTurns(nextRows, {
       terminalAssistantMessageIds,
       collapseWork: detail !== "full" && detail !== "messages",
@@ -2070,31 +2069,39 @@ function collapseSettledTurns(
   }
 }
 
-// The messages level is the conversation alone: work rows go, and so does the
-// work a message row carries, so nothing here is folded, capped or opened.
-type WorkCarryingFields = Partial<
-  Pick<
-    Extract<MessagesTimelineRow, { kind: "message" }>,
-    | "leadingWorkEntries"
-    | "leadingWorkGroupId"
-    | "inlineWorkEntries"
-    | "inlineWorkGroupId"
-    | "collapsedTurnItems"
-  >
->;
+// Messages hides the work log, not the controls a reader needs to unblock work
+// or recover a failed turn.
+function isActionableWorkEntry(entry: WorkLogEntry): boolean {
+  return Boolean(
+    entry.computerControlDenied ||
+    entry.computerSetupRequired ||
+    entry.connectorProposalId ||
+    entry.automation?.proposalState === "pending" ||
+    entry.turnFailure,
+  );
+}
 
-function stripWorkRows(rows: MessagesTimelineRow[]): void {
+function hideNonActionableWorkRows(rows: MessagesTimelineRow[]): void {
   let kept = 0;
   for (const row of rows) {
-    if (row.kind === "work") continue;
-    const bare = row as MessagesTimelineRow & WorkCarryingFields;
-    delete bare.leadingWorkEntries;
-    delete bare.leadingWorkGroupId;
-    delete bare.inlineWorkEntries;
-    delete bare.inlineWorkGroupId;
-    delete bare.collapsedTurnItems;
-    rows[kept] = row;
-    kept += 1;
+    if (row.kind === "work") {
+      row.groupedEntries = row.groupedEntries.filter(isActionableWorkEntry);
+      if (row.groupedEntries.length === 0) continue;
+    } else if (row.kind === "message") {
+      const leading = row.leadingWorkEntries?.filter(isActionableWorkEntry);
+      if (leading?.length) row.leadingWorkEntries = leading;
+      else {
+        delete row.leadingWorkEntries;
+        delete row.leadingWorkGroupId;
+      }
+      const inline = row.inlineWorkEntries?.filter(isActionableWorkEntry);
+      if (inline?.length) row.inlineWorkEntries = inline;
+      else {
+        delete row.inlineWorkEntries;
+        delete row.inlineWorkGroupId;
+      }
+    }
+    rows[kept++] = row;
   }
   rows.length = kept;
 }

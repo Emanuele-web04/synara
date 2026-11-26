@@ -534,8 +534,7 @@ export const AppSettingsSchema = Schema.Struct({
   voiceEnterBehavior: VoiceEnterBehavior.pipe(withDefaults(() => DEFAULT_VOICE_ENTER_BEHAVIOR)),
   enableAssistantStreaming: Schema.Boolean.pipe(withDefaults(() => true)),
   // How much of the turn's work the transcript shows: only model messages, the
-  // standard inline work log, or everything fully expanded. Every level keeps
-  // the work reachable by expanding the turn.
+  // standard inline work log, or everything fully expanded.
   transcriptDetail: TranscriptDetailSchema.pipe(withDefaults(() => DEFAULT_TRANSCRIPT_DETAIL)),
   // Legacy: "fold finished turns" predates the three detail levels. Read once to
   // place a reader who turned folding off on the level that shows everything.

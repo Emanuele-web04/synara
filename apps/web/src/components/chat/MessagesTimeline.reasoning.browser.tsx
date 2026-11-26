@@ -1,6 +1,6 @@
 import "../../index.css";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
 import { type TranscriptDetail } from "~/appSettings";
@@ -21,6 +21,7 @@ function Timeline(props: {
   isWorking?: boolean;
   activeTurnInProgress?: boolean;
   transcriptDetail?: TranscriptDetail;
+  onEnableComputerControl?: () => void;
 }) {
   return (
     <MessagesTimeline
@@ -43,6 +44,9 @@ function Timeline(props: {
       timestampFormat="locale"
       workspaceRoot={undefined}
       {...(props.transcriptDetail ? { transcriptDetail: props.transcriptDetail } : {})}
+      {...(props.onEnableComputerControl
+        ? { onEnableComputerControl: props.onEnableComputerControl }
+        : {})}
     />
   );
 }
@@ -157,6 +161,44 @@ describe("MessagesTimeline reasoning", () => {
     }
   });
 
+  it("keeps the enable action visible at the messages level", async () => {
+    const enable = vi.fn();
+    const entries: TimelineEntry[] = [
+      userEntry("request", "Check my desktop"),
+      commandEntry("lint", "bun run lint"),
+      {
+        id: "denied",
+        kind: "work",
+        createdAt: STARTED_AT,
+        entry: {
+          id: "denied",
+          createdAt: STARTED_AT,
+          tone: "error",
+          label: "Computer control is off",
+          computerControlDenied: { toolName: "computer_click" },
+        },
+      },
+      assistantEntry("answer", "Computer control is off.", {
+        completedAt: "2026-03-17T19:12:26.000Z",
+      }),
+    ];
+    const screen = await render(
+      <Timeline
+        transcriptDetail="messages"
+        timelineEntries={entries}
+        onEnableComputerControl={enable}
+      />,
+      { container: createTimelineHost() },
+    );
+    try {
+      await screen.getByRole("button", { name: "Enable", exact: true }).click();
+      expect(enable).toHaveBeenCalledOnce();
+      expect(isVisibleOutsideClosedDisclosure("bun run lint")).toBe(false);
+    } finally {
+      await screen.unmount();
+    }
+  });
+
   it("keeps the trace one click away from the turn at the standard level", async () => {
     const entries: TimelineEntry[] = [
       userEntry("request", "Fix the adapter"),
@@ -208,7 +250,9 @@ describe("MessagesTimeline reasoning", () => {
   it("shows every step of a finished turn at the full level", async () => {
     const entries: TimelineEntry[] = [
       userEntry("request", "Fix the adapter"),
-      commandEntry("lint", "bun run lint"),
+      ...Array.from({ length: 7 }, (_, index) =>
+        commandEntry(`check-${index}`, `bun run check-${index}`),
+      ),
       reasoningEntry("trace", "Reading the adapter.", "completed"),
       assistantEntry("answer", "Done.", { completedAt: "2026-03-17T19:12:26.000Z" }),
     ];
@@ -217,7 +261,11 @@ describe("MessagesTimeline reasoning", () => {
     });
     try {
       await expect.element(screen.getByText("Reading the adapter.", { exact: true })).toBeVisible();
-      await expect.element(screen.getByText("bun run lint", { exact: true })).toBeVisible();
+      for (let index = 0; index < 7; index++) {
+        await expect
+          .element(screen.getByText(`bun run check-${index}`, { exact: true }))
+          .toBeVisible();
+      }
       expect(workedForTrigger()).toBeNull();
     } finally {
       await screen.unmount();

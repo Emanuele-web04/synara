@@ -903,6 +903,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   // summaries apply, and reasoning is the one trace that opens there.
   const foldWork = detail !== "full";
   const maxVisibleWorkEntries = foldWork ? MAX_VISIBLE_WORK_LOG_ENTRIES : Number.POSITIVE_INFINITY;
+  const maxVisibleInlineToolEntries = foldWork
+    ? MAX_VISIBLE_INLINE_TOOL_ENTRIES
+    : Number.POSITIVE_INFINITY;
   const rawRows = useMemo(
     () =>
       deriveMessagesTimelineRows({
@@ -2353,14 +2356,14 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               toolGroupId !== null ? (expandedWorkGroupsState[toolGroupId] ?? false) : false;
             const collapsibleToolCount = collapsibleHiddenRowCount(
               toolEntries.length,
-              MAX_VISIBLE_INLINE_TOOL_ENTRIES,
+              maxVisibleInlineToolEntries,
             );
             const visibleToolEntries =
               toolExpanded || collapsibleToolCount === 0
                 ? toolEntries
                 : activeTurnInProgress
-                  ? toolEntries.slice(-MAX_VISIBLE_INLINE_TOOL_ENTRIES)
-                  : toolEntries.slice(0, MAX_VISIBLE_INLINE_TOOL_ENTRIES);
+                  ? toolEntries.slice(-maxVisibleInlineToolEntries)
+                  : toolEntries.slice(0, maxVisibleInlineToolEntries);
             const hasGenericFileChangeEntry = toolEntries.some(
               (workEntry) =>
                 isFileChangeWorkLogEntry(workEntry) && (workEntry.changedFiles?.length ?? 0) === 0,
@@ -2532,7 +2535,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             );
             const cappedRenderPlan = capOpenWorkEntryRenderChunks(plannedRenderChunks, {
               expanded: display.toolExpanded,
-              maxVisibleEntries: MAX_VISIBLE_INLINE_TOOL_ENTRIES,
+              maxVisibleEntries: maxVisibleInlineToolEntries,
               keep: activeTurnInProgress ? "last" : "first",
               shouldCapEntry: (workEntry) => workEntry.tone === "tool",
             });
