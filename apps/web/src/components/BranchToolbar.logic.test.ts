@@ -8,8 +8,52 @@ import {
   resolveDraftEnvModeAfterBranchChange,
   resolveFixedLocalWorkspacePatch,
   resolveBranchToolbarValue,
+  resolveBranchToolbarUsageAccount,
   shouldSyncLocalThreadBranch,
 } from "./BranchToolbar.logic";
+
+describe("resolveBranchToolbarUsageAccount", () => {
+  it("uses the runtime account when the selected account differs", () => {
+    expect(
+      resolveBranchToolbarUsageAccount(
+        { provider: "claudeAgent", providerInstanceId: "claude_running" },
+        { provider: "claudeAgent", instanceId: "claude_selected" },
+      ),
+    ).toEqual({ provider: "claudeAgent", instanceId: "claude_running" });
+  });
+
+  it("uses a same-provider selection for older sessions with no account id", () => {
+    expect(
+      resolveBranchToolbarUsageAccount(
+        { provider: "claudeAgent" },
+        { provider: "claudeAgent", instanceId: "claude_work" },
+      ),
+    ).toEqual({ provider: "claudeAgent", instanceId: "claude_work" });
+  });
+
+  it("explicitly scopes legacy chats to the default account", () => {
+    expect(resolveBranchToolbarUsageAccount(null, { provider: "claudeAgent" })).toEqual({
+      provider: "claudeAgent",
+      instanceId: "claudeAgent",
+    });
+  });
+
+  it("does not pair a runtime with another provider's selected account", () => {
+    expect(
+      resolveBranchToolbarUsageAccount(
+        { provider: "claudeAgent" },
+        { provider: "codex", instanceId: "codex_selected" },
+      ),
+    ).toEqual({ provider: "claudeAgent", instanceId: "claudeAgent" });
+  });
+
+  it("has no usage account for a draft without a selection", () => {
+    expect(resolveBranchToolbarUsageAccount(null, undefined)).toEqual({
+      provider: null,
+      instanceId: undefined,
+    });
+  });
+});
 
 describe("resolveDraftEnvModeAfterBranchChange", () => {
   it("switches to local mode when returning from an existing worktree to the main worktree", () => {
