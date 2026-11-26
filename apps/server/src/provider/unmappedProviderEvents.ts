@@ -515,8 +515,11 @@ export function sanitizeUnmappedProviderData(value: unknown): unknown {
   };
 }
 
-export function sanitizeUnmappedProviderDetail(value: string | undefined): string | undefined {
-  return value === undefined ? undefined : sanitizeText(value, MAX_UNMAPPED_PROVIDER_DETAIL_CHARS);
+export function sanitizeUnmappedProviderDetail(
+  value: string | undefined,
+  maxChars = MAX_UNMAPPED_PROVIDER_DETAIL_CHARS,
+): string | undefined {
+  return value === undefined ? undefined : sanitizeText(value, maxChars);
 }
 
 export function sanitizeUnmappedProviderNativeType(value: string): string {

@@ -1,7 +1,15 @@
+import { useTranslation } from "~/i18n";
 import { ProviderInteractionMode } from "@synara/contracts";
-import { type ReactNode } from "react";
+import { type ReactNode, useEffect, useRef } from "react";
 import { GoTasklist } from "react-icons/go";
-import { BugIcon, ChevronDownIcon, ComposerSendArrowIcon, LayoutSidebarIcon } from "~/lib/icons";
+import {
+  BugIcon,
+  ChevronDownIcon,
+  ChevronRightIcon,
+  ComposerSendArrowIcon,
+  LayoutSidebarIcon,
+  PlayIcon,
+} from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import type { derivePendingUserInputProgress } from "../../pendingUserInput";
 import type { SessionPhase } from "../../types";
@@ -10,8 +18,14 @@ import { Menu, MenuItem, MenuTrigger } from "../ui/menu";
 import { ComposerPickerMenuPopup } from "./ComposerPickerMenuPopup";
 import { ComposerVoiceButton } from "./ComposerVoiceButton";
 import { ComposerVoiceRecorderBar } from "./ComposerVoiceRecorderBar";
-import { COMPOSER_FOOTER_ROW_CLASS_NAME } from "./composerPickerStyles";
+import {
+  COMPOSER_ACTION_CIRCLE_CLASS_NAME,
+  COMPOSER_FOOTER_ROW_CLASS_NAME,
+} from "./composerPickerStyles";
 interface ChatComposerFooterProps {
+  /** `row`: the single-row composer. The footer box becomes `display: contents` so its
+   *  leading and trailing clusters sit beside the editor in the surface's grid. */
+  layout?: "row" | "block";
   isComposerFooterCompact: boolean;
   leadingControls: ReactNode;
   composerPickerControls: ReactNode;
@@ -38,6 +52,10 @@ interface ChatComposerFooterProps {
   } | null;
   submission: {
     phase: SessionPhase;
+    /** An idle quarantined runtime can still need an explicit Stop before recovery. */
+    recoveryStopAvailable?: boolean;
+    /** An armed host-owned wait can be cancelled without a running provider turn. */
+    usageLimitStopAvailable?: boolean;
     busy: boolean;
     connecting: boolean;
     expired: boolean;
@@ -50,10 +68,42 @@ interface ChatComposerFooterProps {
     hasPrompt: boolean;
     onInterrupt: () => void;
     onImplementInNewThread: () => void;
+    /** Set while the latest turn was interrupted: an empty composer's send button
+     *  becomes Resume (filled play) and continues that task. */
+    onResume?: (() => void) | undefined;
   };
 }
 
+// Resume takes Stop's place, so it ignores clicks this long after Stop leaves:
+// a repeated Stop click must not resume the task it just stopped.
+const STOP_LANDED_RESUME_GUARD_MS = 500;
+
+/** Busy glyph inside the round send button. */
+function SendButtonSpinner() {
+  return (
+    <svg
+      width="12"
+      height="12"
+      viewBox="0 0 14 14"
+      fill="none"
+      className="animate-spin"
+      aria-hidden="true"
+    >
+      <circle
+        cx="7"
+        cy="7"
+        r="5.5"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeDasharray="20 12"
+      />
+    </svg>
+  );
+}
+
 export function ChatComposerFooter({
+  layout: layoutProp,
   isComposerFooterCompact,
   leadingControls,
   composerPickerControls,
@@ -65,24 +115,53 @@ export function ChatComposerFooter({
   pendingInput,
   submission,
 }: ChatComposerFooterProps) {
+  const { t } = useTranslation();
+
+  const row = (layoutProp ?? "block") === "row";
+  const voiceActive = voice.recording || voice.transcribing;
+  const showStop =
+    submission.phase === "running" ||
+    submission.connecting ||
+    submission.recoveryStopAvailable === true ||
+    submission.usageLimitStopAvailable === true;
+  const showResume = submission.onResume !== undefined && !submission.hasContent;
+  const stopLeftAtRef = useRef<number | null>(null);
+  const previousShowStopRef = useRef(showStop);
+  useEffect(() => {
+    if (previousShowStopRef.current && !showStop) stopLeftAtRef.current = performance.now();
+    previousShowStopRef.current = showStop;
+  }, [showStop]);
+  const onResumeClick = () => {
+    const stopLeftAt = stopLeftAtRef.current;
+    if (stopLeftAt !== null && performance.now() - stopLeftAt < STOP_LANDED_RESUME_GUARD_MS) {
+      return;
+    }
+    submission.onResume?.();
+  };
   return (
     <div
-      data-chat-composer-footer="true"
+      data-chat-composer-footer={row ? undefined : "true"}
       className={cn(
-        "@container",
-        COMPOSER_FOOTER_ROW_CLASS_NAME,
-        isComposerFooterCompact ? "gap-1.5" : "flex-wrap gap-1.5 sm:flex-nowrap sm:gap-0",
+        row
+          ? "contents"
+          : [
+              "@container",
+              COMPOSER_FOOTER_ROW_CLASS_NAME,
+              isComposerFooterCompact ? "gap-1.5" : "flex-wrap gap-1.5 sm:flex-nowrap sm:gap-0",
+            ],
       )}
     >
       <div
         data-chat-composer-leading="true"
         className={cn(
           "flex items-center",
-          voice.recording || voice.transcribing
-            ? "min-w-0 shrink-0 gap-1"
-            : isComposerFooterCompact
-              ? "min-w-0 flex-1 gap-1 overflow-hidden"
-              : "min-w-0 flex-1 gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden sm:min-w-max sm:overflow-visible",
+          row
+            ? "col-start-1 row-start-1 shrink-0 gap-0.5"
+            : voiceActive
+              ? "min-w-0 shrink-0 gap-1"
+              : isComposerFooterCompact
+                ? "min-w-0 flex-1 gap-1 overflow-hidden"
+                : "min-w-0 flex-1 gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden sm:min-w-max sm:overflow-visible",
         )}
       >
         {leadingControls}
@@ -96,15 +175,17 @@ export function ChatComposerFooter({
                 size="sm"
                 type="button"
                 onClick={resetInteractionMode}
-                title={`${interactionMode === "plan" ? "Plan" : "Debug"} mode — click to return to normal build mode`}
+                title={t("chat:modeClickToReturnToNormalBuildMode", {
+                  value0: interactionMode === "plan" ? t("workspace:plan_badge") : t("chat:debug"),
+                })}
               >
                 {interactionMode === "plan" ? (
                   <GoTasklist className="size-3.5" />
                 ) : (
                   <BugIcon className="size-3.5" />
                 )}
-                <span className="sr-only sm:not-sr-only">
-                  {interactionMode === "plan" ? "Plan" : "Debug"}
+                <span className={row ? "sr-only" : "sr-only sm:not-sr-only"}>
+                  {interactionMode === "plan" ? t("workspace:plan_badge") : t("chat:debug")}
                 </span>
               </Button>
             ) : null}
@@ -112,7 +193,10 @@ export function ChatComposerFooter({
             {sidebarAction ? (
               <Button
                 variant="ghost"
-                className="shrink-0 whitespace-nowrap px-2 text-ui-sm sm:text-ui-sm font-normal sm:px-3"
+                className={cn(
+                  "shrink-0 whitespace-nowrap text-ui-sm sm:text-ui-sm font-normal",
+                  row ? COMPOSER_ACTION_CIRCLE_CLASS_NAME : "px-2 sm:px-3",
+                )}
                 size="sm"
                 type="button"
                 onClick={sidebarAction.onClick}
@@ -120,7 +204,9 @@ export function ChatComposerFooter({
                 aria-label={sidebarAction.title}
               >
                 <LayoutSidebarIcon className="size-3.5" />
-                <span className="sr-only sm:not-sr-only">{sidebarAction.label}</span>
+                <span className={row ? "sr-only" : "sr-only sm:not-sr-only"}>
+                  {sidebarAction.label}
+                </span>
               </Button>
             ) : null}
           </>
@@ -129,9 +215,16 @@ export function ChatComposerFooter({
 
       <div
         data-chat-composer-actions="right"
+        data-chat-composer-footer={row ? "true" : undefined}
         className={cn(
           "flex items-center gap-2",
-          voice.recording || voice.transcribing ? "min-w-0 flex-1" : "shrink-0",
+          row
+            ? voiceActive
+              ? "col-start-2 col-end-4 row-start-1 min-w-0"
+              : "col-start-3 row-start-1 shrink-0"
+            : voiceActive
+              ? "min-w-0 flex-1"
+              : "min-w-0 shrink",
         )}
       >
         {contextMeter}
@@ -151,24 +244,59 @@ export function ChatComposerFooter({
           />
         ) : null}
         {pendingInput?.progress ? (
-          <Button
-            type="submit"
-            size="sm"
-            className="rounded-full px-4"
-            disabled={
-              pendingInput.responding ||
-              (pendingInput.progress.isLastQuestion
-                ? !pendingInput.answersComplete
-                : !pendingInput.progress.canAdvance)
-            }
-          >
-            {pendingInput.responding
-              ? "Submitting..."
-              : pendingInput.progress.isLastQuestion
-                ? "Submit answers"
-                : "Next question"}
-          </Button>
-        ) : submission.phase === "running" || submission.connecting ? (
+          row ? (
+            // The single-row composer keeps its round send button; the question card above
+            // spells out what Enter does.
+            <Button
+              type="submit"
+              variant="prominent"
+              size="icon-xs"
+              className={COMPOSER_ACTION_CIRCLE_CLASS_NAME}
+              disabled={
+                pendingInput.responding ||
+                (pendingInput.progress.isLastQuestion
+                  ? !pendingInput.answersComplete
+                  : !pendingInput.progress.canAdvance)
+              }
+              aria-label={
+                pendingInput.responding
+                  ? t("chat:submitting2")
+                  : pendingInput.progress.isLastQuestion
+                    ? t("chat:submitAnswers")
+                    : t("chat:composerPendingUserInputPanel_nextQuestion")
+              }
+            >
+              {pendingInput.responding ? (
+                <SendButtonSpinner />
+              ) : pendingInput.progress.isLastQuestion ? (
+                <ComposerSendArrowIcon
+                  aria-hidden="true"
+                  className="size-5 shrink-0 translate-y-px"
+                />
+              ) : (
+                <ChevronRightIcon aria-hidden="true" className="size-4 shrink-0" />
+              )}
+            </Button>
+          ) : (
+            <Button
+              type="submit"
+              size="sm"
+              className="rounded-full px-4"
+              disabled={
+                pendingInput.responding ||
+                (pendingInput.progress.isLastQuestion
+                  ? !pendingInput.answersComplete
+                  : !pendingInput.progress.canAdvance)
+              }
+            >
+              {pendingInput.responding
+                ? t("chat:submitting2")
+                : pendingInput.progress.isLastQuestion
+                  ? t("chat:submitAnswers")
+                  : t("chat:composerPendingUserInputPanel_nextQuestion")}
+            </Button>
+          )
+        ) : showStop ? (
           <>
             {/* Dictating a follow-up is allowed mid-turn: the transcript lands in the
                 composer and sending it follows the queue/steer behavior. */}
@@ -178,6 +306,7 @@ export function ChatComposerFooter({
             !voice.transcribing &&
             !submission.hasPendingUserInputs ? (
               <ComposerVoiceButton
+                appearance="circle"
                 disabled={submission.busy || submission.expired}
                 isRecording={false}
                 isStarting={voice.starting}
@@ -194,10 +323,20 @@ export function ChatComposerFooter({
                 type="button"
                 variant="prominent"
                 size="icon-xs"
-                className="sm:size-[26px]"
+                className={COMPOSER_ACTION_CIRCLE_CLASS_NAME}
                 onClick={submission.onInterrupt}
-                aria-label="Stop generation"
-                title="Stop the current response. On Mac, press Ctrl+C to interrupt."
+                aria-label={
+                  submission.usageLimitStopAvailable
+                    ? t("chat:cancelUsageLimitResume")
+                    : t("chat:stopGeneration_ariaLabel")
+                }
+                title={
+                  submission.usageLimitStopAvailable
+                    ? t("chat:cancelUsageLimitResume")
+                    : submission.recoveryStopAvailable
+                      ? t("chat:stopRuntimeBeforeUnblock")
+                      : t("chat:stopGeneration_title")
+                }
               >
                 <span aria-hidden="true" className="block size-2 rounded-[1px] bg-current" />
               </Button>
@@ -217,7 +356,9 @@ export function ChatComposerFooter({
                   submission.hasPendingCacheReview
                 }
               >
-                {submission.connecting || submission.busy ? "Sending..." : "Refine"}
+                {submission.connecting || submission.busy
+                  ? t("chat:composer_sending")
+                  : t("chat:composer_refine")}
               </Button>
             ) : (
               <div className="flex items-center">
@@ -232,7 +373,9 @@ export function ChatComposerFooter({
                     submission.hasPendingCacheReview
                   }
                 >
-                  {submission.connecting || submission.busy ? "Sending..." : "Implement"}
+                  {submission.connecting || submission.busy
+                    ? t("chat:composer_sending")
+                    : t("chat:composer_implement")}
                 </Button>
                 <Menu>
                   <MenuTrigger
@@ -241,7 +384,7 @@ export function ChatComposerFooter({
                         size="sm"
                         variant="default"
                         className="h-9 rounded-l-none rounded-r-full border-l-white/12 px-2 sm:h-8"
-                        aria-label="Implementation actions"
+                        aria-label={t("chat:composer_implementationActions")}
                         disabled={
                           submission.busy ||
                           submission.connecting ||
@@ -263,7 +406,7 @@ export function ChatComposerFooter({
                       }
                       onClick={() => void submission.onImplementInNewThread()}
                     >
-                      Implement in a new thread
+                      {t("chat:composer_implementNewThread")}
                     </MenuItem>
                   </ComposerPickerMenuPopup>
                 </Menu>
@@ -273,6 +416,7 @@ export function ChatComposerFooter({
             <>
               {voice.enabled ? (
                 <ComposerVoiceButton
+                  appearance="circle"
                   disabled={submission.connecting || submission.busy || submission.expired}
                   isRecording={voice.recording}
                   isStarting={voice.starting}
@@ -282,10 +426,10 @@ export function ChatComposerFooter({
                 />
               ) : null}
               <Button
-                type="submit"
+                type={showResume ? "button" : "submit"}
                 variant="prominent"
                 size="icon-xs"
-                className="size-7 rounded-full sm:size-7"
+                className={COMPOSER_ACTION_CIRCLE_CLASS_NAME}
                 disabled={
                   submission.busy ||
                   submission.connecting ||
@@ -293,46 +437,36 @@ export function ChatComposerFooter({
                   submission.hasPendingCacheReview ||
                   voice.transcribing ||
                   submission.preparingImages ||
-                  !submission.hasContent
+                  (!submission.hasContent && !showResume)
                 }
+                {...(showResume ? { onClick: onResumeClick } : {})}
                 aria-label={
                   submission.connecting
-                    ? "Connecting"
+                    ? t("chat:composer_connecting")
                     : voice.transcribing
-                      ? "Transcribing voice note"
+                      ? t("chat:composer_transcribingVoice")
                       : submission.preparingImages
-                        ? "Optimizing image"
+                        ? t("chat:optimizingImage")
                         : submission.preparingWorktree
-                          ? "Preparing worktree"
+                          ? t("workspace:composer_preparingWorktree")
                           : submission.busy
-                            ? "Sending"
-                            : "Send message"
+                            ? t("chat:sending")
+                            : showResume
+                              ? t("chat:composer_resumeTask")
+                              : t("chat:composer_sendMessage")
                 }
                 title={
                   submission.hasPendingCacheReview
-                    ? "Choose how to resume the held message above"
-                    : undefined
+                    ? t("chat:chooseHowToResumeTheHeldMessageAbove")
+                    : showResume
+                      ? t("chat:composer_resumeTask")
+                      : undefined
                 }
               >
                 {submission.connecting || submission.busy || submission.preparingImages ? (
-                  <svg
-                    width="12"
-                    height="12"
-                    viewBox="0 0 14 14"
-                    fill="none"
-                    className="animate-spin"
-                    aria-hidden="true"
-                  >
-                    <circle
-                      cx="7"
-                      cy="7"
-                      r="5.5"
-                      stroke="currentColor"
-                      strokeWidth="1.5"
-                      strokeLinecap="round"
-                      strokeDasharray="20 12"
-                    />
-                  </svg>
+                  <SendButtonSpinner />
+                ) : showResume ? (
+                  <PlayIcon aria-hidden="true" className="size-3.5 shrink-0" />
                 ) : (
                   <ComposerSendArrowIcon
                     aria-hidden="true"

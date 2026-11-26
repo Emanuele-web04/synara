@@ -8,10 +8,11 @@ import {
   SYNARA_MANAGED_CODEX_CONFIG_END,
 } from "../codexProcessEnv.ts";
 import {
-  buildAntigravityMcpPluginConfig,
   buildAcpSynaraMcpServers,
   buildClaudeMcpServers,
   buildCodexMcpConfigToml,
+  buildCodexMcpThreadConfig,
+  buildOpenCodeConnectorMcpServers,
   buildOpenCodeMcpServer,
   callAgentGatewayMcpTool,
   listAgentGatewayMcpTools,
@@ -29,24 +30,6 @@ const stdioProxy = {
 };
 
 describe("agent gateway MCP injection", () => {
-  it("builds a secret-free Antigravity stdio plugin config", () => {
-    assert.deepEqual(buildAntigravityMcpPluginConfig(stdioProxy), {
-      mcpServers: {
-        synara: {
-          command: stdioProxy.command,
-          args: stdioProxy.args,
-          env: {
-            SYNARA_AGENT_GATEWAY_URL: "$SYNARA_AGENT_GATEWAY_URL",
-            SYNARA_AGENT_GATEWAY_BOOTSTRAP_TOKEN: "$SYNARA_AGENT_GATEWAY_BOOTSTRAP_TOKEN",
-            ELECTRON_RUN_AS_NODE: "1",
-          },
-          disabled: false,
-          disabledTools: [],
-        },
-      },
-    });
-  });
-
   it("builds a codex config block that references the token env var, not the token", () => {
     const block = buildCodexMcpConfigToml(connection.url);
     assert.include(block, "[mcp_servers.synara]");
@@ -283,5 +266,79 @@ describe("agent gateway MCP injection", () => {
         ],
       },
     ]);
+  });
+});
+
+describe("connector injection", () => {
+  const withConnectors = {
+    ...connection,
+    connectors: [
+      {
+        name: "supabase_connector",
+        url: "http://127.0.0.1:3773/mcp/connectors/mcp_conn_1",
+      },
+    ],
+  };
+  const authorization = `Bearer ${connection.bearerToken}`;
+
+  it("adds connector proxies to Claude next to synara, with the session bearer", () => {
+    assert.deepEqual(buildClaudeMcpServers(withConnectors), {
+      synara: { type: "http", url: connection.url, headers: { Authorization: authorization } },
+      supabase_connector: {
+        type: "http",
+        url: "http://127.0.0.1:3773/mcp/connectors/mcp_conn_1",
+        headers: { Authorization: authorization },
+      },
+    });
+  });
+
+  it("adds connector proxies only to Codex's per-thread config", () => {
+    assert.deepEqual(buildCodexMcpThreadConfig(withConnectors), {
+      mcp_servers: {
+        synara: { url: connection.url, http_headers: { Authorization: authorization } },
+        supabase_connector: {
+          url: "http://127.0.0.1:3773/mcp/connectors/mcp_conn_1",
+          http_headers: { Authorization: authorization },
+        },
+      },
+    });
+    assert.notInclude(buildCodexMcpConfigToml(connection.url, "thread"), "connector");
+  });
+
+  it("adds connectors using the transport advertised by ACP agents", () => {
+    const http = buildAcpSynaraMcpServers({
+      connection: withConnectors,
+      initializeResult: { agentCapabilities: { mcpCapabilities: { http: true } } },
+      stdioProxy,
+    });
+    assert.deepEqual(
+      http.map((server) => server.name),
+      ["synara", "supabase_connector"],
+    );
+    const stdio = buildAcpSynaraMcpServers({
+      connection: withConnectors,
+      initializeResult: {},
+      stdioProxy,
+    });
+    assert.deepEqual(
+      stdio.map((server) => server.name),
+      ["synara", "supabase_connector"],
+    );
+  });
+
+  it("builds OpenCode remote entries for connectors with OAuth disabled", () => {
+    assert.deepEqual(buildOpenCodeConnectorMcpServers(withConnectors), [
+      {
+        name: "supabase_connector",
+        config: {
+          type: "remote",
+          url: "http://127.0.0.1:3773/mcp/connectors/mcp_conn_1",
+          enabled: true,
+          headers: { Authorization: authorization },
+          oauth: false,
+        },
+      },
+    ]);
+    assert.deepEqual(buildOpenCodeConnectorMcpServers(connection), []);
   });
 });

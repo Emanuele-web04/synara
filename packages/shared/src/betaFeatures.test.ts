@@ -4,7 +4,10 @@ import {
   desktopFlavorFromBundleId,
   desktopFlavorFromProtocol,
   GROUPS_BETA_FEATURE,
+  INLINE_VISUALS_BETA_FEATURE,
   isBetaFeatureEnabled,
+  MCP_CONNECTORS_BETA_FEATURE,
+  NATIVE_EDITOR_BETA_FEATURE,
 } from "./betaFeatures";
 import {
   SYNARA_BETA_BUNDLE_ID,
@@ -12,10 +15,11 @@ import {
   SYNARA_CUA_BUNDLE_ID,
   SYNARA_DEVELOPMENT_BUNDLE_ID,
   SYNARA_PRODUCTION_BUNDLE_ID,
+  SYNARA_REMOTE_BUNDLE_ID,
 } from "./desktopIdentity";
 
 describe("isBetaFeatureEnabled", () => {
-  it.each(["inbox", "pull-request-auto-fix", "tasks"])(
+  it.each(["inbox", "pull-request-auto-fix", "tasks", "accountProfileSync", "accountInbox"])(
     "offers %s in Stable and Beta",
     (feature) => {
       expect(isBetaFeatureEnabled(feature, "production")).toBe(true);
@@ -48,6 +52,30 @@ describe("isBetaFeatureEnabled", () => {
       expect(isBetaFeatureEnabled(GROUPS_BETA_FEATURE, flavor)).toBe(true);
     }
   });
+
+  it("offers inline visuals in Stable and all other flavors", () => {
+    expect(isBetaFeatureEnabled(INLINE_VISUALS_BETA_FEATURE, "production")).toBe(true);
+    for (const flavor of ["beta", "remote", "development", "canary", "cua", "unknown"] as const) {
+      expect(isBetaFeatureEnabled(INLINE_VISUALS_BETA_FEATURE, flavor)).toBe(true);
+    }
+  });
+
+  it.each([MCP_CONNECTORS_BETA_FEATURE, NATIVE_EDITOR_BETA_FEATURE])(
+    "offers %s in Stable and all other flavors",
+    (feature) => {
+      for (const flavor of [
+        "production",
+        "beta",
+        "remote",
+        "development",
+        "canary",
+        "cua",
+        "unknown",
+      ] as const) {
+        expect(isBetaFeatureEnabled(feature, flavor)).toBe(true);
+      }
+    },
+  );
 
   it("enables the rail sidebar layout in both Beta and Stable", () => {
     expect(isBetaFeatureEnabled("sidebarV2", "beta")).toBe(true);
@@ -82,6 +110,7 @@ describe("desktopFlavorFromBundleId", () => {
     expect(desktopFlavorFromBundleId(SYNARA_CANARY_BUNDLE_ID)).toBe("canary");
     expect(desktopFlavorFromBundleId(SYNARA_CUA_BUNDLE_ID)).toBe("cua");
     expect(desktopFlavorFromBundleId(SYNARA_BETA_BUNDLE_ID)).toBe("beta");
+    expect(desktopFlavorFromBundleId(SYNARA_REMOTE_BUNDLE_ID)).toBe("remote");
   });
 
   it("trims surrounding whitespace", () => {
@@ -99,6 +128,7 @@ describe("desktopFlavorFromBundleId", () => {
 describe("desktopFlavorFromProtocol", () => {
   it("maps each desktop scheme", () => {
     expect(desktopFlavorFromProtocol("synara-beta:", false)).toBe("beta");
+    expect(desktopFlavorFromProtocol("synara-remote:", false)).toBe("remote");
     expect(desktopFlavorFromProtocol("synara-canary:", false)).toBe("canary");
     expect(desktopFlavorFromProtocol("synara-cua:", false)).toBe("cua");
     expect(desktopFlavorFromProtocol("synara:", false)).toBe("production");

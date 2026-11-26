@@ -19,7 +19,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { useRef, useState } from "react";
 
 import { toastManager } from "~/components/ui/toast";
-import type { ProviderInstanceOption } from "~/appSettings";
+import type { NewChatDefault, ProviderInstanceOption } from "~/appSettings";
 import type { DraftThreadEnvMode } from "~/composerDraftStore";
 import { providerInstanceModelSelectionKey, useComposerDraftStore } from "~/composerDraftStore";
 import { useRefreshProviderStatusesNow } from "~/hooks/useProviderStatusRefresh";
@@ -44,7 +44,7 @@ interface UseKanbanTaskSubmitInput {
   readonly sendAsDraft: boolean;
   /** New-task dialog "send as goal" toggle (off by default; dialog-owned state). */
   readonly sendAsGoal?: boolean | undefined;
-  readonly defaultProvider: ProviderKind;
+  readonly newChatDefault: NewChatDefault;
   readonly assistantDeliveryMode: AssistantDeliveryMode;
   readonly providerOptionsForDispatch: ProviderStartOptions | undefined;
   readonly providerInstances: ReadonlyArray<
@@ -52,7 +52,7 @@ interface UseKanbanTaskSubmitInput {
   >;
   readonly providerStatuses: readonly ServerProviderStatus[];
   readonly isPreparingImages: boolean;
-  readonly waitForPendingImages: () => Promise<void>;
+  readonly waitForPendingImages: () => Promise<boolean>;
   readonly onOpenChange: (open: boolean) => void;
 }
 
@@ -72,7 +72,7 @@ export function useKanbanTaskSubmit(input: UseKanbanTaskSubmitInput) {
     envMode,
     sendAsDraft,
     sendAsGoal = false,
-    defaultProvider,
+    newChatDefault,
     assistantDeliveryMode,
     providerOptionsForDispatch,
     providerInstances,
@@ -107,7 +107,10 @@ export function useKanbanTaskSubmit(input: UseKanbanTaskSubmitInput) {
     }
 
     isCreatingRef.current = true;
-    await waitForPendingImages();
+    if (!(await waitForPendingImages())) {
+      isCreatingRef.current = false;
+      return;
+    }
     const truncatedPrompt = truncateKanbanTaskPreview(taskPreview);
     // The scratch draft carries the full selection (model + reasoning effort +
     // speed) set through the picker; fall back to a bare selection otherwise.
@@ -169,7 +172,7 @@ export function useKanbanTaskSubmit(input: UseKanbanTaskSubmitInput) {
     setIsCreating(true);
     void createAndSendKanbanTask({
       ...taskInput,
-      defaultProvider,
+      newChatDefault,
       assistantDeliveryMode,
       providerOptions: providerOptionsForDispatch,
       ...(sendAsGoal ? { sendAsGoal: true as const } : {}),

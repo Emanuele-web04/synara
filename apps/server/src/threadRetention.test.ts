@@ -6,6 +6,7 @@
 import {
   ProjectId,
   ThreadId,
+  TurnId,
   type OrchestrationCommand,
   type OrchestrationReadModel,
   type OrchestrationShellSnapshot,
@@ -140,6 +141,27 @@ describe("thread retention", () => {
     expect(
       getRetentionArchiveRootIds(makeReadModel([snoozedThread, unsnoozedThread]), nowMs),
     ).toEqual([unsnoozedThread.id]);
+  });
+
+  it("retains an old task while its provider reset is still scheduled", () => {
+    const nowMs = Date.parse("2026-04-20T00:00:00.000Z");
+    const waiting = makeReadModelThread({
+      usageLimitRecovery: {
+        id: "weekly-wait",
+        turnId: TurnId.makeUnsafe("failed-turn"),
+        resetAt: "2026-04-21T00:00:00.000Z",
+        autoResume: true,
+        provider: "codex",
+        providerInstanceId: "codex",
+        model: "model",
+        bindingKey: "opaque",
+        policyEpoch: 0,
+      },
+    });
+    expect(getRetentionArchiveRootIds(makeReadModel([waiting]), nowMs)).toEqual([]);
+    expect(
+      getRetentionArchiveRootIds(makeReadModel([{ ...waiting, usageLimitRecovery: null }]), nowMs),
+    ).toEqual([waiting.id]);
   });
 
   it("does not select enabled heartbeat automation target threads", () => {

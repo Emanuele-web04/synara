@@ -9,13 +9,17 @@ import { normalizeModelSlug } from "@synara/shared/model";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo } from "react";
 import { useProviderStatusesForLocalConfig } from "~/hooks/useProviderStatusesForLocalConfig";
-import { resolveUnsentComposerProvider } from "~/lib/providerAvailability";
+import {
+  findUsableProviderStatus,
+  providerStatusInstanceKey,
+  resolveUnsentComposerProvider,
+} from "~/lib/providerAvailability";
 import { resolveProviderDiscoveryCwd } from "~/lib/providerDiscovery";
 import {
   hasReconciledServerProviderStatuses,
   serverConfigQueryOptions,
 } from "~/lib/serverReactQuery";
-import type { AppSettings } from "../../appSettings";
+import type { AppSettings, NewChatDefault } from "../../appSettings";
 import {
   getProviderInstanceOptions,
   getProviderStartOptions,
@@ -45,6 +49,8 @@ interface ChatProviderModelsInput {
   activeProject: Project | undefined;
   composerDraft: ReturnType<typeof useComposerThreadDraft>;
   settings: AppSettings;
+  /** Agent new chats start on (see useNewChatDefault). */
+  newChatDefault: NewChatDefault;
   resolvedThreadWorktreePath: string | null;
   // The picker may leave the thread's provider: picking another one hands the
   // thread off to it in place when the next message is sent.
@@ -57,6 +63,7 @@ export function useChatProviderModels({
   activeProject,
   composerDraft,
   settings,
+  newChatDefault,
   resolvedThreadWorktreePath,
   allowProviderHandoff,
 }: ChatProviderModelsInput) {
@@ -107,6 +114,14 @@ export function useChatProviderModels({
     selectedProviderByThreadId !== boundProvider
       ? selectedProviderByThreadId
       : null;
+  // So is another account of the bound provider.
+  const handoffAccountPending =
+    allowProviderHandoff === true &&
+    boundProvider !== null &&
+    selectedProviderByThreadId === boundProvider &&
+    selectedProviderInstanceIdByThreadId !== null &&
+    (composerDraft.modelSelectionByProvider[selectedProviderInstanceIdByThreadId]?.instanceId ??
+      selectedProviderInstanceIdByThreadId) !== boundProviderInstanceId;
   const lockedProvider: ProviderKind | null = allowProviderHandoff === true ? null : boundProvider;
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const localProviderStatuses = useProviderStatusesForLocalConfig();
@@ -118,7 +133,7 @@ export function useChatProviderModels({
       resolveUnsentComposerProvider({
         explicitProvider: selectedProviderByThreadId,
         threadProvider,
-        defaultProvider: settings.defaultProvider,
+        defaultProvider: newChatDefault.defaultProvider,
         statuses: providerStatusesReconciled ? localProviderStatuses : EMPTY_PROVIDER_STATUSES,
         providerOrder: settings.providerOrder,
         hiddenProviders: settings.hiddenProviders,
@@ -129,14 +144,14 @@ export function useChatProviderModels({
       localProviderStatuses,
       providerStatusesReconciled,
       selectedProviderByThreadId,
-      settings.defaultProvider,
+      newChatDefault.defaultProvider,
       settings.hiddenProviders,
       settings.providerOrder,
       threadProvider,
     ],
   );
   const sessionInstanceId =
-    activeThread?.session?.provider === selectedProvider
+    !handoffAccountPending && activeThread?.session?.provider === selectedProvider
       ? activeThread.session.providerInstanceId
       : undefined;
   let candidateInstanceId: ProviderInstanceId | undefined =
@@ -163,9 +178,28 @@ export function useChatProviderModels({
   ) {
     candidateInstanceId = activeProject.defaultModelSelection.instanceId;
   }
+  const configuredInstanceId = resolveSelectableProviderInstanceId(
+    settings,
+    selectedProvider,
+    candidateInstanceId,
+  );
+  // An explicit enabled choice can report its own setup error; only implicit
+  // selection may switch to a healthy sibling.
+  const usableFallback =
+    providerStatusesReconciled && candidateInstanceId !== configuredInstanceId
+      ? findUsableProviderStatus(
+          localProviderStatuses,
+          selectedProvider,
+          configuredInstanceId,
+          providerInstances,
+        )
+      : null;
   const selectedProviderInstanceId =
     sessionInstanceId ??
-    resolveSelectableProviderInstanceId(settings, selectedProvider, candidateInstanceId);
+    (boundProvider === selectedProvider && !handoffAccountPending
+      ? boundProviderInstanceId
+      : null) ??
+    (usableFallback ? providerStatusInstanceKey(usableFallback) : configuredInstanceId);
 
   const composerModelHintByProvider = useMemo<Record<ProviderKind, string | null>>(() => {
     const threadModelSelection = activeThread?.modelSelection ?? null;
@@ -391,15 +425,11 @@ export function useChatProviderModels({
       buildSearchableModelOptions({
         providerOptions: providerInstances
           // Search mirrors the picker: disabled instances are not actionable,
-          // and a started thread is locked to its exact provider instance.
+          // and a thread that cannot hand off is locked to its exact account.
           .filter(
             (instance) =>
               instance.enabled &&
-              (lockedProvider === null || instance.instanceId === selectedProviderInstanceId) &&
-              // A handoff can change the provider, not the bound provider's account.
-              (boundProvider === null ||
-                instance.provider !== boundProvider ||
-                instance.instanceId === boundProviderInstanceId),
+              (lockedProvider === null || instance.instanceId === selectedProviderInstanceId),
           )
           .map((instance) => ({
             value: instance.provider,
@@ -414,8 +444,6 @@ export function useChatProviderModels({
         lockedProvider,
       }),
     [
-      boundProvider,
-      boundProviderInstanceId,
       lockedProvider,
       modelOptionsByProvider,
       modelOptionsByProviderInstance,
@@ -430,7 +458,6 @@ export function useChatProviderModels({
     hasThreadStarted,
     lockedProvider,
     boundProvider,
-    boundProviderInstanceId,
     serverConfigQuery,
     selectedProvider,
     providerInstances,

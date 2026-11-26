@@ -70,6 +70,9 @@ export const applyProjectMetadataProjection = (input: {
             ...(input.event.payload.spaceId !== undefined
               ? { spaceId: input.event.payload.spaceId }
               : {}),
+            ...(input.event.payload.additionalFolders !== undefined
+              ? { additionalFolders: input.event.payload.additionalFolders }
+              : {}),
             updatedAt: input.event.payload.updatedAt,
           });
         }

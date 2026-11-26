@@ -16,9 +16,32 @@ import {
   claudeUsageFetcher,
 } from "./claude";
 
-const { readKeychainPasswordMock } = vi.hoisted(() => ({
+const { readKeychainPasswordMock, managedFragments } = vi.hoisted(() => ({
   readKeychainPasswordMock: vi.fn(),
+  managedFragments: { present: false },
 }));
+
+// Managed policy paths are synthetic/absent in these fixture-only tests.
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    stat: (path: string) => {
+      if (managedFragments.present && path === "/etc/claude-code/managed-settings.d") {
+        return Promise.resolve({ isDirectory: () => true, isFile: () => false });
+      }
+      if (
+        path.startsWith("/etc/claude-code/") ||
+        path.startsWith("/Library/Application Support/ClaudeCode/")
+      ) {
+        return Promise.reject(
+          Object.assign(new Error("Synthetic policy is absent"), { code: "ENOENT" }),
+        );
+      }
+      return actual.stat(path);
+    },
+  };
+});
 
 vi.mock("../credentials", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../credentials")>()),
@@ -42,6 +65,13 @@ function rateLimitedResponse(retryAfterSeconds?: number): Response {
     headers["Retry-After"] = String(retryAfterSeconds);
   }
   return new Response(JSON.stringify({ error: "rate_limited" }), { status: 429, headers });
+}
+
+function cloudflareBlockResponse(): Response {
+  return new Response("<html><title>Attention Required! | Cloudflare</title></html>", {
+    status: 403,
+    headers: { "Content-Type": "text/html; charset=UTF-8", "cf-mitigated": "challenge" },
+  });
 }
 
 function stubOutboundFetch(
@@ -103,6 +133,7 @@ function stubAuthNudge(
 
 beforeEach(() => {
   __resetClaudeUsageRateLimitState();
+  managedFragments.present = false;
   readKeychainPasswordMock.mockReset();
   readKeychainPasswordMock.mockResolvedValue(null);
   stubAuthNudge();
@@ -558,5 +589,279 @@ describe("claudeUsageFetcher", () => {
     const duringCooldown = await claudeUsageFetcher.fetch({ ...ctx, nowMs: NOW_MS + 30_000 });
     expect(duringCooldown.status).toBe("error");
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("claudeUsageFetcher Cloudflare edge blocks", () => {
+  it("keeps the last values without a CLI nudge or source fallthrough on a Cloudflare 403", async () => {
+    const { configDir } = makeClaudeConfigDir({
+      accessToken: "edge-blocked-access-token",
+      expiresAt: NOW_MS + 60 * 60 * 1000,
+      scopes: ["user:profile"],
+    });
+    const { homeDir } = makeClaudeHome({
+      accessToken: "fallback-access-token",
+      expiresAt: NOW_MS + 60 * 60 * 1000,
+      scopes: ["user:profile"],
+    });
+    const runMock = stubAuthNudge();
+
+    let blocked = false;
+    const fetchMock = vi.fn(async () =>
+      blocked
+        ? cloudflareBlockResponse()
+        : jsonResponse({ five_hour: { utilization: 33, resets_at: "2026-06-09T12:00:00Z" } }),
+    );
+    stubOutboundFetch(fetchMock);
+
+    const ctx = {
+      homeDir,
+      env: { CLAUDE_CONFIG_DIR: configDir },
+      platform: "linux" as const,
+      nowMs: NOW_MS,
+    };
+    expect((await claudeUsageFetcher.fetch(ctx)).status).toBe("ok");
+
+    blocked = true;
+    const snapshot = await claudeUsageFetcher.fetch(ctx);
+    expect(snapshot.status).toBe("ok");
+    expect(snapshot.stale).toBe(true);
+    expect(snapshot.limits.find((limit) => limit.window === "5h")?.usedPercent).toBe(33);
+    expect(snapshot.detail).toContain("HTTP 403");
+    expect(snapshot.detail).not.toContain("rate-limiting");
+    expect(runMock).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    // Backs off briefly instead of re-hitting the blocked edge on every poll.
+    await claudeUsageFetcher.fetch({ ...ctx, nowMs: NOW_MS + 30_000 });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    await claudeUsageFetcher.fetch({ ...ctx, nowMs: NOW_MS + 61_000 });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("reports a transient error, not needs-auth, when blocked before any successful fetch", async () => {
+    const { homeDir } = makeClaudeHome({
+      accessToken: "cold-edge-blocked-token",
+      expiresAt: NOW_MS + 60 * 60 * 1000,
+      scopes: ["user:profile"],
+    });
+    const runMock = stubAuthNudge();
+    stubOutboundFetch(async () => cloudflareBlockResponse());
+
+    const snapshot = await claudeUsageFetcher.fetch({
+      homeDir,
+      env: {},
+      platform: "linux",
+      nowMs: NOW_MS,
+    });
+    expect(snapshot.status).toBe("error");
+    expect(snapshot.detail).toContain("HTTP 403");
+    expect(runMock).not.toHaveBeenCalled();
+  });
+
+  it("still nudges the CLI when Anthropic rejects the token with a JSON 403", async () => {
+    const { homeDir } = makeClaudeHome({
+      accessToken: "json-403-access-token",
+      expiresAt: NOW_MS + 60 * 60 * 1000,
+      scopes: ["user:profile"],
+    });
+    const runMock = stubAuthNudge();
+    stubOutboundFetch(async () => jsonResponse({ error: { type: "permission_error" } }, 403));
+
+    const snapshot = await claudeUsageFetcher.fetch({
+      homeDir,
+      env: {},
+      platform: "linux",
+      nowMs: NOW_MS,
+    });
+    expect(snapshot.status).toBe("needs-auth");
+    expect(runMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("claudeUsageFetcher durable recovery identity", () => {
+  const ACCOUNT_A = "11111111-1111-4111-8111-111111111111";
+  const ACCOUNT_B = "22222222-2222-4222-8222-222222222222";
+  const ORG_A = "33333333-3333-4333-8333-333333333333";
+  const ORG_B = "44444444-4444-4444-8444-444444444444";
+  const profile = (accountUuid = ACCOUNT_A, organizationUuid = ORG_A) => ({
+    oauthAccount: { accountUuid, organizationUuid },
+  });
+  function fixture() {
+    const native = makeClaudeHome({ accessToken: "access-before", refreshToken: "refresh-before" });
+    const workingDirectory = nodePath.join(native.homeDir, "workspace");
+    mkdirSync(nodePath.join(workingDirectory, ".git"), { recursive: true });
+    const profilePath = nodePath.join(native.homeDir, ".claude.json");
+    writeFileSync(profilePath, JSON.stringify(profile()), "utf8");
+    return {
+      ...native,
+      profilePath,
+      context: {
+        homeDir: native.homeDir,
+        workingDirectory,
+        env: {},
+        platform: "linux" as const,
+        nowMs: NOW_MS,
+      },
+    };
+  }
+
+  it("keeps native account+organization identity stable through token rotation and detects both switches", async () => {
+    const { profilePath, credentialsPath, context } = fixture();
+    const first = await claudeUsageFetcher.recoveryIdentity!(context);
+    expect(first).not.toBeNull();
+    writeFileSync(
+      credentialsPath,
+      JSON.stringify({
+        claudeAiOauth: { accessToken: "access-after", refreshToken: "refresh-after" },
+      }),
+      "utf8",
+    );
+    expect(await claudeUsageFetcher.recoveryIdentity!(context)).toBe(first);
+    writeFileSync(profilePath, JSON.stringify(profile(ACCOUNT_B, ORG_A)), "utf8");
+    const changedAccount = await claudeUsageFetcher.recoveryIdentity!(context);
+    expect(changedAccount).not.toBe(first);
+    writeFileSync(profilePath, JSON.stringify(profile(ACCOUNT_B, ORG_B)), "utf8");
+    expect(await claudeUsageFetcher.recoveryIdentity!(context)).not.toBe(changedAccount);
+  });
+
+  it("reads only the selected native configuration and honors legacy profile precedence", async () => {
+    const { context } = fixture();
+    const { configDir } = makeClaudeConfigDir({ accessToken: "selected-access" });
+    writeFileSync(
+      nodePath.join(configDir, ".claude.json"),
+      JSON.stringify(profile(ACCOUNT_B, ORG_B)),
+      "utf8",
+    );
+    const selected = {
+      ...context,
+      isolateCredentials: true,
+      env: { CLAUDE_CONFIG_DIR: configDir, CLAUDE_SECURESTORAGE_CONFIG_DIR: configDir },
+    };
+    expect(await claudeUsageFetcher.recoveryIdentity!(selected)).toBe(
+      JSON.stringify([ACCOUNT_B, ORG_B]),
+    );
+    writeFileSync(nodePath.join(configDir, ".config.json"), JSON.stringify(profile()), "utf8");
+    expect(await claudeUsageFetcher.recoveryIdentity!(selected)).toBe(
+      JSON.stringify([ACCOUNT_A, ORG_A]),
+    );
+    writeFileSync(nodePath.join(configDir, ".config.json"), "malformed legacy profile", "utf8");
+    expect(await claudeUsageFetcher.recoveryIdentity!(selected)).toBeNull();
+  });
+
+  it("checks the authoritative main checkout local settings for a linked worktree", async () => {
+    const { context } = fixture();
+    const linked = nodePath.join(context.homeDir, "linked-worktree");
+    mkdirSync(linked);
+    writeFileSync(
+      nodePath.join(linked, ".git"),
+      "gitdir: /synthetic/untrusted-never-read\n",
+      "utf8",
+    );
+    expect(
+      await claudeUsageFetcher.recoveryIdentity!({ ...context, workingDirectory: linked }),
+    ).toBeNull();
+    const selected = {
+      ...context,
+      workingDirectory: linked,
+      projectRoot: context.workingDirectory,
+    };
+    expect(await claudeUsageFetcher.recoveryIdentity!(selected)).not.toBeNull();
+    const sharedSettings = nodePath.join(context.workingDirectory, ".claude");
+    mkdirSync(sharedSettings);
+    writeFileSync(
+      nodePath.join(sharedSettings, "settings.local.json"),
+      JSON.stringify({ apiKeyHelper: "main-checkout-helper" }),
+      "utf8",
+    );
+    expect(await claudeUsageFetcher.recoveryIdentity!(selected)).toBeNull();
+  });
+
+  it.each([
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "ANTHROPIC_API_KEY",
+    "CLAUDE_CODE_CUSTOM_OAUTH_URL",
+    "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR",
+    "ANTHROPIC_PROFILE",
+  ])("does not adopt a stored native login while %s selects another auth mode", async (name) => {
+    const { context } = fixture();
+    expect(
+      await claudeUsageFetcher.recoveryIdentity!({
+        ...context,
+        env: { [name]: "synthetic-override" },
+      }),
+    ).toBeNull();
+  });
+
+  it.each([
+    "global helper",
+    "project helper",
+    "project environment",
+    "implicit profile",
+    "managed fragments",
+  ])("%s keeps authentication mode manual", async (mode) => {
+    const { context } = fixture();
+    if (mode === "managed fragments") managedFragments.present = true;
+    const configHome = nodePath.join(context.homeDir, ".claude");
+    const projectConfig = nodePath.join(context.workingDirectory, ".claude");
+    mkdirSync(projectConfig);
+    if (mode === "global helper")
+      writeFileSync(
+        nodePath.join(configHome, "settings.json"),
+        JSON.stringify({ apiKeyHelper: "synthetic-helper" }),
+        "utf8",
+      );
+    if (mode === "project helper")
+      writeFileSync(
+        nodePath.join(projectConfig, "settings.local.json"),
+        JSON.stringify({ apiKeyHelper: "synthetic-helper" }),
+        "utf8",
+      );
+    if (mode === "project environment")
+      writeFileSync(
+        nodePath.join(projectConfig, "settings.json"),
+        JSON.stringify({ env: { ANTHROPIC_AUTH_TOKEN: "synthetic-other-account" } }),
+        "utf8",
+      );
+    if (mode === "implicit profile") {
+      const profileHome = nodePath.join(context.homeDir, ".config", "anthropic");
+      mkdirSync(profileHome, { recursive: true });
+      writeFileSync(nodePath.join(profileHome, "profiles.json"), "{}", "utf8");
+    }
+    expect(await claudeUsageFetcher.recoveryIdentity!(context)).toBeNull();
+  });
+
+  it("does not treat an empty Anthropic profile home as a profile", async () => {
+    const { context } = fixture();
+    const profileHome = nodePath.join(context.homeDir, ".config", "anthropic");
+    mkdirSync(profileHome, { recursive: true });
+    // Tools create the directory ahead of use; nothing inside can select credentials.
+    expect(await claudeUsageFetcher.recoveryIdentity!(context)).not.toBeNull();
+    writeFileSync(nodePath.join(profileHome, "profiles.json"), "{}", "utf8");
+    expect(await claudeUsageFetcher.recoveryIdentity!(context)).toBeNull();
+  });
+
+  it("requires native credentials, both UUIDs and a known absolute workspace/configuration", async () => {
+    const { profilePath, credentialsPath, context } = fixture();
+    const { workingDirectory: _workingDirectory, ...unknownWorkspace } = context;
+    expect(await claudeUsageFetcher.recoveryIdentity!(unknownWorkspace)).toBeNull();
+    expect(
+      await claudeUsageFetcher.recoveryIdentity!({
+        ...context,
+        env: { CLAUDE_CONFIG_DIR: "relative-config" },
+      }),
+    ).toBeNull();
+    expect(
+      await claudeUsageFetcher.recoveryIdentity!({ ...context, env: { CLAUDE_CONFIG_DIR: "" } }),
+    ).toBeNull();
+    writeFileSync(
+      profilePath,
+      JSON.stringify({ oauthAccount: { accountUuid: ACCOUNT_A } }),
+      "utf8",
+    );
+    expect(await claudeUsageFetcher.recoveryIdentity!(context)).toBeNull();
+    writeFileSync(profilePath, JSON.stringify(profile()), "utf8");
+    rmSync(credentialsPath);
+    expect(await claudeUsageFetcher.recoveryIdentity!(context)).toBeNull();
   });
 });

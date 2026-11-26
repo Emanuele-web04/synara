@@ -3,12 +3,12 @@
 // Layer: Web presentation helper
 
 import { useSyncExternalStore } from "react";
+import { t } from "~/i18n";
 
 import type { WorkLogLiveActivity } from "../workLog";
 import { formatClockDuration } from "../session-logic";
 import { startVisibleInterval } from "./visibleInterval";
 
-const NO_ACTIVITY_THRESHOLD_MS = 30_000;
 const LIVE_ACTIVITY_TICK_MS = 1_000;
 const liveActivityClockListeners = new Set<() => void>();
 let stopLiveActivityClock: (() => void) | null = null;
@@ -103,21 +103,21 @@ export function formatLiveActivityProgress(progress: number): string {
 export function formatLiveActivityStateLabel(state: WorkLogLiveActivity["state"]): string {
   switch (state) {
     case "starting":
-      return "Starting";
+      return t("chat:runStatus_starting");
     case "thinking":
-      return "Thinking";
+      return t("chat:timeline_thinking");
     case "running_tool":
-      return "Running tool";
+      return t("common:runningTool");
     case "waiting":
-      return "Waiting";
+      return t("common:waiting");
     case "streaming":
-      return "Streaming";
+      return t("common:streaming");
     case "completed":
-      return "Completed";
+      return t("workspace:triageOutcome_completed");
     case "failed":
-      return "Failed";
+      return t("chat:runStatus_failed");
     case "cancelled":
-      return "Cancelled";
+      return t("git:runStatus_cancelled");
   }
 }
 
@@ -130,51 +130,36 @@ export function formatLiveActivityElapsed(
 }
 
 export interface LiveActivityMetaOptions {
-  // Subagent rows (Cursor/Claude `Task`, Codex collab) only hear back from the child
-  // agent when it finishes, so quiet time is the expected state — never idleness.
+  // Subagent rows (Cursor/Claude `Task`, Codex collab) keep a working/elapsed
+  // tail: the row title names the task, not that it is still running.
   readonly subagent?: boolean;
 }
 
-// Live meta only exists to explain work the row can't state on its own: how long
-// something in flight has been running, or that it ended badly. A tool call that
-// simply succeeded already reads as a finished sentence ("Searched for foo in
-// src"), so it gets no status/elapsed tail — that detail lives in the disclosure.
+// Live meta only explains what a row can't state on its own: that a subagent is
+// still working, or that a call ended badly. A running tool call reads like any
+// other ("Running `bun install`") and a successful one already reads as a
+// finished sentence ("Searched for foo in src"); their timing lives in the
+// details disclosure.
 export function formatLiveActivityMeta(
   activity: WorkLogLiveActivity,
   nowMs: number,
   options?: LiveActivityMetaOptions,
 ): string | null {
-  if (activity.state === "completed") {
+  const inProgress = isLiveActivityInProgress(activity);
+  if (activity.state === "completed" || (inProgress && !options?.subagent)) {
     return null;
   }
 
-  const parts: string[] = [];
+  const parts = [
+    inProgress ? t("common:subagentWorking") : formatLiveActivityStateLabel(activity.state),
+  ];
   const elapsed = formatLiveActivityElapsed(activity, nowMs);
-  const lastActivityAtMs = parseTimestamp(activity.lastActivityAt);
-
-  if (isLiveActivityInProgress(activity)) {
-    if (options?.subagent) {
-      parts.push("Subagent working");
-    } else if (lastActivityAtMs !== null) {
-      const idleMs = Math.max(0, nowMs - lastActivityAtMs);
-      parts.push(
-        idleMs >= NO_ACTIVITY_THRESHOLD_MS
-          ? `No activity for ${formatClockDuration(idleMs)}`
-          : idleMs < 1_000
-            ? "Active now"
-            : `Active ${formatClockDuration(idleMs)} ago`,
-      );
-    }
-  } else {
-    parts.push(formatLiveActivityStateLabel(activity.state));
-  }
-
   if (elapsed !== null) {
-    parts.push(`${elapsed} elapsed`);
+    parts.push(t("common:elapsed", { duration: elapsed }));
   }
   if (activity.progress !== undefined) {
     parts.push(formatLiveActivityProgress(activity.progress));
   }
 
-  return parts.length > 0 ? parts.join(" · ") : null;
+  return parts.join(" · ");
 }

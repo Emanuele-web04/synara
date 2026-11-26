@@ -334,6 +334,9 @@ export const ProviderModelDescriptor = Schema.Struct({
   supportedReasoningEfforts: Schema.optional(Schema.Array(ProviderReasoningEffortDescriptor)),
   defaultReasoningEffort: Schema.optional(TrimmedNonEmptyString),
   supportsFastMode: Schema.optional(Schema.Boolean),
+  fastModeDescription: Schema.optional(TrimmedNonEmptyString),
+  supportsUltrafastMode: Schema.optional(Schema.Boolean),
+  ultrafastModeDescription: Schema.optional(TrimmedNonEmptyString),
   supportsThinkingToggle: Schema.optional(Schema.Boolean),
   supportsAutoMode: Schema.optional(Schema.Boolean),
   contextWindowOptions: Schema.optional(Schema.Array(ProviderContextWindowDescriptor)),
@@ -346,6 +349,8 @@ export const ProviderListModelsResult = Schema.Struct({
   models: Schema.Array(ProviderModelDescriptor),
   source: Schema.optional(TrimmedNonEmptyString),
   cached: Schema.optional(Schema.Boolean),
+  // A partial or fallback catalog must not replace the last complete discovery.
+  degraded: Schema.optional(Schema.Boolean),
   // A concise, redacted explanation when live discovery failed and the result
   // was populated from a static fallback.
   error: Schema.optional(TrimmedNonEmptyString),

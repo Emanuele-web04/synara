@@ -1,3 +1,4 @@
+import { getExecutionStorage } from "./lib/hosts/executionStorage";
 // FILE: pinnedProjectsStore.ts
 // Purpose: Persists sidebar project pin ids with the shared pin ordering cap.
 // Layer: UI state store
@@ -60,7 +61,7 @@ export const usePinnedProjectsStore = create<PinnedProjectsStoreState>()(
     }),
     {
       name: PINNED_PROJECTS_STORAGE_KEY,
-      storage: createJSONStorage(() => localStorage),
+      storage: createJSONStorage(getExecutionStorage),
       partialize: (state) => ({
         pinnedProjectIds: normalizePinnedIds(state.pinnedProjectIds, PINNED_PROJECTS_OPTIONS),
       }),

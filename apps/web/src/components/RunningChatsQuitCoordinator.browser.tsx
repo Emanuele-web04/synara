@@ -7,6 +7,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
 import { useStore } from "~/store";
+import { APP_DISPLAY_NAME } from "~/branding";
 
 import { RunningChatsQuitCoordinator } from "./RunningChatsQuitCoordinator";
 
@@ -25,6 +26,7 @@ afterEach(() => {
 });
 
 it("requires confirmation for an idle quit, supports Escape, and asks again after cancel", async () => {
+  const title = `Quit ${APP_DISPLAY_NAME}?`;
   let request: ((payload: DesktopQuitConfirmationRequest) => void) | undefined;
   const reply = vi.fn();
   window.desktopBridge = {
@@ -49,7 +51,9 @@ it("requires confirmation for an idle quit, supports Escape, and asks again afte
   try {
     await expect.element(page.getByRole("alertdialog")).not.toBeInTheDocument();
     request?.({ requestId: "q1", presentation: "in-app" });
-    await expect.element(page.getByRole("alertdialog")).toBeVisible();
+    await expect
+      .element(page.getByRole("alertdialog", { name: title }), { timeout: 5000 })
+      .toBeVisible();
     expect(reply).toHaveBeenCalledWith({
       requestId: "q1",
       phase: "ready",
@@ -64,7 +68,9 @@ it("requires confirmation for an idle quit, supports Escape, and asks again afte
     expect(reply).toHaveBeenCalledWith({ requestId: "q1", phase: "decision", allow: false });
 
     request?.({ requestId: "q2", presentation: "in-app" });
-    await expect.element(page.getByRole("alertdialog")).toBeVisible();
+    await expect
+      .element(page.getByRole("alertdialog", { name: title }), { timeout: 5000 })
+      .toBeVisible();
     await page.getByRole("button", { name: "Quit", exact: true }).click();
     expect(reply).toHaveBeenCalledWith({ requestId: "q2", phase: "decision", allow: true });
   } finally {

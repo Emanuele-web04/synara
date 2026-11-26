@@ -5,6 +5,7 @@
 // Exports: buildTaskRowContextMenu, TaskRowMenuAction
 
 import type { ContextMenuItem } from "@synara/contracts";
+import { t } from "~/i18n";
 
 import { THREAD_CONTEXT_MENU_ICONS } from "~/lib/contextMenuIcons";
 
@@ -16,40 +17,57 @@ export type TaskRowMenuAction =
   | "toggle-done"
   | "delete";
 
-export function buildTaskRowContextMenu(input: {
-  /** Linked to a chat that still exists. */
-  isDelegated: boolean;
-  isDone: boolean;
-  /** False while a delegation is still starting, before its link has settled. */
-  canUnlink: boolean;
-  /** Has a chat link at all, even to a chat that was deleted. */
-  hasLink: boolean;
-}): ContextMenuItem<TaskRowMenuAction>[] {
+export function buildTaskRowContextMenu(
+  input: {
+    /** Linked to a chat that still exists. */
+    isDelegated: boolean;
+    isDone: boolean;
+    /** False while a delegation is still starting, before its link has settled. */
+    canUnlink: boolean;
+    /** Has a chat link at all, even to a chat that was deleted. */
+    hasLink: boolean;
+  },
+  translate: typeof t = t,
+): ContextMenuItem<TaskRowMenuAction>[] {
   const { isDelegated, isDone, hasLink, canUnlink } = input;
   return [
-    { id: "rename", label: "Rename", icon: THREAD_CONTEXT_MENU_ICONS.rename },
+    { id: "rename", label: translate("workspace:rename"), icon: THREAD_CONTEXT_MENU_ICONS.rename },
     ...(isDelegated
       ? [
-          { id: "open-chat" as const, label: "Open chat", separatorBefore: true },
-          ...(canUnlink ? [{ id: "unlink-chat" as const, label: "Unlink chat" }] : []),
+          { id: "open-chat" as const, label: translate("common:openChat"), separatorBefore: true },
+          ...(canUnlink
+            ? [{ id: "unlink-chat" as const, label: translate("common:task_unlinkChat") }]
+            : []),
         ]
       : [
           ...(isDone
             ? []
-            : [{ id: "delegate" as const, label: "Delegate…", separatorBefore: true }]),
+            : [
+                {
+                  id: "delegate" as const,
+                  label: translate("common:task_delegate"),
+                  separatorBefore: true,
+                },
+              ]),
           // A link to a chat that was deleted can still be cleared.
           ...(hasLink && canUnlink
-            ? [{ id: "unlink-chat" as const, label: "Unlink chat", separatorBefore: isDone }]
+            ? [
+                {
+                  id: "unlink-chat" as const,
+                  label: translate("common:task_unlinkChat"),
+                  separatorBefore: isDone,
+                },
+              ]
             : []),
         ]),
     {
       id: "toggle-done",
-      label: isDone ? "Mark as not done" : "Mark as done",
+      label: isDone ? translate("common:markAsNotDone") : translate("common:markAsDone"),
       separatorBefore: true,
     },
     {
       id: "delete",
-      label: "Delete",
+      label: translate("computer:detail_delete"),
       icon: THREAD_CONTEXT_MENU_ICONS.delete,
       destructive: true,
       separatorBefore: true,

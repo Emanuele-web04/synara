@@ -5,6 +5,14 @@ description: Everything you can feed an agent — files, images, folders, screen
 
 The composer is more than a text box. The more precise the context you attach, the less the agent has to guess — these are the tools for that.
 
+## Compact composer and work capsules
+
+In Stable 1.0.5 and Beta, a started chat uses a single row while its draft fits on one line. A newline or longer draft expands it; shortening the draft collapses it again. Goals, active tasks and changes appear in floating capsules above the input. Open a capsule for details, use **+** for extras, and open the plan from its control even when no task capsule is present. Queue and permission notices remain actionable above the composer.
+
+Empty chats show a dithered backdrop in your accent color: a Greek temple by default, or soft gradient waves that slowly drift. Pick **Temple**, **Gradient** or **Off** in **Settings → Appearance → Empty chat background**. Clicks on empty space send a ripple, reduced motion keeps it still (no ripples, no drift), and forced-colors or high-contrast modes hide it.
+
+Source evidence: feature head `4b2441d`; `ChatView.tsx`, `chat/useComposerSingleRow.ts`, `chat/ComposerCapsule.tsx`, `chat/ChatComposerFooter.tsx` and `chat/AsciiWaveBackground.tsx` under `apps/web/src/components`.
+
 ## Attach files and images
 
 Drag files or images into the composer, paste them, or use mentions. Attachments render as chips and cards, previews are worktree-aware, and paths with spaces or parentheses survive intact. Browsing your prompt history keeps a draft's attachments instead of stripping them.

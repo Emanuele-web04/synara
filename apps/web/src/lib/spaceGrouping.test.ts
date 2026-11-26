@@ -45,7 +45,7 @@ describe("the unfiled group's presentation", () => {
     expect(spaceDisplayIcon(null, [workSpace], renamedVoid)).toBe("backpack");
   });
 
-  it("leaves stored spaces alone, and falls back for a space the snapshot lost", () => {
+  it("leaves stored spaces alone and names the missing-space fallback", () => {
     const staleSpaceId = SpaceId.makeUnsafe("space-deleted");
 
     expect(spaceDisplayName(workSpaceId, [workSpace], renamedVoid)).toBe("Work");
@@ -54,7 +54,7 @@ describe("the unfiled group's presentation", () => {
     expect(spaceDisplayIcon(staleSpaceId, [workSpace], renamedVoid)).toBe("backpack");
   });
 
-  it("labels the grouped unfiled bucket with it too", () => {
+  it("labels the grouped unfiled bucket without changing its name or identity", () => {
     const groups = groupItemsBySpace({
       items: [{ spaceId: null }, { spaceId: workSpaceId }],
       spaces: [workSpace],
@@ -64,6 +64,12 @@ describe("the unfiled group's presentation", () => {
     });
 
     expect(groups.map((group) => group.label)).toEqual(["Da ordinare · Active", "Work"]);
+    expect(groups.map((group) => group.name)).toEqual(["Da ordinare", "Work"]);
+    expect(groups.map((group) => group.spaceId)).toEqual([null, workSpaceId]);
+    expect(groups.flatMap((group) => group.items)).toEqual([
+      { spaceId: null },
+      { spaceId: workSpaceId },
+    ]);
     expect(groups[0]?.icon).toBe("backpack");
     expect(groups[0]?.key).toBe("void");
   });

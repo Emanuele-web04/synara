@@ -1,4 +1,6 @@
-import { ServerBusyIndicator } from "../components/ServerBusyIndicator";
+import { readWorkspaceFrame } from "../lib/hosts/workspaceFrame";
+import { subscribeWorkspaceKeybindings } from "../lib/hosts/workspaceKeybindings";
+import { onControllerStateChange } from "../lib/hosts/connectionClients";
 import { EditorDirtyRouteGuard } from "../components/EditorDirtyRouteGuard";
 import {
   ORCHESTRATION_STREAM_OVERFLOW_CODE,
@@ -45,13 +47,27 @@ import { AppSnapWelcomeDialog } from "../components/AppSnapWelcomeDialog";
 import { BetaWelcomeDialog } from "../components/BetaWelcomeDialog";
 import { useOnboarding } from "../onboarding/useOnboarding";
 import { ProjectImportAnnouncementDialog } from "../projectImport/ProjectImportAnnouncementDialog";
+import { ConnectionLaunchAnnouncements } from "../components/hosts/IosBetaAnnouncement";
+import { ProductAnalyticsAnnouncement } from "../components/ProductAnalyticsAnnouncement";
 import { useProjectImportDialogStore } from "../projectImport/projectImportDialogStore";
 import { FeatureTourDialog } from "../components/FeatureTourDialog";
 import { SafariAccessOnboarding } from "../components/SafariAccessOnboarding";
+import { NewThreadDefaultsSyncCoordinator } from "../components/NewThreadDefaultsSyncCoordinator";
+import { settingsChangedBeyondNewThreadDefaults } from "@synara/shared/serverSettings";
 import { QueuedComposerDrainCoordinator } from "../components/QueuedComposerDrainCoordinator";
-import { FeedbackDialog } from "../components/FeedbackDialog";
+import {
+  isSessionOrLatestTurnRunning,
+  isSessionOrLatestTurnStartingOrRunning,
+} from "../session-logic";
+import { GlobalAccountDialogs } from "../components/account/GlobalAccountDialogs";
+import { HostDiscoverabilityPrompt } from "../components/hosts/HostDiscoverabilityPrompt";
+const FeedbackDialog = lazy(() =>
+  import("../components/FeedbackDialog").then((module) => ({
+    default: module.FeedbackDialog,
+  })),
+);
 import { SETTINGS_TARGETS } from "../settingsNavigation";
-import ShortcutsDialog from "../components/ShortcutsDialog";
+const ShortcutsDialog = lazy(() => import("../components/ShortcutsDialog"));
 import WhatsNewDialog from "../components/WhatsNewDialog";
 import { useWhatsNew } from "../whatsNew/useWhatsNew";
 import { WhatsNewPopoutCard } from "../whatsNew/WhatsNewPopoutCard";
@@ -64,6 +80,7 @@ import { useFeatureFlags } from "../featureFlags";
 import { useFocusedChatContext } from "../focusedChatContext";
 import { useFeedbackDialogStore } from "../feedbackDialogStore";
 import type { FeedbackThreadContext } from "../feedback";
+import { invalidateAccountStatus } from "../lib/accountReactQuery";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import {
   invalidateProviderUsageQueries,
@@ -80,11 +97,12 @@ import {
   markPromotedDraftThreads,
   useComposerDraftStore,
 } from "../composerDraftStore";
-import { useStore } from "../store";
+import { useStore, type AppState } from "../store";
 import { EMPTY_THREAD_IDS } from "../storeState";
-import { createAllThreadsSelector, createThreadSelector } from "../storeSelectors";
+import { createThreadSelector } from "../storeSelectors";
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
 import { terminalActivityFromEvent } from "../terminalActivity";
+import { withWorkspaceKeybindings } from "../lib/hosts/workspaceKeybindings";
 import {
   onServerConfigUpdated,
   onServerProviderStatusesUpdated,
@@ -92,6 +110,7 @@ import {
   onServerWelcome,
   onThreadStreamFailure,
   onShellStreamFailure,
+  readLatestServerConfigSnapshot,
 } from "../wsNativeApi";
 import {
   addWsCompatibilityIssueListener,
@@ -99,7 +118,10 @@ import {
   readLatestWsCompatibilityIssue,
 } from "../wsTransportEvents";
 import { providerQueryKeys } from "../lib/providerReactQuery";
-import { invalidateProjectFileQueriesForCwds, projectQueryKeys } from "../lib/projectReactQuery";
+import {
+  invalidateProjectFileQueriesForCwdsAfterActivity,
+  projectQueryKeys,
+} from "../lib/projectReactQuery";
 import {
   collectActiveTerminalThreadIds,
   removeOrphanedTerminalRuntimes,
@@ -138,7 +160,10 @@ import {
 } from "./-threadTerminalFence";
 import { getThreadFromState, getThreadsFromState } from "../threadDerivation";
 import { coalesceOrchestrationUiEvents } from "../orchestrationEventCoalescing";
-import { isThreadDetailVerifiedInSync } from "../threadDetailCatchupPolicy";
+import {
+  isLiveThreadStreamDelivering,
+  isThreadDetailVerifiedInSync,
+} from "../threadDetailCatchupPolicy";
 import { useAppDensity } from "../hooks/useAppDensity";
 import { useChatWidth } from "../hooks/useChatWidth";
 import { useCommittedPathname } from "../hooks/useCommittedPathname";
@@ -149,10 +174,15 @@ import { usePreloadRouteChunks } from "../hooks/usePreloadRouteChunks";
 import { useSyncDesktopTopBarTrafficLightGutterZoom } from "../hooks/useDesktopTopBarGutter";
 import { useTheme } from "../hooks/useTheme";
 import { useNativeFontSmoothing } from "../hooks/useNativeFontSmoothing";
-import { invalidateGitQueries, invalidateGitQueriesForCwds } from "../lib/gitReactQuery";
+import {
+  invalidateGitQueries,
+  refreshGitQueriesForCwdsAfterActivity,
+  refreshLocalGitQueriesForCwdsAfterActivity,
+} from "../lib/gitReactQuery";
 import { shouldRepairDesktopProjectSnapshot } from "../lib/desktopProjectRecovery";
 import {
   registerEmptyRouteRestoreRefresh,
+  registerShellSnapshotRefresh,
   runEmptyRouteRestoreRefresh,
 } from "../routeRestoreRefreshCoordinator";
 import { useDiffRouteSearch } from "../hooks/useDiffRouteSearch";
@@ -195,12 +225,16 @@ import {
   getGitInvalidationThreadIdForEvent,
   getProjectFileInvalidationThreadIdForEvent,
   getStudioOutputInvalidationThreadIdForEvent,
+  getTurnDiffInvalidationThreadIdForEvent,
+  invalidateFinalizedTurnDiffQueries,
+  isLocalGitActivityInvalidationEvent,
   resolveGitInvalidationCwdForThreadId,
   shouldInvalidateGitQueriesForEvent,
   shouldInvalidateProviderQueriesForEvent,
 } from "./-rootEventInvalidation";
 import { createDesktopProjectRecoveryAttemptGate } from "./-desktopProjectRecoveryAttempt";
 import { isSidechatThread } from "@synara/shared/sidechatThread";
+import { t, useTranslation } from "~/i18n";
 
 const SHELL_SNAPSHOT_BOOTSTRAP_FALLBACK_DELAY_MS = 1_500;
 const THREAD_DETAIL_CATCHUP_INTERVAL_MS = 1_500;
@@ -283,6 +317,8 @@ export const Route = createRootRouteWithContext<{
 });
 
 function RootRouteView() {
+  const { t } = useTranslation();
+
   useAppTypography();
   useAppDensity();
   useChatWidth();
@@ -321,7 +357,6 @@ function RootRouteView() {
   const desktopChrome = (
     <>
       <RunningChatsQuitCoordinator />
-      <ServerBusyIndicator />
       {desktopWindowControls}
     </>
   );
@@ -341,7 +376,7 @@ function RootRouteView() {
         <div className="flex h-screen flex-col bg-background text-foreground">
           <div className="flex flex-1 items-center justify-center">
             <p className="text-ui leading-snug text-muted-foreground">
-              Connecting to {APP_DISPLAY_NAME} server...
+              {t("common:connectingTo")} {APP_DISPLAY_NAME} {t("common:server2")}
             </p>
           </div>
         </div>
@@ -362,18 +397,29 @@ function RootRouteView() {
           <GlobalShortcutsDialog />
           <BrowserVaultDialog />
           <GlobalFeedbackDialog />
-          <GlobalWhatsNewSurface />
+          <GlobalAccountDialogs />
+          {/* Mounted globally because the host it asks about registers itself
+              at sign-in, wherever the user happens to be in the app. */}
+          {!readWorkspaceFrame() && <HostDiscoverabilityPrompt />}
+          {!readWorkspaceFrame() && <GlobalWhatsNewSurface />}
           <TaskCompletionNotifications />
           <QueuedComposerDrainCoordinator />
-          {/* Beta welcome must resolve the first-run gate even while Safari is queued. */}
-          <BetaWelcomeDialog />
-          <SafariAccessOnboarding startup>
-            <AppSnapWelcomeDialog>
-              <FeatureTourDialog />
-            </AppSnapWelcomeDialog>
-          </SafariAccessOnboarding>
-          <GlobalOnboardingDialog />
-          <ProjectImportAnnouncementDialog />
+          <NewThreadDefaultsSyncCoordinator />
+          {!readWorkspaceFrame() && (
+            <>
+              {/* Beta welcome resolves the first-run gate while Safari is queued. */}
+              <BetaWelcomeDialog />
+              <SafariAccessOnboarding startup>
+                <AppSnapWelcomeDialog>
+                  <FeatureTourDialog />
+                </AppSnapWelcomeDialog>
+              </SafariAccessOnboarding>
+              <GlobalOnboardingDialog />
+              <ProjectImportAnnouncementDialog />
+              <ProductAnalyticsAnnouncement />
+              <ConnectionLaunchAnnouncements />
+            </>
+          )}
           <GlobalProjectImportDialog />
           <AppSnapCoordinator />
           <DesktopProjectBootstrap />
@@ -386,12 +432,14 @@ function RootRouteView() {
 }
 
 function TransportCompatibilityView({ issue }: { issue: WsCompatibilityError }) {
+  const { t } = useTranslation();
+
   const title =
     issue.action === "update-client"
-      ? "This Synara client needs an update."
+      ? t("common:thisSynaraClientNeedsAnUpdate")
       : issue.action === "update-server"
-        ? "The Synara server needs an update."
-        : "Synara needs to reconnect with a matching build.";
+        ? t("common:theSynaraServerNeedsAnUpdate")
+        : t("common:synaraNeedsToReconnectWithAMatchingBuild");
   const guidance =
     issue.action === "update-client"
       ? "Update or reload this client, then reconnect."
@@ -411,7 +459,7 @@ function TransportCompatibilityView({ issue }: { issue: WsCompatibilityError }) 
         <p className="mt-2 text-ui leading-relaxed text-muted-foreground">{issue.message}</p>
         <p className="mt-2 text-ui leading-relaxed text-muted-foreground">{guidance}</p>
         <p className="mt-4 text-ui leading-snug text-muted-foreground/80">
-          Client {APP_VERSION} · Server {issue.serverBuild}
+          {t("common:client")} {APP_VERSION} {t("common:server")} {issue.serverBuild}
         </p>
         <div className="mt-5">
           <Button
@@ -419,7 +467,7 @@ function TransportCompatibilityView({ issue }: { issue: WsCompatibilityError }) 
             className={dialogActionButtonClassName}
             onClick={() => window.location.reload()}
           >
-            Reload app
+            {t("common:common_reloadApp")}
           </Button>
         </div>
       </section>
@@ -553,11 +601,11 @@ async function runProviderUpdateAll(params: {
     trackedToast?.toastId ??
     toastManager.add({
       type: "loading",
-      title: "Updating providers...",
+      title: t("common:common_updatingProviders"),
       description:
         providers.length === 1
-          ? `Updating ${providerStatusDisplayName(providers[0]!)}.`
-          : `Updating ${providers.length} providers.`,
+          ? t("common:updating", { value0: providerStatusDisplayName(providers[0]!) })
+          : t("common:updatingProviders", { value0: providers.length }),
       timeout: 0,
     });
   activeToastRef.current = { kind: "update", key: activeNotificationKey, toastId };
@@ -571,11 +619,11 @@ async function runProviderUpdateAll(params: {
 
   toastManager.update(toastId, {
     type: "loading",
-    title: "Updating providers...",
+    title: t("common:common_updatingProviders"),
     description:
       providers.length === 1
-        ? `Updating ${providerStatusDisplayName(providers[0]!)}.`
-        : `Updating ${providers.length} providers.`,
+        ? t("common:updating", { value0: providerStatusDisplayName(providers[0]!) })
+        : t("common:updatingProviders", { value0: providers.length }),
     actionProps: undefined,
     data: { onClose: dismissProgressToast },
     timeout: 0,
@@ -669,11 +717,14 @@ async function runProviderUpdateAll(params: {
       type: "error",
       title:
         failures.length === providers.length
-          ? "Provider updates failed"
-          : "Some provider updates failed",
+          ? t("common:common_providerUpdatesFailed")
+          : t("common:common_someProviderUpdatesFailed"),
       description:
         manualCommands.length > 0
-          ? `${failureLines}\n\nCopy the command${manualCommands.length === 1 ? "" : "s"} below to update manually in a terminal.`
+          ? t("common:copyTheCommandsBelowToUpdateManuallyInA", {
+              failures: failureLines,
+              count: manualCommands.length,
+            })
           : failureLines,
       data: {
         onClose: dismissProgressToast,
@@ -689,9 +740,9 @@ async function runProviderUpdateAll(params: {
     type: "success",
     title:
       providers.length === 1
-        ? `${providerStatusDisplayName(providers[0]!)} updated`
-        : `${providers.length} providers updated`,
-    description: "New sessions will use the refreshed provider tools.",
+        ? t("common:updated2", { value0: providerStatusDisplayName(providers[0]!) })
+        : t("common:providersUpdated", { value0: providers.length }),
+    description: t("common:common_refreshedProviderTools"),
     data: { onClose: dismissProgressToast },
     timeout: 6000,
   });
@@ -702,6 +753,8 @@ function ProviderUpdateNotifications({
 }: {
   readonly liveVersionCheckCompleted: boolean;
 }) {
+  const { t } = useTranslation();
+
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { settings } = useAppSettings();
@@ -765,12 +818,15 @@ function ProviderUpdateNotifications({
     const providerName = providerStatusDisplayName(firstProvider);
     const title =
       outdatedProviders.length === 1
-        ? `${providerName} update available`
-        : `${outdatedProviders.length} provider updates available`;
+        ? t("common:updateAvailable", { value0: providerName })
+        : t("common:providerUpdatesAvailable", { value0: outdatedProviders.length });
     const description =
       outdatedProviders.length === 1
-        ? `${providerName} has a newer version available.`
-        : `${providerName} and ${additionalCount} more provider${additionalCount === 1 ? "" : "s"} have newer versions available.`;
+        ? t("common:hasANewerVersionAvailable", { value0: providerName })
+        : t("common:updatesAvailableForAndMoreProviders", {
+            provider: providerName,
+            count: additionalCount,
+          });
 
     let toastId!: ProviderUpdateToastId;
     const closeTrackedPrompt = () => {
@@ -785,7 +841,7 @@ function ProviderUpdateNotifications({
       description,
       timeout: 0,
       actionProps: {
-        children: "Review updates",
+        children: t("common:providerReviewUpdates"),
         onClick: () => {
           if (activeToastRef.current?.toastId === toastId) {
             toastManager.close(toastId);
@@ -800,7 +856,7 @@ function ProviderUpdateNotifications({
       data: {
         onClose: closeTrackedPrompt,
         secondaryActionProps: {
-          children: "Update all",
+          children: t("common:providerUpdateAll"),
           onClick: () => {
             void updateAll(oneClickProviders);
           },
@@ -808,7 +864,15 @@ function ProviderUpdateNotifications({
       },
     });
     activeToastRef.current = { kind: "prompt", key: notificationKey, toastId };
-  }, [isUpdatingAll, navigate, notificationKey, oneClickProviders, outdatedProviders, updateAll]);
+  }, [
+    isUpdatingAll,
+    navigate,
+    notificationKey,
+    oneClickProviders,
+    outdatedProviders,
+    updateAll,
+    t,
+  ]);
 
   return null;
 }
@@ -848,19 +912,28 @@ function GlobalShortcutsDialog() {
     };
   }, []);
 
+  const [hasOpened, setHasOpened] = useState(false);
+  useEffect(() => {
+    if (open) setHasOpened(true);
+  }, [open]);
+
+  if (!hasOpened) return null;
+
   return (
-    <ShortcutsDialog
-      open={open}
-      onOpenChange={setOpen}
-      keybindings={keybindings}
-      projectScripts={activeProject?.kind === "project" ? activeProject.scripts : []}
-      platform={platform}
-      context={{
-        terminalFocus: isTerminalFocused(),
-        terminalOpen,
-        terminalWorkspaceOpen,
-      }}
-    />
+    <Suspense fallback={null}>
+      <ShortcutsDialog
+        open={open}
+        onOpenChange={setOpen}
+        keybindings={keybindings}
+        projectScripts={activeProject?.kind === "project" ? activeProject.scripts : []}
+        platform={platform}
+        context={{
+          terminalFocus: isTerminalFocused(),
+          terminalOpen,
+          terminalWorkspaceOpen,
+        }}
+      />
+    </Suspense>
   );
 }
 
@@ -890,7 +963,18 @@ function GlobalFeedbackDialog() {
     hasThreadError: Boolean(activeThread?.error),
   };
 
-  return <FeedbackDialog open={isOpen} context={context} onOpenChange={setOpen} />;
+  const [hasOpened, setHasOpened] = useState(false);
+  useEffect(() => {
+    if (isOpen) setHasOpened(true);
+  }, [isOpen]);
+
+  if (!hasOpened) return null;
+
+  return (
+    <Suspense fallback={null}>
+      <FeedbackDialog open={isOpen} context={context} onOpenChange={setOpen} />
+    </Suspense>
+  );
 }
 
 // The dialog pulls in the provider sign-in terminal (xterm and addons), so it stays out
@@ -983,6 +1067,8 @@ function GlobalWhatsNewSurface() {
 }
 
 function RootRouteErrorView({ error, reset }: ErrorComponentProps) {
+  const { t } = useTranslation();
+
   const message = errorMessage(error);
   const details = errorDetails(error);
 
@@ -995,12 +1081,14 @@ function RootRouteErrorView({ error, reset }: ErrorComponentProps) {
 
       <section className="relative w-full max-w-xl rounded-2xl border border-border/80 bg-card/90 p-6 shadow-2xl shadow-black/20 backdrop-blur-md sm:p-8">
         <p className="text-ui-sm font-semibold text-muted-foreground">{APP_DISPLAY_NAME}</p>
-        <h1 className="mt-3 text-2xl font-semibold sm:text-3xl">Something went wrong.</h1>
+        <h1 className="mt-3 text-2xl font-semibold sm:text-3xl">
+          {t("common:somethingWentWrong")}
+        </h1>
         <p className="mt-2 text-ui leading-relaxed text-muted-foreground">{message}</p>
 
         <div className="mt-5 flex flex-wrap gap-2">
           <Button size="sm" className={dialogActionButtonClassName} onClick={() => reset()}>
-            Try again
+            {t("chat:profile_tryAgain")}
           </Button>
           <Button
             size="sm"
@@ -1008,14 +1096,14 @@ function RootRouteErrorView({ error, reset }: ErrorComponentProps) {
             className={dialogActionButtonClassName}
             onClick={() => window.location.reload()}
           >
-            Reload app
+            {t("common:common_reloadApp")}
           </Button>
         </div>
 
         <details className="group mt-5 overflow-hidden rounded-lg border border-border/70 bg-background/55">
           <summary className="cursor-pointer list-none px-3 py-2 text-ui leading-snug font-medium text-muted-foreground">
-            <span className="group-open:hidden">Show error details</span>
-            <span className="hidden group-open:inline">Hide error details</span>
+            <span className="group-open:hidden">{t("common:common_showErrorDetails")}</span>
+            <span className="hidden group-open:inline">{t("common:common_hideErrorDetails")}</span>
           </summary>
           <pre className="max-h-56 overflow-auto border-t border-border/70 bg-background/80 px-3 py-2 text-xs text-foreground/85">
             {details}
@@ -1035,7 +1123,7 @@ function errorMessage(error: unknown): string {
     return error;
   }
 
-  return "An unexpected router error occurred.";
+  return t("common:common_unexpectedRouterError");
 }
 
 function errorDetails(error: unknown): string {
@@ -1119,8 +1207,7 @@ function isThreadDetailEventForThread(event: OrchestrationEvent, threadId: Threa
 function shouldPollThreadDetailCatchup(threadId: ThreadId): boolean {
   const thread = getThreadFromState(useStore.getState(), threadId);
   return (
-    thread?.session?.orchestrationStatus === "running" ||
-    thread?.latestTurn?.state === "running" ||
+    isSessionOrLatestTurnRunning(thread?.session?.orchestrationStatus, thread?.latestTurn?.state) ||
     hasPendingTurnDispatch(threadId)
   );
 }
@@ -1196,9 +1283,10 @@ function isPendingInteractionDetailMissing(threadId: ThreadId): boolean {
 function shouldReconcileThreadProjection(threadId: ThreadId): boolean {
   const thread = getThreadFromState(useStore.getState(), threadId);
   return (
-    thread?.session?.orchestrationStatus === "starting" ||
-    thread?.session?.orchestrationStatus === "running" ||
-    thread?.latestTurn?.state === "running" ||
+    isSessionOrLatestTurnStartingOrRunning(
+      thread?.session?.orchestrationStatus,
+      thread?.latestTurn?.state,
+    ) ||
     thread?.messages.some((message) => message.role === "assistant" && message.streaming) ===
       true ||
     isPendingInteractionDetailMissing(threadId) ||
@@ -1229,6 +1317,8 @@ function releaseOrphanedThreadDetail(input: {
 }
 
 function EventRouter() {
+  const { t } = useTranslation();
+
   useDeviceEventBridge();
   useComputerEventBridge();
   const syncServerShellSnapshot = useStore((store) => store.syncServerShellSnapshot);
@@ -1337,7 +1427,10 @@ function EventRouter() {
     let needsProviderInvalidation = false;
     let needsBroadGitInvalidation = false;
     let pendingGitInvalidationThreadIds = new Set<ThreadId>();
+    // Tool completions: local Git state only (no GitHub repository / pull-request reads).
+    let pendingLocalGitInvalidationThreadIds = new Set<ThreadId>();
     let pendingProjectFileInvalidationThreadIds = new Set<ThreadId>();
+    let pendingTurnDiffInvalidationThreadIds = new Set<ThreadId>();
     let pendingStudioOutputInvalidationThreadIds = new Set<ThreadId>();
     let pendingDomainEvents: OrchestrationEvent[] = [];
     const immediatelyFlushedAssistantMessageIds = new Set<string>();
@@ -1424,6 +1517,9 @@ function EventRouter() {
       lastProjectionReconciledAt: number | null;
     }
     const threadCatchupBackoffById = new Map<ThreadId, ThreadCatchupBackoff>();
+    // When each subscribed thread's own live stream last applied an event; replay
+    // polls wait for a delivering stream to go quiet (threadDetailCatchupPolicy).
+    const lastLiveThreadEventAtById = new Map<ThreadId, number>();
     const resolveThreadCatchupBackoff = (threadId: ThreadId): ThreadCatchupBackoff => {
       const turnId = getThreadFromState(useStore.getState(), threadId)?.latestTurn?.turnId ?? null;
       let entry = threadCatchupBackoffById.get(threadId);
@@ -1505,6 +1601,7 @@ function EventRouter() {
       threadProjectionReconcilePendingById.delete(threadId);
       clearThreadProjectionTerminalFence(threadId);
       threadCatchupBackoffById.delete(threadId);
+      lastLiveThreadEventAtById.delete(threadId);
       nextThreadSubscriptionGeneration += 1;
       threadSubscriptionGenerationById.set(threadId, nextThreadSubscriptionGeneration);
       nextThreadProjectionReconcileAtById.set(
@@ -1554,6 +1651,7 @@ function EventRouter() {
         backoff.nextReplayAt = 0;
         backoff.appliedEventSerial += 1;
       }
+      if (source === "stream") lastLiveThreadEventAtById.set(threadId, Date.now());
       return true;
     };
 
@@ -1612,6 +1710,7 @@ function EventRouter() {
         threadSubscriptionGenerationById.delete(threadId);
         nextThreadProjectionReconcileAtById.delete(threadId);
         threadCatchupBackoffById.delete(threadId);
+        lastLiveThreadEventAtById.delete(threadId);
         subscribedThreadIds.delete(threadId);
       }
       // A retention eviction can refresh a thread whose lease is dropping in the
@@ -1665,8 +1764,8 @@ function EventRouter() {
           toastManager.add({
             id: `stream-overflow:retry-failed:${threadId}`,
             type: "error",
-            title: "Unable to resume thread updates",
-            description: "Try again when the server responds.",
+            title: t("common:unableToResumeThreadUpdates"),
+            description: t("common:tryAgainWhenTheServerResponds"),
             data: { threadId },
           });
         }
@@ -1764,10 +1863,17 @@ function EventRouter() {
     };
 
     const applyQueriedShellSnapshot = (snapshot: OrchestrationShellSnapshot) => {
-      if (!shouldApplyBootstrapShellSnapshot(snapshot)) {
-        return false;
+      if (shouldApplyBootstrapShellSnapshot(snapshot)) {
+        return applyAuthoritativeShellSnapshot(snapshot);
       }
-      return applyAuthoritativeShellSnapshot(snapshot);
+      // A fresh empty-shell proof can settle route recovery without replacing hydrated state.
+      return (
+        !disposed &&
+        shellSnapshotSequence >= 0 &&
+        snapshot.snapshotSequence >= shellSnapshotSequence &&
+        snapshot.emptyThreadShellVerified === true &&
+        snapshot.threads.length === 0
+      );
     };
 
     // The live shell stream normally delivers the bootstrap snapshot. Only
@@ -1811,6 +1917,13 @@ function EventRouter() {
       }, SHELL_SNAPSHOT_BOOTSTRAP_FALLBACK_DELAY_MS);
     };
 
+    const unregisterShellSnapshotRefresh = registerShellSnapshotRefresh(async (minSequence) => {
+      if (disposed) return false;
+      if (shellSnapshotSequence >= minSequence) return true;
+      const snapshot = await api.orchestration.getShellSnapshot();
+      applyAuthoritativeShellSnapshot(snapshot);
+      return !disposed && shellSnapshotSequence >= minSequence;
+    });
     const unregisterEmptyRouteRestoreRefresh = registerEmptyRouteRestoreRefresh(() =>
       runEmptyRouteRestoreRefresh({
         getShellSnapshot: () => api.orchestration.getShellSnapshot(),
@@ -1821,11 +1934,36 @@ function EventRouter() {
       }),
     );
 
+    // Counts successful socket opens so the first welcome can tell whether the
+    // mount-time bootstrap already subscribed on the connection that sent it.
+    // Requests issued while connecting land on the next open, hence `+ 1`.
+    let transportOpenCount = 0;
+    let transportOpen = false;
+    const unsubTransportOpenCount = addWsTransportStateListener(
+      (state) => {
+        if (state === "open" && !transportOpen) {
+          transportOpenCount += 1;
+          // Boot hydrates from subscribeConfig. A reconnect must replace any
+          // config left in React Query from the previous socket.
+          if (transportOpenCount > 1) {
+            void refreshServerConfigAfterTransportOpen(queryClient).catch(() => undefined);
+          }
+        }
+        transportOpen = state === "open";
+      },
+      { replayCurrent: true },
+    );
+    const currentTransportConnection = () =>
+      transportOpen ? transportOpenCount : transportOpenCount + 1;
+    let scopedSubscriptionConnection: number | null = null;
+    let awaitingInitialWelcome = true;
+
     let scopedSubscriptionRefresh: Promise<void> | null = null;
     const ensureScopedSubscriptions = () => {
       if (scopedSubscriptionRefresh) {
         return scopedSubscriptionRefresh;
       }
+      scopedSubscriptionConnection = currentTransportConnection();
       shellSubscriptionGeneration += 1;
       const generation = shellSubscriptionGeneration;
       if (shellSnapshotFallbackTimer !== null) {
@@ -1853,6 +1991,7 @@ function EventRouter() {
           threadSubscriptionGenerationById.clear();
           nextThreadProjectionReconcileAtById.clear();
           threadCatchupBackoffById.clear();
+          lastLiveThreadEventAtById.clear();
           const previousThreadIds = [...subscribedThreadIds];
           subscribedThreadIds.clear();
           // Reconnect drops every lease at once, so the reconcile below sees no
@@ -1909,11 +2048,25 @@ function EventRouter() {
       if (needsProviderInvalidation) {
         needsProviderInvalidation = false;
         pendingProjectFileInvalidationThreadIds = new Set();
+        pendingTurnDiffInvalidationThreadIds = new Set();
         void queryClient.invalidateQueries({ queryKey: providerQueryKeys.all });
         // Invalidate workspace entry queries so the @-mention file picker
         // reflects files created, deleted, or restored during this turn.
         void queryClient.invalidateQueries({ queryKey: projectQueryKeys.all });
-      } else if (pendingProjectFileInvalidationThreadIds.size > 0) {
+      } else if (pendingTurnDiffInvalidationThreadIds.size > 0) {
+        // Scoped to the finalized turns' threads; their file queries ride the
+        // file-change pass below unless every project cache was already dropped.
+        const scoped = invalidateFinalizedTurnDiffQueries(
+          queryClient,
+          useStore.getState(),
+          pendingTurnDiffInvalidationThreadIds,
+        );
+        pendingTurnDiffInvalidationThreadIds = new Set();
+        if (!scoped) {
+          pendingProjectFileInvalidationThreadIds = new Set();
+        }
+      }
+      if (pendingProjectFileInvalidationThreadIds.size > 0) {
         // Mid-turn file-change activities: refresh the editor file tree and
         // open file preview for just the affected workspaces.
         const currentState = useStore.getState();
@@ -1926,7 +2079,7 @@ function EventRouter() {
         }
         pendingProjectFileInvalidationThreadIds = new Set();
         if (fileChangeCwds.size > 0) {
-          void invalidateProjectFileQueriesForCwds(queryClient, fileChangeCwds);
+          invalidateProjectFileQueriesForCwdsAfterActivity(queryClient, fileChangeCwds);
         } else {
           void queryClient.invalidateQueries({ queryKey: projectQueryKeys.all });
         }
@@ -1943,24 +2096,40 @@ function EventRouter() {
       if (needsBroadGitInvalidation) {
         needsBroadGitInvalidation = false;
         pendingGitInvalidationThreadIds = new Set();
+        pendingLocalGitInvalidationThreadIds = new Set();
         void invalidateGitQueries(queryClient);
-      } else if (pendingGitInvalidationThreadIds.size > 0) {
+      } else if (
+        pendingGitInvalidationThreadIds.size > 0 ||
+        pendingLocalGitInvalidationThreadIds.size > 0
+      ) {
         const currentState = useStore.getState();
         const scopedCwds = new Set<string>();
+        const localCwds = new Set<string>();
         let hasUnresolvedThread = false;
-        for (const threadId of pendingGitInvalidationThreadIds) {
-          const cwd = resolveGitInvalidationCwdForThreadId(currentState, threadId);
-          if (cwd) {
-            scopedCwds.add(cwd);
-          } else {
-            hasUnresolvedThread = true;
+        for (const [threadIds, cwds] of [
+          [pendingGitInvalidationThreadIds, scopedCwds],
+          [pendingLocalGitInvalidationThreadIds, localCwds],
+        ] as const) {
+          for (const threadId of threadIds) {
+            const cwd = resolveGitInvalidationCwdForThreadId(currentState, threadId);
+            if (cwd) {
+              cwds.add(cwd);
+            } else {
+              hasUnresolvedThread = true;
+            }
           }
         }
         pendingGitInvalidationThreadIds = new Set();
-        if (hasUnresolvedThread || scopedCwds.size === 0) {
+        pendingLocalGitInvalidationThreadIds = new Set();
+        if (hasUnresolvedThread || (scopedCwds.size === 0 && localCwds.size === 0)) {
           void invalidateGitQueries(queryClient);
         } else {
-          void invalidateGitQueriesForCwds(queryClient, scopedCwds);
+          refreshGitQueriesForCwdsAfterActivity(queryClient, scopedCwds);
+          // A full refresh for the same checkout already covers its local state.
+          refreshLocalGitQueriesForCwdsAfterActivity(
+            queryClient,
+            [...localCwds].filter((cwd) => !scopedCwds.has(cwd)),
+          );
         }
       }
     };
@@ -1979,6 +2148,10 @@ function EventRouter() {
       if (shouldInvalidateProviderQueriesForEvent(event)) {
         needsProviderInvalidation = true;
       }
+      const turnDiffThreadId = getTurnDiffInvalidationThreadIdForEvent(event);
+      if (turnDiffThreadId) {
+        pendingTurnDiffInvalidationThreadIds.add(turnDiffThreadId);
+      }
       const projectFileThreadId = getProjectFileInvalidationThreadIdForEvent(event);
       if (projectFileThreadId) {
         pendingProjectFileInvalidationThreadIds.add(projectFileThreadId);
@@ -1989,7 +2162,9 @@ function EventRouter() {
       }
       if (shouldInvalidateGitQueriesForEvent(event)) {
         const threadId = getGitInvalidationThreadIdForEvent(event);
-        if (threadId) {
+        if (threadId && isLocalGitActivityInvalidationEvent(event)) {
+          pendingLocalGitInvalidationThreadIds.add(threadId);
+        } else if (threadId) {
           pendingGitInvalidationThreadIds.add(threadId);
         } else {
           needsBroadGitInvalidation = true;
@@ -2157,7 +2332,8 @@ function EventRouter() {
         if (projectionSettlesCurrentTurn || projectionRepairsTerminalFence) {
           // Mirror terminal-event invalidation when recovery came from the
           // projection rather than the live stream.
-          needsProviderInvalidation = true;
+          pendingTurnDiffInvalidationThreadIds.add(threadId);
+          pendingProjectFileInvalidationThreadIds.add(threadId);
           pendingGitInvalidationThreadIds.add(threadId);
           pendingStudioOutputInvalidationThreadIds.add(threadId);
           domainEventFlushThrottler.maybeExecute();
@@ -2173,30 +2349,30 @@ function EventRouter() {
           if (threadProjectionReconcilePendingById.get(threadId) === subscriptionGeneration) {
             threadProjectionReconcilePendingById.delete(threadId);
             void reconcileThreadProjection(threadId).catch(() => undefined);
-            return;
-          }
-          if (projectionAttemptFailed) {
-            // A failed reconcile is not evidence of a quiet healthy stream.
-            // Retry it at the base cadence, while preserving backoff when the
-            // snapshot was merely superseded by newer live events.
-            resolveThreadCatchupBackoff(threadId).reconcileNoopStreak = 0;
-          }
-          // Never retire the fence on a still-running snapshot or one taken at
-          // the exact session-set sequence before buffered assistant finals land.
-          if (projectionConfirmed && projectionSatisfiesTerminalFence) {
-            clearThreadProjectionTerminalFence(threadId);
-          }
-          if (
-            threadProjectionTerminalFencePending.has(threadId) ||
-            shouldReconcileThreadProjection(threadId) ||
-            isDraftThreadAwaitingProjection(threadId)
-          ) {
-            nextThreadProjectionReconcileAtById.set(
-              threadId,
-              Date.now() + nextThreadProjectionReconcileDelayMs(threadId),
-            );
           } else {
-            nextThreadProjectionReconcileAtById.delete(threadId);
+            if (projectionAttemptFailed) {
+              // A failed reconcile is not evidence of a quiet healthy stream.
+              // Retry it at the base cadence, while preserving backoff when the
+              // snapshot was merely superseded by newer live events.
+              resolveThreadCatchupBackoff(threadId).reconcileNoopStreak = 0;
+            }
+            // Never retire the fence on a still-running snapshot or one taken at
+            // the exact session-set sequence before buffered assistant finals land.
+            if (projectionConfirmed && projectionSatisfiesTerminalFence) {
+              clearThreadProjectionTerminalFence(threadId);
+            }
+            if (
+              threadProjectionTerminalFencePending.has(threadId) ||
+              shouldReconcileThreadProjection(threadId) ||
+              isDraftThreadAwaitingProjection(threadId)
+            ) {
+              nextThreadProjectionReconcileAtById.set(
+                threadId,
+                Date.now() + nextThreadProjectionReconcileDelayMs(threadId),
+              );
+            } else {
+              nextThreadProjectionReconcileAtById.delete(threadId);
+            }
           }
         }
       }
@@ -2239,6 +2415,10 @@ function EventRouter() {
       }
       shellSnapshotSequence = item.sequence;
       toastManager.close("stream-overflow:shell");
+      const previousSessionStatus =
+        item.kind === "thread-upserted"
+          ? (useStore.getState().threadSessionById?.[item.thread.id]?.status ?? null)
+          : null;
       applyShellEvent(item);
       if (item.kind === "thread-upserted") {
         reconcilePromotedDraftsFromShellThreads([item.thread]);
@@ -2256,7 +2436,12 @@ function EventRouter() {
         item.thread.session !== null &&
         isTerminalThreadSessionStatus(item.thread.session.status)
       ) {
-        armThreadProjectionTerminalFence(item.thread.id, item.sequence);
+        if (
+          previousSessionStatus === null ||
+          !isTerminalThreadSessionStatus(previousSessionStatus)
+        ) {
+          armThreadProjectionTerminalFence(item.thread.id, item.sequence);
+        }
       } else if (
         item.kind === "thread-upserted" &&
         subscribedThreadIds.has(item.thread.id) &&
@@ -2423,9 +2608,8 @@ function EventRouter() {
       toastManager.add({
         id: toastId,
         type: "error",
-        title: "Workspace updates paused",
-        description:
-          "The update stream could not keep up after repeated retries. Retry to resume workspace updates.",
+        title: t("common:workspaceUpdatesPaused"),
+        description: t("common:theUpdateStreamCouldNotKeepUpAfterRepeated"),
         timeout: 0,
         actionProps: {
           children: "Retry updates",
@@ -2442,8 +2626,8 @@ function EventRouter() {
               toastManager.add({
                 id: "stream-overflow:shell:retry-failed",
                 type: "error",
-                title: "Unable to resume workspace updates",
-                description: "Try again when the server responds.",
+                title: t("common:unableToResumeWorkspaceUpdates"),
+                description: t("common:tryAgainWhenTheServerResponds"),
               });
             });
           },
@@ -2467,12 +2651,14 @@ function EventRouter() {
       if (failure.code === ORCHESTRATION_STREAM_OVERFLOW_CODE) {
         const toastId = threadOverflowToastId(threadId);
         const threadTitle = getThreadFromState(useStore.getState(), threadId)?.title;
-        const threadLabel = threadTitle ? `“${threadTitle}”` : "this thread";
+        const threadLabel = threadTitle
+          ? t("common:symbol4", { value0: threadTitle })
+          : t("common:thisThread");
         toastManager.add({
           id: toastId,
           type: "error",
-          title: "Thread updates paused",
-          description: `The update stream for ${threadLabel} could not keep up after repeated retries. Retry to resume updates.`,
+          title: t("common:threadUpdatesPaused"),
+          description: t("common:theUpdateStreamForCouldNotKeepUpAfter", { value0: threadLabel }),
           timeout: 0,
           data: { threadId },
           actionProps: {
@@ -2519,7 +2705,9 @@ function EventRouter() {
         if (event.cliKind || currentCliKind !== null) {
           terminalStore.setTerminalMetadata(terminalThreadId, event.terminalId, {
             cliKind: event.cliKind,
-            label: event.cliKind ? defaultTerminalTitleForCliKind(event.cliKind) : "Terminal",
+            label: event.cliKind
+              ? defaultTerminalTitleForCliKind(event.cliKind)
+              : t("workspace:viewportPane_terminal"),
           });
         }
       }
@@ -2569,7 +2757,17 @@ function EventRouter() {
           studioWorkspaceRoot: payload.studioWorkspaceRoot,
           groupsWorkspaceRoot: payload.groupsWorkspaceRoot,
         });
-        await ensureScopedSubscriptions();
+        // The first welcome of the connection the mount-time bootstrap already
+        // subscribed on carries nothing new. Resubscribing would interrupt the open
+        // chat's snapshot and load it twice; later welcomes still resynchronize.
+        const coveredByBootstrap =
+          awaitingInitialWelcome && scopedSubscriptionConnection === currentTransportConnection();
+        awaitingInitialWelcome = false;
+        if (coveredByBootstrap) {
+          await scopedSubscriptionRefresh;
+        } else {
+          await ensureScopedSubscriptions();
+        }
         if (disposed) {
           return;
         }
@@ -2596,9 +2794,21 @@ function EventRouter() {
     // onServerConfigUpdated replays the latest cached value synchronously
     // during subscribe. Skip the toast for that replay so effect re-runs
     // don't produce duplicate toasts.
+    const unsubWorkspaceKeybindings = subscribeWorkspaceKeybindings(
+      queryClient,
+      serverQueryKeys.config(),
+    );
     let subscribed = false;
     const unsubServerConfigUpdated = onServerConfigUpdated((payload) => {
-      void queryClient.invalidateQueries({ queryKey: serverQueryKeys.config() });
+      const streamSnapshot = readLatestServerConfigSnapshot();
+      if (streamSnapshot !== null) {
+        queryClient.setQueryData<ServerConfig>(serverQueryKeys.config(), (current) => {
+          const hydrated = withWorkspaceKeybindings(streamSnapshot);
+          return current ? { ...hydrated, providers: current.providers } : hydrated;
+        });
+      } else {
+        void queryClient.invalidateQueries({ queryKey: serverQueryKeys.config() });
+      }
       if (!subscribed) return;
       const issue = payload.issues.find((entry) => entry.kind.startsWith("keybindings."));
       if (!issue) {
@@ -2607,7 +2817,7 @@ function EventRouter() {
 
       toastManager.add({
         type: "warning",
-        title: "Invalid keybindings configuration",
+        title: t("common:common_invalidKeybindingsConfig"),
         description: issue.message,
         actionProps: {
           children: "Open keybindings.json",
@@ -2624,9 +2834,11 @@ function EventRouter() {
               .catch((error) => {
                 toastManager.add({
                   type: "error",
-                  title: "Unable to open keybindings file",
+                  title: t("common:advanced_unableToOpenKeybindings"),
                   description:
-                    error instanceof Error ? error.message : "Unknown error opening file.",
+                    error instanceof Error
+                      ? error.message
+                      : t("common:common_unknownErrorOpeningFile"),
                 });
               });
           },
@@ -2666,15 +2878,9 @@ function EventRouter() {
         });
       }
     });
-    const unsubWsTransportState = addWsTransportStateListener(
-      (state) => {
-        if (state !== "open") return;
-        // Reopening the socket is a projection boundary. React Query otherwise
-        // keeps the previous infinite-stale config and can strand "Checking".
-        void refreshServerConfigAfterTransportOpen(queryClient).catch(() => undefined);
-      },
-      { replayCurrent: true },
-    );
+    const unsubControllerState = onControllerStateChange((state) => {
+      if (state === "open") void invalidateAccountStatus(queryClient).catch(() => undefined);
+    });
     const unsubServerSettingsUpdated = onServerSettingsUpdated((payload) => {
       const previousSettings = queryClient.getQueryData<ServerSettingsView>(
         serverQueryKeys.settings(),
@@ -2687,9 +2893,18 @@ function EventRouter() {
         // Another window toggled it; the local patch path already invalidates its own.
         void queryClient.invalidateQueries({ queryKey: providerDiscoveryQueryKeys.all });
       }
-      void queryClient.invalidateQueries({
-        queryKey: serverSettingsQueryOptions().queryKey,
-      });
+      // A composer pick only moves the shared new-chat defaults, which the push
+      // already carries whole; refetching on each one would only add load.
+      // Likewise, initial hydration (`previousSettings === undefined`) already
+      // placed the authoritative server snapshot in cache via `setQueryData`.
+      if (
+        previousSettings !== undefined &&
+        settingsChangedBeyondNewThreadDefaults(previousSettings, payload.settings)
+      ) {
+        void queryClient.invalidateQueries({
+          queryKey: serverSettingsQueryOptions().queryKey,
+        });
+      }
     });
     subscribed = true;
     void ensureScopedSubscriptions();
@@ -2708,9 +2923,15 @@ function EventRouter() {
           } else if (
             // A pending dispatch is the exact lost-event failure this poll
             // repairs, so it always polls at base cadence; otherwise honor the
-            // empty-replay backoff (reset on any applied event or a new turn).
+            // empty-replay backoff (reset on any applied event or a new turn)
+            // and wait for a delivering live stream to go quiet first.
             hasPendingTurnDispatch(threadId) ||
-            now >= resolveThreadCatchupBackoff(threadId).nextReplayAt
+            (now >= resolveThreadCatchupBackoff(threadId).nextReplayAt &&
+              !isLiveThreadStreamDelivering(
+                lastLiveThreadEventAtById.get(threadId) ?? null,
+                now,
+                THREAD_DETAIL_CATCHUP_INTERVAL_MS,
+              ))
           ) {
             // A late replay result must not recreate backoff state for a thread
             // whose lease was dropped (cleanup deleted it) or re-leased (a new
@@ -2787,6 +3008,8 @@ function EventRouter() {
       needsProviderInvalidation = false;
       needsBroadGitInvalidation = false;
       pendingGitInvalidationThreadIds = new Set();
+      pendingLocalGitInvalidationThreadIds = new Set();
+      pendingTurnDiffInvalidationThreadIds = new Set();
       pendingStudioOutputInvalidationThreadIds = new Set();
       threadProjectionReconcileInFlight.clear();
       threadProjectionTerminalFencePending.clear();
@@ -2795,9 +3018,11 @@ function EventRouter() {
       threadSubscriptionGenerationById.clear();
       nextThreadProjectionReconcileAtById.clear();
       threadCatchupBackoffById.clear();
+      lastLiveThreadEventAtById.clear();
       domainEventFlushThrottler.cancel();
       reconcileThreadSubscriptionsRef.current = null;
       unregisterEmptyRouteRestoreRefresh();
+      unregisterShellSnapshotRefresh();
       unregisterThreadDetailSyncRetry();
       void api.orchestration.unsubscribeShell().catch(() => undefined);
       // Same shape as reconnect: every lease drops at once, and a remount re-leases
@@ -2821,8 +3046,10 @@ function EventRouter() {
       unsubDevServerEvent();
       unsubWelcome();
       unsubServerConfigUpdated();
+      unsubWorkspaceKeybindings?.();
       unsubProviderStatusesUpdated();
-      unsubWsTransportState();
+      unsubControllerState();
+      unsubTransportOpenCount();
       unsubServerSettingsUpdated();
     };
   }, [
@@ -2848,11 +3075,32 @@ function EventRouter() {
   return null;
 }
 
+function selectNeedsDesktopProjectRecovery(state: AppState): boolean {
+  if (!state.threadsHydrated) return false;
+  if (state.projects.length === 0) return true;
+  const projectIds = new Set<string>();
+  for (let i = 0; i < state.projects.length; i += 1) {
+    projectIds.add(state.projects[i]!.id);
+  }
+  const threadIds = state.threadIds ?? [];
+  const threadShellById = state.threadShellById;
+  if (!threadShellById) return false;
+  for (let i = 0; i < threadIds.length; i += 1) {
+    const shell = threadShellById[threadIds[i]!];
+    if (shell && !projectIds.has(shell.projectId)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function DesktopProjectBootstrap() {
   const syncServerReadModel = useStore((store) => store.syncServerReadModel);
-  const projects = useStore((store) => store.projects);
-  const threads = useStore(selectAllThreads);
-  const threadsHydrated = useStore((store) => store.threadsHydrated);
+  const needsRecovery = useStore(selectNeedsDesktopProjectRecovery);
+  // Project inventory and thread membership can unblock a previously failed
+  // recovery without changing the missing-project predicate or rerunning for deltas.
+  const projects = useStore((store) => (needsRecovery ? store.projects : null));
+  const threadIds = useStore((store) => (needsRecovery ? store.threadIds : null));
   const recoveryAttemptGateRef = useRef<ReturnType<
     typeof createDesktopProjectRecoveryAttemptGate
   > | null>(null);
@@ -2864,13 +3112,7 @@ function DesktopProjectBootstrap() {
   useEffect(() => {
     let disposed = false;
     const api = readNativeApi();
-    if (!api || !threadsHydrated) {
-      return;
-    }
-
-    const projectIds = new Set(projects.map((project) => project.id));
-    const hasThreadWithoutProject = threads.some((thread) => !projectIds.has(thread.projectId));
-    if (projects.length > 0 && !hasThreadWithoutProject) {
+    if (!api || !needsRecovery) {
       return;
     }
 
@@ -2903,9 +3145,8 @@ function DesktopProjectBootstrap() {
       disposed = true;
       attempt.release();
     };
-  }, [projects, recoveryAttemptGate, syncServerReadModel, threads, threadsHydrated]);
+  }, [needsRecovery, projects, recoveryAttemptGate, syncServerReadModel, threadIds]);
 
   // Desktop hydration normally runs through EventRouter project + orchestration sync.
   return null;
 }
-const selectAllThreads = createAllThreadsSelector();

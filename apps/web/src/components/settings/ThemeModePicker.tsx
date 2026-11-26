@@ -5,6 +5,7 @@
 // Exports: ThemeModePicker
 
 import { cn } from "~/lib/utils";
+import { useTranslation } from "~/i18n";
 import type { ThemeMode, ThemeVariant } from "~/hooks/useTheme";
 import { useRadioGroupKeyboardNav } from "~/hooks/useRadioGroupKeyboardNav";
 
@@ -65,9 +66,9 @@ const MOCKUP_LAYOUT = {
 } as const;
 
 const THEME_MODE_CHOICES = [
-  { value: "system", label: "System" },
-  { value: "light", label: "Light" },
-  { value: "dark", label: "Dark" },
+  { value: "system", label: "common:themeOptions_system" },
+  { value: "light", label: "settings:theme_lightTheme" },
+  { value: "dark", label: "settings:theme_darkTheme" },
 ] as const satisfies ReadonlyArray<{ value: ThemeMode; label: string }>;
 
 const THEME_MODE_VALUES = THEME_MODE_CHOICES.map((choice) => choice.value);
@@ -174,6 +175,7 @@ export function ThemeModePicker({
   onValueChange: (value: ThemeMode) => void;
   ariaLabel: string;
 }) {
+  const { t } = useTranslation();
   const radioItemProps = useRadioGroupKeyboardNav({
     values: THEME_MODE_VALUES,
     value,
@@ -189,20 +191,25 @@ export function ThemeModePicker({
             type="button"
             role="radio"
             aria-checked={isActive}
-            className="group flex min-w-0 flex-col items-center gap-1.5 focus-visible:outline-none"
+            aria-label={t(choice.label)}
+            className="group flex min-w-0 flex-col items-center gap-1.5 rounded-[14px] outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--color-border-focus)] focus-visible:ring-offset-2 focus-visible:ring-offset-background"
             onClick={() => onValueChange(choice.value)}
             {...radioItemProps(choice.value)}
           >
             <div
               className={cn(
                 "w-full rounded-[14px] border-2 p-[3px] transition-colors motion-reduce:transition-none",
-                "group-focus-visible:ring-2 group-focus-visible:ring-ring/50",
                 isActive
                   ? "border-foreground"
                   : "border-transparent group-hover:border-foreground/25",
               )}
             >
-              <div className="relative aspect-[10/7] w-full overflow-hidden rounded-lg">
+              {/* Drawn thumbnail; the radio carries the same name, so it is not read twice. */}
+              <div
+                role="img"
+                aria-label={t(choice.label)}
+                className="relative aspect-[10/7] w-full overflow-hidden rounded-lg"
+              >
                 <ThemeModeMockup mode={choice.value} />
               </div>
             </div>
@@ -212,7 +219,7 @@ export function ThemeModePicker({
                 isActive ? "font-medium text-foreground" : "text-muted-foreground",
               )}
             >
-              {choice.label}
+              {t(choice.label)}
             </span>
           </button>
         );

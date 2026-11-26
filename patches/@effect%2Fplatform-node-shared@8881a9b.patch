@@ -251,6 +251,30 @@ index dc53bafb7a2619368b63e9d18965a4426bb2e32f..e40aecbac9e136dcfb5d83876ec0e0f0
            }),
            Effect.fnUntraced(function*([childProcess, exitSignal]) {
              const exited = yield* Deferred.isDone(exitSignal)
+diff --git a/dist/NodeRuntime.js b/dist/NodeRuntime.js
+--- a/dist/NodeRuntime.js
++++ b/dist/NodeRuntime.js
+@@ -22,5 +22,6 @@
+   function onSigint() {
++    // Retain ownership while async finalizers run: signal-exit may otherwise
++    // re-raise this same signal after seeing our listener disappear.
++    if (receivedSignal) process.exit(130);
+     receivedSignal = true;
+-    process.removeListener("SIGINT", onSigint);
+-    process.removeListener("SIGTERM", onSigint);
+     fiber.interruptUnsafe(fiber.id);
+diff --git a/src/NodeRuntime.ts b/src/NodeRuntime.ts
+--- a/src/NodeRuntime.ts
++++ b/src/NodeRuntime.ts
+@@ -51,5 +51,6 @@
+   function onSigint() {
++    // Retain ownership while async finalizers run: signal-exit may otherwise
++    // re-raise this same signal after seeing our listener disappear.
++    if (receivedSignal) process.exit(130)
+     receivedSignal = true
+-    process.removeListener("SIGINT", onSigint)
+-    process.removeListener("SIGTERM", onSigint)
+     fiber.interruptUnsafe(fiber.id)
 diff --git a/src/NodeSink.ts b/src/NodeSink.ts
 index b467655804c6e36eac4f7454ef4c6f0444193219..a1fea6e09d57f50050ec093fdaa48fde849ad135 100644
 --- a/src/NodeSink.ts

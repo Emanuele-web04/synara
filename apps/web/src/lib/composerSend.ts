@@ -14,10 +14,6 @@ import {
   type ProviderKind,
   type UploadChatAttachment,
 } from "@synara/contracts";
-import {
-  ATTACHMENT_CANCEL_ROUTE_PATH,
-  ATTACHMENT_UPLOAD_ROUTE_PATH,
-} from "@synara/shared/binaryTransfer";
 import { applyClaudePromptEffortPrefix, getModelCapabilities } from "@synara/shared/model";
 import { parseComputerInvocation } from "@synara/shared/computerInvocation";
 
@@ -35,8 +31,10 @@ import {
   prepareModelScreenImage,
 } from "./composerImagePreparation";
 import { appSnapUploadName, normalizeComposerImageSource } from "./composerImageSource";
+import { isRequestOutcomeUnknown } from "./requestOutcome";
 import { randomUUID } from "./utils";
-import { resolveWsHttpUrl } from "./wsHttpUrl";
+import { captureExecutionResourceRequester } from "./wsHttpUrl";
+import type { WorkspaceResourceRequester } from "./hosts/workspaceResources";
 
 const ATTACHMENT_CANCEL_CONCURRENCY = 2;
 const ATTACHMENT_CANCEL_BODY_MAX_BYTES = 512;
@@ -251,7 +249,7 @@ export interface StagedComposerAttachments {
   readonly commit: () => void;
   /** Best-effort compensation for a rejected/abandoned dispatch. Never rejects. */
   readonly cleanup: () => Promise<void>;
-  /** Runs dispatch with commit-on-success and cleanup-on-failure semantics. */
+  /** Keeps uploaded receipts available while delivery may still settle. */
   readonly runWithDispatch: <A>(
     dispatch: (attachments: UploadChatAttachment[]) => Promise<A>,
   ) => Promise<A>;
@@ -266,7 +264,10 @@ function isManagedAttachmentId(value: unknown): value is string {
   );
 }
 
-async function cancelManagedAttachments(attachmentIds: readonly string[]): Promise<void> {
+async function cancelManagedAttachments(
+  attachmentIds: readonly string[],
+  requestResource: WorkspaceResourceRequester,
+): Promise<void> {
   let nextIndex = 0;
   const worker = async () => {
     while (nextIndex < attachmentIds.length) {
@@ -276,12 +277,12 @@ async function cancelManagedAttachments(attachmentIds: readonly string[]): Promi
       const body = JSON.stringify({ attachmentId });
       if (new TextEncoder().encode(body).byteLength > ATTACHMENT_CANCEL_BODY_MAX_BYTES) continue;
       try {
-        await fetch(resolveWsHttpUrl(ATTACHMENT_CANCEL_ROUTE_PATH), {
-          method: "POST",
-          credentials: "include",
-          headers: { "Content-Type": "application/json" },
-          body,
-        });
+        await requestResource(
+          { kind: "attachment-cancel" },
+          {
+            body,
+          },
+        );
       } catch {
         // Staged attachments also have a server-owned expiry. Compensation is
         // deliberately best-effort and must never replace the dispatch/upload error.
@@ -302,6 +303,7 @@ export async function stageUploadComposerAttachments(input: {
   files?: ReadonlyArray<ComposerFileAttachment>;
   assistantSelections: ReadonlyArray<ComposerAssistantSelectionAttachment>;
 }): Promise<StagedComposerAttachments> {
+  const requestResource = captureExecutionResourceRequester();
   const attachments: UploadChatAttachment[] = input.assistantSelections.map((selection) => ({
     type: "assistant-selection" as const,
     assistantMessageId: MessageId.makeUnsafe(selection.assistantMessageId),
@@ -318,17 +320,15 @@ export async function stageUploadComposerAttachments(input: {
       const uploadFile = appSnapSource
         ? await prepareModelScreenImage(attachment.file)
         : attachment.file;
-      const params = new URLSearchParams({
-        threadId: input.threadId,
-        type: attachment.type,
-        name: appSnapSource ? appSnapUploadName(appSnapSource, uploadFile.name) : attachment.name,
-        mimeType: appSnapSource ? uploadFile.type : attachment.mimeType,
-      });
-      const response = await fetch(
-        resolveWsHttpUrl(`${ATTACHMENT_UPLOAD_ROUTE_PATH}?${params.toString()}`),
+      const response = await requestResource(
         {
-          method: "POST",
-          credentials: "include",
+          kind: "attachment-upload",
+          threadId: input.threadId,
+          type: attachment.type,
+          name: appSnapSource ? appSnapUploadName(appSnapSource, uploadFile.name) : attachment.name,
+          mimeType: appSnapSource ? uploadFile.type : attachment.mimeType,
+        },
+        {
           body: uploadFile,
         },
       );
@@ -337,26 +337,38 @@ export async function stageUploadComposerAttachments(input: {
         | ChatFileAttachment
         | { readonly error?: unknown }
         | null;
-      if (!response.ok || !payload || !("id" in payload) || !isManagedAttachmentId(payload.id)) {
+      if (
+        !response.ok ||
+        !payload ||
+        typeof payload !== "object" ||
+        !("id" in payload) ||
+        !isManagedAttachmentId(payload.id)
+      ) {
+        // HTTP success alone is not an upload receipt (a static fallback can be 200 HTML).
         const message =
-          payload && "error" in payload && typeof payload.error === "string"
+          payload &&
+          typeof payload === "object" &&
+          "error" in payload &&
+          typeof payload.error === "string"
             ? payload.error
-            : `Attachment upload failed with status ${response.status}.`;
+            : response.ok
+              ? "Your computer returned an invalid attachment upload response. Reconnect and try again."
+              : `Attachment upload failed with status ${response.status}.`;
         throw new Error(message);
       }
       managedAttachmentIds.push(payload.id);
       attachments.push(payload);
     }
   } catch (error) {
-    await cancelManagedAttachments(managedAttachmentIds);
+    await cancelManagedAttachments(managedAttachmentIds, requestResource);
     throw error;
   }
 
-  let disposition: "pending" | "committed" | "cleaned" = "pending";
+  let disposition: "pending" | "committed" | "cleaned" | "unsettled" = "pending";
   const cleanup = async () => {
     if (disposition !== "pending") return;
     disposition = "cleaned";
-    await cancelManagedAttachments(managedAttachmentIds);
+    await cancelManagedAttachments(managedAttachmentIds, requestResource);
   };
   const commit = () => {
     if (disposition === "pending") disposition = "committed";
@@ -369,7 +381,8 @@ export async function stageUploadComposerAttachments(input: {
       commit();
       return result;
     } catch (error) {
-      await cleanup();
+      if (isRequestOutcomeUnknown(error, { requireSent: true })) disposition = "unsettled";
+      else await cleanup();
       throw error;
     }
   };

@@ -12,6 +12,7 @@ import {
 import { MEMORY_NOTES_DOCUMENT_PREFIX } from "@synara/shared/projectAgent";
 
 import { isDefaultGroupCoordinatorName } from "../../../lib/groupCoordinatorName";
+import { deepEqualJson } from "../../../storeNormalization";
 
 export const GROUP_SETTINGS_SECTIONS = ["general", "memory", "environment", "plugins"] as const;
 export type GroupSettingsSection = (typeof GROUP_SETTINGS_SECTIONS)[number];
@@ -143,6 +144,36 @@ export function buildGroupSettingsBaseline(input: {
     draft: buildGroupSettingsDraft(input),
     config: input.config ?? null,
   };
+}
+
+/** Fields configure keeps from the stored row or stamps itself: lifecycle, links, bookkeeping. */
+function settingsConfigFields(config: ProjectAgentConfig) {
+  const {
+    revision: _revision,
+    updatedAt: _updatedAt,
+    pausedAt: _pausedAt,
+    archivedAt: _archivedAt,
+    pausedAutomationIds: _pausedAutomationIds,
+    linkedProjectIds: _linkedProjectIds,
+    ...settings
+  } = config;
+  return settings;
+}
+
+/**
+ * Pause, resume, and archive bump the config revision without changing any setting, and
+ * configure carries their state forward. Adopt such a newer config so Save after those
+ * actions is not refused as a conflict. Any other change keeps the baseline, so a
+ * concurrent settings write still fails the save.
+ */
+export function rebaseGroupSettingsBaseline(
+  baseline: GroupSettingsBaseline,
+  next: ProjectAgentConfig | null,
+): GroupSettingsBaseline {
+  if (!baseline.config || !next || next.revision <= baseline.config.revision) return baseline;
+  return deepEqualJson(settingsConfigFields(baseline.config), settingsConfigFields(next))
+    ? { ...baseline, config: next }
+    : baseline;
 }
 
 /** Sections whose draft fields differ from the baseline. The Plugins section has no settings. */

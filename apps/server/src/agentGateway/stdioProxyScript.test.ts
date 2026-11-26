@@ -50,6 +50,8 @@ describe("agent gateway stdio proxy", () => {
     const duplicateStarted = deferred<void>();
     const slowAborted = deferred<void>();
     const cancellationReceived = deferred<void>();
+    const initialized = deferred<void>();
+    const sessionHeaders: Array<{ method: string; session: unknown; protocol: unknown }> = [];
     let slowRequestCount = 0;
     let duplicateAborted = false;
     let server: Server | undefined;
@@ -57,6 +59,15 @@ describe("agent gateway stdio proxy", () => {
 
     try {
       server = createServer(async (request, response) => {
+        if (request.method === "DELETE") {
+          sessionHeaders.push({
+            method: "DELETE",
+            session: request.headers["mcp-session-id"],
+            protocol: request.headers["mcp-protocol-version"],
+          });
+          response.writeHead(204).end();
+          return;
+        }
         const chunks: Buffer[] = [];
         for await (const chunk of request) chunks.push(Buffer.from(chunk));
         const message = JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
@@ -64,6 +75,27 @@ describe("agent gateway stdio proxy", () => {
           method?: string;
           params?: { requestId?: string };
         };
+        if (message.method === "initialize") {
+          response.setHeader("Content-Type", "application/json");
+          response.setHeader("Mcp-Session-Id", "connector-session");
+          response.end(
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id: message.id,
+              result: {
+                protocolVersion: "2024-11-05",
+                capabilities: {},
+                serverInfo: { name: "fixture", version: "1" },
+              },
+            }),
+          );
+          return;
+        }
+        sessionHeaders.push({
+          method: message.method ?? "",
+          session: request.headers["mcp-session-id"],
+          protocol: request.headers["mcp-protocol-version"],
+        });
         if (message.id === "slow") {
           slowRequestCount += 1;
           if (slowRequestCount === 1) {
@@ -126,11 +158,26 @@ describe("agent gateway stdio proxy", () => {
           stdoutBuffer = stdoutBuffer.slice(newlineIndex + 1);
           if (!line) continue;
           const message = JSON.parse(line) as Record<string, unknown>;
+          if (message.id === "initialize") initialized.resolve(undefined);
           if (message.id === "ping-after-cancel") pingResponse.resolve(message);
         }
       });
       child.stderr.setEncoding("utf8");
       child.stderr.on("data", (chunk: string) => stderr.push(chunk));
+
+      child.stdin.write(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: "initialize",
+          method: "initialize",
+          params: {
+            protocolVersion: "2025-06-18",
+            capabilities: {},
+            clientInfo: { name: "fixture", version: "1" },
+          },
+        }) + "\n",
+      );
+      await withTimeout(initialized.promise);
 
       child.stdin.write(
         `${JSON.stringify({
@@ -181,6 +228,11 @@ describe("agent gateway stdio proxy", () => {
 
       child.stdin.end();
       await withTimeout(new Promise<void>((resolve) => child!.once("exit", () => resolve())));
+      expect(sessionHeaders.at(-1)?.method).toBe("DELETE");
+      for (const headers of sessionHeaders) {
+        expect(headers.session).toBe("connector-session");
+        expect(headers.protocol).toBe("2024-11-05");
+      }
     } finally {
       if (child) await stopChild(child);
       if (server) await closeServer(server);

@@ -13,6 +13,7 @@ import { TaskPillButton } from "./TaskCardPrimitives";
 import { TaskPriorityGlyph } from "./TaskGlyphs";
 import { TaskDueMenu, TaskPriorityMenu, TaskProjectMenu } from "./TaskPropertyMenus";
 import { formatDueLabel, todoPriorityLabel } from "./tasks.logic";
+import { useTranslation } from "~/i18n";
 
 const PILL_ICON_CLASS = "size-3.5 shrink-0 opacity-70";
 /** An unset property: a round icon-only pill. */
@@ -31,7 +32,9 @@ export function TaskCardProperties({
   now: Date;
   onUpdate: (input: TodoUpdateInput) => void;
 }) {
-  const due = todo.dueDate ? formatDueLabel(todo.dueDate, now) : null;
+  const { t, formatLocale } = useTranslation();
+
+  const due = todo.dueDate ? formatDueLabel(todo.dueDate, now, t, formatLocale) : null;
   const projectName = todo.projectId ? (projectNameById.get(todo.projectId) ?? null) : null;
 
   return (
@@ -42,8 +45,8 @@ export function TaskCardProperties({
         onChange={(dueDate) => onUpdate({ id: todo.id, dueDate })}
         trigger={
           <TaskPillButton
-            aria-label={due ? `Due ${due.label}` : "Set a due day"}
-            title={due ? undefined : "Due day"}
+            aria-label={due ? t("common:due", { value0: due.label }) : t("common:setADueDay")}
+            title={due ? undefined : t("common:dueDay")}
             className={cn(
               !due && EMPTY_PILL_CLASS,
               due?.overdue && "text-status-failure hover:text-status-failure",
@@ -60,8 +63,10 @@ export function TaskCardProperties({
         onChange={(projectId) => onUpdate({ id: todo.id, projectId })}
         trigger={
           <TaskPillButton
-            aria-label={projectName ? `Project: ${projectName}` : "Set a project"}
-            title={projectName ? undefined : "Project"}
+            aria-label={
+              projectName ? t("git:project", { value0: projectName }) : t("common:setAProject")
+            }
+            title={projectName ? undefined : t("chat:detail_project")}
             className={cn(!projectName && EMPTY_PILL_CLASS)}
           />
         }
@@ -74,14 +79,14 @@ export function TaskCardProperties({
         onChange={(priority) => onUpdate({ id: todo.id, priority })}
         trigger={
           <TaskPillButton
-            aria-label={`Priority: ${todoPriorityLabel(todo.priority)}`}
-            title={todo.priority === "none" ? "Priority" : undefined}
+            aria-label={t("common:priority", { value0: todoPriorityLabel(todo.priority, t) })}
+            title={todo.priority === "none" ? t("workspace:priority") : undefined}
             className={cn(todo.priority === "none" && EMPTY_PILL_CLASS)}
           />
         }
       >
         <TaskPriorityGlyph priority={todo.priority} />
-        {todo.priority === "none" ? null : todoPriorityLabel(todo.priority)}
+        {todo.priority === "none" ? null : todoPriorityLabel(todo.priority, t)}
       </TaskPriorityMenu>
     </div>
   );

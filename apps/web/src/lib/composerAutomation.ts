@@ -4,6 +4,7 @@
 // Exports: composer automation resolver plus draft builder for ChatView.
 // Depends on: automationIntent parsing and automation form helpers.
 
+import { t } from "~/i18n";
 import { DEFAULT_AUTOMATION_FAST_INTERVAL_MAX_ITERATIONS } from "@synara/contracts";
 import type {
   AutomationMode,
@@ -110,17 +111,17 @@ export function automationClarificationPrompt(
   const needsTask = fields.includes("taskPrompt");
   const needsSchedule = fields.includes("schedule");
   if (needsTask && needsSchedule) {
-    return 'Sure, what should this automation do, and how often should it run? For example: "every weekday at 9am, summarize my open PRs."';
+    return t("automation:clarifyTaskSchedule");
   }
   if (needsTask) {
     // Cadence is already known, so asking for it again risks the user repeating it and
     // leaving a duplicate schedule phrase in the saved task.
-    return "What should this automation do? For example: summarize my open PRs, or check the build.";
+    return t("automation:clarifyTask");
   }
   if (needsSchedule) {
-    return "How often should this automation run? For example: every 6 hours, weekdays at 9am, or daily at 18:00.";
+    return t("automation:clarifySchedule");
   }
-  return "A couple more details: what should this automation do, and how often should it run?";
+  return t("automation:clarifyDetails");
 }
 
 // ─── ENTRY POINT ─────────────────────────────────────────────

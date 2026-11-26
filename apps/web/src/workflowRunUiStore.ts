@@ -1,3 +1,4 @@
+import { executionStorage } from "./lib/hosts/executionStorage";
 // FILE: workflowRunUiStore.ts
 // Purpose: Persist per-thread workflow-run UI flags (Claude dynamic workflows):
 // which settled workflow task ids the user paused (vs. a plain stop) and which
@@ -158,7 +159,7 @@ export const useWorkflowRunUiStore = create<WorkflowRunUiStoreState>()(
     }),
     {
       name: WORKFLOW_RUN_UI_STORAGE_KEY,
-      storage: createJSONStorage(() => localStorage),
+      storage: createJSONStorage(() => executionStorage),
       merge: (persisted, current) => ({
         ...current,
         stateByThreadId: sanitizeWorkflowRunUiStateByThreadId(

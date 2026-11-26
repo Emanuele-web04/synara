@@ -8,12 +8,15 @@ import { useEffect, useRef, useState } from "react";
 import { IconButton } from "~/components/ui/icon-button";
 import { ArrowDownIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
+import { useTranslation } from "~/i18n";
 
 interface TerminalScrollToBottomProps {
   terminal: Terminal | null;
 }
 
 export function TerminalScrollToBottom({ terminal }: TerminalScrollToBottomProps) {
+  const { t } = useTranslation();
+
   // Keyed by terminal: swapping terminals derives back to hidden in the same
   // render (no state-resetting effect); the rAF check re-evaluates right after.
   const [visibility, setVisibility] = useState<{
@@ -76,7 +79,7 @@ export function TerminalScrollToBottom({ terminal }: TerminalScrollToBottomProps
       <IconButton
         onClick={handleClick}
         className="size-7 rounded-full border-border bg-background text-muted-foreground shadow-sm hover:bg-muted hover:text-foreground sm:size-7"
-        label="Scroll to bottom"
+        label={t("common:terminal_scrollToBottom")}
         size="icon-xs"
         variant="outline"
       >

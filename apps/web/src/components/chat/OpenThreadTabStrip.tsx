@@ -8,7 +8,7 @@
 //             thread context menu.
 
 import type { ProjectId, ResolvedKeybindingsConfig, ThreadId } from "@synara/contracts";
-import { useEffect, useState } from "react";
+import { useEffect, useState, type RefObject } from "react";
 
 import { useComposerDraftStore } from "~/composerDraftStore";
 import { useHandleNewThread } from "~/hooks/useHandleNewThread";
@@ -21,7 +21,7 @@ import {
 import { useOptimisticTabSelection } from "~/hooks/useOptimisticTabSelection";
 import { useStableCallback } from "~/hooks/useStableCallback";
 import { resolveShortcutCommand } from "~/keybindings";
-import { TerminalIcon } from "~/lib/icons";
+import { PlusSignIcon, TerminalIcon } from "~/lib/icons";
 import { isTerminalFocused } from "~/lib/terminalFocus";
 import { showThreadContextMenu } from "~/lib/threadContextMenu";
 import { readNativeApi } from "~/nativeApi";
@@ -39,21 +39,33 @@ import { useOpenThreadTabsStore } from "~/openThreadTabsStore";
 import { ProviderIcon } from "../ProviderIcon";
 import { getNextVisibleSidebarThreadId } from "../Sidebar.logic";
 import { ThreadRunningSpinner } from "../ThreadRunningSpinner";
+import { Button } from "../ui/button";
 import { toastManager } from "../ui/toast";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { DOCK_HEADER_ICON_BUTTON_CLASS } from "./chatHeaderControls";
 import { SurfaceContentTabs } from "./SurfaceContentTabs";
+import { useTranslation } from "~/i18n";
 
 const CLOSE_TABS_MENU_ID_PREFIX = "close-tabs:";
-const CLOSE_TABS_MENU_ROWS: readonly { scope: OpenThreadTabCloseScope; label: string }[] = [
-  { scope: "left", label: "Close Tabs to the Left" },
-  { scope: "right", label: "Close Tabs to the Right" },
-  { scope: "others", label: "Close Other Tabs" },
+const CLOSE_TABS_MENU_ROWS: readonly { scope: OpenThreadTabCloseScope; labelKey: string }[] = [
+  { scope: "left", labelKey: "chat:closeTabsToTheLeft" },
+  { scope: "right", labelKey: "chat:closeTabsToTheRight" },
+  { scope: "others", labelKey: "chat:closeOtherTabs" },
 ];
 
 export function OpenThreadTabStrip(props: {
   activeThreadId: ThreadId;
   keybindings: ResolvedKeybindingsConfig;
+  closeActiveTabRef?: RefObject<(() => boolean) | null>;
   onRenameActiveThread: () => void;
+  /**
+   * Creates a thread in the active workspace, rendered as the strip's trailing `+` right
+   * after the last tab. Null hides it: a thread with no project has no workspace to inherit.
+   */
+  onNewThread: (() => void) | null;
 }) {
+  const { t } = useTranslation();
+
   const { activeThreadId, keybindings } = props;
   useRecordOpenThreadTab(activeThreadId);
   const tabs = useOpenThreadTabs({ activeThreadId });
@@ -134,12 +146,30 @@ export function OpenThreadTabStrip(props: {
       if (!result.ok) {
         toastManager.add({
           type: "error",
-          title: "Unable to close the tab",
+          title: t("chat:unableToCloseTheTab"),
           description: result.error,
         });
       }
     });
   };
+
+  // Cmd/Ctrl+W lands here through useChatKeyboardShortcuts: close the tab the user is
+  // looking at (the optimistically-painted one), exactly like its close button. A false
+  // return tells the caller to leave the chord untouched (e.g. no matching tab).
+  const closeActiveTab = useStableCallback(() => {
+    const tab = tabs.find((candidate) => candidate.threadId === shownThreadId);
+    if (!tab) return false;
+    closeTab(tab.threadId, tab.projectId);
+    return true;
+  });
+  useEffect(() => {
+    const ref = props.closeActiveTabRef;
+    if (!ref) return;
+    ref.current = closeActiveTab;
+    return () => {
+      if (ref.current === closeActiveTab) ref.current = null;
+    };
+  }, [props.closeActiveTabRef, closeActiveTab]);
 
   const closeTabsInScope = (anchorThreadId: ThreadId, scope: OpenThreadTabCloseScope) => {
     cancelTabSelection();
@@ -169,7 +199,7 @@ export function OpenThreadTabStrip(props: {
       (row) => resolveOpenThreadTabsInCloseScope(tabs, tab.threadId, row.scope).length > 0,
     ).map((row, index) => ({
       id: `${CLOSE_TABS_MENU_ID_PREFIX}${row.scope}`,
-      label: row.label,
+      label: t(row.labelKey),
       separatorBefore: index === 0,
     }));
     const onCloseAction = (itemId: string) => {
@@ -196,7 +226,7 @@ export function OpenThreadTabStrip(props: {
 
   return (
     <SurfaceContentTabs
-      ariaLabel="Open threads"
+      ariaLabel={t("chat:openThreads")}
       activeKey={shownThreadId}
       selectionAria="current"
       onMove={moveThreadTab}
@@ -208,7 +238,7 @@ export function OpenThreadTabStrip(props: {
           icon:
             // A running thread spins in place of its glyph, like its sidebar row.
             tab.isRunning ? (
-              <span role="img" aria-label="Working" className="inline-flex">
+              <span role="img" aria-label={t("workspace:status_working")} className="inline-flex">
                 <ThreadRunningSpinner className="size-3.5" />
               </span>
             ) : tab.isTerminal ? (
@@ -225,6 +255,27 @@ export function OpenThreadTabStrip(props: {
           onContextMenu: (position) => openTabContextMenu(tab, position),
         };
       })}
+      trailing={
+        props.onNewThread ? (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  type="button"
+                  variant="chrome"
+                  size="icon-xs"
+                  aria-label={t("chat:newThreadInWorkspace")}
+                  className={DOCK_HEADER_ICON_BUTTON_CLASS}
+                  onClick={() => props.onNewThread?.()}
+                />
+              }
+            >
+              <PlusSignIcon className="size-3.5" />
+            </TooltipTrigger>
+            <TooltipPopup side="bottom">{t("chat:newThreadInWorkspace")}</TooltipPopup>
+          </Tooltip>
+        ) : null
+      }
     />
   );
 }

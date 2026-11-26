@@ -11,26 +11,32 @@ import { PinStatusIcon, pinActionLabel } from "~/lib/pin";
 import { cn } from "~/lib/utils";
 import { IconButton } from "./ui/icon-button";
 import { SIDEBAR_TRAILING_ICON_CLASS } from "./sidebarGlyphs";
+import { useTranslation } from "~/i18n";
 
 export function ThreadPinToggleButton({
   pinned,
   presentation,
   targetLabel: targetLabelProp,
   toneClassName,
+  disabled,
   onToggle,
 }: {
   pinned: boolean;
   presentation: "overlay" | "inline" | "leading";
   targetLabel?: string;
   toneClassName?: string;
+  disabled?: boolean;
   onToggle: (event: React.MouseEvent<HTMLButtonElement> | React.MouseEvent) => void;
 }) {
-  const targetLabel = targetLabelProp ?? "thread";
+  const { t } = useTranslation();
+
+  const targetLabel = targetLabelProp ?? t("common:thread");
   const label = pinActionLabel(targetLabel, pinned);
 
   return (
     <IconButton
       label={label}
+      disabled={disabled}
       aria-pressed={pinned}
       title={label}
       size="icon-xs"

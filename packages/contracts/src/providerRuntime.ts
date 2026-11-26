@@ -1,4 +1,5 @@
 import { Option, Schema } from "effect";
+import { ProviderInteractionMode } from "./orchestration";
 import { AsyncUserInputQuestions } from "./asyncUserInput";
 import {
   EventId,
@@ -14,6 +15,7 @@ import {
   TurnId,
 } from "./baseSchemas";
 import { ClaudeCacheObservation } from "./claudeCache";
+import { ProviderUsageLimit } from "./usageLimit";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance";
 
 const TrimmedNonEmptyStringSchema = TrimmedNonEmptyString;
@@ -387,10 +389,12 @@ export type ThreadRealtimeClosedPayload = typeof ThreadRealtimeClosedPayload.Typ
 const TurnStartedPayload = Schema.Struct({
   model: Schema.optional(TrimmedNonEmptyStringSchema),
   effort: Schema.optional(TrimmedNonEmptyStringSchema),
+  supportsNativeTurnSteering: Schema.optional(Schema.Boolean),
 });
 export type TurnStartedPayload = typeof TurnStartedPayload.Type;
 
 const TurnCompletedPayload = Schema.Struct({
+  usageLimit: Schema.optional(ProviderUsageLimit),
   state: RuntimeTurnState,
   // Present only for an explicitly requested native compaction operation.
   contextCompacted: Schema.optional(Schema.Boolean),
@@ -398,12 +402,18 @@ const TurnCompletedPayload = Schema.Struct({
   usage: Schema.optional(Schema.Unknown),
   modelUsage: Schema.optional(UnknownRecordSchema),
   tokenAccountingVersion: Schema.optional(Schema.Literal(1)),
+  // Claude SDK result versus a synthetic UI completion without a result.
+  claudeResultObserved: Schema.optional(Schema.Boolean),
   // Per-turn main-loop usage, including observed usage when no result arrives.
   mainLoopTokens: Schema.optional(NonNegativeInt),
+  // The part of mainLoopTokens read from the prompt cache.
+  mainLoopCacheReadTokens: Schema.optional(NonNegativeInt),
   totalCostUsd: Schema.optional(Schema.Number),
   cumulativeCostUsd: Schema.optional(Schema.Number),
   errorMessage: Schema.optional(TrimmedNonEmptyStringSchema),
   errorCode: Schema.optional(TrimmedNonEmptyStringSchema),
+  // HTTP status of the provider request that failed the turn, when the provider reports it.
+  httpStatus: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 100, maximum: 599 }))),
 });
 export type TurnCompletedPayload = typeof TurnCompletedPayload.Type;
 
@@ -486,6 +496,8 @@ const RequestResolvedPayload = Schema.Struct({
 export type RequestResolvedPayload = typeof RequestResolvedPayload.Type;
 
 const UserInputQuestionOption = Schema.Struct({
+  // Some provider protocols identify choices independently of their display labels.
+  value: Schema.optional(Schema.String),
   label: TrimmedNonEmptyStringSchema,
   description: TrimmedNonEmptyStringSchema,
 });
@@ -496,6 +508,9 @@ export const UserInputQuestion = Schema.Struct({
   header: TrimmedNonEmptyStringSchema,
   question: TrimmedNonEmptyStringSchema,
   options: Schema.Array(UserInputQuestionOption),
+  allowCustomAnswer: Schema.optional(Schema.Boolean),
+  // Some providers receive free-form text in a separate response field.
+  customAnswerId: Schema.optional(TrimmedNonEmptyStringSchema),
   multiSelect: Schema.optional(Schema.Boolean).pipe(
     Schema.withConstructorDefault(() => Option.some(false)),
   ),
@@ -569,6 +584,7 @@ const WorkflowAgentPlan = Schema.Struct({
 export type WorkflowAgentPlan = typeof WorkflowAgentPlan.Type;
 
 const TaskStartedPayload = Schema.Struct({
+  interactionMode: Schema.optional(ProviderInteractionMode),
   taskId: RuntimeTaskId,
   description: Schema.optional(TrimmedNonEmptyStringSchema),
   taskType: Schema.optional(TrimmedNonEmptyStringSchema),
@@ -606,6 +622,8 @@ const TaskProgressPayload = Schema.Struct({
 export type TaskProgressPayload = typeof TaskProgressPayload.Type;
 
 const TaskUpdatedPayload = Schema.Struct({
+  reconcilesStop: Schema.optional(Schema.Boolean),
+  interactionMode: Schema.optional(ProviderInteractionMode),
   taskId: RuntimeTaskId,
   status: Schema.optional(
     Schema.Literals(["pending", "running", "completed", "failed", "killed", "paused"]),
@@ -623,6 +641,7 @@ const TaskUpdatedPayload = Schema.Struct({
 export type TaskUpdatedPayload = typeof TaskUpdatedPayload.Type;
 
 const TaskCompletedPayload = Schema.Struct({
+  interactionMode: Schema.optional(ProviderInteractionMode),
   taskId: RuntimeTaskId,
   status: Schema.Literals(["completed", "failed", "stopped"]),
   summary: Schema.optional(TrimmedNonEmptyStringSchema),
@@ -631,6 +650,12 @@ const TaskCompletedPayload = Schema.Struct({
   workflowAgents: Schema.optional(Schema.Array(WorkflowAgentSnapshot)),
   // Spawning tool call id when the task is a provider-native subagent.
   toolUseId: Schema.optional(TrimmedNonEmptyStringSchema),
+  // A provider terminal update can correct an adapter's earlier local stop
+  // result when the task's completion notification arrived later.
+  reconcilesStop: Schema.optional(Schema.Boolean),
+  // A local stop persisted without a provider terminal update. Resume replay
+  // may reconcile this task after a process restart.
+  awaitingProviderConfirmation: Schema.optional(Schema.Boolean),
 });
 export type TaskCompletedPayload = typeof TaskCompletedPayload.Type;
 

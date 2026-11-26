@@ -96,7 +96,9 @@ export class ProviderValidationError extends Schema.TaggedErrorClass<ProviderVal
   {
     operation: Schema.String,
     issue: Schema.String,
-    reason: Schema.optional(Schema.Literals(["runtime-unavailable", "stale-interaction"])),
+    reason: Schema.optional(
+      Schema.Literals(["runtime-unavailable", "stale-interaction", "active-turn-unavailable"]),
+    ),
     cause: Schema.optional(Schema.Defect),
   },
 ) {

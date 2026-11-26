@@ -1,13 +1,12 @@
+import { t } from "~/i18n";
 import {
   PROVIDER_DISPLAY_NAMES,
   type ProviderInstanceId,
   type ProviderKind,
   type ServerProviderStatus,
 } from "@synara/contracts";
+import type { ProviderInstanceOption } from "../appSettings";
 import { isProviderKind } from "../providerOrdering";
-
-const CUSTOM_BINARY_CONFIRMATION_SUFFIX =
-  "Availability will be confirmed when you start a session.";
 
 export interface ProviderSendAvailability {
   readonly provider: ProviderKind;
@@ -48,7 +47,7 @@ export function normalizeProviderStatusForLocalConfig(input: {
       available: false,
       authStatus: "unknown",
       checkedAt: status.checkedAt,
-      message: "Provider is disabled in Synara settings.",
+      message: t("settings:providerDisabledReason"),
     };
   }
 
@@ -93,7 +92,9 @@ export function normalizeProviderStatusForLocalConfig(input: {
     available: true,
     ...(_staleAvailability !== undefined ? { availability: "available" as const } : {}),
     status: "warning",
-    message: `${PROVIDER_DISPLAY_NAMES[input.provider]} uses a custom local binary path in this app. ${CUSTOM_BINARY_CONFIRMATION_SUFFIX}`,
+    message: t("settings:providerCustomBinaryReason", {
+      provider: PROVIDER_DISPLAY_NAMES[input.provider],
+    }),
   };
 }
 
@@ -101,6 +102,13 @@ export function providerStatusInstanceKey(
   status: Pick<ServerProviderStatus, "provider" | "instanceId">,
 ): ProviderInstanceId {
   return status.instanceId ?? status.provider;
+}
+
+/** Statuses keyed by the account (provider instance) they describe. */
+export function providerStatusesByInstance(
+  statuses: readonly ServerProviderStatus[],
+): Map<string, ServerProviderStatus> {
+  return new Map(statuses.map((status) => [providerStatusInstanceKey(status), status]));
 }
 
 // Advisory warnings the health layer marks available (Pi bundled SDK, Cursor
@@ -111,24 +119,24 @@ export function isProviderUsable(status: ServerProviderStatus | null | undefined
     // Missing status means the health check has not confirmed an installed provider yet.
     return false;
   }
-  return status.available && status.authStatus !== "unauthenticated";
+  return status.enabled !== false && status.available && status.authStatus !== "unauthenticated";
 }
 
 export function providerUnavailableReason(status: ServerProviderStatus | null | undefined): string {
   if (!status) {
-    return "Provider status is still loading.";
+    return t("settings:providerStatusLoading");
   }
   const providerLabelFallback = isProviderKind(status.provider)
     ? PROVIDER_DISPLAY_NAMES[status.provider]
     : status.provider;
   const providerLabel = status.displayName?.trim() || providerLabelFallback || status.provider;
   if (status.authStatus === "unauthenticated") {
-    return `${providerLabel} is not authenticated yet.`;
+    return t("settings:providerNotAuthenticated", { provider: providerLabel });
   }
   if (!status.available) {
-    return status.message ?? `${providerLabel} is unavailable right now.`;
+    return status.message ?? t("settings:providerUnavailableNow", { provider: providerLabel });
   }
-  return status.message ?? `${providerLabel} has limited availability right now.`;
+  return status.message ?? t("settings:providerLimitedNow", { provider: providerLabel });
 }
 
 export function findProviderStatus(
@@ -148,6 +156,31 @@ export function findProviderStatus(
   return statuses.find((status) => (status.driver ?? status.provider) === provider) ?? null;
 }
 
+/** Prefer the requested account when usable, then an enabled sibling of the same provider. */
+export function findUsableProviderStatus(
+  statuses: readonly ServerProviderStatus[],
+  provider: ProviderKind,
+  preferredInstanceId: ProviderInstanceId = provider,
+  configuredInstances?: readonly Pick<
+    ProviderInstanceOption,
+    "instanceId" | "provider" | "enabled"
+  >[],
+): ServerProviderStatus | null {
+  const usable = statuses.filter(
+    (status) =>
+      (status.driver ?? status.provider) === provider &&
+      isProviderUsable(status) &&
+      (!configuredInstances ||
+        configuredInstances.some(
+          (instance) =>
+            instance.enabled &&
+            instance.provider === provider &&
+            instance.instanceId === providerStatusInstanceKey(status),
+        )),
+  );
+  return findProviderStatus(usable, provider, preferredInstanceId) ?? usable[0] ?? null;
+}
+
 export function resolveAvailableProviderPreference(input: {
   readonly preferredProvider: ProviderKind;
   readonly statuses: readonly ServerProviderStatus[];
@@ -158,8 +191,7 @@ export function resolveAvailableProviderPreference(input: {
     return input.preferredProvider;
   }
 
-  const preferredStatus = findProviderStatus(input.statuses, input.preferredProvider);
-  if (isProviderUsable(preferredStatus)) {
+  if (findUsableProviderStatus(input.statuses, input.preferredProvider)) {
     return input.preferredProvider;
   }
 
@@ -180,12 +212,20 @@ export function resolveAvailableProviderPreference(input: {
   });
   const visibleInstalled = orderedStatuses.filter((status) => {
     const provider = providerForStatus(status);
-    return status.available && provider !== null && !hiddenProviders.has(provider);
+    return (
+      status.enabled !== false &&
+      status.available &&
+      provider !== null &&
+      !hiddenProviders.has(provider)
+    );
   });
   const installed =
     visibleInstalled.length > 0
       ? visibleInstalled
-      : orderedStatuses.filter((status) => status.available && providerForStatus(status) !== null);
+      : orderedStatuses.filter(
+          (status) =>
+            status.enabled !== false && status.available && providerForStatus(status) !== null,
+        );
 
   const preferredInstalled =
     installed.find((status) => status.authStatus !== "unauthenticated") ?? installed[0];

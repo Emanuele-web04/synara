@@ -32,7 +32,6 @@ import type {
   DeviceInstallAppResult,
   DeviceKeyModifier,
   DeviceLaunchAppResult,
-  DeviceScreenshotResult,
   DeviceSetupStep,
   DeviceStartRecordingResult,
   DeviceStopRecordingResult,
@@ -51,12 +50,22 @@ import {
 import { runProcess, type ProcessRunResult } from "../processRunner.ts";
 import {
   DeviceBackendError,
+  fitDeviceMessage,
   type DeviceBackend,
+  type DeviceConfiguration,
   type DeviceFrameListener,
+  type DeviceInputOptions,
   type DeviceKeyEvent,
+  type DeviceLaunchOptions,
   type DeviceListOptions,
+  type DeviceLogQuery,
+  type DeviceLogResult,
+  type DeviceScreenshotCapture,
   type DeviceSwipeGesture,
+  type DeviceTapOptions,
+  type DeviceTypeTextOutcome,
 } from "./DeviceBackend.ts";
+import { readCrashReports, unifiedLogArguments, tailLines } from "./deviceLogs.ts";
 import { readDeviceTypeCatalogue, type DeviceTypeCatalogue } from "./deviceTypeCatalogue.ts";
 import {
   availabilityFromProbe,
@@ -77,12 +86,22 @@ const DEVICE_LIST_CACHE_MS = 1_500;
 /** How long the machine-wide `xcode-select -p` answer is reused; see xcodeSelectPath. */
 const XCODE_SELECT_CACHE_MS = 15_000;
 const BOOT_TIMEOUT_MS = 120_000;
+/** Keep a recently used input client warm between agent calls. */
+const HELPER_IDLE_MS = 2 * 60_000;
+/** Allow cold-boot attach retries to reuse the process without retaining failed attachments. */
+const HELPER_UNATTACHED_IDLE_MS = 5_000;
 const RECORDING_START_TIMEOUT_MS = 10_000;
 const RECORDING_STOP_GRACE_MS = 15_000;
 const RECORDING_KILL_GRACE_MS = 1_000;
 const MAX_RECORDING_STDERR_LENGTH = 64 * 1024;
 /** Screenshots are PNG on stdout-adjacent temp files; cap what we will read. */
 const MAX_SCREENSHOT_BYTES = 32 * 1024 * 1024;
+/**
+ * Characters per `text` RPC. The helper paces keystrokes at roughly 36 ms each
+ * and every RPC shares a 15 s deadline, so a long string sent whole timed out
+ * and the retry typed it a second time.
+ */
+const TEXT_CHUNK_LENGTH = 120;
 
 export const DEVICE_HELPER_CACHE_ROOT = path.join(homedir(), ...DEVICE_HELPER_CACHE_SEGMENTS);
 
@@ -125,6 +144,7 @@ export interface IosSimulatorBackendOptions {
     binaryPath: string,
     env?: NodeJS.ProcessEnv,
     launch?: HelperSandboxCommand,
+    onExit?: (reason: string) => void,
   ) => HelperClient;
   /** Keeps the long-lived simctl process controllable in tests. */
   readonly spawnProcess?: SpawnRecordingProcess;
@@ -267,6 +287,16 @@ export async function selectRecordingDirectory(
   return fallback;
 }
 
+interface SimulatorHelperSession {
+  readonly udid: string;
+  client: HelperClient | null;
+  interruptCompile: ((error: DeviceBackendError) => void) | null;
+  pending: Promise<void> | null;
+  shutdown: Promise<void> | null;
+  streamingUdid: string | null;
+  idleTimer: ReturnType<typeof setTimeout> | null;
+}
+
 export class IosSimulatorBackend implements DeviceBackend {
   readonly platform = "ios-simulator" as const;
 
@@ -278,7 +308,10 @@ export class IosSimulatorBackend implements DeviceBackend {
     binaryPath: string,
     env?: NodeJS.ProcessEnv,
     launch?: HelperSandboxCommand,
+    onExit?: (reason: string) => void,
   ) => HelperClient;
+  private readonly helperSessions = new Map<string, SimulatorHelperSession>();
+  private readonly streamInterruptedListeners = new Set<(udid: string, reason: string) => void>();
   /** One warning per backend when the helper runs unconfined. */
   private warnedUnsandboxed = false;
   private readonly spawnProcess: SpawnRecordingProcess;
@@ -304,16 +337,24 @@ export class IosSimulatorBackend implements DeviceBackend {
     readonly resolvedAtMs: number;
     readonly developerDir: Promise<string | null>;
   } | null = null;
+  private xcodeBuildKeyCache: {
+    readonly developerDir: string | undefined;
+    readonly resolvedAtMs: number;
+    readonly key: Promise<string>;
+  } | null = null;
   private deviceListCache: {
     readonly listedAtMs: number;
     readonly devices: Promise<readonly DeviceDescriptor[]>;
   } | null = null;
-  private helper: HelperClient | null = null;
   private helperBuildFailure: string | null = null;
   private helperCompilation: Promise<string> | null = null;
   /** Keyed on the binary so a rebuilt helper is re-probed rather than assumed. */
   private helperProbe: { binaryPath: string; result: HelperProbeResult } | null = null;
   private readonly recordings = new Map<string, ActiveRecording>();
+  /** Per-device answer to `usesUsKeyboardLayout`; dropped on boot and shutdown. */
+  private readonly keyboardLayouts = new Map<string, Promise<boolean>>();
+  /** `CFBundleExecutable` per udid+bundle, for log predicates and crash reports. */
+  private readonly executables = new Map<string, Promise<string | null>>();
   private readonly recordingStarts = new Map<string, Promise<DeviceStartRecordingResult>>();
   private readonly recordingStops = new Map<string, Promise<DeviceStopRecordingResult>>();
   private readonly reservedRecordingPaths = new Set<string>();
@@ -333,7 +374,8 @@ export class IosSimulatorBackend implements DeviceBackend {
     this.run = options.run ?? runProcess;
     this.makeHelperClient =
       options.makeHelperClient ??
-      ((binaryPath, env, launch) => new HelperClient({ binaryPath, env, launch }));
+      ((binaryPath, env, launch, onExit) =>
+        new HelperClient({ binaryPath, env, launch, ...(onExit ? { onExit } : {}) }));
     this.spawnProcess =
       options.spawnProcess ??
       ((command, args) => spawn(command, [...args], { stdio: "pipe", windowsHide: true }));
@@ -479,6 +521,7 @@ export class IosSimulatorBackend implements DeviceBackend {
   }
 
   async boot(udid: string): Promise<DeviceDescriptor> {
+    this.keyboardLayouts.delete(udid);
     const result = await this.simctl(["boot", udid], { timeoutMs: BOOT_TIMEOUT_MS });
     // Booting an already-booted device is success, not failure: the pane and an
     // agent can race on the same device and neither should see an error.
@@ -493,16 +536,20 @@ export class IosSimulatorBackend implements DeviceBackend {
   }
 
   async shutdown(udid: string): Promise<void> {
-    await this.stopRecordingForLifecycle(udid);
-    await this.detachStream(udid);
-    // The helper outlives the simulator, and its attachment holds a display
-    // descriptor bound to this boot. Dropping it here means the next attach
-    // rebinds instead of reusing a descriptor whose framebuffer is gone.
-    this.helper?.invalidateAttachment(udid);
-    const result = await this.simctl(["shutdown", udid]);
-    if (result.code !== 0 && !/current state: Shutdown/iu.test(result.stderr)) {
-      throw this.simctlError("shutdown", result);
-    }
+    this.keyboardLayouts.delete(udid);
+    const session = this.helperSession(udid);
+    // A cold compile is shared with other simulators and can outlive poweroff.
+    // Invalidate this session immediately so that compile cannot start its helper.
+    session.shutdown ??= Promise.resolve()
+      .then(async () => {
+        await Promise.all([this.closeHelper(session), this.stopRecordingForLifecycle(udid)]);
+        const result = await this.simctl(["shutdown", udid]);
+        if (result.code !== 0 && !/current state: Shutdown/iu.test(result.stderr)) {
+          throw this.simctlError("shutdown", result);
+        }
+      })
+      .finally(() => this.helperSessions.delete(udid.toLowerCase()));
+    await session.shutdown;
   }
 
   async install(udid: string, appPath: string): Promise<DeviceInstallAppResult> {
@@ -516,8 +563,26 @@ export class IosSimulatorBackend implements DeviceBackend {
     udid: string,
     bundleId: string,
     launchArguments: readonly string[] = [],
+    options: DeviceLaunchOptions = {},
   ): Promise<DeviceLaunchAppResult> {
-    const result = await this.simctl(["launch", udid, bundleId, ...launchArguments]);
+    // Do not redirect stdout/stderr into unbounded files or pipes whose
+    // reader teardown could signal a still-running user app.
+    const environment = Object.fromEntries(
+      Object.entries(options.environment ?? {}).map(([key, value]) => [
+        `SIMCTL_CHILD_${key}`,
+        value,
+      ]),
+    );
+    const result = await this.simctl(
+      [
+        "launch",
+        ...(options.terminateExisting === true ? ["--terminate-running-process"] : []),
+        udid,
+        bundleId,
+        ...launchArguments,
+      ],
+      { env: environment },
+    );
     if (result.code !== 0) throw this.simctlError("launch", result);
     // `simctl launch` prints `<bundleId>: <pid>`.
     const match = /:\s*(\d+)\s*$/u.exec(result.stdout.trim());
@@ -531,16 +596,20 @@ export class IosSimulatorBackend implements DeviceBackend {
 
   async screenshot(
     udid: string,
-    options: { readonly save?: boolean; readonly maxInlineBytes?: number } = {},
-  ): Promise<DeviceScreenshotResult> {
+    options: {
+      readonly save?: boolean;
+      readonly maxInlineBytes?: number;
+      readonly resolution?: "pixels" | "points";
+      readonly proof?: boolean;
+    } = {},
+  ): Promise<DeviceScreenshotCapture> {
     // Captured to a temp file either way, because `simctl io screenshot` only
     // writes to a path. When the caller wants it kept, it is moved next to the
     // recordings afterwards rather than captured somewhere different.
     const directory = await mkdtemp(path.join(tmpdir(), "synara-device-"));
     const file = path.join(directory, "screenshot.png");
     try {
-      const result = await this.simctl(["io", udid, "screenshot", file]);
-      if (result.code !== 0) throw this.simctlError("screenshot", result);
+      await this.captureScreenshot(udid, file);
       const info = await stat(file);
       if (info.size > MAX_SCREENSHOT_BYTES) {
         throw new DeviceBackendError("Screenshot exceeded the maximum supported size");
@@ -548,11 +617,28 @@ export class IosSimulatorBackend implements DeviceBackend {
       const fullBytes = await readFile(file);
       const savedPath =
         options.save === true ? await this.saveScreenshotFile(udid, fullBytes) : null;
+      const points =
+        options.resolution === "points" ? await this.scaleToPoints(udid, file, directory) : null;
+      if (options.resolution === "points" && points === null) {
+        throw new DeviceBackendError(
+          "Could not produce a screenshot in device-point coordinates. Describe the UI for tap points instead.",
+        );
+      }
+      const sized = points ?? fullBytes;
+      if (
+        options.resolution === "points" &&
+        options.maxInlineBytes !== undefined &&
+        sized.byteLength > options.maxInlineBytes
+      ) {
+        throw new DeviceBackendError(
+          "Point-resolution screenshot exceeds the inline image limit; use device_describe_ui for coordinates.",
+        );
+      }
       // Inline consumers (agent tool results) ride JSON-RPC frames with byte
       // caps, so oversized shots are resampled rather than rejected.
       const bytes =
-        options.maxInlineBytes === undefined || fullBytes.byteLength <= options.maxInlineBytes
-          ? fullBytes
+        options.maxInlineBytes === undefined || sized.byteLength <= options.maxInlineBytes
+          ? sized
           : await this.resampleScreenshotPng(file, directory, options.maxInlineBytes);
       const dimensions = readPngDimensions(bytes);
       return {
@@ -564,11 +650,70 @@ export class IosSimulatorBackend implements DeviceBackend {
         height: dimensions?.height ?? 1,
         sizeBytes: bytes.byteLength,
         bytesBase64: bytes.toString("base64"),
+        ...(options.proof ? { proofBytesBase64: fullBytes.toString("base64") } : {}),
         capturedAt: new Date().toISOString(),
       };
     } finally {
       await rm(directory, { recursive: true, force: true }).catch(() => undefined);
     }
+  }
+
+  /**
+   * Capture through the attached helper when it can, which reads the
+   * framebuffer in-process (~40 ms), and through `simctl io` otherwise (~430 ms,
+   * but public API that survives a broken framebuffer path).
+   */
+  private async captureScreenshot(udid: string, file: string): Promise<void> {
+    const session = this.helperSessions.get(udid.toLowerCase());
+    if (session?.shutdown) await session.shutdown.catch(() => undefined);
+    if (session?.client?.running && session.client.attachedDevice !== null) {
+      const viaHelper = await this.runWithHelperSession(session, async () => {
+        const helper = session.client;
+        if (!helper?.running || helper.attachedDevice === null) return false;
+        await this.helperRequest(helper, HELPER_METHODS.screenshot, { path: file });
+        return true;
+      }).catch(() => false);
+      if (viaHelper) return;
+    }
+    if (this.disposed) throw new DeviceBackendError("The iOS simulator backend is disposed");
+    const result = await this.simctl(["io", udid, "screenshot", file]);
+    if (result.code !== 0) throw this.simctlError("screenshot", result);
+  }
+
+  /**
+   * Resample to the screen's size in points, so a coordinate read off the image
+   * is the device point a tap takes. Also the cheapest image a model can read:
+   * a third of the pixels per side on a 3x screen. Null when the point size is
+   * unknown or `sips` fails, in which case the caller keeps the full image.
+   */
+  private async scaleToPoints(
+    udid: string,
+    sourceFile: string,
+    directory: string,
+  ): Promise<Buffer | null> {
+    const geometry =
+      this.deviceGeometry.get(udid.toLowerCase()) ?? (await this.catalogueGeometry(udid));
+    if (!geometry) return null;
+    const target = path.join(directory, "screenshot-points.png");
+    const result = await this.run(
+      "/usr/bin/sips",
+      [
+        "-z",
+        String(Math.round(geometry.pointHeight)),
+        String(Math.round(geometry.pointWidth)),
+        sourceFile,
+        "--out",
+        target,
+      ],
+      { timeoutMs: 10_000, allowNonZeroExit: true },
+    ).catch(() => null);
+    if (result === null || result.code !== 0) return null;
+    return await readFile(target).catch(() => null);
+  }
+
+  private async catalogueGeometry(udid: string): Promise<DeviceGeometry | null> {
+    const devices = await this.listDevicesUnchecked().catch(() => []);
+    return devices.find((device) => device.udid === udid)?.geometry ?? null;
   }
 
   /**
@@ -682,59 +827,255 @@ export class IosSimulatorBackend implements DeviceBackend {
     udid: string,
     method: string,
     buildParams: (helper: HelperClient) => Record<string, unknown>,
-  ): Promise<void> {
+    signal?: AbortSignal,
+  ): Promise<unknown> {
+    signal?.throwIfAborted();
     await this.assertCapability("hid");
-    const helper = await this.attachedHelper(udid);
-    try {
-      await this.helperRequest(method, buildParams(helper));
-      return;
-    } catch (error) {
-      if (!isInputNotDeliveredError(error)) throw error;
-    }
-    const rebound = await this.attachedHelper(udid, { force: true });
-    await this.helperRequest(method, buildParams(rebound));
-  }
-
-  async tap(udid: string, x: number, y: number): Promise<void> {
-    await this.injectInput(udid, HELPER_METHODS.tap, (helper) => helper.normalize(x, y));
-  }
-
-  async swipe(udid: string, gesture: DeviceSwipeGesture): Promise<void> {
-    await this.injectInput(udid, HELPER_METHODS.swipe, (helper) => {
-      const start = helper.normalize(gesture.fromX, gesture.fromY);
-      const end = helper.normalize(gesture.toX, gesture.toY);
-      return {
-        startX: start.x,
-        startY: start.y,
-        endX: end.x,
-        endY: end.y,
-        durationMs: gesture.durationMs,
+    return await this.withAttachedHelper(udid, async (helper, session) => {
+      const inject = () => {
+        signal?.throwIfAborted();
+        return this.helperRequest(helper, method, buildParams(helper));
       };
+      try {
+        return await inject();
+      } catch (error) {
+        if (!isInputNotDeliveredError(error)) throw error;
+        // A budget refusal does not mean the now-ready transport is stale.
+        // Leave it connected and let the caller retry the gesture deliberately.
+        if (/input deadline/iu.test(errorText(error))) throw error;
+        // Replaying keystrokes after a partial delivery types them twice. Only a
+        // refusal that sent nothing is safe to repeat for a non-replayable call.
+        if (!/(?:^|: )nothing was sent:/iu.test(errorText(error))) {
+          throw error;
+        }
+        // dtuhidd still coming up after a boot: the attachment is fine and keeps
+        // warming in the background, while a re-attach would restart the wait.
+        if (/still starting/iu.test(errorText(error))) {
+          return await inject();
+        }
+      }
+      signal?.throwIfAborted();
+      await this.attachHelper(helper, session.udid, { force: true });
+      return await inject();
     });
   }
 
-  async typeText(udid: string, text: string): Promise<void> {
-    await this.injectInput(udid, HELPER_METHODS.text, () => ({ text }));
+  async tap(udid: string, x: number, y: number, options: DeviceTapOptions = {}): Promise<void> {
+    await this.injectInput(
+      udid,
+      HELPER_METHODS.tap,
+      (helper) => ({
+        ...helper.normalize(x, y),
+        ...(options.holdMs === undefined ? {} : { holdMs: Math.round(options.holdMs) }),
+      }),
+      options.signal,
+    );
   }
 
-  async keyEvent(udid: string, event: DeviceKeyEvent): Promise<void> {
+  async swipe(
+    udid: string,
+    gesture: DeviceSwipeGesture,
+    options?: DeviceInputOptions,
+  ): Promise<void> {
+    await this.injectInput(
+      udid,
+      HELPER_METHODS.swipe,
+      (helper) => {
+        const start = helper.normalize(gesture.fromX, gesture.fromY);
+        const end = helper.normalize(gesture.toX, gesture.toY);
+        return {
+          startX: start.x,
+          startY: start.y,
+          endX: end.x,
+          endY: end.y,
+          durationMs: gesture.durationMs,
+          ...(gesture.edge === undefined ? {} : { edge: gesture.edge }),
+        };
+      },
+      options?.signal,
+    );
+  }
+
+  async typeText(
+    udid: string,
+    text: string,
+    options?: DeviceInputOptions,
+  ): Promise<DeviceTypeTextOutcome> {
+    let skipped = 0;
+    for (let start = 0; start < text.length; start += TEXT_CHUNK_LENGTH) {
+      const chunk = text.slice(start, start + TEXT_CHUNK_LENGTH);
+      const result = await this.injectInput(
+        udid,
+        HELPER_METHODS.text,
+        () => ({ text: chunk }),
+        options?.signal,
+      );
+      const chunkSkipped = (result as { skipped?: unknown } | null)?.skipped;
+      if (typeof chunkSkipped === "number") skipped += chunkSkipped;
+    }
+    return { skipped };
+  }
+
+  async setFocusedValue(udid: string, value: string, options?: DeviceInputOptions): Promise<void> {
+    options?.signal?.throwIfAborted();
+    await this.assertCapability("accessibility");
+    await this.withAttachedHelper(udid, (helper) => {
+      options?.signal?.throwIfAborted();
+      return this.helperRequest(helper, HELPER_METHODS.setFocusedValue, { value });
+    });
+  }
+
+  /**
+   * HID keystrokes go through the guest's hardware keyboard layout: on an
+   * Italian simulator the key that is "-" on a US keyboard types "'". Only a
+   * device whose first keyboard (or, with none set, whose locale) is US English
+   * gets keystrokes; the rest get exact text through accessibility.
+   */
+  async usesUsKeyboardLayout(udid: string): Promise<boolean> {
+    let cached = this.keyboardLayouts.get(udid);
+    if (!cached) {
+      cached = (async () => {
+        const keyboards = await this.simctl([
+          "spawn",
+          udid,
+          "defaults",
+          "read",
+          "-g",
+          "AppleKeyboards",
+        ]);
+        const firstKeyboard = /"?([A-Za-z]{2}[_-][A-Za-z]{2}[^",\s)]*)/u.exec(
+          keyboards.code === 0 ? keyboards.stdout : "",
+        )?.[1];
+        if (firstKeyboard !== undefined) return /^en[_-]US\b/iu.test(firstKeyboard);
+        const locale = await this.simctl(["spawn", udid, "defaults", "read", "-g", "AppleLocale"]);
+        return locale.code === 0 && /^en[_-]US\b/iu.test(locale.stdout.trim());
+      })().catch(() => false);
+      this.keyboardLayouts.set(udid, cached);
+    }
+    return await cached;
+  }
+
+  // ── Environment and diagnostics ────────────────────────────────────
+
+  async configure(udid: string, configuration: DeviceConfiguration): Promise<void> {
+    const args = ((): readonly string[] => {
+      switch (configuration.kind) {
+        case "appearance":
+          return ["ui", udid, "appearance", configuration.appearance];
+        case "content-size":
+          return ["ui", udid, "content_size", configuration.category];
+        case "location":
+          return ["location", udid, "set", `${configuration.latitude},${configuration.longitude}`];
+        case "location-clear":
+          return ["location", udid, "clear"];
+        case "privacy":
+          return [
+            "privacy",
+            udid,
+            configuration.action,
+            configuration.service,
+            ...(configuration.bundleId === undefined ? [] : [configuration.bundleId]),
+          ];
+      }
+    })();
+    const result = await this.simctl(args);
+    if (result.code !== 0) throw this.simctlError(args[0] ?? "configure", result);
+  }
+
+  async readLogs(udid: string, query: DeviceLogQuery): Promise<DeviceLogResult> {
+    const executable = await this.executableFor(udid, query.bundleId);
+    const sinceMs = this.now() - query.sinceSeconds * 1000;
+    const [unified, consoleLines, crashes] = await Promise.all([
+      executable === null
+        ? Promise.resolve<readonly string[]>([])
+        : this.simctl(["spawn", udid, "log", ...unifiedLogArguments(executable, query)], {
+            timeoutMs: 60_000,
+          }).then((result) => {
+            if (result.code !== 0) throw this.simctlError("log show", result);
+            // `log show` prints a column header before the first entry.
+            return result.stdout.split("\n").filter((line) => /^\d{4}-\d{2}-\d{2} /u.test(line));
+          }),
+      Promise.resolve<readonly string[]>([]),
+      executable === null
+        ? Promise.resolve([])
+        : readCrashReports({
+            directory: path.join(homedir(), "Library", "Logs", "DiagnosticReports"),
+            executable,
+            udid,
+            sinceMs,
+          }),
+    ]);
+    const contains = query.contains?.toLowerCase();
+    const filter = (lines: readonly string[]) =>
+      contains === undefined
+        ? lines
+        : lines.filter((line) => line.toLowerCase().includes(contains));
+    const log = tailLines(filter(unified), query.limit);
+    const console = tailLines(filter(consoleLines), query.limit);
+    return {
+      bundleId: query.bundleId,
+      process: executable,
+      log: log.lines,
+      console: console.lines,
+      consoleUnavailableReason:
+        "Direct stdout/stderr capture is unavailable; use Logger, NSLog or os_log for simulator output.",
+      crashes,
+      omitted: log.omitted + console.omitted,
+    };
+  }
+
+  private executableFor(udid: string, bundleId: string): Promise<string | null> {
+    const key = `${udid}:${bundleId}`;
+    let cached = this.executables.get(key);
+    if (!cached) {
+      cached = this.simctl(["appinfo", udid, bundleId]).then((result) => {
+        const match = /CFBundleExecutable\s*=\s*"?([^";\n]+)"?;/u.exec(result.stdout);
+        if (result.code !== 0 && isDeviceNotBootedDetail(result.stderr)) {
+          throw this.simctlError("appinfo", result);
+        }
+        if (result.code !== 0 || !match) {
+          throw new DeviceBackendError(
+            `App ${bundleId} is not installed on this simulator, so it has no logs to read.`,
+          );
+        }
+        return match[1]!.trim();
+      });
+      // A failure is not remembered: the app may be installed a moment later.
+      cached.catch(() => this.executables.delete(key));
+      this.executables.set(key, cached);
+    }
+    return cached;
+  }
+
+  async keyEvent(udid: string, event: DeviceKeyEvent, options?: DeviceInputOptions): Promise<void> {
     // The helper takes one USB HID usage per call and tracks held modifiers
     // itself, so a chord is sent as its modifier keys around the main key.
+    let admissionSignal = options?.signal;
     for (const modifier of event.modifiers) {
       const usage = HID_MODIFIER_USAGES[modifier];
       if (usage === undefined) continue;
-      await this.injectInput(udid, HELPER_METHODS.key, () => ({
-        usage,
-        phase: event.direction,
-      }));
+      await this.injectInput(
+        udid,
+        HELPER_METHODS.key,
+        () => ({ usage, phase: event.direction }),
+        admissionSignal,
+      );
+      // Finish a chord once its first event has been delivered.
+      admissionSignal = undefined;
     }
-    await this.injectInput(udid, HELPER_METHODS.key, () => ({
-      usage: event.keyCode,
-      phase: event.direction,
-    }));
+    await this.injectInput(
+      udid,
+      HELPER_METHODS.key,
+      () => ({ usage: event.keyCode, phase: event.direction }),
+      admissionSignal,
+    );
   }
 
-  async pressButton(udid: string, button: DeviceHardwareButton): Promise<void> {
+  async pressButton(
+    udid: string,
+    button: DeviceHardwareButton,
+    options?: DeviceInputOptions,
+  ): Promise<void> {
     if (button === "rotate") {
       // Rotation is a Simulator.app window command, not a HID button: there is
       // no HID usage for it and no simctl equivalent. Simulator.app posts a
@@ -747,14 +1088,14 @@ export class IosSimulatorBackend implements DeviceBackend {
         "Rotating a headless simulator is not supported; rotate the device from inside the app or use Simulator.app.",
       );
     }
-    await this.assertCapability("hid");
-    await this.injectInput(udid, HELPER_METHODS.button, () => ({ name: button }));
+    await this.injectInput(udid, HELPER_METHODS.button, () => ({ name: button }), options?.signal);
   }
 
   async describeUi(udid: string): Promise<DeviceDescribeUiResult> {
     await this.assertCapability("accessibility");
-    await this.attachedHelper(udid);
-    const result = await this.helperRequest(HELPER_METHODS.describeUi, {});
+    const result = await this.withAttachedHelper(udid, (helper) =>
+      this.helperRequest(helper, HELPER_METHODS.describeUi, {}),
+    );
     const tree = (result as { tree?: unknown } | null)?.tree;
     if (typeof tree !== "object" || tree === null) {
       throw new DeviceBackendError("Device helper returned no accessibility tree");
@@ -767,7 +1108,7 @@ export class IosSimulatorBackend implements DeviceBackend {
   }
 
   geometry(udid: string): DeviceGeometry | null {
-    return this.deviceGeometry.get(udid) ?? null;
+    return this.deviceGeometry.get(udid.toLowerCase()) ?? null;
   }
 
   async attachStream(udid: string, onFrame: DeviceFrameListener): Promise<void> {
@@ -775,14 +1116,62 @@ export class IosSimulatorBackend implements DeviceBackend {
     // the encoder to compress it.
     await this.assertCapability("framebuffer");
     await this.assertCapability("encoder");
-    const helper = await this.attachedHelper(udid);
-    await helper.startStream(udid, onFrame);
+    await this.withAttachedHelper(udid, async (helper, session) => {
+      session.streamingUdid = null;
+      try {
+        await helper.startStream(session.udid, onFrame);
+      } catch (error) {
+        // After a reboot outside Synara the cached attachment still looks valid,
+        // and starting the stream on it fails with "no framebuffer surface" on
+        // every retry. A fresh attach against the current boot fixes it at once.
+        if (!isStaleDescriptorError(error)) throw error;
+        await this.attachHelper(helper, session.udid, { force: true });
+        await helper.startStream(session.udid, onFrame);
+      }
+      if (!helper.running) {
+        throw new DeviceBackendError("Device helper exited while starting the stream");
+      }
+      session.streamingUdid = udid;
+    });
   }
 
   async detachStream(udid: string): Promise<void> {
-    // The helper holds one attachment, so its stream is this device's stream.
-    if (!this.helper || this.helper.attachedDevice?.udid !== udid) return;
-    await this.helper.stopStream().catch(() => undefined);
+    const session = this.helperSessions.get(udid.toLowerCase());
+    if (!session || session.shutdown !== null) return;
+    await this.runWithHelperSession(session, async () => {
+      session.streamingUdid = null;
+      await session.client?.stopStream().catch(() => undefined);
+    });
+  }
+
+  onStreamInterrupted(listener: (udid: string, reason: string) => void): () => void {
+    this.streamInterruptedListeners.add(listener);
+    return () => {
+      this.streamInterruptedListeners.delete(listener);
+    };
+  }
+
+  /**
+   * The helper process exited. A running stream died with it, which nothing
+   * else reports: frames just stop. The next request starts a new helper; the
+   * listeners decide whether the stream is still wanted.
+   */
+  private helperExited(
+    session: SimulatorHelperSession,
+    helper: HelperClient,
+    reason: string,
+  ): void {
+    if (this.disposed || session.client !== helper || session.streamingUdid === null) return;
+    const udid = session.streamingUdid;
+    session.streamingUdid = null;
+    this.scheduleHelperRetirement(session);
+    for (const listener of this.streamInterruptedListeners) {
+      try {
+        listener(udid, reason);
+      } catch {
+        // One listener's failure must not hide the interruption from the rest.
+      }
+    }
   }
 
   async dispose(): Promise<void> {
@@ -793,9 +1182,9 @@ export class IosSimulatorBackend implements DeviceBackend {
     await Promise.allSettled(this.recordingStarts.values());
     this.recordings.clear();
     this.reservedRecordingPaths.clear();
-    const helper = this.helper;
-    this.helper = null;
-    await helper?.dispose();
+    const sessions = [...this.helperSessions.values()];
+    this.helperSessions.clear();
+    await Promise.all(sessions.map((session) => this.closeHelper(session)));
   }
 
   private async startRecordingProcess(udid: string): Promise<DeviceStartRecordingResult> {
@@ -997,7 +1386,7 @@ export class IosSimulatorBackend implements DeviceBackend {
 
   private async simctl(
     args: readonly string[],
-    options: { readonly timeoutMs?: number } = {},
+    options: { readonly timeoutMs?: number; readonly env?: NodeJS.ProcessEnv } = {},
   ): Promise<ProcessRunResult> {
     if (this.osPlatform !== "darwin") {
       throw new DeviceBackendError("iOS simulators are only available on macOS");
@@ -1005,17 +1394,29 @@ export class IosSimulatorBackend implements DeviceBackend {
     // Anything but a read can change what `list devices` reports; drop the
     // short-lived listing cache before the command runs so the next listing
     // sees the mutation (boot, shutdown, create, erase, ...).
-    if (args[0] !== "list") this.deviceListCache = null;
+    if (!READ_ONLY_SIMCTL_COMMANDS.has(args[0] ?? "")) this.deviceListCache = null;
+    const toolchain = await this.toolchainEnv();
     return await this.run("xcrun", ["simctl", ...args], {
       timeoutMs: options.timeoutMs ?? SIMCTL_TIMEOUT_MS,
       allowNonZeroExit: true,
       outputMode: "truncate",
-      env: await this.toolchainEnv(),
+      env:
+        options.env === undefined
+          ? toolchain
+          : { ...(toolchain ?? this.processEnv), ...options.env },
     });
   }
 
   private simctlError(action: string, result: ProcessRunResult): DeviceBackendError {
     const detail = result.stderr.trim() || result.stdout.trim();
+    // CoreSimulator answers a command for a shut-down device with SimError 405
+    // "Unable to lookup in current state: Shutdown", which an agent reads as a
+    // broken app or a missing install rather than the one step it skipped.
+    if (isDeviceNotBootedDetail(detail)) {
+      return new DeviceBackendError(
+        `simctl ${action} failed because the simulator is not booted. Boot it with device_boot, then retry.`,
+      );
+    }
     return new DeviceBackendError(
       `simctl ${action} failed${detail ? `: ${detail}` : ""}`,
       // A timeout may still be progressing on the device; a refusal will not.
@@ -1176,8 +1577,11 @@ export class IosSimulatorBackend implements DeviceBackend {
 
   // ── Helper lifecycle ───────────────────────────────────────────────
 
-  private async helperRequest(method: string, params: Record<string, unknown>): Promise<unknown> {
-    const helper = await this.requireHelper();
+  private async helperRequest(
+    helper: HelperClient,
+    method: string,
+    params: Record<string, unknown>,
+  ): Promise<unknown> {
     try {
       return await helper.request(method, params);
     } catch (error) {
@@ -1194,54 +1598,174 @@ export class IosSimulatorBackend implements DeviceBackend {
     );
   }
 
+  private withAttachedHelper<A>(
+    udid: string,
+    action: (helper: HelperClient, session: SimulatorHelperSession) => Promise<A>,
+  ): Promise<A> {
+    const session = this.helperSession(udid);
+    if (session.shutdown !== null) {
+      const resume = () => this.withAttachedHelper(udid, action);
+      return session.shutdown.then(resume, resume);
+    }
+    return this.runWithHelperSession(session, async () => {
+      const helper = await this.requireHelper(session);
+      await this.attachHelper(helper, session.udid);
+      this.assertActiveHelperSession(session);
+      return await action(helper, session);
+    });
+  }
+
+  private helperSession(udid: string): SimulatorHelperSession {
+    if (this.disposed) throw new DeviceBackendError("The iOS simulator backend is disposed");
+    const key = udid.toLowerCase();
+    let session = this.helperSessions.get(key);
+    if (!session) {
+      session = {
+        udid,
+        client: null,
+        interruptCompile: null,
+        pending: null,
+        shutdown: null,
+        streamingUdid: null,
+        idleTimer: null,
+      };
+      this.helperSessions.set(key, session);
+    }
+    return session;
+  }
+
+  private assertActiveHelperSession(session: SimulatorHelperSession): void {
+    if (this.disposed) throw new DeviceBackendError("The iOS simulator backend is disposed");
+    if (session.shutdown !== null)
+      throw new DeviceBackendError("The simulator helper session ended during shutdown");
+  }
+
   /**
-   * The helper is bound to one simulator at a time and every input and read
-   * method acts on that binding, so each call re-asserts it. `attach` is a
-   * no-op when the device is already the attached one.
+   * The native helper's input, accessibility and screen reads use the last
+   * attachment. One process per device prevents cross-device retargeting.
+   * Serialize work within that device so a rebind cannot interrupt another
+   * request's attachment or coordinate conversion.
    */
-  private async attachedHelper(
+  private runWithHelperSession<A>(
+    session: SimulatorHelperSession,
+    action: () => Promise<A>,
+  ): Promise<A> {
+    if (session.idleTimer !== null) {
+      clearTimeout(session.idleTimer);
+      session.idleTimer = null;
+    }
+    const result = (session.pending ?? Promise.resolve()).then(() => {
+      this.assertActiveHelperSession(session);
+      return action();
+    });
+    const settled = () => {
+      if (session.pending !== tail) return;
+      session.pending = null;
+      this.scheduleHelperRetirement(session);
+    };
+    const tail = result.then(settled, settled);
+    session.pending = tail;
+    return result;
+  }
+
+  private scheduleHelperRetirement(session: SimulatorHelperSession): void {
+    if (
+      this.disposed ||
+      session.shutdown !== null ||
+      session.pending !== null ||
+      session.streamingUdid !== null ||
+      session.idleTimer !== null
+    ) {
+      return;
+    }
+    if (session.client === null) {
+      this.helperSessions.delete(session.udid.toLowerCase());
+      return;
+    }
+    const idleMs =
+      session.client.attachedDevice === null ? HELPER_UNATTACHED_IDLE_MS : HELPER_IDLE_MS;
+    session.idleTimer = setTimeout(
+      () => {
+        session.idleTimer = null;
+        void this.runWithHelperSession(session, () => this.closeHelper(session)).catch(
+          () => undefined,
+        );
+      },
+      session.client.running ? idleMs : 0,
+    );
+    session.idleTimer.unref();
+  }
+
+  private async closeHelper(session: SimulatorHelperSession): Promise<void> {
+    if (session.idleTimer !== null) {
+      clearTimeout(session.idleTimer);
+      session.idleTimer = null;
+    }
+    session.streamingUdid = null;
+    session.interruptCompile?.(
+      new DeviceBackendError(
+        this.disposed
+          ? "The iOS simulator backend is disposed"
+          : "The simulator helper session ended during shutdown",
+      ),
+    );
+    const helper = session.client;
+    try {
+      await helper?.dispose();
+    } finally {
+      if (session.client === helper) session.client = null;
+    }
+  }
+
+  private async attachHelper(
+    helper: HelperClient,
     udid: string,
     options: { readonly force?: boolean } = {},
-  ): Promise<HelperClient> {
-    const helper = await this.requireHelper();
-    const remember = () => {
-      const attachment = helper.attachedDevice;
-      if (attachment?.udid === udid) {
-        this.deviceGeometry.set(udid, {
-          pointWidth: attachment.pointWidth,
-          pointHeight: attachment.pointHeight,
-          scale: attachment.scale,
-        });
-      }
-    };
-    try {
-      await helper.attach(udid, options);
-      remember();
-    } catch (error) {
+  ): Promise<void> {
+    const attachment = await helper.attach(udid, options).catch(async (error) => {
       // A device can also be rebooted outside Synara (Simulator.app, or simctl
       // in the agent's own shell), which no invalidation hook here can observe.
       // A dead-descriptor failure is therefore retried once with a forced
       // re-attach, which rebinds against the current boot.
       if (!isStaleDescriptorError(error)) throw this.helperError(error);
       try {
-        await helper.attach(udid, { force: true });
-        remember();
+        return await helper.attach(udid, { force: true });
       } catch (retryError) {
         throw this.helperError(retryError);
       }
-    }
-    return helper;
+    });
+    this.deviceGeometry.set(udid.toLowerCase(), {
+      pointWidth: attachment.pointWidth,
+      pointHeight: attachment.pointHeight,
+      scale: attachment.scale,
+    });
   }
 
-  private async requireHelper(): Promise<HelperClient> {
-    if (this.helper?.running) return this.helper;
-    const binaryPath = await this.compileHelperIfNeeded();
+  private async requireHelper(session: SimulatorHelperSession): Promise<HelperClient> {
+    if (session.client?.running) return session.client;
+    await this.closeHelper(session);
+    this.assertActiveHelperSession(session);
+    // The compiler is shared by all devices. Closing this session releases
+    // its queue without interrupting a build another device may still need.
+    const interrupted = Promise.withResolvers<never>();
+    session.interruptCompile = interrupted.reject;
+    let binaryPath: string;
+    try {
+      binaryPath = await Promise.race([this.compileHelperIfNeeded(), interrupted.promise]);
+    } finally {
+      session.interruptCompile = null;
+    }
+    this.assertActiveHelperSession(session);
     // The helper resolves CoreSimulator out of DEVELOPER_DIR at runtime, so it
     // has to inherit the same toolchain the binary was built against.
     const env = await this.toolchainEnv();
-    const helper = this.makeHelperClient(binaryPath, env, await this.sandboxFor([binaryPath], env));
+    const sandbox = await this.sandboxFor([binaryPath], env);
+    this.assertActiveHelperSession(session);
+    const helper: HelperClient = this.makeHelperClient(binaryPath, env, sandbox, (reason) =>
+      this.helperExited(session, helper, reason),
+    );
     helper.start();
-    this.helper = helper;
+    session.client = helper;
     return helper;
   }
 
@@ -1264,7 +1788,10 @@ export class IosSimulatorBackend implements DeviceBackend {
 
   private async compileHelper(): Promise<string> {
     const buildScript = path.join(this.helperSourceDir, "build.sh");
-    const outputDirectory = path.join(this.helperCacheRoot, await this.xcodeBuildKey());
+    const key = await this.xcodeBuildKey().catch((error: unknown) => {
+      throw this.recordHelperFailure(error instanceof Error ? error.message : String(error));
+    });
+    const outputDirectory = path.join(this.helperCacheRoot, key);
     const result = await this.run("/bin/sh", [buildScript, outputDirectory], {
       timeoutMs: 300_000,
       allowNonZeroExit: true,
@@ -1298,7 +1825,7 @@ export class IosSimulatorBackend implements DeviceBackend {
   private recordHelperFailure(message: string): DeviceBackendError {
     // Remembered so `availability()` reports `helper-unavailable` instead of
     // the pane retrying a build that will keep failing the same way.
-    this.helperBuildFailure = message;
+    this.helperBuildFailure = fitDeviceMessage(message);
     return new DeviceBackendError(message);
   }
 
@@ -1346,14 +1873,6 @@ export class IosSimulatorBackend implements DeviceBackend {
   /**
    * Digest of the helper's sources, so a helper fix invalidates the cache.
    *
-   * Read fresh rather than memoised: it runs once per attach, and a stale
-   * digest would reintroduce exactly the bug it exists to prevent. If the
-   * sources cannot be read the digest is omitted, which falls back to keying on
-   * the toolchain alone rather than failing the attach outright.
-   */
-  /**
-   * Digest of the helper's sources, so a helper fix invalidates the cache.
-   *
    * Derived through the shared reader that `scripts/device-helper-smoke.ts`
    * also uses: a second derivation here is what made the smoke run build into a
    * directory this backend never read.
@@ -1367,10 +1886,34 @@ export class IosSimulatorBackend implements DeviceBackend {
   }
 
   private async xcodeBuildKey(): Promise<string> {
+    const env = await this.toolchainEnv();
+    const developerDir = env?.DEVELOPER_DIR;
+    const cached = this.xcodeBuildKeyCache;
+    const resolvedAtMs = Date.now();
+    // The capability probe checks the helper path before each native action.
+    // Reuse the version process and source digest within the Xcode lookup window.
+    if (
+      cached !== null &&
+      cached.developerDir === developerDir &&
+      resolvedAtMs - cached.resolvedAtMs < XCODE_SELECT_CACHE_MS
+    ) {
+      return await cached.key;
+    }
+    const entry = { developerDir, resolvedAtMs, key: this.resolveXcodeBuildKey(env) };
+    this.xcodeBuildKeyCache = entry;
+    try {
+      return await entry.key;
+    } catch (error) {
+      if (this.xcodeBuildKeyCache === entry) this.xcodeBuildKeyCache = null;
+      throw error;
+    }
+  }
+
+  private async resolveXcodeBuildKey(env: NodeJS.ProcessEnv | undefined): Promise<string> {
     const result = await this.run("xcodebuild", ["-version"], {
       timeoutMs: 20_000,
       allowNonZeroExit: true,
-      env: await this.toolchainEnv(),
+      env,
     }).catch(() => null);
     // Derived by the shared helper so the smoke CLI writes the directory the
     // server reads; deriving it here independently is what let them diverge.
@@ -1378,14 +1921,33 @@ export class IosSimulatorBackend implements DeviceBackend {
       result?.code === 0
         ? deviceHelperCacheKey(result.stdout, await this.helperSourceRevision())
         : null;
+    // Not recorded as a helper failure here: this also runs on every cache
+    // lookup, and one slow or failed call (Xcode updating, a license prompt)
+    // would otherwise leave the pane on "helper unavailable" until restart.
+    // compileHelper records it when the failure actually blocks a build.
     if (key === null) {
-      throw this.recordHelperFailure(
+      throw new DeviceBackendError(
         "Could not determine the Xcode version. Install Xcode and run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer",
       );
     }
     return key;
   }
 }
+
+/** SimError 405: the command needs a booted device and this one is not. */
+function isDeviceNotBootedDetail(detail: string): boolean {
+  return /current state: (?:Shutdown|Shutting Down)|code=405/iu.test(detail);
+}
+
+/** simctl commands that cannot change what `list devices` reports. */
+const READ_ONLY_SIMCTL_COMMANDS = new Set([
+  "list",
+  "appinfo",
+  "spawn",
+  "location",
+  "ui",
+  "privacy",
+]);
 
 function slugDeviceName(name: string): string {
   return (
@@ -1486,11 +2048,13 @@ export function normalizeUiNode(raw: unknown): DeviceUiNode {
     if (typeof y !== "number" || !Number.isFinite(y)) return null;
     return { x, y };
   };
+  const identifier = readText("identifier");
+  const placeholder = readText("placeholder");
   return {
-    role: typeof node.role === "string" ? node.role : "Unknown",
-    subrole: readText("subrole"),
-    label: readText("label"),
-    value: readText("value"),
+    role: typeof node.role === "string" ? node.role.slice(0, 128) : "Unknown",
+    subrole: clampText(readText("subrole"), 128),
+    label: clampText(readText("label"), UI_TEXT_MAX_LENGTH),
+    value: clampText(readText("value"), UI_TEXT_MAX_LENGTH),
     frame: {
       x: readFrameValue("x"),
       y: readFrameValue("y"),
@@ -1498,8 +2062,22 @@ export function normalizeUiNode(raw: unknown): DeviceUiNode {
       height: Math.max(0, readFrameValue("height")),
     },
     activationPoint: readActivationPoint(),
+    ...(identifier === null ? {} : { identifier: clampText(identifier, 512) }),
+    enabled: node.enabled !== false,
+    ...(node.focused === true ? { focused: true } : {}),
+    ...(node.selected === true ? { selected: true } : {}),
+    ...(placeholder === null ? {} : { placeholder: clampText(placeholder, UI_TEXT_MAX_LENGTH) }),
+    ...(node.unframed === true || typeof node.frame !== "object" ? { unframed: true } : {}),
     children: Array.isArray(node.children) ? node.children.map(normalizeUiNode) : [],
   };
+}
+
+/** The contract's per-string cap; a long text view must not fail the whole read. */
+const UI_TEXT_MAX_LENGTH = 1_024;
+
+function clampText(value: string | null, maxLength: number): string | null {
+  if (value === null || value.length <= maxLength) return value;
+  return `${value.slice(0, maxLength - 1)}…`;
 }
 
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);

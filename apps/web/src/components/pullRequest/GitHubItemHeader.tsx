@@ -18,7 +18,7 @@ import { ComposerPickerMenuPopup } from "~/components/chat/ComposerPickerMenuPop
 import { IconButton } from "~/components/ui/icon-button";
 import { Menu, MenuTrigger } from "~/components/ui/menu";
 import { ArrowLeftIcon, ArrowRightIcon, ChevronDownIcon } from "~/lib/icons";
-import { formatRelativeTime } from "~/lib/relativeTime";
+import { formatRelativeTimeAgo } from "~/lib/relativeTime";
 import { cn } from "~/lib/utils";
 import { GitHubLabelChips } from "./GitHubLabelChips";
 import { PullRequestActorLabel } from "./PullRequestActorLabel";
@@ -29,10 +29,12 @@ import {
   pullRequestStateLabel,
 } from "./PullRequestStateGlyph";
 import {
+  ISSUE_STATE_SHORT_LABEL_KEYS,
   resolveIssueStatePresentation,
   resolvePrStatePresentation,
 } from "./pullRequestStatePresentation";
 import { PR_FINE_TEXT_CLASS_NAME, PR_META_TEXT_CLASS_NAME } from "./pullRequestText";
+import { useTranslation } from "~/i18n";
 
 type HeaderFields =
   | "number"
@@ -55,11 +57,6 @@ export type GitHubItemHeaderItem =
       HeaderFields | "state" | "stateReason" | "assignees"
     >);
 
-function relativeTimeAgo(iso: string): string {
-  const relative = formatRelativeTime(iso);
-  return relative === "now" ? "just now" : `${relative} ago`;
-}
-
 /** Returns a narrow layout from the detail to the list; leads the detail page's top bar. */
 export function GitHubItemBackButton({
   onBack,
@@ -68,11 +65,13 @@ export function GitHubItemBackButton({
   onBack: () => void;
   className?: string;
 }) {
+  const { t } = useTranslation();
+
   return (
     <IconButton
       variant="chrome"
-      label="Back to code review"
-      tooltip="Back"
+      label={t("git:backToCodeReview")}
+      tooltip={t("common:app_back")}
       className={cn("shrink-0", className)}
       onClick={onBack}
     >
@@ -91,6 +90,8 @@ export function GitHubItemHeader({
   stateMenu?: ReactNode;
   className?: string;
 }) {
+  const { t, formatLocale } = useTranslation();
+
   const state =
     item.kind === "pullRequest"
       ? {
@@ -106,7 +107,7 @@ export function GitHubItemHeader({
           ),
         }
       : {
-          word: resolveIssueStatePresentation(item).shortLabel,
+          word: t(ISSUE_STATE_SHORT_LABEL_KEYS[resolveIssueStatePresentation(item).shortLabel]),
           colorClass: resolveIssueStatePresentation(item).colorClass,
           glyph: (
             <IssueStateGlyph
@@ -135,7 +136,7 @@ export function GitHubItemHeader({
         {stateMenu ? (
           <Menu>
             <MenuTrigger
-              aria-label={`State: ${state.word}. Change state`}
+              aria-label={t("git:stateChangeState", { value0: state.word })}
               className={cn(
                 pillClassName,
                 "cursor-pointer pr-1.5 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
@@ -166,8 +167,8 @@ export function GitHubItemHeader({
         className={cn(PR_META_TEXT_CLASS_NAME, "mt-3 flex-wrap text-muted-foreground")}
       >
         <PullRequestActorLabel actor={item.author} className="font-medium text-foreground" />
-        <span title={new Date(item.createdAt).toLocaleString()}>
-          {relativeTimeAgo(item.createdAt)}
+        <span title={new Date(item.createdAt).toLocaleString(formatLocale)}>
+          {formatRelativeTimeAgo(item.createdAt, undefined, formatLocale, t)}
         </span>
         {item.kind === "pullRequest" ? (
           <span className="flex min-w-0 items-center gap-1.5">

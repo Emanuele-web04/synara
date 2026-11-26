@@ -19,6 +19,7 @@ import {
   providerStartOptionsFromInstance,
   resolveProviderInstance,
 } from "@synara/shared/providerInstances";
+import { expandHomePath } from "@synara/shared/synaraHome";
 import { Effect, Exit, Layer, Option, Queue, Schema, SchemaIssue } from "effect";
 
 import { ServerConfig } from "../../config.ts";
@@ -41,6 +42,9 @@ import {
   resolveProviderModelCatalogCachePath,
   writeProviderModelCatalogCache,
 } from "../providerModelCatalogCache.ts";
+import { openCodeCompatibleConfigFingerprint } from "../openCodeConfigPaths.ts";
+import { buildProviderProcessEnv } from "../providerProcessEnv.ts";
+import { OPENCODE_CLI_SPEC } from "../opencodeRuntime.ts";
 import {
   discoverSkillsCatalog,
   filterDisabledSkills,
@@ -248,7 +252,8 @@ const make = Effect.gen(function* () {
         ? applyProviderStartOptions(
             resolved,
             providerStartOptionsFromInstance(instance),
-            parsed.instanceId !== undefined,
+            // Pi loads the selected SDK in-process, so always use host settings.
+            parsed.instanceId !== undefined || instance.driver === "pi",
           )
         : resolved;
     });
@@ -455,17 +460,22 @@ const make = Effect.gen(function* () {
         };
       }
       const listModelsFromAdapter = adapter.listModels;
-      const discover = Effect.suspend(() => listModelsFromAdapter(resolved)).pipe(
-        Effect.flatMap((result) =>
-          isolateMalformedModelDescriptors({ provider: resolved.provider, result }),
-        ),
-      );
+      const discover = (input: Parameters<typeof listModelsFromAdapter>[0]) =>
+        Effect.suspend(() => listModelsFromAdapter(input)).pipe(
+          Effect.flatMap((result) =>
+            isolateMalformedModelDescriptors({ provider: resolved.provider, result }),
+          ),
+        );
       // OMP owns a five-minute CLI catalog cache. Do not layer the shared
       // thirty-minute fresh window or persisted catalogs over that cadence.
       if (resolved.provider === "omp") {
-        return yield* discover;
+        return yield* discover(resolved);
       }
-      const cacheKey = providerModelDiscoveryCacheKey(resolved);
+      const discoveryInput =
+        resolved.provider === "opencode"
+          ? { ...resolved, cwd: expandHomePath(resolved.cwd ?? serverConfig.cwd) }
+          : resolved;
+      const cacheKey = providerModelDiscoveryCacheKey(discoveryInput);
       const runtimeVersion =
         resolved.provider === "claudeAgent"
           ? ((yield* providerHealth.getStatuses).find(
@@ -473,9 +483,42 @@ const make = Effect.gen(function* () {
                 status.provider === "claudeAgent" && status.instanceId === resolved.instanceId,
             )?.version ?? null)
           : undefined;
+      // OpenCode-family discovery shells out to the CLI, which reads its own
+      // config file. Editing that file (for example renaming a model) changes
+      // nothing else in the key, so fold in a fingerprint of the file the CLI
+      // will actually read. Without this, the fresh window and the persisted
+      // snapshot keep serving the old names across restarts.
+      const configFingerprint =
+        resolved.provider === "opencode"
+          ? yield* Effect.tryPromise(() =>
+              openCodeCompatibleConfigFingerprint({
+                homeDir: serverConfig.homeDir,
+                cwd: discoveryInput.cwd,
+                dataDirectoryName: OPENCODE_CLI_SPEC.dataDirectoryName,
+                env: buildProviderProcessEnv({
+                  driver: "opencode",
+                  instanceId: resolved.instanceId,
+                  homeDir: serverConfig.homeDir,
+                  isolationRootDir: serverConfig.stateDir,
+                  skipHomePreparation: true,
+                  ...(resolved.environment !== undefined
+                    ? { environment: resolved.environment }
+                    : {}),
+                }),
+              }),
+            ).pipe(Effect.orElseSucceed(() => null))
+          : undefined;
       return yield* modelDiscoveryCache.lookup(
-        { ...cacheKey, ...(runtimeVersion !== undefined ? { runtimeVersion } : {}) },
-        discover,
+        {
+          ...cacheKey,
+          ...(runtimeVersion !== undefined ? { runtimeVersion } : {}),
+          ...(configFingerprint !== undefined ? { configFingerprint } : {}),
+        },
+        discover(
+          discoveryInput.provider === "opencode" && !discoveryInput.serverUrl
+            ? { ...discoveryInput, localConfigRevision: configFingerprint ?? "no-local-config" }
+            : discoveryInput,
+        ),
         parsed.refresh,
       );
     });

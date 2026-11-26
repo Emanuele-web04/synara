@@ -5,12 +5,13 @@
 // Layer: Chat transcript UI
 // Exports: SubagentRunningChip
 
-import { pluralize } from "@synara/shared/text";
+import { pluralize } from "~/i18n/pluralize";
 
 import { ArrowDownIcon, ArrowUpIcon } from "~/lib/icons";
 import { subagentStatusTextToneClassName } from "~/lib/subagentPresentation";
 import { cn } from "~/lib/utils";
 import { LiveStatusSpinner } from "../ui/spinner";
+import { useTranslation } from "~/i18n";
 
 export function SubagentRunningChip({
   runningCount,
@@ -24,6 +25,8 @@ export function SubagentRunningChip({
   visible: boolean;
   onClick: () => void;
 }) {
+  const { t } = useTranslation();
+
   const Arrow = direction === "below" ? ArrowDownIcon : ArrowUpIcon;
   return (
     <button
@@ -32,7 +35,11 @@ export function SubagentRunningChip({
       data-scroll-anchor-ignore
       aria-hidden={!visible}
       tabIndex={visible ? 0 : -1}
-      aria-label={`${runningCount} ${pluralize(runningCount, "subagent")} running, show ${pluralize(runningCount, "it", "them")}`}
+      aria-label={t("chat:runningShow", {
+        value0: runningCount,
+        value1: pluralize(runningCount, "subagent"),
+        value2: pluralize(runningCount, "it", "them"),
+      })}
       onClick={onClick}
       className={cn(
         "flex items-center gap-1.5 rounded-full border border-[color:var(--color-border)] bg-[var(--color-background-elevated-primary-opaque)] py-1 pr-2 pl-2.5 text-ui-sm text-foreground/85 backdrop-blur-md hover:cursor-pointer",
@@ -43,7 +50,9 @@ export function SubagentRunningChip({
       <LiveStatusSpinner
         className={cn("size-3 shrink-0", subagentStatusTextToneClassName("running"))}
       />
-      <span className="tabular-nums">{runningCount} running</span>
+      <span className="tabular-nums">
+        {runningCount} {t("chat:running")}
+      </span>
       <span aria-hidden="true" className="h-3 w-px bg-[var(--color-border)]" />
       <Arrow aria-hidden="true" className="size-3 shrink-0 text-muted-foreground" />
     </button>

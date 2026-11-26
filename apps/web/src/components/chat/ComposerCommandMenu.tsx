@@ -30,6 +30,7 @@ import { formatSkillScope } from "~/lib/providerDiscovery";
 import { cn } from "~/lib/utils";
 import { FileEntryIcon } from "./FileEntryIcon";
 import { ProviderIcon } from "../ProviderIcon";
+import { ConnectorIcon } from "../ConnectorIcon";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
   COMPOSER_MENU_PANEL_GLYPH_CLASS_NAME,
@@ -37,6 +38,7 @@ import {
   ComposerMenuPanel,
   type ComposerMenuPanelGroup,
 } from "./ComposerMenuPanel";
+import { t, useTranslation } from "~/i18n";
 
 function humanizeProviderCommandName(command: string): string {
   return command
@@ -51,31 +53,31 @@ function commandMenuTitle(
 ): string {
   switch (item.command) {
     case "clear":
-      return "Clear";
+      return t("chat:clear");
     case "compact":
-      return "Compact Context";
+      return t("chat:compactContext");
     case "model":
-      return "Model";
+      return t("chat:detail_model");
     case "fast":
-      return "Fast Mode";
+      return t("chat:fastMode");
     case "plan":
-      return "Plan Mode";
+      return t("chat:planMode");
     case "debug":
-      return "Debug Mode";
+      return t("chat:debugMode");
     case "default":
-      return "Default Mode";
+      return t("chat:defaultMode");
     case "review":
-      return "Code Review";
+      return t("chat:codeReview");
     case "fork":
-      return "Fork";
+      return t("workspace:fork");
     case "side":
-      return "Sidechat";
+      return t("chat:sidechat");
     case "status":
-      return "Status";
+      return t("chat:detail_status");
     case "subagents":
-      return "Subagents";
+      return t("chat:subagents");
     case "feedback":
-      return "Feedback Synara";
+      return t("workspace:feedbackSynara");
     default:
       return humanizeProviderCommandName(item.command);
   }
@@ -88,6 +90,10 @@ function commandMenuTrailingMeta(item: ComposerCommandItem): string | null {
 
   if (item.type === "plugin") {
     return "Plugin";
+  }
+
+  if (item.type === "connector") {
+    return "Connector";
   }
 
   if (item.type === "thread") {
@@ -136,6 +142,7 @@ function commandMenuSecondaryText(item: ComposerCommandItem): string | null {
 
   if (
     item.type === "plugin" ||
+    item.type === "connector" ||
     item.type === "skill" ||
     item.type === "local-root" ||
     item.type === "thread"
@@ -221,6 +228,15 @@ export type ComposerCommandItem =
     }
   | {
       id: string;
+      type: "connector";
+      /** Display name, also what picks the brand mark or favicon. */
+      connectorName: string;
+      mention: ProviderMentionReference;
+      label: string;
+      description: string;
+    }
+  | {
+      id: string;
       type: "skill";
       skill: ProviderSkillDescriptor;
       label: string;
@@ -248,12 +264,14 @@ export function groupCommandItems(
   groupSlashCommandSections: boolean,
 ): ComposerCommandGroupModel[] {
   if (triggerKind === "mention") {
+    const connectorItems = items.filter((item) => item.type === "connector");
     const pluginItems = items.filter((item) => item.type === "plugin");
     const threadItems = items.filter((item) => item.type === "thread");
     const localItems = items.filter((item) => item.type === "local-root" || item.type === "path");
     const agentItems = items.filter((item) => item.type === "agent");
     const otherItems = items.filter(
       (item) =>
+        item.type !== "connector" &&
         item.type !== "plugin" &&
         item.type !== "thread" &&
         item.type !== "local-root" &&
@@ -262,17 +280,20 @@ export function groupCommandItems(
     );
 
     const groups: ComposerCommandGroupModel[] = [];
+    if (connectorItems.length > 0) {
+      groups.push({ id: "connectors", label: "Connectors", items: connectorItems });
+    }
     if (pluginItems.length > 0) {
-      groups.push({ id: "plugins", label: "Plugins", items: pluginItems });
+      groups.push({ id: "plugins", label: t("common:plugin_pluginsTab"), items: pluginItems });
     }
     if (threadItems.length > 0) {
-      groups.push({ id: "chats", label: "Chats", items: threadItems });
+      groups.push({ id: "chats", label: t("workspace:general_chats"), items: threadItems });
     }
     if (localItems.length > 0) {
-      groups.push({ id: "local", label: "Local", items: localItems });
+      groups.push({ id: "local", label: t("computer:worktreeMode_local"), items: localItems });
     }
     if (agentItems.length > 0) {
-      groups.push({ id: "subagents", label: "Subagents", items: agentItems });
+      groups.push({ id: "subagents", label: t("chat:subagents"), items: agentItems });
     }
     if (otherItems.length > 0) {
       groups.push({ id: "other", label: null, items: otherItems });
@@ -296,13 +317,17 @@ export function groupCommandItems(
 
   const groups: ComposerCommandGroupModel[] = [];
   if (builtInItems.length > 0) {
-    groups.push({ id: "built-in", label: "Built-in", items: builtInItems });
+    groups.push({ id: "built-in", label: t("chat:builtIn"), items: builtInItems });
   }
   if (providerItems.length > 0) {
-    groups.push({ id: "provider", label: "Provider", items: providerItems });
+    groups.push({
+      id: "provider",
+      label: t("workspace:models_customModelProvider"),
+      items: providerItems,
+    });
   }
   if (skillItems.length > 0) {
-    groups.push({ id: "skills", label: "Skills", items: skillItems });
+    groups.push({ id: "skills", label: t("common:plugin_skillsSection"), items: skillItems });
   }
   if (otherItems.length > 0) {
     groups.push({ id: "other", label: null, items: otherItems });
@@ -340,6 +365,8 @@ export function ComposerCommandMenu(props: {
   onHighlightedItemChange: (itemId: string | null) => void;
   onSelect: (item: ComposerCommandItem) => void;
 }) {
+  const { t } = useTranslation();
+
   const groups = groupCommandItems(
     props.items,
     props.triggerKind,
@@ -388,10 +415,10 @@ export function ComposerCommandMenu(props: {
                 "px-2 py-0 font-medium text-muted-foreground text-ui leading-snug",
               )}
             >
-              Files
+              {t("workspace:toolCallDetails_filesSection")}
             </p>
             <p className="px-2 pt-0.5 text-ui-sm text-muted-foreground/55">
-              Type to search for files
+              {t("workspace:typeToSearchForFiles")}
             </p>
           </div>
         ) : null
@@ -408,16 +435,16 @@ export function ComposerCommandMenu(props: {
           >
             {props.isLoading
               ? props.triggerKind === "mention"
-                ? "Searching mentions..."
+                ? t("chat:searchingMentions")
                 : props.triggerKind === "skill"
-                  ? "Loading skills..."
-                  : "Loading commands..."
+                  ? t("chat:loadingSkills")
+                  : t("chat:loadingCommands")
               : (props.emptyStateText ??
                 (props.triggerKind === "mention"
-                  ? "No matching plugin, chat, or file."
+                  ? t("chat:noMatchingPluginChatOrFile")
                   : props.triggerKind === "skill"
-                    ? "No matching skill."
-                    : "No matching command."))}
+                    ? t("chat:noMatchingSkill")
+                    : t("chat:noMatchingCommand")))}
           </p>
         ) : null
       }
@@ -481,6 +508,8 @@ function commandMenuItemGlyph(item: ComposerCommandItem, theme: "light" | "dark"
       return <PluginIcon className={cls} />;
     case "thread":
       return <ProviderIcon provider={item.provider} className={cls} />;
+    case "connector":
+      return <ConnectorIcon name={item.connectorName} className={cls} />;
     case "skill":
       return <SkillCubeIcon className={cls} />;
     default:

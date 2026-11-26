@@ -7,11 +7,17 @@ import { Effect, FileSystem, Path } from "effect";
 
 import { BETA_ASSET_PATHS, BRAND_ASSET_PATHS } from "./brand-assets.ts";
 
-// Build-time output that only the app bundle reads: the DMG artwork, plus the
-// compiled Icon Composer catalog and its ICNS, which macOS loads from
-// Contents/Resources. Copying them into the runtime tree would ship megabytes
-// of artwork the app never resolves.
-const BUNDLE_ONLY_RESOURCE_ENTRIES = new Set(["dmgly", "Assets.car", "Synara.icns"]);
+// Build-time output and external executables that only the app bundle reads
+// (via extraFiles/extraResources): the DMG artwork, the compiled Icon Composer
+// catalog and its ICNS, and helper binaries. Copying them into prod-resources
+// would duplicate megabytes of assets inside app.asar that the app never resolves.
+const BUNDLE_ONLY_RESOURCE_ENTRIES = new Set([
+  "dmgly",
+  "Assets.car",
+  "Synara.icns",
+  "cua-driver",
+  "cloudflared",
+]);
 
 export const stageDesktopRuntimeResources = Effect.fn("stageDesktopRuntimeResources")(function* (
   buildResourcesDir: string,

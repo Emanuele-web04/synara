@@ -1,8 +1,8 @@
 // FILE: BackgroundTaskRow.tsx
-// Purpose: The one transcript row a background task keeps for its whole life:
-//          "`sleep 20 && echo done` · 12s [Stop]" behind a spinner, then
-//          "finished 20s" / "failed · exit 1" / "stopped" in place. Borderless
-//          and one color (the live spinner), like the transcript's tool rows.
+// Purpose: The transcript row a background task keeps once its tool run is
+//          expanded: "`sleep 20 && echo done` · running", then "finished 20s" /
+//          "failed · exit 1" / "stopped" in place. The transcript never ticks.
+//          Stop is available here only when the chat has no Environment panel.
 // Layer: Web chat presentation component
 // Exports: BackgroundTaskRow, BackgroundTaskStopContext
 
@@ -14,23 +14,21 @@ import { MUTED_LABEL_TEXT_CLASS_NAME } from "~/surfaceStyles";
 import type { WorkLogBackgroundTask } from "../../workLog";
 import { deriveLiteralCommand } from "../../lib/toolCallLabel";
 import { Button } from "../ui/button";
-import { LiveStatusSpinner } from "../ui/spinner";
 import { describeBackgroundTaskStatus } from "./backgroundTaskRow.logic";
-import { INLINE_COMMAND_CHIP_CLASS_NAME } from "./chatTypography";
-import { LiveElapsedTimer } from "./LiveElapsedTimer";
+import { useTranslation } from "~/i18n";
 
-// Stops a running background task; absent where the transcript cannot act on
-// the thread (read-only surfaces).
+// ChatView supplies Stop only for the transcript that owns the task.
 export const BackgroundTaskStopContext = createContext<((taskId: string) => void) | null>(null);
 
 export function BackgroundTaskRow(props: { task: WorkLogBackgroundTask; fontSizePx: number }) {
+  const { t } = useTranslation();
+
   const { task, fontSizePx } = props;
   const onStop = useContext(BackgroundTaskStopContext);
-  // A running task's clock ticks in LiveElapsedTimer; settled ones use their end.
-  const status = describeBackgroundTaskStatus(task, task.completedAt ?? task.startedAt);
-  const running = task.status === "running";
+  // A running task shows no clock here; settled ones keep how long they ran.
+  const status = describeBackgroundTaskStatus(task, task.completedAt ?? task.startedAt, t);
   const command = task.command ? deriveLiteralCommand(task.command) : null;
-  const subject = command ?? task.description ?? "Background task";
+  const subject = command ?? task.description ?? t("chat:backgroundTask");
 
   return (
     <div
@@ -38,7 +36,7 @@ export function BackgroundTaskRow(props: { task: WorkLogBackgroundTask; fontSize
       style={{ fontSize: `${fontSizePx}px` }}
       data-background-task={task.taskId}
       data-background-task-status={task.status}
-      title={task.description && command ? task.description : "Background task"}
+      title={task.description && command ? task.description : t("chat:backgroundTask")}
     >
       <span
         className={cn(
@@ -47,18 +45,10 @@ export function BackgroundTaskRow(props: { task: WorkLogBackgroundTask; fontSize
         )}
         aria-hidden
       >
-        {running ? (
-          <LiveStatusSpinner className="size-3.5 text-sky-600 dark:text-sky-300" />
-        ) : (
-          <BackgroundTrayIcon className="size-3.5" />
-        )}
+        <BackgroundTrayIcon className="size-3.5" />
       </span>
-      <span className="min-w-0 truncate leading-5">
-        {command ? (
-          <code className={INLINE_COMMAND_CHIP_CLASS_NAME}>{subject}</code>
-        ) : (
-          <span className={MUTED_LABEL_TEXT_CLASS_NAME}>{subject}</span>
-        )}
+      <span className={cn("min-w-0 truncate leading-5", MUTED_LABEL_TEXT_CLASS_NAME)}>
+        {subject}
       </span>
       <span
         className={cn(
@@ -67,27 +57,23 @@ export function BackgroundTaskRow(props: { task: WorkLogBackgroundTask; fontSize
         )}
       >
         <span
-          className={cn(running && "sr-only", task.status === "failed" && "text-destructive")}
+          className={cn(task.status === "failed" && "text-destructive")}
           data-background-task-label="true"
         >
           {status.label}
         </span>
-        {running ? (
-          <LiveElapsedTimer startedAt={task.startedAt} />
-        ) : status.elapsed ? (
-          <span>{status.elapsed}</span>
-        ) : null}
-        {running && onStop ? (
+        {task.status !== "running" && status.elapsed ? <span>{status.elapsed}</span> : null}
+        {task.status === "running" && onStop ? (
           <Button
             type="button"
             variant="ghost"
             size="xs"
             className="shrink-0 text-foreground/80"
             onClick={() => onStop(task.taskId)}
-            aria-label={`Stop background task ${subject}`}
+            aria-label={t("chat:stopBackgroundTask", { value0: subject })}
           >
             <StopIcon className="size-2.5" />
-            Stop
+            {t("chat:stop")}
           </Button>
         ) : null}
       </span>

@@ -10,6 +10,18 @@ Large, unfocused, or direction-changing PRs may still be closed quickly.
 
 PRs are automatically labeled with a `vouch:*` trust status and a `size:*` diff size based on changed lines.
 
+Size buckets are XXS (0–9), XS (10–49), S (50–199), M (200–599),
+L (600–999), XL (1,000–2,999), XXL (3,000–5,999), 3XL (6,000–11,999),
+4XL (12,000–24,999), 5XL (25,000–49,999), and 6XL (50,000+).
+Counts exclude lockfiles, generated output, media, evidence, and tests;
+test-only PRs use their test-line count. If GitHub truncates the file list,
+the workflow warns and leaves existing size labels unchanged for manual review.
+
+Conservative path rules in [.github/labeler.json](.github/labeler.json) also add
+`area:*` and `provider:*` labels. These are additive hints, not exhaustive ownership
+classification; labels assigned manually are preserved. `regression`, `performance`,
+and `accessibility` are assigned during triage.
+
 If you are an external contributor, expect `vouch:unvouched` until we explicitly add you to [.github/VOUCHED.td](.github/VOUCHED.td).
 
 ## What We Are Most Likely To Accept
@@ -46,6 +58,8 @@ Do not mix unrelated fixes together.
 
 If the PR makes anything resembling a UI change, include clear before/after images.
 
+For interface copy, follow [the interface text guide](docs/internationalization.md). Add stable semantic keys to the English catalogs, preserve user/provider data, and run the catalog and extraction checks.
+
 If the change depends on motion, timing, transitions, or interaction details, include a short video.
 
 If we have to guess what changed, we are much less likely to review it.
@@ -55,6 +69,44 @@ If we have to guess what changed, we are much less likely to review it.
 If you are thinking about a non-trivial change, open an issue first.
 
 That gives you a chance to check whether the direction fits before spending time on a larger patch.
+
+## Pre-push Check
+
+`bun install` adds a pre-push launcher in Git's default hooks directory. It runs
+`.githooks/pre-push` from the current worktree when that file exists. The hook
+(`scripts/pre-push-check.ts`) checks only the files the push changes, compared
+with what the remote already has (or the default branch, for a new branch):
+
+- formatting with `oxfmt --check`
+- lint errors with `oxlint --quiet`
+- types with `tsrs`, for the projects that own those files and the scripts that
+  import server or desktop sources. Changes to shared code (`packages/`,
+  `scripts/lib/`), root TypeScript config or the lockfile check every project.
+  Deleted files count for project selection.
+
+`tsrs` keeps incremental build info under each workspace's
+`node_modules/.cache`, so a repeat check usually takes about a second; a first
+check of every project took about 7 seconds. It checks the working tree, so
+uncommitted edits to those files count too. Very large pushes format-check and
+lint the full tree to stay within platform argument limits. Run `bun run fmt`
+to fix formatting.
+CI still checks the whole tree and also runs the Effect language-service
+diagnostics, which are too slow for a hook. To skip the check once, push with
+`git push --no-verify`. Pushes that only delete branches skip it.
+
+The setup preserves existing hooks and skips installation when `core.hooksPath`
+is already configured, in CI, during `--ignore-scripts` installs, and in copies
+outside a repository root. To opt out across installs, configure the clone to
+use its existing hooks directory:
+
+```bash
+git config --local core.hooksPath "$(git rev-parse --path-format=absolute --git-path hooks)"
+```
+
+If Synara already installed a launcher, remove that file from the configured
+directory. It contains the comment `Installed by Synara`.
+
+The hook is a POSIX `sh` script and also runs under Git for Windows (Git Bash).
 
 ## Testing
 
@@ -107,6 +159,19 @@ fix belongs in the HTTP writer, not an uncaught-exception handler. When updating
 Electron or Undici, run `apps/desktop/src/httpRuntime.test.ts` under both Node and
 Electron with `ELECTRON_RUN_AS_NODE=1`. The test performs real loopback HTTP
 requests while injecting the socket error and also checks ordinary request failures.
+
+Packaged desktop API requests must reach the HTTP backend; the static protocol
+serves only GET/HEAD navigation and assets. An attachment upload needs a valid
+JSON receipt even when HTTP reports success. Preserve drafts on upload failure
+and observe pending upload rejections while workspace preparation is awaiting RPCs.
+
+The pinned BetterWright patch exposes its existing guard proxy for the dedicated
+browser session. Keep this transport alive across call-scoped CDP workers; switching
+or draining proxies after each `browser_run` aborts the page's pending requests.
+Only a trusted worker settlement receipt permits graceful cleanup of a failed
+snippet; cancellation, timeout, and transport loss still revoke execution. After
+updating BetterWright, run `bun run --cwd apps/desktop smoke:browser-lifecycle`
+with an isolated Electron profile; the fixture creates one automatically.
 
 Desktop stdio MCP proxies reuse Electron's executable and must explicitly set
 `ELECTRON_RUN_AS_NODE=1` in their launch configuration. Provider child environments

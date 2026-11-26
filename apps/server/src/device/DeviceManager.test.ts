@@ -500,6 +500,259 @@ describe("DeviceManager idle shutdown", () => {
   });
 });
 
+describe("DeviceManager agent-owned idle lifetime", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  async function useDevice(manager: DeviceManager, threadId: string, udid: string, turnId: string) {
+    await manager.withAgentActivity(threadId, () => manager.ensureThreadAttached(threadId, udid), {
+      udid,
+      turnId,
+    });
+  }
+
+  it("waits for all exact-turn users, including a device different from the visible attachment", async () => {
+    const { manager, backend } = makeManager();
+    await manager.boot(DEVICE_A);
+    await manager.boot(DEVICE_B);
+    await useDevice(manager, THREAD_A, DEVICE_A, "old");
+    await useDevice(manager, THREAD_A, DEVICE_A, "new");
+    await useDevice(manager, THREAD_B, DEVICE_A, "other-thread");
+    await useDevice(manager, THREAD_A, DEVICE_B, "new");
+    manager.endAgentTurn(THREAD_A, "old");
+    manager.endAgentTurn(THREAD_A, "old");
+    await vi.advanceTimersByTimeAsync(DEVICE_IDLE_SHUTDOWN_MS * 2);
+    expect(backend.callsOfKind("shutdown")).toHaveLength(0);
+    manager.endAgentTurn(THREAD_A, "new");
+    await vi.advanceTimersByTimeAsync(DEVICE_IDLE_SHUTDOWN_MS + 1);
+    expect(backend.callsOfKind("shutdown").map((call) => call.udid)).toEqual([DEVICE_B]);
+    manager.endAgentTurn(THREAD_B, "other-thread");
+    await vi.advanceTimersByTimeAsync(DEVICE_IDLE_SHUTDOWN_MS + 1);
+    expect(backend.callsOfKind("shutdown").map((call) => call.udid)).toEqual([DEVICE_B, DEVICE_A]);
+  });
+
+  it.each(["user attachment", "viewer", "recording", "user boot"] as const)(
+    "preserves a %s and starts a new grace period only after release",
+    async (consumer) => {
+      const { manager, backend } = makeManager();
+      if (consumer === "user boot") backend.bootExternally(DEVICE_A);
+      else await manager.boot(DEVICE_A);
+      await useDevice(manager, THREAD_A, DEVICE_A, "agent-turn");
+      manager.endAgentTurn(THREAD_A, "agent-turn");
+      await vi.advanceTimersByTimeAsync(DEVICE_IDLE_SHUTDOWN_MS / 2);
+      let release = async () => {};
+      if (consumer === "user attachment") {
+        await manager.attach(THREAD_A, DEVICE_A);
+        release = async () => {
+          await manager.detach(THREAD_A);
+        };
+      } else if (consumer === "viewer") {
+        const unsubscribe = manager.subscribeFrames(DEVICE_A, {
+          send: () => undefined,
+          bufferedAmount: () => 0,
+          isOpen: () => true,
+        });
+        release = async () => unsubscribe();
+      } else if (consumer === "recording") {
+        await manager.startRecording(DEVICE_A);
+        release = async () => {
+          await manager.stopRecording(DEVICE_A);
+        };
+      }
+      await vi.advanceTimersByTimeAsync(DEVICE_IDLE_SHUTDOWN_MS * 2);
+      expect(backend.callsOfKind("shutdown")).toHaveLength(0);
+      await release();
+      await vi.advanceTimersByTimeAsync(DEVICE_IDLE_SHUTDOWN_MS - 1);
+      expect(backend.callsOfKind("shutdown")).toHaveLength(0);
+      await vi.advanceTimersByTimeAsync(2);
+      expect(backend.callsOfKind("shutdown")).toHaveLength(consumer === "user boot" ? 0 : 1);
+    },
+  );
+
+  it("lets an in-flight tool finish after its terminal event without leaking a completed turn", async () => {
+    const { manager, backend } = makeManager();
+    await manager.boot(DEVICE_A);
+    const finish = deferred();
+    const action = manager.withAgentActivity(THREAD_A, () => finish.promise, {
+      udid: DEVICE_A,
+      turnId: "ending-turn",
+    });
+    manager.endAgentTurn(THREAD_A, "ending-turn");
+    await vi.advanceTimersByTimeAsync(DEVICE_IDLE_SHUTDOWN_MS * 2);
+    expect(backend.callsOfKind("shutdown")).toHaveLength(0);
+    finish.resolve();
+    await action;
+    // A late admitted call cannot resurrect a lease already released by its exact terminal event.
+    await manager.withAgentActivity(THREAD_A, async () => {}, {
+      udid: DEVICE_A,
+      turnId: "ending-turn",
+    });
+    await vi.advanceTimersByTimeAsync(DEVICE_IDLE_SHUTDOWN_MS + 1);
+    expect(backend.callsOfKind("shutdown")).toHaveLength(1);
+  });
+
+  it("rechecks ownership after asynchronous stream teardown before shutting down", async () => {
+    const { manager, backend } = makeManager();
+    await manager.boot(DEVICE_A);
+    // Start a user preview, then leave its stream held by the agent attachment.
+    // A background-only agent no longer starts a stream that can delay shutdown.
+    await manager.attach(THREAD_B, DEVICE_A);
+    await useDevice(manager, THREAD_A, DEVICE_A, "ending-turn");
+    await manager.detach(THREAD_B);
+    const finish = deferred();
+    const detached = deferred();
+    const detachStream = backend.detachStream.bind(backend);
+    backend.detachStream = async (udid) => {
+      detached.resolve();
+      await finish.promise;
+      await detachStream(udid);
+    };
+    manager.endAgentTurn(THREAD_A, "ending-turn");
+    await vi.advanceTimersByTimeAsync(DEVICE_IDLE_SHUTDOWN_MS + 1);
+    await detached.promise;
+    const attach = manager.attach(THREAD_B, DEVICE_A);
+    const unsubscribe = manager.subscribeFrames(DEVICE_A, {
+      send: () => undefined,
+      bufferedAmount: () => 0,
+      isOpen: () => true,
+    });
+    finish.resolve();
+    await attach;
+    await vi.advanceTimersByTimeAsync(1);
+    expect(backend.callsOfKind("shutdown")).toHaveLength(0);
+    expect(backend.hasStream(DEVICE_A)).toBe(true);
+    unsubscribe();
+    expect((await manager.getThreadState(THREAD_B)).attachedDeviceUdid).toBe(DEVICE_A);
+  });
+
+  it("waits out an idle poweroff and restores the owned boot before new agent input", async () => {
+    const { manager, backend } = makeManager();
+    await manager.boot(DEVICE_A);
+    await useDevice(manager, THREAD_A, DEVICE_A, "ending-turn");
+    const started = deferred();
+    const finish = deferred();
+    const shutdown = backend.shutdown.bind(backend);
+    backend.shutdown = async (udid) => {
+      started.resolve();
+      await finish.promise;
+      await shutdown(udid);
+    };
+    manager.endAgentTurn(THREAD_A, "ending-turn");
+    await vi.advanceTimersByTimeAsync(DEVICE_IDLE_SHUTDOWN_MS + 1);
+    await started.promise;
+    const input = manager.withAgentActivity(THREAD_A, () => manager.tap(DEVICE_A, 1, 1), {
+      udid: DEVICE_A,
+      turnId: "new-turn",
+    });
+    const attach = manager.attach(THREAD_B, DEVICE_A);
+    const recording = manager.startRecording(DEVICE_A);
+    const unsubscribe = manager.subscribeFrames(DEVICE_A, {
+      send: () => undefined,
+      bufferedAmount: () => 0,
+      isOpen: () => true,
+    });
+    await vi.advanceTimersByTimeAsync(1);
+    expect(backend.callsOfKind("tap")).toHaveLength(0);
+    expect(backend.callsOfKind("startRecording")).toHaveLength(0);
+    finish.resolve();
+    await Promise.all([input, attach, recording]);
+    expect(backend.callsOfKind("boot")).toHaveLength(2);
+    const lifecycle = backend.calls.filter(
+      (call) => call.kind === "shutdown" || call.kind === "boot" || call.kind === "tap",
+    );
+    expect(lifecycle.slice(-3).map((call) => call.kind)).toEqual(["shutdown", "boot", "tap"]);
+    expect((await manager.getThreadState(THREAD_B)).attachedDeviceUdid).toBe(DEVICE_A);
+    unsubscribe();
+    expect((await manager.list()).devices.find((device) => device.udid === DEVICE_A)?.state).toBe(
+      "booted",
+    );
+  });
+
+  it("protects direct pane input while an idle poweroff is already pending", async () => {
+    const { manager, backend } = makeManager();
+    await manager.boot(DEVICE_A);
+    await useDevice(manager, THREAD_A, DEVICE_A, "ending-turn");
+    const started = deferred();
+    const finish = deferred();
+    const shutdown = backend.shutdown.bind(backend);
+    backend.shutdown = async (udid) => {
+      started.resolve();
+      await finish.promise;
+      await shutdown(udid);
+    };
+    manager.endAgentTurn(THREAD_A, "ending-turn");
+    await vi.advanceTimersByTimeAsync(DEVICE_IDLE_SHUTDOWN_MS + 1);
+    await started.promise;
+    const input = manager.tap(DEVICE_A, 1, 1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(backend.callsOfKind("tap")).toHaveLength(0);
+    finish.resolve();
+    await input;
+    expect(
+      backend.calls
+        .filter((call) => ["shutdown", "boot", "tap"].includes(call.kind))
+        .slice(-3)
+        .map((call) => call.kind),
+    ).toEqual(["shutdown", "boot", "tap"]);
+  });
+
+  it("does not start recording if disposal begins while its owned boot is being restored", async () => {
+    const { manager, backend } = makeManager();
+    await manager.boot(DEVICE_A);
+    await useDevice(manager, THREAD_A, DEVICE_A, "ending-turn");
+    const shutdownStarted = deferred();
+    const finishShutdown = deferred();
+    const shutdown = backend.shutdown.bind(backend);
+    backend.shutdown = async (udid) => {
+      shutdownStarted.resolve();
+      await finishShutdown.promise;
+      await shutdown(udid);
+    };
+    manager.endAgentTurn(THREAD_A, "ending-turn");
+    await vi.advanceTimersByTimeAsync(DEVICE_IDLE_SHUTDOWN_MS + 1);
+    await shutdownStarted.promise;
+    const bootStarted = deferred();
+    const finishBoot = deferred();
+    const boot = backend.boot.bind(backend);
+    backend.boot = async (udid) => {
+      bootStarted.resolve();
+      await finishBoot.promise;
+      return await boot(udid);
+    };
+    const recording = manager.startRecording(DEVICE_A);
+    const recorded = expect(recording).rejects.toThrow("disposed");
+    finishShutdown.resolve();
+    await bootStarted.promise;
+    const dispose = manager.dispose();
+    finishBoot.resolve();
+    await recorded;
+    await dispose;
+    expect(backend.callsOfKind("startRecording")).toHaveLength(0);
+  });
+
+  it("does not recreate an archived attachment or arm new timers after disposal", async () => {
+    const { manager, backend } = makeManager();
+    await manager.boot(DEVICE_A);
+    await useDevice(manager, THREAD_A, DEVICE_A, "ending-turn");
+    const finish = deferred();
+    const action = manager.withAgentActivity(THREAD_A, () => finish.promise, {
+      udid: DEVICE_A,
+      turnId: "ending-turn",
+    });
+    await manager.handleThreadRemoved(THREAD_A);
+    await manager.dispose();
+    finish.resolve();
+    await action;
+    manager.endAgentTurn(THREAD_A, "ending-turn");
+    await vi.advanceTimersByTimeAsync(DEVICE_IDLE_SHUTDOWN_MS * 2);
+    expect(backend.callsOfKind("shutdown")).toHaveLength(1);
+  });
+});
+
 describe("DeviceManager device switching", () => {
   it("frees the old slot immediately when a thread switches devices", async () => {
     const { backend, manager } = makeManager();
@@ -525,6 +778,54 @@ describe("DeviceManager device switching", () => {
     // The user started this one; it outlives the session either way.
     expect(backend.callsOfKind("shutdown")).toHaveLength(0);
   });
+
+  it.each([
+    ["stream teardown", "detachStream", 0],
+    ["poweroff", "shutdown", 1],
+  ] as const)(
+    "keeps a simulator usable for an agent that arrives during switch %s",
+    async (_stage, operation, poweroffs) => {
+      const { backend, manager } = makeManager();
+      await manager.boot(DEVICE_A);
+      await manager.boot(DEVICE_B);
+      await manager.attach(THREAD_A, DEVICE_A);
+      await waitForStream(backend, DEVICE_A, true);
+
+      const operationStarted = deferred();
+      const finishOperation = deferred();
+      const proceed = backend[operation].bind(backend);
+      backend[operation] = async (udid) => {
+        if (udid === DEVICE_A) {
+          operationStarted.resolve();
+          await finishOperation.promise;
+        }
+        await proceed(udid);
+      };
+      const switching = manager.attach(THREAD_A, DEVICE_B);
+      await operationStarted.promise;
+
+      const allowTap = deferred();
+      const tap = manager.withAgentActivity(
+        THREAD_B,
+        async () => {
+          await allowTap.promise;
+          await manager.tap(DEVICE_A, 1, 1);
+        },
+        { udid: DEVICE_A, turnId: "new-turn" },
+      );
+      finishOperation.resolve();
+      try {
+        await switching;
+      } finally {
+        allowTap.resolve();
+      }
+      await expect(tap).resolves.toBeUndefined();
+      expect(backend.callsOfKind("shutdown")).toHaveLength(poweroffs);
+      expect(backend.callsOfKind("boot").filter((call) => call.udid === DEVICE_A)).toHaveLength(
+        poweroffs + 1,
+      );
+    },
+  );
 
   it("keeps a device another thread is still watching booted", async () => {
     const { backend, manager } = makeManager();
@@ -695,19 +996,37 @@ describe("DeviceManager lifecycle and agent activity", () => {
     expect(availability).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps the badge lit until the last overlapping agent action finishes", async () => {
-    const { manager } = makeManager();
-    let innerFinished = false;
-
-    await manager.withAgentActivity(THREAD_A, async () => {
-      await manager.withAgentActivity(THREAD_A, async () => {
-        innerFinished = true;
-      });
-      expect((await manager.getThreadState(THREAD_A)).agentActive).toBe(true);
-    });
-
-    expect(innerFinished).toBe(true);
-    expect((await manager.getThreadState(THREAD_A)).agentActive).toBe(false);
+  it("publishes the badge until the last overlapping agent action finishes", async () => {
+    const { manager, events } = makeManager();
+    const entered = [deferred(), deferred()];
+    const finish = [deferred(), deferred()];
+    const actions = entered.map((started, index) =>
+      manager.withAgentActivity(
+        THREAD_A,
+        async () => {
+          started.resolve();
+          await finish[index]!.promise;
+        },
+        { udid: DEVICE_A, turnId: `overlapping-${index}` },
+      ),
+    );
+    try {
+      await Promise.all(entered.map((started) => started.promise));
+      const badges = () =>
+        events.flatMap((event) =>
+          event.type === "device.thread-state" ? [event.state.agentActive] : [],
+        );
+      expect(badges()).toEqual([true]);
+      finish[0]!.resolve();
+      await actions[0];
+      expect(badges()).toEqual([true]);
+      finish[1]!.resolve();
+      await actions[1];
+      expect(badges()).toEqual([true, false]);
+    } finally {
+      finish.forEach((entry) => entry.resolve());
+      await Promise.all(actions);
+    }
   });
 });
 
@@ -785,7 +1104,7 @@ describe("DeviceManager screen recording", () => {
 });
 
 describe("DeviceManager agent auto-attach", () => {
-  it("attaches an unattached thread to the device the agent is using", async () => {
+  it("keeps background agent control available and starts video only when a pane watches", async () => {
     const { backend, manager } = makeManager();
     await backend.boot(DEVICE_A);
 
@@ -795,7 +1114,27 @@ describe("DeviceManager agent auto-attach", () => {
     // watches a black phone while the agent works.
     const state = await manager.getThreadState(THREAD_A);
     expect(state.attachedDeviceUdid).toBe(DEVICE_A);
+    expect(backend.hasStream(DEVICE_A)).toBe(false);
+    expect(backend.callsOfKind("attachStream")).toHaveLength(0);
+    expect(state.attachPhase).toBeNull();
+
+    await manager.tap(DEVICE_A, 0.5, 0.5);
+    expect((await manager.screenshot(DEVICE_A)).udid).toBe(DEVICE_A);
+
+    const unsubscribe = manager.subscribeFrames(DEVICE_A, {
+      send: () => undefined,
+      bufferedAmount: () => 0,
+      isOpen: () => true,
+    });
+    await waitForStream(backend, DEVICE_A, true);
     expect(backend.hasStream(DEVICE_A)).toBe(true);
+
+    unsubscribe();
+    await waitForStream(backend, DEVICE_A, false);
+    await manager.tap(DEVICE_A, 0.25, 0.25);
+    expect(backend.callsOfKind("tap")).toHaveLength(2);
+    expect((await manager.getThreadState(THREAD_A)).attachedDeviceUdid).toBe(DEVICE_A);
+    await manager.dispose();
   });
 
   it("never steals a thread already attached to a different device", async () => {
@@ -854,7 +1193,7 @@ describe("DeviceManager agent auto-attach", () => {
 
     const opened = events.filter((event) => event.type === "device.open-pane-requested");
     expect(opened).toHaveLength(1);
-    expect(backend.callsOfKind("attachStream")).toHaveLength(1);
+    expect(backend.callsOfKind("attachStream")).toHaveLength(0);
   });
 
   it("surfaces again when the agent moves the thread to another device", async () => {

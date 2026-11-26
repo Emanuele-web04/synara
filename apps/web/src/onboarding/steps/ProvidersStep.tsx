@@ -1,130 +1,48 @@
 // FILE: ProvidersStep.tsx
-// Purpose: Provider grid for the welcome tour: one card per runtime with its detection
-//          status, an enable/disable checkbox bound to the server-backed `disabledProviders`
-//          setting, inline sign-in for detected-but-unauthenticated CLIs, and a setup-guide
-//          link for missing ones.
+// Purpose: Agents step of the onboarding: a grid with one cell per runtime, its detection
+//          status, an enable/disable switch for the installed ones (bound to the
+//          server-backed `disabledProviders` setting), guided sign-in for detected but
+//          unauthenticated CLIs, and a setup-guide link for missing ones.
 // Layer: Web UI component
 
-import type { ProviderKind, ServerProviderStatus } from "@synara/contracts";
-import { VISIBLE_PROVIDER_DESCRIPTORS } from "../../betaFeatures";
-import { useQuery } from "@tanstack/react-query";
-import { useEffect, useMemo, useRef, useState } from "react";
+import type { ProviderKind } from "@synara/contracts";
+import { useEffect, useRef, useState } from "react";
 
-import { getCustomBinaryPathForProvider, useAppSettings } from "~/appSettings";
 import { ProviderIcon } from "~/components/ProviderIcon";
-import { Checkbox } from "~/components/ui/checkbox";
-import { DisclosureRegion } from "~/components/ui/DisclosureRegion";
+import { ProviderGuidedSignIn } from "~/components/settings/accounts/ProviderGuidedSignIn";
+import { Button } from "~/components/ui/button";
 import { Skeleton } from "~/components/ui/skeleton";
 import { StatusDot } from "~/components/ui/status-chip";
-import { RefreshCwIcon, XIcon } from "~/lib/icons";
-import {
-  findProviderStatus,
-  normalizeProviderStatusForLocalConfig,
-} from "~/lib/providerAvailability";
-import { serverConfigQueryOptions } from "~/lib/serverReactQuery";
+import { Switch } from "~/components/ui/switch";
+import { ChevronRightIcon, RefreshCwIcon } from "~/lib/icons";
+import { useTranslation } from "~/i18n";
 import { cn } from "~/lib/utils";
-import { isProviderKind } from "~/providerOrdering";
-import { useWorkspacePathsStore } from "~/workspacePathsStore";
-import { ONBOARDING_TILE_CLASS_NAME } from "../layout";
-import { classifyProviderSetup, summarizeProviderSetup, type ProviderSetupState } from "../logic";
+import type { ProviderSetupState } from "../logic";
 import type { ProviderDetection } from "../useProviderDetection";
-import { ProviderConnectTerminal } from "./ProviderConnectTerminal";
-
-const EMPTY_STATUSES: readonly ServerProviderStatus[] = [];
+import type { ProviderSetup } from "../useProviderSetup";
+import { ONBOARDING_LIVE_COLOR } from "../stage/stageTokens";
 
 /** Status as a dot + word; the dot carries the colour, the copy stays muted. */
 const STATE_PRESENTATION: Record<ProviderSetupState, { label: string; dotClassName: string }> = {
-  connected: { label: "Connected", dotClassName: "bg-status-success" },
-  "needs-sign-in": { label: "Needs sign-in", dotClassName: "bg-warning" },
-  "not-installed": { label: "Not installed", dotClassName: "bg-muted-foreground/40" },
-  detecting: { label: "Detecting", dotClassName: "bg-muted-foreground/40" },
-  "check-failed": { label: "Could not check", dotClassName: "bg-warning" },
-  disabled: { label: "Disabled", dotClassName: "bg-muted-foreground/40" },
+  connected: { label: "chat:connected", dotClassName: "bg-[#317CFF]" },
+  "needs-sign-in": { label: "common:needsSignIn", dotClassName: "bg-warning" },
+  "not-installed": { label: "onboarding:notInstalled", dotClassName: "bg-muted-foreground/40" },
+  unavailable: { label: "common:triageOutcome_needsAttention", dotClassName: "bg-warning" },
+  detecting: { label: "onboarding:detecting", dotClassName: "bg-muted-foreground/40" },
+  "check-failed": { label: "onboarding:couldNotCheck", dotClassName: "bg-warning" },
+  disabled: { label: "chat:disabled", dotClassName: "bg-muted-foreground/40" },
 };
 
-const INLINE_ACTION_CLASS_NAME =
-  "cursor-pointer text-foreground underline decoration-foreground/40 underline-offset-[3px] transition-colors hover:decoration-foreground motion-reduce:transition-none";
+const CELL_ACTION_CLASS_NAME =
+  "inline-flex cursor-pointer items-center gap-0.5 text-ui-sm transition-opacity hover:opacity-75 motion-reduce:transition-none";
 
-/**
- * Raw detection statuses with custom-binary overrides applied but *without* folding the
- * disabled flag in: this step must keep showing "installed" for a provider the user just
- * unchecked, otherwise the card appears to lose its CLI.
- */
-function useDetectedProviderStatuses(): readonly ServerProviderStatus[] {
-  const { settings } = useAppSettings();
-  const serverConfigQuery = useQuery(serverConfigQueryOptions());
-  const providers = serverConfigQuery.data?.providers ?? EMPTY_STATUSES;
-  return useMemo(
-    () =>
-      providers.flatMap((status) => {
-        const provider = status.driver ?? status.provider;
-        if (!isProviderKind(provider) || (status.instanceId ?? status.provider) !== provider) {
-          return [];
-        }
-        const normalized = normalizeProviderStatusForLocalConfig({
-          provider,
-          status,
-          customBinaryPath: getCustomBinaryPathForProvider(settings, provider),
-        });
-        return normalized ? [normalized] : [];
-      }),
-    [providers, settings],
-  );
-}
-
-/**
- * Optimistic disabled-provider selection. `disabledProviders` is server-owned and is not
- * applied to local settings until the round-trip completes, so deriving each write from
- * `settings.disabledProviders` would let a second toggle rebuild the list without the
- * first change. Every write instead comes from this draft, and the draft only resyncs
- * from the server once no write is in flight (e.g. after a failed request is rolled back).
- */
-function useDisabledProvidersDraft(): {
-  readonly disabled: ReadonlySet<ProviderKind>;
-  readonly setProviderDisabled: (provider: ProviderKind, disabled: boolean) => void;
-} {
-  const { settings, updateSettingsAndWait } = useAppSettings();
-  const [draft, setDraft] = useState<ReadonlySet<ProviderKind>>(
-    () => new Set(settings.disabledProviders),
-  );
-  const draftRef = useRef(draft);
-  // State, not a ref: a rejected write refetches settings *before* the count drops, so the
-  // resync must run again once the final write settles or the draft would stay rolled
-  // forward on the rejected value.
-  const [pendingWrites, setPendingWrites] = useState(0);
-  const serverDisabledProviders = settings.disabledProviders;
-
-  useEffect(() => {
-    if (pendingWrites > 0) return;
-    const next = new Set(serverDisabledProviders);
-    draftRef.current = next;
-    setDraft(next);
-  }, [pendingWrites, serverDisabledProviders]);
-
-  const setProviderDisabled = (provider: ProviderKind, disabled: boolean) => {
-    const next = new Set(draftRef.current);
-    if (disabled) {
-      next.add(provider);
-    } else {
-      next.delete(provider);
-    }
-    draftRef.current = next;
-    setDraft(next);
-    setPendingWrites((count) => count + 1);
-    void updateSettingsAndWait({ disabledProviders: [...next] }).finally(() => {
-      setPendingWrites((count) => count - 1);
-    });
-  };
-
-  return { disabled: draft, setProviderDisabled };
-}
-
-export function ProvidersStep(props: { readonly detection: ProviderDetection }) {
+export function ProvidersStep(props: {
+  readonly detection: ProviderDetection;
+  readonly setup: ProviderSetup;
+}) {
+  const { t } = useTranslation();
   const { detection } = props;
-  const statuses = useDetectedProviderStatuses();
-  const homeDir = useWorkspacePathsStore((store) => store.homeDir);
-  const [connectingProvider, setConnectingProvider] = useState<ProviderKind | null>(null);
-  const { disabled: disabledSet, setProviderDisabled } = useDisabledProvidersDraft();
+  const { rows, summary, setProviderDisabled } = props.setup;
 
   // Probe once on entry so a CLI installed while the intro was open shows up.
   const refreshedOnEntryRef = useRef(false);
@@ -134,138 +52,32 @@ export function ProvidersStep(props: { readonly detection: ProviderDetection }) 
     void detection.detect({ silent: true });
   }, [detection]);
 
-  const rows = VISIBLE_PROVIDER_DESCRIPTORS.map((descriptor) => {
-    const status = findProviderStatus(statuses, descriptor.kind);
-    const state = classifyProviderSetup({
-      status,
-      disabled: disabledSet.has(descriptor.kind),
-      detecting: detection.detecting,
-      detectionFailed: detection.failed,
-    });
-    return { descriptor, status, state };
-  });
-  const summary = summarizeProviderSetup(
-    rows.map((row) => ({ provider: row.descriptor.kind, state: row.state })),
-  );
-  const connecting = connectingProvider
-    ? rows.find((row) => row.descriptor.kind === connectingProvider)
+  // The same isolated sign-in Settings uses: it runs the CLI's login command itself, so
+  // nobody has to know that command or open a terminal. Re-probe when it closes.
+  const [signingInProvider, setSigningInProvider] = useState<ProviderKind | null>(null);
+  const signingIn = signingInProvider
+    ? rows.find((row) => row.descriptor.kind === signingInProvider)
     : undefined;
-  const connectingSignInCommand = connecting?.descriptor.usage?.signInCommand;
-
-  const finishConnect = () => {
-    setConnectingProvider(null);
-    void detection.detect({ silent: true });
-  };
-  const toggleConnect = (provider: ProviderKind) => {
-    if (connectingProvider === provider) {
-      finishConnect();
-      return;
-    }
-    setConnectingProvider(provider);
-  };
-
-  // The terminal mounts below the provider grid in a fixed-height dialog; bring it into
-  // view so the sign-in prompt is not left under the scroll fold.
-  const terminalRegionRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!connectingProvider) return;
-    const frame = window.requestAnimationFrame(() => {
-      terminalRegionRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, [connectingProvider]);
 
   return (
-    <div className="flex flex-col gap-3">
-      <div className="grid grid-cols-3 gap-2.5">
-        {rows.map(({ descriptor, state }) => {
-          const presentation = STATE_PRESENTATION[state];
-          const enabled = state !== "disabled";
-          const canConnectInline =
-            state === "needs-sign-in" &&
-            descriptor.usage?.signInCommand !== undefined &&
-            homeDir !== null;
-          const isConnecting = connectingProvider === descriptor.kind;
-          const checkboxId = `onboarding-provider-${descriptor.kind}`;
-          return (
-            <div
-              key={descriptor.kind}
-              className={cn(
-                "flex h-[60px] items-center gap-3 px-3.5 transition-opacity motion-reduce:transition-none",
-                ONBOARDING_TILE_CLASS_NAME,
-                !enabled && "opacity-50",
-              )}
-            >
-              <ProviderIcon provider={descriptor.kind} className="size-5 shrink-0" />
-              <label
-                htmlFor={checkboxId}
-                className="flex min-w-0 flex-1 cursor-pointer flex-col gap-0.5"
-              >
-                <span className="truncate text-ui-lg font-medium text-foreground">
-                  {descriptor.displayName}
-                </span>
-                <span className="flex h-lh items-center gap-1.5 text-ui-sm text-muted-foreground">
-                  {state === "detecting" ? (
-                    <>
-                      <Skeleton aria-hidden className="h-2.5 w-20 rounded-full" />
-                      <span className="sr-only">{presentation.label}</span>
-                    </>
-                  ) : (
-                    <>
-                      <StatusDot aria-hidden className={presentation.dotClassName} />
-                      {presentation.label}
-                    </>
-                  )}
-                  {canConnectInline ? (
-                    <button
-                      type="button"
-                      className={cn("ml-1", INLINE_ACTION_CLASS_NAME)}
-                      onClick={(event) => {
-                        event.preventDefault();
-                        toggleConnect(descriptor.kind);
-                      }}
-                    >
-                      {isConnecting ? "Done" : "Sign in"}
-                    </button>
-                  ) : null}
-                  {state === "not-installed" ? (
-                    <a
-                      href={descriptor.setupDocsHref}
-                      target="_blank"
-                      rel="noreferrer"
-                      className={cn("ml-1", INLINE_ACTION_CLASS_NAME)}
-                      onClick={(event) => event.stopPropagation()}
-                    >
-                      Guide
-                    </a>
-                  ) : null}
-                </span>
-              </label>
-              <Checkbox
-                id={checkboxId}
-                checked={enabled}
-                aria-label={`${enabled ? "Disable" : "Enable"} ${descriptor.displayName}`}
-                onCheckedChange={(checked) =>
-                  setProviderDisabled(descriptor.kind, checked !== true)
-                }
-              />
-            </div>
-          );
-        })}
-      </div>
-
-      <div className="flex items-center justify-between gap-3 text-ui text-muted-foreground">
+    <div className="flex min-h-full flex-col">
+      <div className="flex h-11 shrink-0 items-center justify-between gap-3 border-b border-foreground/8 bg-background px-8 text-ui text-muted-foreground">
         <span aria-live="polite">
-          {summary.detecting > 0 ? (
-            "Detecting agents on this machine…"
-          ) : summary.checkFailed > 0 ? (
-            "Couldn't check all agents. Try Re-detect."
-          ) : (
-            <>
-              {summary.connected} connected · {summary.needsSignIn} need sign-in ·{" "}
-              {summary.notInstalled} not installed
-            </>
-          )}
+          {summary.detecting > 0
+            ? t("onboarding:detectingAgentsOnThisMachine")
+            : summary.checkFailed > 0
+              ? t("onboarding:couldnTCheckAllAgentsTryReDetect")
+              : [
+                  t("onboarding:providerSummary", {
+                    connected: summary.connected,
+                    needsSignIn: summary.needsSignIn,
+                    notInstalled: summary.notInstalled,
+                  }),
+                  // Rare enough to stay out of the line until there is one to report.
+                  ...(summary.unavailable > 0
+                    ? [t("onboarding:providerSummaryUnavailable", { count: summary.unavailable })]
+                    : []),
+                ].join(" · ")}
         </span>
         <button
           type="button"
@@ -277,38 +89,134 @@ export function ProvidersStep(props: { readonly detection: ProviderDetection }) 
             className={cn("size-3.5", detection.detecting && "animate-spin")}
             aria-hidden
           />
-          Re-detect
+          {t("onboarding:reDetect")}
         </button>
       </div>
 
-      <DisclosureRegion open={connecting !== undefined}>
-        {connecting && connectingSignInCommand !== undefined && homeDir !== null ? (
-          <div ref={terminalRegionRef} className="flex flex-col gap-1.5">
-            {/* Always-available close: the card's "Done" link disappears once the
-                provider is detected as connected, but the terminal stays mounted. */}
-            <div className="flex items-center justify-between text-ui text-muted-foreground">
-              <span>
-                Signing in to {connecting.descriptor.displayName} ·{" "}
-                <code className="text-foreground/80">{connectingSignInCommand}</code>
-              </span>
-              <button
-                type="button"
-                className="inline-flex cursor-pointer items-center gap-1 text-foreground/70 transition-colors hover:text-foreground motion-reduce:transition-none"
-                onClick={finishConnect}
-              >
-                <XIcon className="size-3.5" aria-hidden />
-                Done
-              </button>
+      <div className="grid auto-rows-[176px] grid-cols-2 sm:grid-cols-3 xl:grid-cols-5">
+        {rows.map(({ descriptor, status, state }) => {
+          const presentation = STATE_PRESENTATION[state];
+          const enabled = state !== "disabled";
+          const installed = status?.available === true;
+          // A switch only means something for a CLI that is on this machine: missing
+          // agents read as off, and cannot be switched on until they are installed.
+          const switchable =
+            installed ||
+            state === "disabled" ||
+            state === "check-failed" ||
+            state === "unavailable";
+          const switchId = `onboarding-provider-${descriptor.kind}`;
+          return (
+            <div
+              key={descriptor.kind}
+              className={cn(
+                "-mt-px -ml-px flex flex-col justify-between border border-foreground/8 p-6 transition-colors motion-reduce:transition-none",
+                // Opaque, so the landscape behind the stage never shows through the copy.
+                installed && enabled
+                  ? "bg-popover"
+                  : "bg-background shadow-[inset_0_0_0_100vmax_rgb(0_0_0/0.03)] dark:shadow-[inset_0_0_0_100vmax_rgb(255_255_255/0.03)]",
+              )}
+            >
+              <div className="flex items-start justify-between gap-3">
+                <ProviderIcon
+                  provider={descriptor.kind}
+                  className={cn("size-7 shrink-0", !(installed && enabled) && "opacity-55")}
+                />
+                <Switch
+                  id={switchId}
+                  checked={enabled && switchable}
+                  disabled={!switchable}
+                  aria-label={t(
+                    enabled && switchable ? "settings:disableProvider" : "settings:enableProvider",
+                    {
+                      provider: descriptor.displayName,
+                    },
+                  )}
+                  onCheckedChange={(checked) => setProviderDisabled(descriptor.kind, !checked)}
+                />
+              </div>
+              <div className="flex flex-col gap-1">
+                <label
+                  htmlFor={switchId}
+                  className={cn(
+                    "cursor-pointer truncate text-ui-lg",
+                    installed && enabled ? "text-foreground" : "text-foreground/60",
+                  )}
+                >
+                  {descriptor.displayName}
+                </label>
+                <span className="flex h-lh items-center gap-1.5 text-ui-sm text-muted-foreground">
+                  {state === "detecting" ? (
+                    <>
+                      <Skeleton aria-hidden className="h-2.5 w-20 rounded-full" />
+                      <span className="sr-only">{t(presentation.label)}</span>
+                    </>
+                  ) : (
+                    <>
+                      <StatusDot aria-hidden className={presentation.dotClassName} />
+                      {t(presentation.label)}
+                    </>
+                  )}
+                </span>
+                {state === "unavailable" ? (
+                  // Installed but unusable: say what the server found, not "set it up".
+                  <span
+                    className="line-clamp-2 min-h-7 text-ui-xs text-muted-foreground sm:min-h-6"
+                    title={status?.message}
+                  >
+                    {status?.message ?? t("onboarding:providerUnavailableHint")}
+                  </span>
+                ) : null}
+                <span
+                  className={cn(
+                    "flex h-7 items-center sm:h-6",
+                    state === "unavailable" && "hidden",
+                  )}
+                >
+                  {state === "needs-sign-in" ? (
+                    <Button
+                      size="xs"
+                      shape="capsule"
+                      className="px-2.5"
+                      disabled={signingInProvider !== null}
+                      onClick={() => setSigningInProvider(descriptor.kind)}
+                    >
+                      {t("chat:providerModelPicker_signIn")}
+                    </Button>
+                  ) : null}
+                  {state === "not-installed" ? (
+                    <a
+                      href={descriptor.setupDocsHref}
+                      target="_blank"
+                      rel="noreferrer"
+                      className={CELL_ACTION_CLASS_NAME}
+                      style={{ color: ONBOARDING_LIVE_COLOR }}
+                    >
+                      {t("computer:setUp")}
+                      <ChevronRightIcon className="size-3" aria-hidden />
+                    </a>
+                  ) : null}
+                </span>
+              </div>
             </div>
-            <ProviderConnectTerminal
-              key={connecting.descriptor.kind}
-              provider={connecting.descriptor.kind}
-              signInCommand={connectingSignInCommand}
-              cwd={homeDir}
-            />
-          </div>
-        ) : null}
-      </DisclosureRegion>
+          );
+        })}
+      </div>
+
+      {signingIn ? (
+        <ProviderGuidedSignIn
+          key={signingIn.descriptor.kind}
+          account={{
+            provider: signingIn.descriptor.kind,
+            instanceId: signingIn.descriptor.kind,
+            label: signingIn.descriptor.displayName,
+          }}
+          onClosed={() => {
+            setSigningInProvider(null);
+            void detection.detect({ silent: true });
+          }}
+        />
+      ) : null}
     </div>
   );
 }

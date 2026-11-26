@@ -4,10 +4,14 @@
 // Exports: isBetaFeatureOn, visibleProviderDescriptors, VISIBLE_PROVIDER_DESCRIPTORS
 
 import {
+  ACCOUNT_INBOX_BETA_FEATURE,
   desktopFlavorFromProtocol,
   GROUPS_BETA_FEATURE,
   INBOX_BETA_FEATURE,
+  INLINE_VISUALS_BETA_FEATURE,
   isBetaFeatureEnabled,
+  MCP_CONNECTORS_BETA_FEATURE,
+  NATIVE_EDITOR_BETA_FEATURE,
   PULL_REQUEST_AUTO_FIX_BETA_FEATURE,
 } from "@synara/shared/betaFeatures";
 import { PROVIDER_DESCRIPTORS } from "@synara/shared/providerMetadata";
@@ -36,10 +40,41 @@ export const GROUPS_ON = isBetaFeatureOn(GROUPS_BETA_FEATURE);
  */
 export const INBOX_ON = isBetaFeatureOn(INBOX_BETA_FEATURE);
 
+/** Account-saved Inbox history is available in Stable and Beta. */
+export const ACCOUNT_INBOX_ON = isBetaFeatureOn(ACCOUNT_INBOX_BETA_FEATURE);
+
 /**
  * Auto-fix CI is available in Stable and Beta; watching a PR remains opt-in.
  */
 export const PULL_REQUEST_AUTO_FIX_ON = isBetaFeatureOn(PULL_REQUEST_AUTO_FIX_BETA_FEATURE);
+
+/**
+ * Inline visuals are available in Stable and Beta. HTML keeps the same
+ * sandbox and desktop-only execution boundary; component specs also work on the web.
+ */
+export const INLINE_VISUALS_ON = isBetaFeatureOn(INLINE_VISUALS_BETA_FEATURE);
+
+/**
+ * Connectors are available in Stable and Beta, including Settings and `@`
+ * mentions for provider sessions that support them.
+ */
+export const MCP_CONNECTORS_ON = isBetaFeatureOn(MCP_CONNECTORS_BETA_FEATURE);
+
+/** The native Code OSS engine is enabled in Stable and Beta; Pierre remains the gated alternative. */
+export type CodeEditorEngine = "native" | "pierre";
+
+export function codeEditorEngine(
+  isOn: (feature: string) => boolean = isBetaFeatureOn,
+): CodeEditorEngine {
+  return isOn(NATIVE_EDITOR_BETA_FEATURE) ? "native" : "pierre";
+}
+
+/**
+ * Stable and Beta use the same native editing engine, language-service and
+ * debugger controls. The server applies the same shared availability policy.
+ */
+export const CODE_EDITOR_ENGINE = codeEditorEngine();
+export const NATIVE_EDITOR_ON = CODE_EDITOR_ENGINE === "native";
 
 /**
  * Provider descriptors with Beta-only providers removed on Stable. A

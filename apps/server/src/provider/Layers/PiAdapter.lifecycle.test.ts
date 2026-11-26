@@ -24,9 +24,26 @@ import {
 } from "../../agentGateway/Services/AgentGatewayCredentials.ts";
 import type { AgentGatewayMcpFetch } from "../../agentGateway/mcpInjection.ts";
 import { SYNARA_COMPUTER_TOOL_NAMES } from "../../agentGateway/computerToolPermission.ts";
-import { ServerConfig } from "../../config.ts";
+import { deriveServerPaths, ServerConfig } from "../../config.ts";
 import { PiAdapter, type PiAdapterShape } from "../Services/PiAdapter.ts";
 import { makePiAdapterLive } from "./PiAdapter.ts";
+
+// Lifecycle tests replace the selected CLI's transport here, while retaining the real SDK.
+vi.mock("../piSdkImports.ts", async (importOriginal) => {
+  const loader = await importOriginal<typeof import("../piSdkImports.ts")>();
+  const importAi = loader.makePiPackageImporter(
+    import.meta.resolve("@earendil-works/pi-coding-agent"),
+  );
+  return {
+    ...loader,
+    resolvePiInstallation: async () => ({
+      importPackage: (specifier: string) =>
+        specifier === "@earendil-works/pi-coding-agent"
+          ? import("@earendil-works/pi-coding-agent")
+          : importAi(specifier),
+    }),
+  };
+});
 
 const captured = vi.hoisted(() => ({
   sessions: [] as AgentSession[],
@@ -240,6 +257,23 @@ async function send(adapter: PiAdapterShape) {
   return Effect.runPromise(adapter.sendTurn({ threadId, input: "Test this turn" }));
 }
 
+it("keeps idle snapshot activity stable across reads and advances it on completed work", async () => {
+  responses("success");
+  await withAdapter(async (adapter, events) => {
+    const before = (await Effect.runPromise(adapter.listSessions()))[0]!;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect((await Effect.runPromise(adapter.listSessions()))[0]?.updatedAt).toBe(before.updatedAt);
+    await send(adapter);
+    await waitFor(() => expect(completions(events)).toHaveLength(1));
+    const completed = (await Effect.runPromise(adapter.listSessions()))[0]!;
+    expect(Date.parse(completed.updatedAt)).toBeGreaterThan(Date.parse(before.updatedAt));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect((await Effect.runPromise(adapter.listSessions()))[0]?.updatedAt).toBe(
+      completed.updatedAt,
+    );
+  });
+});
+
 it("passes the current Pi system prompt and tools to the model stream", async () => {
   responses("success");
   await withAdapter(async (adapter, events) => {
@@ -247,6 +281,59 @@ it("passes the current Pi system prompt and tools to the model stream", async ()
     await waitFor(() => expect(completions(events)).toHaveLength(1));
     expect(captured.modelSystemPrompts[0]).toBeTruthy();
     expect(captured.modelTools[0]?.some((tool) => tool.name === "read")).toBe(true);
+  });
+});
+
+it("delivers the first prepared image to the real Pi model stream without a resend", async () => {
+  responses("success");
+  const modelStream = captured.stream!;
+  const providerInputs: unknown[] = [];
+  captured.stream = (model, context, options) => {
+    providerInputs.push(context.messages.filter((message) => message.role === "user"));
+    return modelStream(model, context, options);
+  };
+  await withAdapter(async (adapter, events, cwd) => {
+    const image = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+      "base64",
+    );
+    const { attachmentsDir } = await Effect.runPromise(
+      deriveServerPaths(path.join(cwd, "server"), undefined).pipe(
+        Effect.provide(NodeServices.layer),
+      ),
+    );
+    writeFileSync(path.join(attachmentsDir, "pi-first-image.png"), image);
+    await Effect.runPromise(
+      adapter.sendTurn({
+        threadId,
+        input: "Inspect this pixel",
+        attachments: [
+          {
+            type: "image",
+            id: "pi-first-image",
+            name: "pixel.png",
+            mimeType: "image/png",
+            sizeBytes: image.byteLength,
+          },
+        ],
+      }),
+    );
+    await waitFor(() => expect(completions(events)).toHaveLength(1));
+    expect(providerInputs).toHaveLength(1);
+    expect(providerInputs[0]).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: "user",
+          content: expect.arrayContaining([
+            expect.objectContaining({
+              type: "image",
+              data: image.toString("base64"),
+              mimeType: "image/png",
+            }),
+          ]),
+        }),
+      ]),
+    );
   });
 });
 
@@ -837,7 +924,7 @@ it("rejects steering into an untracked SDK run instead of orphaning a queued tur
   await withAdapter(async (adapter, events) => {
     const session = captured.sessions[0]!;
     const streamingSpy = vi.spyOn(session, "isStreaming", "get").mockReturnValue(true);
-    const steerSpy = vi.spyOn(session, "steer").mockResolvedValue(undefined);
+    const steerSpy = vi.spyOn(session, "steer").mockResolvedValue("queued");
     const promptSpy = vi.spyOn(session, "prompt");
     const outcome = await Effect.runPromise(
       adapter.steerTurn!({ threadId, input: "Fresh turn during untracked run" }).pipe(
@@ -917,6 +1004,35 @@ it("does not let an old prompt rejection settle a replacement session's turn", a
     expect(completions(events)[0]?.turnId).toBe(next.turnId);
     expect(events.filter((event) => event.type === "runtime.error")).toHaveLength(0);
     expect(oldTurn.turnId).not.toBe(next.turnId);
+  });
+});
+
+it("retains a failed-stop context without reporting a live session", async () => {
+  responses("success");
+  await withAdapter(async (adapter) => {
+    const dispose = vi.spyOn(captured.sessions[0]!, "dispose").mockImplementationOnce(() => {
+      throw new Error("runtime disposal failed");
+    });
+    expect(await Effect.runPromise(adapter.hasSession(threadId))).toBe(true);
+    expect(await Effect.runPromise(adapter.hasSession(ThreadId.makeUnsafe("missing")))).toBe(false);
+    expect(await Effect.runPromise(adapter.hasRetainedSession!(threadId))).toBe(true);
+    expect(
+      await Effect.runPromise(adapter.hasRetainedSession!(ThreadId.makeUnsafe("missing"))),
+    ).toBe(false);
+
+    const stopped = await Effect.runPromise(Effect.result(adapter.stopSession(threadId)));
+    expect(stopped._tag).toBe("Failure");
+    expect(await Effect.runPromise(adapter.listSessions())).toMatchObject([
+      { threadId, status: "closed" },
+    ]);
+    expect(await Effect.runPromise(adapter.hasSession(threadId))).toBe(false);
+    expect(await Effect.runPromise(adapter.hasRetainedSession!(threadId))).toBe(true);
+
+    await Effect.runPromise(adapter.stopSession(threadId));
+    expect(dispose).toHaveBeenCalledTimes(2);
+    expect(await Effect.runPromise(adapter.listSessions())).toEqual([]);
+    expect(await Effect.runPromise(adapter.hasSession(threadId))).toBe(false);
+    expect(await Effect.runPromise(adapter.hasRetainedSession!(threadId))).toBe(false);
   });
 });
 

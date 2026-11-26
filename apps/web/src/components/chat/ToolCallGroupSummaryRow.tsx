@@ -1,36 +1,43 @@
 // FILE: ToolCallGroupSummaryRow.tsx
-// Purpose: One-line disclosure for a run of tool calls. Settled runs read as a
-//          verb summary ("Read 2 files, ran 3 commands, 1 failed"); a live run
-//          wears its latest status or call instead. Both expand to the rows.
+// Purpose: One-line disclosure for a run of tool calls, read as a verb summary
+//          ("Read 2 files, ran 3 commands, 1 failed, 1 running") that expands
+//          to the rows. LiveToolCallLine is the working indicator's line for
+//          the call of the moment: its icon and sentence, or its failure.
 // Layer: Web chat presentation component
-// Exports: ToolCallGroupSummaryRow
+// Exports: ToolCallGroupSummaryRow, LiveToolCallLine
 // Depends on: DisclosureRegion/DisclosureChevron (shared disclosure motion)
 
 import { useEffect, useState, type ReactNode } from "react";
+import { useTranslation } from "../../i18n";
 
 import { DisclosureChevron } from "../ui/DisclosureChevron";
 import { DisclosureRegion } from "../ui/DisclosureRegion";
 import { DISCLOSURE_CLEANUP_BUFFER_MS, DISCLOSURE_TRANSITION_MS } from "~/lib/disclosureMotion";
 import {
+  BackgroundTrayIcon,
   BotIcon,
-  FileIcon,
+  FileReadIcon,
   GlobeIcon,
   type LucideIcon,
+  McpIcon,
   PencilIcon,
   SearchIcon,
   TerminalIcon,
+  WebSearchIcon,
   WorkingIcon,
 } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { MUTED_LABEL_TEXT_CLASS_NAME } from "~/surfaceStyles";
 import { extractWebFetchUrl } from "../../lib/toolCallLabel";
 import { LinkChipIcon } from "../LinkChipIcon";
+import { McpServerIcon } from "./McpServerIcon";
 import type { WorkLogEntry } from "../../session-logic";
 import { multiFileEditLabel, type ToolCallGroupSummary } from "./toolCallGroup.logic";
 import {
   renderWorkEntryIcon,
   renderWorkEntrySentence,
   workEntryDisplayParts,
+  workEntryFailureMetaText,
   workEntryLeftIcon,
 } from "./TimelineWorkEntryRow";
 
@@ -40,15 +47,19 @@ import {
 function summaryIcon(summary: ToolCallGroupSummary): LucideIcon {
   switch (summary.iconCategory) {
     case "read":
-      return FileIcon;
+      return FileReadIcon;
     case "search":
       return SearchIcon;
+    case "web-search":
+      return WebSearchIcon;
     case "command":
       return TerminalIcon;
     case "edit":
       return PencilIcon;
     case "agent":
       return BotIcon;
+    case "background":
+      return BackgroundTrayIcon;
     case "fetch":
       return GlobeIcon;
     case "mixed":
@@ -59,23 +70,67 @@ function summaryIcon(summary: ToolCallGroupSummary): LucideIcon {
   }
 }
 
-// A group the tool summary does not describe (e.g. background tasks) passes
-// its own line and glyph instead.
-type GroupLine =
-  | { summary: ToolCallGroupSummary; label?: never; icon?: never }
-  | { summary?: never; label: ReactNode; icon: LucideIcon };
+// The size-4 icon slot a tool line wears: a fetched site's favicon, an MCP
+// server's mark, or the given glyph.
+function ToolCallLineIcon(props: {
+  icon: LucideIcon;
+  entry: WorkLogEntry;
+  showFavicon: boolean;
+  category?: string | undefined;
+}) {
+  const { icon: Icon, entry, showFavicon, category } = props;
+  const webFetchUrl = showFavicon ? extractWebFetchUrl(entry) : null;
+  return (
+    <span
+      className="flex size-4 shrink-0 items-center justify-center"
+      aria-hidden
+      data-tool-group-icon={category}
+    >
+      {webFetchUrl ? (
+        <LinkChipIcon url={webFetchUrl} className="size-3.5" />
+      ) : Icon === McpIcon && entry.mcpServer ? (
+        <McpServerIcon serverName={entry.mcpServer} className="size-3.5" />
+      ) : (
+        renderWorkEntryIcon(Icon, "size-3.5")
+      )}
+    </span>
+  );
+}
 
-export function ToolCallGroupSummaryRow(
-  props: GroupLine & {
-    // Selected status or call of a live run, shown instead of the summary.
-    liveEntry?: WorkLogEntry | null;
-    open: boolean;
-    onToggle: (open: boolean) => void;
-    fontSizePx: number;
-    renderChildren: () => ReactNode;
-  },
-) {
-  const { liveEntry, open, onToggle, fontSizePx, renderChildren } = props;
+// One tool call on one line for the working indicator: its own icon (favicon,
+// MCP server mark or tool glyph) and its sentence, truncated. A failed call
+// adds the failure the expanded row states ("Failed · exit 1"); the indicator
+// sets the failure tone around it.
+export function LiveToolCallLine(props: { entry: WorkLogEntry; failed: boolean }) {
+  const { t } = useTranslation();
+  const { entry, failed } = props;
+  const failureMetaText = failed ? workEntryFailureMetaText(entry) : null;
+  return (
+    <>
+      <ToolCallLineIcon icon={workEntryLeftIcon(entry)} entry={entry} showFavicon />
+      <span className="min-w-0 truncate" data-working-tool-call="true">
+        {multiFileEditLabel(entry, t) ?? renderWorkEntrySentence(workEntryDisplayParts(entry, t))}
+        {failureMetaText ? (
+          <>
+            {" · "}
+            <span className="text-destructive" data-tool-failure-meta="true">
+              {failureMetaText}
+            </span>
+          </>
+        ) : null}
+      </span>
+    </>
+  );
+}
+
+export function ToolCallGroupSummaryRow(props: {
+  summary: ToolCallGroupSummary;
+  open: boolean;
+  onToggle: (open: boolean) => void;
+  fontSizePx: number;
+  renderChildren: () => ReactNode;
+}) {
+  const { summary, open, onToggle, fontSizePx, renderChildren } = props;
   const [keepChildrenMounted, setKeepChildrenMounted] = useState(open);
 
   useEffect(() => {
@@ -93,58 +148,37 @@ export function ToolCallGroupSummaryRow(
 
   const shouldRenderChildren = open || keepChildrenMounted;
 
-  // A live line wears its call's own icon; a settled group its kind's glyph.
-  // A fetched site keeps its favicon.
-  const summary = props.summary ?? null;
-  const iconEntry = liveEntry ?? summary?.iconEntry ?? null;
-  const iconWebFetchUrl = iconEntry ? extractWebFetchUrl(iconEntry) : null;
-  const showFavicon =
-    iconWebFetchUrl !== null && (liveEntry != null || summary?.iconCategory === "fetch");
-  const Icon = liveEntry
-    ? workEntryLeftIcon(liveEntry)
-    : summary
-      ? summaryIcon(summary)
-      : props.icon!;
-  const liveMultiFileLabel = liveEntry ? multiFileEditLabel(liveEntry) : null;
-
   return (
     <div>
       <button
         type="button"
         aria-expanded={open}
         className={cn(
-          "inline-flex max-w-full items-center gap-1.5 py-0.5 text-left transition-colors duration-200 hover:text-foreground",
+          "inline-flex max-w-full items-center gap-1.5 py-0.5 text-left leading-5 transition-colors duration-200 hover:text-foreground",
           MUTED_LABEL_TEXT_CLASS_NAME,
         )}
         style={{ fontSize: `${fontSizePx}px` }}
         onClick={() => onToggle(!open)}
       >
-        <span
-          className="flex size-4 shrink-0 items-center justify-center"
-          aria-hidden
-          data-tool-group-icon={liveEntry ? undefined : summary?.iconCategory}
-        >
-          {showFavicon && iconWebFetchUrl ? (
-            <LinkChipIcon url={iconWebFetchUrl} className="size-3.5" />
-          ) : (
-            renderWorkEntryIcon(Icon, "size-3.5")
-          )}
-        </span>
-        <span className="min-w-0 truncate" data-tool-group-live={liveEntry ? "true" : undefined}>
-          {liveEntry ? (
-            (liveMultiFileLabel ?? renderWorkEntrySentence(workEntryDisplayParts(liveEntry)))
-          ) : !summary ? (
-            props.label
-          ) : (
+        {/* The group wears its kind's glyph; a fetched site keeps its favicon. */}
+        <ToolCallLineIcon
+          icon={summaryIcon(summary)}
+          entry={summary.iconEntry}
+          showFavicon={summary.iconCategory === "fetch"}
+          category={summary.iconCategory}
+        />
+        <span className="min-w-0 truncate">
+          {summary.label}
+          {summary.failedLabel ? (
             <>
-              {summary.label}
-              {summary.failedLabel ? (
-                <>
-                  , <span className="text-destructive">{summary.failedLabel}</span>
-                </>
-              ) : null}
+              , <span className="text-destructive">{summary.failedLabel}</span>
             </>
-          )}
+          ) : null}
+          {summary.runningLabel ? (
+            <>
+              , <span data-tool-group-running="true">{summary.runningLabel}</span>
+            </>
+          ) : null}
         </span>
         {/* One step quieter than the label, matching the per-row disclosure chevron. */}
         <DisclosureChevron open={open} className="text-muted-foreground/70" />

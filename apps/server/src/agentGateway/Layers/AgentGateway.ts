@@ -1,3 +1,7 @@
+import { GatewayToolError } from "../toolRuntime.ts";
+import { makeRemoteAwareTools, receiveRemoteTool } from "../remoteTools";
+import { ServerEnvironment } from "../../environment/Services/ServerEnvironment";
+import { HostConnectionRegistryService } from "../../hostConnections/registry";
 import { resolveManagedWorktreeMergeCleanup } from "../../managedWorktreeMergeCleanup";
 import { ProjectionThreadMessageRepository } from "../../persistence/Services/ProjectionThreadMessages.ts";
 /**
@@ -22,6 +26,7 @@ import {
   COMPUTER_SETUP_REQUIRED_ACTIVITY_KIND,
   COMPUTER_CONTROL_DENIED_ACTIVITY_KIND,
   CommandId,
+  INLINE_VISUAL_ACTIVITY_KIND,
   EventId,
   SYNARA_GATEWAY_MAX_THREADS_PER_OPERATION,
   MessageId,
@@ -34,6 +39,7 @@ import {
   type ComputerSetupRequiredPayload,
   type ModelSelection,
   type OrchestrationCommand,
+  type OrchestrationThreadShell,
   type ProviderApprovalDecision,
   type ProviderKind,
   type RuntimeMode,
@@ -41,6 +47,8 @@ import {
   type TurnDispatchMode,
 } from "@synara/contracts";
 import { runtimeModeEscalatesPrivilege } from "@synara/shared/runtimeMode";
+import { INLINE_VISUALS_BETA_FEATURE } from "@synara/shared/betaFeatures";
+import { pullRequestLinkKey, visiblePullRequestLinks } from "@synara/shared/threadPullRequestLinks";
 import { deriveProviderInstances, isProviderKind } from "@synara/shared/providerInstances";
 import { Effect, Layer, Option } from "effect";
 
@@ -85,9 +93,13 @@ import {
 } from "../toolInput.ts";
 import { WRITE_TOOL_ANNOTATIONS, type ToolContext, type ToolEntry } from "../toolRuntime.ts";
 import { makeAgentGatewayMcpTransport } from "../mcpTransport.ts";
+import {
+  FOLLOW_UP_DISPATCH_DESCRIPTION,
+  FOLLOW_UP_MODE_DESCRIPTION,
+} from "../followUpDispatchPolicy.ts";
 import { deliverGatewayCompletions } from "../completionDelivery.ts";
 import { recoverInterruptedAgentGatewayOperations } from "../startupRecovery.ts";
-import { makeCreateThreadsHandler } from "../creationCoordinator.ts";
+import { appendThreadCreationRecap, makeCreateThreadsHandler } from "../creationCoordinator.ts";
 import { makeHubWorkGateway } from "../hubWorkGateway";
 import { OrchestrationCommandReceiptRepository } from "../../persistence/Services/OrchestrationCommandReceipts";
 import { QueuedTurnPromotionRepository } from "../../persistence/Services/QueuedTurnPromotions";
@@ -99,6 +111,8 @@ import { cloneDelegatedAttachments } from "../delegatedAttachments";
 import { LOCAL_LOOPBACK_ATTACHMENT_PRINCIPAL } from "../../managedAttachmentPrincipal";
 
 import { makeAgentGatewayAutomationTools } from "../automationTools.ts";
+import { makeConnectorTools } from "../connectorTools.ts";
+import { McpConnectors } from "../../mcpConnectors/Services/McpConnectors.ts";
 import { makeAgentGatewayBrowserTools } from "../browserTools.ts";
 import { makeAgentGatewayComputerBrowserTools } from "../computerBrowserTools.ts";
 import { computerApprovalDisplayArgs } from "../computerApprovalDisplay.ts";
@@ -121,6 +135,8 @@ import { makeThreadReadTools } from "../threadReadTools.ts";
 import { makeThreadDiagnosticTools } from "../threadDiagnosticTools.ts";
 import { makeAgentGatewayKanbanTools } from "../kanbanTools.ts";
 import { makeAgentGatewayTodoTools } from "../todoTools.ts";
+import { makeAgentGatewayInlineVisualTools } from "../inlineVisualTools.ts";
+import { makeAgentGatewayTurnPlanTools } from "../turnPlanTools.ts";
 import { TodoService } from "../../todo/Services/TodoService.ts";
 import { isServerBetaFeatureEnabled } from "../../betaFeatureGate.ts";
 import { pruneProjectedArchivedManagedWorktrees } from "../../managedWorktrees.ts";
@@ -174,9 +190,14 @@ function readThreadGoalArg(args: Record<string, unknown>): string {
 
 export const makeAgentGateway = Effect.gen(function* () {
   const credentials = yield* AgentGatewayCredentials;
+  const environment = Option.getOrUndefined(yield* Effect.serviceOption(ServerEnvironment));
+  const connections = Option.getOrUndefined(
+    yield* Effect.serviceOption(HostConnectionRegistryService),
+  );
   const snapshotQuery = yield* ProjectionSnapshotQuery;
   const orchestrationEngine = yield* OrchestrationEngineService;
   const automationService = yield* AutomationService;
+  const mcpConnectors = Option.getOrUndefined(yield* Effect.serviceOption(McpConnectors));
   const projectAgentService = yield* ProjectAgentService;
   const todoService = yield* TodoService;
   const git = yield* GitCore;
@@ -310,7 +331,7 @@ export const makeAgentGateway = Effect.gen(function* () {
   // otherwise an approval-required or worktree-isolated agent escalates by proxy.
   const assertCallerMayDriveThread = (
     caller: {
-      readonly id: string;
+      readonly id?: string;
       readonly runtimeMode: RuntimeMode;
       readonly envMode?: string | null | undefined;
     },
@@ -335,6 +356,7 @@ export const makeAgentGateway = Effect.gen(function* () {
           ),
         );
       }
+      if (!caller.id) return; // Remote callers have no local coordinator identity.
       yield* projectAgentService
         .assertCallerMayDriveManagedThread({
           callerThreadId: ThreadId.makeUnsafe(caller.id),
@@ -361,6 +383,7 @@ export const makeAgentGateway = Effect.gen(function* () {
     providerRuntimeEvents,
     eventDeliveries,
     requireThreadShell,
+    listRetiredWriteAuthorities: credentials.listRetiredWriteAuthorities,
   });
 
   // --- write tools ----------------------------------------------------------
@@ -441,13 +464,15 @@ export const makeAgentGateway = Effect.gen(function* () {
     context: ToolContext,
   ) =>
     Effect.gen(function* () {
-      const hubResult = hubGateway ? yield* hubGateway.submit(input, context) : null;
+      const hubResult =
+        hubGateway && !context.remoteCaller ? yield* hubGateway.submit(input, context) : null;
       if (hubResult) return hubResult;
       return yield* runCreateThreads(input, {
         kind: "provider-session",
         callerThreadId: context.callerThreadId,
         callerTurnId: context.callerTurnId,
         assertAuthority: context.assertCallerTurnActive,
+        ...(context.remoteCaller ? { remoteCaller: context.remoteCaller } : {}),
       });
     });
   const contextMessageIdsSchema = {
@@ -457,6 +482,18 @@ export const makeAgentGateway = Effect.gen(function* () {
     description:
       "IDs of original human messages in this coordinator conversation. Omit only when delegating the current human turn. Synara forwards their canonical text and attachments.",
   };
+  const taskKeySchema = {
+    type: "string",
+    maxLength: 128,
+    description:
+      "Stable identity of this task inside the request. In a Hub, pass one short lowercase key per task (letters, digits, '.', '_', ':', '-'). Synara freezes the key at the first decision, so retrying or restarting with the same key reuses the same worker instead of creating a second one, while a new key adds a new task from the same original message. Ignore this outside Hubs.",
+  };
+  const routingReasonSchema = {
+    type: "string",
+    maxLength: 500,
+    description:
+      "One short sentence explaining to the user why this task is routed to a worker. Recorded with the task card; it grants no permission.",
+  };
 
   const createThreads: ToolEntry = {
     requiredCapability: "thread:write",
@@ -464,7 +501,7 @@ export const makeAgentGateway = Effect.gen(function* () {
     definition: {
       name: "synara_create_threads",
       description:
-        "Create an exact batch of 1–20 standalone Synara threads. Hub coordinators instead submit durable workItems to the Hub queue: accepted does not mean started, and workerThreadId is available after admission. Worktree threads start on a Synara-managed temporary branch pinned at baseRef (or the selected checkout's HEAD) and copy local checkout changes plus .worktreeinclude files when the ref is that checkout's HEAD; on the first turn Synara may rename the branch after the prompt and publish it. Validation/preflight failures create nothing and may be corrected with the same requestId; durable retries replay the exact operation. Each created thread's result includes a ready-to-use link (`thread://<threadId>`); when you mention a thread in a message to the user, write it as a markdown link like [title](thread://<threadId>).",
+        "Create an exact batch of 1–20 standalone Synara threads. Hub coordinators instead submit durable workItems to the Hub queue: accepted does not mean started, and workerThreadId is available after admission. Give each Hub task a stable taskKey: the Hub freezes that key at the first decision, so a retry after a crash or a restart replays the same worker, while a new key from the same original message adds another task. Worktree threads start on a Synara-managed temporary branch pinned at baseRef (or the selected checkout's HEAD) and copy local checkout changes plus .worktreeinclude files when the ref is that checkout's HEAD; on the first turn Synara may rename the branch after the prompt and publish it. Validation/preflight failures create nothing and may be corrected with the same requestId; durable retries replay the exact operation. Each created thread's result includes a ready-to-use link (`thread://<threadId>`); when you mention a thread in a message to the user, write it as a markdown link like [title](thread://<threadId>).",
       inputSchema: {
         type: "object",
         properties: {
@@ -472,6 +509,11 @@ export const makeAgentGateway = Effect.gen(function* () {
             type: "string",
             maxLength: 256,
             description: "Stable id for this exact user-requested creation plan.",
+          },
+          resumeCreatorOnComplete: {
+            type: "boolean",
+            description:
+              "Resume this same local thread once all initial runs finish, if the creating turn still owns it. Use only when the user asks for asynchronous continuation.",
           },
           threads: {
             type: "array",
@@ -486,6 +528,8 @@ export const makeAgentGateway = Effect.gen(function* () {
                     "Passively return the initial run result to this creating thread. Does not wake the creator; goal runs are unsupported.",
                 },
                 contextMessageIds: contextMessageIdsSchema,
+                taskKey: taskKeySchema,
+                routingReason: routingReasonSchema,
                 prompt: { type: "string" },
                 title: { type: "string" },
                 target: {
@@ -530,17 +574,24 @@ export const makeAgentGateway = Effect.gen(function* () {
     definition: {
       name: "synara_create_thread",
       description:
-        "Create exactly one standalone Synara thread. Hub coordinators receive a durable workItems entry that can remain queued until a worker slot is available. Worktree threads start on a Synara-managed temporary branch pinned at baseRef; on the first turn Synara may rename the branch after the prompt and publish it. For two or more threads use one synara_create_threads call instead. The result includes a ready-to-use link (`thread://<threadId>`); when you mention the thread in a message to the user, write it as a markdown link like [title](thread://<threadId>).",
+        "Create exactly one standalone Synara thread. Hub coordinators receive a durable workItems entry that can remain queued until a worker slot is available; pass a stable taskKey so a retry after a crash or restart reuses the same worker. Worktree threads start on a Synara-managed temporary branch pinned at baseRef; on the first turn Synara may rename the branch after the prompt and publish it. For two or more threads use one synara_create_threads call instead. The result includes a ready-to-use link (`thread://<threadId>`); when you mention the thread in a message to the user, write it as a markdown link like [title](thread://<threadId>).",
       inputSchema: {
         type: "object",
         properties: {
           requestId: { type: "string", maxLength: 256 },
+          resumeCreatorOnComplete: {
+            type: "boolean",
+            description:
+              "Resume this same local thread once the initial run finishes. Use only when the user asks for asynchronous continuation.",
+          },
           notifyCreatorOnComplete: {
             type: "boolean",
             description:
               "Passively return the initial run result to this creating thread. Does not wake the creator; goal runs are unsupported.",
           },
           contextMessageIds: contextMessageIdsSchema,
+          taskKey: taskKeySchema,
+          routingReason: routingReasonSchema,
           prompt: { type: "string" },
           title: { type: "string" },
           target: {
@@ -596,6 +647,8 @@ export const makeAgentGateway = Effect.gen(function* () {
         for (const key of [
           "title",
           "contextMessageIds",
+          "taskKey",
+          "routingReason",
           "projectId",
           "environment",
           "baseRef",
@@ -610,6 +663,9 @@ export const makeAgentGateway = Effect.gen(function* () {
         return createWithHubQueue(
           decodeCreateThreadsInput({
             requestId: readStringArg(args, "requestId", { required: true }),
+            ...(args.resumeCreatorOnComplete === undefined
+              ? {}
+              : { resumeCreatorOnComplete: args.resumeCreatorOnComplete }),
             threads: [spec],
           }),
           context,
@@ -639,15 +695,18 @@ export const makeAgentGateway = Effect.gen(function* () {
     requiresActiveTurn: true,
     definition: {
       name: "synara_send_message",
-      description:
-        'Send a Synara follow-up message to an existing thread. mode "queue" (default) waits for the current turn. "steer" uses native steering when available; otherwise it queues the follow-up first and interrupts the running turn. With no live turn, it starts normally. Use "queue" for ordinary follow-ups.',
+      description: FOLLOW_UP_DISPATCH_DESCRIPTION,
       inputSchema: {
         type: "object",
         properties: {
           threadId: { type: "string", description: "Target thread." },
           message: { type: "string", description: "Message text." },
           contextMessageIds: contextMessageIdsSchema,
-          mode: { type: "string", enum: ["queue", "steer"], description: "Dispatch mode." },
+          mode: {
+            type: "string",
+            enum: ["queue", "steer"],
+            description: FOLLOW_UP_MODE_DESCRIPTION,
+          },
         },
         required: ["threadId", "message"],
         additionalProperties: false,
@@ -662,18 +721,19 @@ export const makeAgentGateway = Effect.gen(function* () {
         if (modeArg !== "queue" && modeArg !== "steer") {
           throw new ToolInputError(`Argument "mode" must be "queue" or "steer".`);
         }
-        const caller = yield* requireThreadShell(context.callerThreadId);
+        const caller = context.remoteCaller ?? (yield* requireThreadShell(context.callerThreadId));
         const target = yield* requireThreadShell(threadId);
         yield* assertCallerMayDriveThread(caller, target);
         // Pass the requested mode through unchanged: the reactor checks live
         // provider state (authoritative, unlike this projection snapshot) and
         // already downgrades steers whose turn is not actually live.
         const dispatchMode: TurnDispatchMode = modeArg;
-        const principal = isServerGroupsEnabled()
-          ? yield* projectAgentService.resolvePrincipalForThread(caller.id)
-          : null;
+        const principal =
+          isServerGroupsEnabled() && "id" in caller
+            ? yield* projectAgentService.resolvePrincipalForThread(caller.id)
+            : null;
         const sourceMessages =
-          principal?.kind === "coordinator" && hubGateway
+          principal?.kind === "coordinator" && hubGateway && "id" in caller
             ? yield* resolveHubWorkSource({
                 snapshotQuery,
                 projectionTurns,
@@ -732,7 +792,7 @@ export const makeAgentGateway = Effect.gen(function* () {
             : [];
         yield* context.assertCallerTurnActive();
         yield* assertCallerMayDriveThread(
-          yield* requireThreadShell(context.callerThreadId),
+          context.remoteCaller ?? (yield* requireThreadShell(context.callerThreadId)),
           yield* requireThreadShell(threadId),
         );
         const followupCommandId = CommandId.makeUnsafe(`agent:${suffix}:send`);
@@ -823,12 +883,13 @@ export const makeAgentGateway = Effect.gen(function* () {
     handler: (args, context) =>
       Effect.gen(function* () {
         const threadId = readStringArg(args, "threadId", { required: true })!;
-        const caller = yield* requireThreadShell(context.callerThreadId);
+        const caller = context.remoteCaller ?? (yield* requireThreadShell(context.callerThreadId));
         const target = yield* requireThreadShell(threadId);
         // Stopping a higher-privileged thread's work is still driving it.
         yield* assertCallerMayDriveThread(caller, target);
         const activeTurnId = target.session?.activeTurnId ?? null;
         const hadActiveTurn = activeTurnId !== null || target.latestTurn?.state === "running";
+        yield* context.assertCallerTurnActive();
         const dispatched = yield* orchestrationEngine
           .dispatch({
             type: "thread.turn.interrupt",
@@ -871,9 +932,10 @@ export const makeAgentGateway = Effect.gen(function* () {
       Effect.gen(function* () {
         const threadId = readStringArg(args, "threadId", { required: true })!;
         const title = readStringArg(args, "title", { required: true })!;
-        const caller = yield* requireThreadShell(context.callerThreadId);
+        const caller = context.remoteCaller ?? (yield* requireThreadShell(context.callerThreadId));
         const target = yield* requireThreadShell(threadId);
         yield* assertCallerMayDriveThread(caller, target);
+        yield* context.assertCallerTurnActive();
         yield* orchestrationEngine
           .dispatch({
             type: "thread.meta.update",
@@ -886,13 +948,35 @@ export const makeAgentGateway = Effect.gen(function* () {
       }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
   };
 
+  const resolveThreadGitWorkspace = (target: OrchestrationThreadShell) =>
+    Effect.gen(function* () {
+      const threadId = target.id;
+      const project = Option.getOrUndefined(
+        yield* snapshotQuery
+          .getProjectShellById(target.projectId)
+          .pipe(Effect.mapError((error) => new ToolInputError(errorText(error)))),
+      );
+      if (!project) {
+        return yield* Effect.fail(
+          new ToolInputError(`Project for thread "${threadId}" was not found.`),
+        );
+      }
+      const cwd = resolveThreadWorkspaceCwd({ thread: target, projects: [project] });
+      if (!cwd) {
+        return yield* Effect.fail(
+          new ToolInputError(`Git workspace for thread "${threadId}" is unavailable.`),
+        );
+      }
+      return cwd;
+    });
+
   const setThreadPullRequest: ToolEntry = {
     requiredCapability: "thread:write",
     requiresActiveTurn: true,
     definition: {
       name: "synara_set_thread_pull_request",
       description:
-        "Associate a pull request with a Synara thread. Use this after successfully creating the pull request that represents that thread's own deliverable. Do not associate pull requests that the thread only reviews, references, or discusses. Defaults to your own thread when threadId is omitted.",
+        "Link a pull request to a Synara thread. A thread can have several; linking adds to the list and never replaces other links, and linking an already-linked PR only refreshes it. Link each PR you create, take over, or push to for the thread's work, including every PR of a stack. Do not link PRs you only read, review, or mention. Defaults to your own thread when threadId is omitted.",
       inputSchema: {
         type: "object",
         properties: {
@@ -908,45 +992,80 @@ export const makeAgentGateway = Effect.gen(function* () {
         required: ["reference"],
         additionalProperties: false,
       },
-      annotations: { title: "Associate a pull request", ...WRITE_TOOL_ANNOTATIONS },
+      annotations: { title: "Link a pull request", ...WRITE_TOOL_ANNOTATIONS },
     },
     handler: (args, context) =>
       Effect.gen(function* () {
         const threadId = readStringArg(args, "threadId") ?? context.callerThreadId;
         const reference = readStringArg(args, "reference", { required: true })!;
-        const caller = yield* requireThreadShell(context.callerThreadId);
+        const caller = context.remoteCaller ?? (yield* requireThreadShell(context.callerThreadId));
         const target = yield* requireThreadShell(threadId);
         yield* assertCallerMayDriveThread(caller, target);
-
-        const project = Option.getOrUndefined(
-          yield* snapshotQuery
-            .getProjectShellById(target.projectId)
-            .pipe(Effect.mapError((error) => new ToolInputError(errorText(error)))),
-        );
-        if (!project) {
-          return yield* Effect.fail(
-            new ToolInputError(`Project for thread "${threadId}" was not found.`),
-          );
-        }
-        const cwd = resolveThreadWorkspaceCwd({ thread: target, projects: [project] });
-        if (!cwd) {
-          return yield* Effect.fail(
-            new ToolInputError(`Git workspace for thread "${threadId}" is unavailable.`),
-          );
-        }
+        const cwd = yield* resolveThreadGitWorkspace(target);
 
         const { pullRequest } = yield* gitManager
           .resolvePullRequest({ cwd, reference })
           .pipe(Effect.mapError((error) => new ToolInputError(errorText(error))));
+        yield* context.assertCallerTurnActive();
         yield* orchestrationEngine
           .dispatch({
-            type: "thread.meta.update",
+            type: "thread.pull-request.link",
             commandId: CommandId.makeUnsafe(`agent:${randomUUID()}:pull-request`),
             threadId: target.id,
-            lastKnownPr: pullRequest,
+            pullRequest,
+            source: "agent",
           })
           .pipe(Effect.mapError((error) => new ToolInputError(errorText(error))));
         return mcpToolResultJson({ threadId: target.id, pullRequest });
+      }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
+  };
+
+  const unlinkThreadPullRequest: ToolEntry = {
+    requiredCapability: "thread:write",
+    requiresActiveTurn: true,
+    definition: {
+      name: "synara_unlink_thread_pull_request",
+      description:
+        "Remove a pull request link from a Synara thread, for example one linked by mistake. This only removes the association: it does not close, merge, or change the pull request on GitHub. Succeeds with wasLinked=false when the PR was not linked. Defaults to your own thread when threadId is omitted.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          threadId: {
+            type: "string",
+            description: "Thread to unlink from. Defaults to your own thread.",
+          },
+          url: {
+            type: "string",
+            description: "Full GitHub pull request URL, as listed in the thread's pullRequests.",
+          },
+        },
+        required: ["url"],
+        additionalProperties: false,
+      },
+      annotations: { title: "Unlink a pull request", ...WRITE_TOOL_ANNOTATIONS },
+    },
+    handler: (args, context) =>
+      Effect.gen(function* () {
+        const threadId = readStringArg(args, "threadId") ?? context.callerThreadId;
+        const url = readStringArg(args, "url", { required: true })!;
+        const caller = context.remoteCaller ?? (yield* requireThreadShell(context.callerThreadId));
+        const target = yield* requireThreadShell(threadId);
+        yield* assertCallerMayDriveThread(caller, target);
+        const wasLinked = visiblePullRequestLinks(target.pullRequests).some(
+          (link) => pullRequestLinkKey(link.pullRequest.url) === pullRequestLinkKey(url),
+        );
+        yield* context.assertCallerTurnActive();
+        if (wasLinked) {
+          yield* orchestrationEngine
+            .dispatch({
+              type: "thread.pull-request.unlink",
+              commandId: CommandId.makeUnsafe(`agent:${randomUUID()}:pull-request-unlink`),
+              threadId: target.id,
+              url,
+            })
+            .pipe(Effect.mapError((error) => new ToolInputError(errorText(error))));
+        }
+        return mcpToolResultJson({ threadId: target.id, url, wasLinked });
       }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
   };
 
@@ -975,9 +1094,10 @@ export const makeAgentGateway = Effect.gen(function* () {
         if (archived === undefined) {
           throw new ToolInputError(`Missing required argument "archived".`);
         }
-        const caller = yield* requireThreadShell(context.callerThreadId);
+        const caller = context.remoteCaller ?? (yield* requireThreadShell(context.callerThreadId));
         const target = yield* requireThreadShell(threadId);
         yield* assertCallerMayDriveThread(caller, target);
+        yield* context.assertCallerTurnActive();
         yield* orchestrationEngine
           .dispatch({
             type: archived ? "thread.archive" : "thread.unarchive",
@@ -1059,7 +1179,7 @@ export const makeAgentGateway = Effect.gen(function* () {
           );
         }
         const goal = achieved || blocked ? "" : readThreadGoalArg(args);
-        const caller = yield* requireThreadShell(context.callerThreadId);
+        const caller = context.remoteCaller ?? (yield* requireThreadShell(context.callerThreadId));
         const target = yield* requireThreadShell(threadId);
         yield* assertCallerMayDriveThread(caller, target);
         if ((achieved || blocked) && (target.goal ?? "").trim().length === 0) {
@@ -1069,6 +1189,7 @@ export const makeAgentGateway = Effect.gen(function* () {
             ),
           );
         }
+        yield* context.assertCallerTurnActive();
         yield* orchestrationEngine
           .dispatch({
             type: "thread.meta.update",
@@ -1130,6 +1251,30 @@ export const makeAgentGateway = Effect.gen(function* () {
   const browserTools = makeAgentGatewayBrowserTools(browserAutomationHost, {
     resolveWorkspaceRoot,
   });
+  const connectorTools = mcpConnectors
+    ? makeConnectorTools({
+        connectors: mcpConnectors,
+        resolveWorkspaceRoot,
+        surface: (proposal) =>
+          orchestrationEngine
+            .dispatch({
+              type: "thread.activity.append",
+              commandId: CommandId.makeUnsafe(`agent:${proposal.proposalId}:connector-proposal`),
+              threadId: ThreadId.makeUnsafe(proposal.threadId),
+              activity: {
+                id: EventId.makeUnsafe(`connector-proposal:${proposal.proposalId}`),
+                kind: "mcp.connector.proposed",
+                tone: "info",
+                summary: `${proposal.action === "add" ? "Add" : "Remove"} connector: ${proposal.connector.name}`,
+                createdAt: isoNow(),
+                turnId: null,
+                payload: { proposalId: proposal.proposalId },
+              },
+              createdAt: isoNow(),
+            })
+            .pipe(Effect.asVoid),
+      })
+    : [];
   const projectAgentTools = makeProjectAgentTools({
     projectAgent: projectAgentService,
   });
@@ -1590,6 +1735,36 @@ export const makeAgentGateway = Effect.gen(function* () {
     requireThreadShell,
   });
 
+  const inlineVisualTools = makeAgentGatewayInlineVisualTools({
+    attachmentsDir: serverConfig.attachmentsDir,
+    appendVisualActivity: ({ threadId, turnId, digest, payload }) => {
+      const createdAt = isoNow();
+      return orchestrationEngine
+        .dispatch({
+          type: "thread.activity.append",
+          commandId: CommandId.makeUnsafe(`agent:${digest}:inline-visual`),
+          threadId: ThreadId.makeUnsafe(threadId),
+          activity: {
+            id: EventId.makeUnsafe(`gateway:${digest}:inline-visual`),
+            tone: "info",
+            kind: INLINE_VISUAL_ACTIVITY_KIND,
+            summary: `Visual: ${payload.title}`,
+            // Spelled out: the activity payload is JSON, which has no optional fields.
+            payload: { ...payload, format: payload.format ?? "html" },
+            turnId: TurnId.makeUnsafe(turnId),
+            createdAt,
+          },
+          createdAt,
+        })
+        .pipe(
+          Effect.asVoid,
+          // An identical retry reuses the command id with a later timestamp. The
+          // first attempt already recorded this visual, so the retry succeeds.
+          Effect.catchTag("OrchestrationCommandIdentityCollisionError", () => Effect.void),
+        );
+    },
+  });
+
   const tools: ReadonlyArray<ToolEntry> = [
     ...readTools,
     ...diagnosticTools,
@@ -1599,13 +1774,19 @@ export const makeAgentGateway = Effect.gen(function* () {
     interruptThread,
     setThreadTitle,
     setThreadPullRequest,
+    unlinkThreadPullRequest,
     setThreadArchived,
     setThreadGoal,
     ...automationTools,
+    ...connectorTools,
     ...browserTools,
     ...kanbanTools,
     // Same switch as the todo.* RPCs: a build without Tasks offers agents no to-do tools.
     ...(isServerBetaFeatureEnabled("tasks") ? todoTools : []),
+    // Shared policy enables inline visuals in both Stable and Beta.
+    ...(isServerBetaFeatureEnabled(INLINE_VISUALS_BETA_FEATURE) ? inlineVisualTools : []),
+    // Advertised only to sessions holding `turn:plan` (Claude; see sessionLease.ts).
+    ...makeAgentGatewayTurnPlanTools(),
     ...(deviceService?.supported === true
       ? makeAgentGatewayDeviceTools({
           manager: deviceService.manager,
@@ -1615,6 +1796,7 @@ export const makeAgentGateway = Effect.gen(function* () {
     ...(computerService?.supported === true
       ? makeAgentGatewayComputerTools({
           manager: computerService.manager,
+          resolveWorkspaceRoot,
           onSetupRequired: surfaceComputerSetupRequired,
           authorizeAction: authorizeComputerAction,
           resolveForegroundAuthorization: resolveComputerForegroundAuthorization,
@@ -1639,10 +1821,39 @@ export const makeAgentGateway = Effect.gen(function* () {
   );
 
   return {
+    ...(environment
+      ? {
+          handleRemoteTool: (call, peerOwnerId) =>
+            receiveRemoteTool({ call, peerOwnerId, environment, tools }),
+        }
+      : {}),
     handleMcpPost: makeAgentGatewayMcpTransport({
       credentials,
       snapshotQuery,
-      tools,
+      tools:
+        environment && connections
+          ? makeRemoteAwareTools({
+              tools,
+              environment,
+              connections,
+              requireThreadShell,
+              appendThreadCreationRecap: (input) =>
+                appendThreadCreationRecap(orchestrationEngine, input),
+              assertRemoteWriteAllowed: (callerThreadId) =>
+                Effect.gen(function* () {
+                  const principal = yield* projectAgentService.resolvePrincipalForThread(
+                    ThreadId.makeUnsafe(callerThreadId),
+                  );
+                  if (principal.kind === "coordinator" || principal.kind === "worker")
+                    return yield* Effect.fail(
+                      new GatewayToolError(
+                        "capability_denied",
+                        "Hub coordinators and workers cannot delegate across computers; their ownership is local to the hub.",
+                      ),
+                    );
+                }),
+            })
+          : tools,
       onCapabilityDenied: surfaceCapabilityDenial,
       // Namespace-insensitive: a session that never saw the catalog reaches
       // for prefixed spellings (synara_computer_click,

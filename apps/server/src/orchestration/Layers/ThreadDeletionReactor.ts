@@ -132,6 +132,9 @@ const make = Effect.gen(function* () {
           error: error instanceof Error ? error.message : String(error),
         }),
       ),
+      // Deletion cleanup must not block the drainable worker on GitHub lookups.
+      Effect.forkDetach,
+      Effect.asVoid,
     );
 
   const refreshCommandReadModelAfterPurge = (threadId: string) =>

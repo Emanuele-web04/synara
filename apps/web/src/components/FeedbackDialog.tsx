@@ -16,6 +16,7 @@ import { Dialog, DialogHeader, DialogPopup, DialogTitle } from "./ui/dialog";
 import { Spinner } from "./ui/spinner";
 import { Textarea } from "./ui/textarea";
 import { toastManager } from "./ui/toast";
+import { useTranslation } from "~/i18n";
 
 export interface FeedbackDialogProps {
   open: boolean;
@@ -24,6 +25,8 @@ export interface FeedbackDialogProps {
 }
 
 export function FeedbackDialog({ open, context, onOpenChange }: FeedbackDialogProps) {
+  const { t } = useTranslation();
+
   const [isSending, setIsSending] = useState(false);
 
   const handleSubmit = async (category: FeedbackCategory | null, details: string) => {
@@ -34,16 +37,16 @@ export function FeedbackDialog({ open, context, onOpenChange }: FeedbackDialogPr
       onOpenChange(false);
       toastManager.add({
         type: "success",
-        title: "Feedback sent",
-        description: "Thanks for helping make Synara better.",
+        title: t("common:feedbackSent"),
+        description: t("common:thanksForHelpingMakeSynaraBetter"),
       });
     } catch (error) {
       setIsSending(false);
       toastManager.add({
         type: "error",
-        title: "Could not send feedback",
+        title: t("common:couldNotSendFeedback"),
         description:
-          error instanceof Error ? error.message : "An unexpected delivery error occurred.",
+          error instanceof Error ? error.message : t("common:anUnexpectedDeliveryErrorOccurred"),
       });
     }
   };
@@ -57,7 +60,9 @@ export function FeedbackDialog({ open, context, onOpenChange }: FeedbackDialogPr
     >
       <DialogPopup className="max-w-xl" showCloseButton={!isSending}>
         <DialogHeader className="gap-0 px-5 pt-5 pb-3">
-          <DialogTitle className="text-xl tracking-[-0.01em]">Share feedback</DialogTitle>
+          <DialogTitle className="text-xl tracking-[-0.01em]">
+            {t("common:shareFeedback")}
+          </DialogTitle>
         </DialogHeader>
         {/* The form state lives below DialogPopup, which unmounts its children
             once the close transition ends — every open starts from a blank
@@ -75,6 +80,8 @@ function FeedbackDialogForm({
   isSending: boolean;
   onSubmit: (category: FeedbackCategory | null, details: string) => Promise<void>;
 }) {
+  const { t } = useTranslation();
+
   const [category, setCategory] = useState<FeedbackCategory | null>(null);
   const [details, setDetails] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -99,7 +106,7 @@ function FeedbackDialogForm({
         void handleSubmit();
       }}
     >
-      <div className="flex flex-wrap gap-1.5" aria-label="Feedback category">
+      <div className="flex flex-wrap gap-1.5" aria-label={t("common:feedbackCategory")}>
         {FEEDBACK_CATEGORIES.map((option) => {
           const selected = category === option.value;
           return (
@@ -129,26 +136,25 @@ function FeedbackDialogForm({
         ref={textareaRef}
         value={details}
         maxLength={5_000}
-        placeholder="Share details (required)"
-        aria-label="Feedback details"
+        placeholder={t("common:shareDetailsRequired")}
+        aria-label={t("common:feedbackDetails")}
         disabled={isSending}
         className="[&_[data-slot=textarea]]:min-h-32 [&_[data-slot=textarea]]:resize-y"
         onChange={(event) => setDetails(event.target.value)}
       />
 
       <p className="text-ui leading-relaxed text-muted-foreground">
-        Diagnostics include app version, OS, provider/model, modes, and session state — never
-        prompts, messages, paths, or logs.
+        {t("common:diagnosticsIncludeAppVersionOSProviderModelModesAnd")}
       </p>
 
       <Button type="submit" className="w-full" disabled={!canSubmit}>
         {isSending ? (
           <>
             <Spinner />
-            Sending…
+            {t("common:sending")}
           </>
         ) : (
-          "Submit"
+          t("common:submit")
         )}
       </Button>
     </form>

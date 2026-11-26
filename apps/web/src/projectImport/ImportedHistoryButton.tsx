@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "~/components/ui/button";
 import { expensiveReadErrorRefetchInterval } from "~/lib/expensiveReadRetry";
 import { ensureNativeApi } from "~/nativeApi";
+import { useTranslation } from "~/i18n";
 
 type HistoryState = LoadProjectImportHistoryResult & {
   threadId: string;
@@ -109,6 +110,8 @@ export function ImportedHistoryButton({
 }: {
   history: ReturnType<typeof useImportedHistory>;
 }) {
+  const { t } = useTranslation();
+
   if (!history.nextCursor && !history.error && !history.loading) return null;
   return (
     <div
@@ -124,10 +127,10 @@ export function ImportedHistoryButton({
         }}
       >
         {history.loading
-          ? "Loading earlier messages…"
+          ? t("workspace:loadingEarlierMessages")
           : history.error
-            ? "Retry loading earlier messages"
-            : "Load earlier messages"}
+            ? t("workspace:retryLoadingEarlierMessages")
+            : t("workspace:loadEarlierMessages")}
       </Button>
       {history.error ? (
         <p role="alert" className="max-w-prose text-center text-ui-xs text-destructive">

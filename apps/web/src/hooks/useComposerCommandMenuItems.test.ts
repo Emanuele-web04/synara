@@ -120,7 +120,7 @@ describe("buildThreadMentionComposerItems", () => {
     expect(items).toHaveLength(20);
   });
 
-  it("disambiguates duplicate titles with the project name so mention tokens stay unique", () => {
+  it("keeps duplicate-title mention tokens stable with display text", () => {
     const items = buildThreadMentionComposerItems({
       projects,
       currentThreadId: null,
@@ -138,6 +138,7 @@ describe("buildThreadMentionComposerItems", () => {
     expect(mentionNamesById["thread:in-project"]).toBe("Planning (Synara)");
     expect(mentionNamesById["thread:in-chats"]).toBe("Planning (Chats)");
     expect(mentionNamesById["thread:unique"]).toBe("Planning extras");
+    expect(items.find((item) => item.id === "thread:in-chats")?.description).toBe("Chats");
     expect(items.every((item) => item.label.startsWith("Planning"))).toBe(true);
   });
 

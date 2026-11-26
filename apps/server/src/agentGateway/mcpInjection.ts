@@ -8,20 +8,21 @@
  * - Codex: a shared endpoint-only TOML block plus per-thread HTTP authorization,
  *   or the legacy `bearer_token_env_var` transport for environment-based callers.
  * - Claude Agent SDK: `mcpServers` record with an HTTP entry.
- * - ACP agents (cursor/grok/droid): `mcpServers` session entries; HTTP when
+ * - ACP agents (cursor/grok/droid/antigravity): `mcpServers` session entries; HTTP when
  *   the agent advertises `mcpCapabilities.http`, otherwise a stdio proxy that
  *   forwards to the HTTP endpoint.
  *
  * @module agentGateway/mcpInjection
  */
 import type * as Acp from "@agentclientprotocol/sdk";
+import { SYNARA_MCP_SERVER_NAME } from "@synara/shared/mcpConnectors";
+export { SYNARA_MCP_SERVER_NAME } from "@synara/shared/mcpConnectors";
 
 import type {
   AgentGatewayMcpConnection,
   AgentGatewayStdioProxySpawn,
 } from "./Services/AgentGatewayCredentials.ts";
 
-export const SYNARA_MCP_SERVER_NAME = "synara";
 export const SYNARA_AGENT_GATEWAY_TOKEN_ENV = "SYNARA_AGENT_GATEWAY_TOKEN";
 export const SYNARA_AGENT_GATEWAY_BOOTSTRAP_TOKEN_ENV = "SYNARA_AGENT_GATEWAY_BOOTSTRAP_TOKEN";
 export const SYNARA_AGENT_GATEWAY_URL_ENV = "SYNARA_AGENT_GATEWAY_URL";
@@ -60,14 +61,19 @@ export function buildCodexMcpConfigToml(
 
 /** Sent only over the owned app-server pipe, never written to the shared home. */
 export function buildCodexMcpThreadConfig(connection: AgentGatewayMcpConnection) {
-  return {
-    mcp_servers: {
-      [SYNARA_MCP_SERVER_NAME]: {
-        url: connection.url,
-        http_headers: { Authorization: authorizationHeader(connection) },
-      },
-    },
+  const headers = { Authorization: authorizationHeader(connection) };
+  const mcpServers: Record<
+    string,
+    { readonly url: string; readonly http_headers: Record<string, string> }
+  > = {
+    [SYNARA_MCP_SERVER_NAME]: { url: connection.url, http_headers: headers },
   };
+  // Connectors only exist in the per-thread config: Codex starts servers it
+  // first sees here, and the shared config.toml must stay secret-free.
+  for (const connector of connection.connectors ?? []) {
+    mcpServers[connector.name] = { url: connector.url, http_headers: headers };
+  }
+  return { mcp_servers: mcpServers };
 }
 
 export interface ClaudeMcpHttpServerConfig {
@@ -100,6 +106,22 @@ export function buildOpenCodeMcpServer(
     headers: { Authorization: authorizationHeader(connection) },
     oauth: false,
   };
+}
+
+/** Connector proxies in OpenCode's `mcp.add` shape; same scoping rules as above. */
+export function buildOpenCodeConnectorMcpServers(
+  connection: AgentGatewayMcpConnection,
+): Array<{ readonly name: string; readonly config: OpenCodeMcpRemoteServerConfig }> {
+  return (connection.connectors ?? []).map((connector) => ({
+    name: connector.name,
+    config: {
+      type: "remote",
+      url: connector.url,
+      enabled: true,
+      headers: { Authorization: authorizationHeader(connection) },
+      oauth: false,
+    },
+  }));
 }
 
 export interface AgentGatewayMcpToolDescriptor {
@@ -208,60 +230,17 @@ export function callAgentGatewayMcpTool(input: {
 export function buildClaudeMcpServers(
   connection: AgentGatewayMcpConnection,
 ): Record<string, ClaudeMcpHttpServerConfig> {
-  return {
-    [SYNARA_MCP_SERVER_NAME]: {
-      type: "http",
-      url: connection.url,
-      headers: { Authorization: authorizationHeader(connection) },
-    },
+  const headers = { Authorization: authorizationHeader(connection) };
+  const servers: Record<string, ClaudeMcpHttpServerConfig> = {
+    [SYNARA_MCP_SERVER_NAME]: { type: "http", url: connection.url, headers },
   };
+  for (const connector of connection.connectors ?? []) {
+    servers[connector.name] = { type: "http", url: connector.url, headers };
+  }
+  return servers;
 }
 
 export type AcpStdioProxySpawn = AgentGatewayStdioProxySpawn;
-
-export interface AntigravityMcpPluginConfig {
-  readonly mcpServers: Record<
-    string,
-    {
-      readonly command: string;
-      readonly args: ReadonlyArray<string>;
-      readonly env: Record<string, string>;
-      readonly disabled: false;
-      readonly disabledTools: ReadonlyArray<string>;
-    }
-  >;
-}
-
-/**
- * Build the secret-free MCP fragment installed with Synara's Antigravity
- * plugin. Antigravity expands the endpoint plus a one-shot bootstrap value
- * from each `agy` process. The stdio proxy consumes that value during MCP
- * initialization and keeps the exchanged session bearer in its own memory,
- * so `run_command` descendants never inherit the bearer.
- *
- * `ELECTRON_RUN_AS_NODE` keeps the generated proxy runnable when a packaged
- * desktop uses its Electron executable as `process.execPath`; it is harmless
- * for regular Node and Bun executables.
- */
-export function buildAntigravityMcpPluginConfig(
-  stdioProxy: AcpStdioProxySpawn,
-): AntigravityMcpPluginConfig {
-  return {
-    mcpServers: {
-      [SYNARA_MCP_SERVER_NAME]: {
-        command: stdioProxy.command,
-        args: [...stdioProxy.args],
-        env: {
-          [SYNARA_AGENT_GATEWAY_URL_ENV]: `$${SYNARA_AGENT_GATEWAY_URL_ENV}`,
-          [SYNARA_AGENT_GATEWAY_BOOTSTRAP_TOKEN_ENV]: `$${SYNARA_AGENT_GATEWAY_BOOTSTRAP_TOKEN_ENV}`,
-          ELECTRON_RUN_AS_NODE: "1",
-        },
-        disabled: false,
-        disabledTools: [],
-      },
-    },
-  };
-}
 
 // Structural view of an ACP initialize response so callers with untyped
 // (raw JSON) responses can reuse the same transport negotiation.
@@ -286,13 +265,17 @@ export function buildAcpSynaraMcpServers(input: {
 }): Array<Acp.McpServer> {
   const supportsHttp = input.initializeResult.agentCapabilities?.mcpCapabilities?.http === true;
   if (supportsHttp) {
+    const headers = [{ name: "Authorization", value: authorizationHeader(input.connection) }];
     return [
-      {
-        type: "http",
-        name: SYNARA_MCP_SERVER_NAME,
-        url: input.connection.url,
-        headers: [{ name: "Authorization", value: authorizationHeader(input.connection) }],
-      },
+      { type: "http", name: SYNARA_MCP_SERVER_NAME, url: input.connection.url, headers },
+      ...(input.connection.connectors ?? []).map(
+        (connector): Acp.McpServer => ({
+          type: "http",
+          name: connector.name,
+          url: connector.url,
+          headers: [...headers],
+        }),
+      ),
     ];
   }
   return [
@@ -307,5 +290,15 @@ export function buildAcpSynaraMcpServers(input: {
         { name: "ELECTRON_RUN_AS_NODE", value: "1" },
       ],
     },
+    ...(input.connection.connectors ?? []).map((connector) => ({
+      name: connector.name,
+      command: input.stdioProxy.command,
+      args: [...input.stdioProxy.args],
+      env: [
+        { name: SYNARA_AGENT_GATEWAY_URL_ENV, value: connector.url },
+        { name: SYNARA_AGENT_GATEWAY_TOKEN_ENV, value: input.connection.bearerToken },
+        { name: "ELECTRON_RUN_AS_NODE", value: "1" },
+      ],
+    })),
   ];
 }

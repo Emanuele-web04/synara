@@ -7,13 +7,20 @@ import { Profiler, createRef, useState } from "react";
 import { expect, it, vi } from "vitest";
 import { page, server, userEvent } from "vitest/browser";
 import { render } from "vitest-browser-react";
-import { CodeEditorPane } from "./CodeEditorPane";
-import { CodeDiffEditorPane } from "./CodeDiffEditorPane";
 import {
   INITIAL_CODE_EDIT_HISTORY_STATE,
   type CodeEditHistoryControls,
   type CodeEditHistoryState,
-} from "./pierreEdit";
+} from "./codeEditHistory";
+
+vi.mock("~/betaFeatures", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("~/betaFeatures")>()),
+  CODE_EDITOR_ENGINE: "pierre",
+  NATIVE_EDITOR_ON: false,
+}));
+
+const { CodeEditorPane } = await import("./CodeEditorPane");
+const { CodeDiffEditorPane } = await import("./CodeDiffEditorPane");
 
 type Mode = "file" | "split" | "unified";
 
@@ -54,7 +61,6 @@ function Fixture({
         <CodeDiffEditorPane
           {...common}
           original={initialValue.replaceAll("= 1;", "= 0;")}
-          originalVersion={0}
           modified={value}
           modifiedVersion={0}
           renderSideBySide={mode === "split"}

@@ -1,20 +1,16 @@
+import { useTranslation } from "~/i18n";
 // FILE: WorkspaceFilePreview.tsx
 // Purpose: Shared single-file preview (code with syntax highlighting, parsed
-//          markdown, images, PDFs) for workspace files plus absolute local
+//          markdown, images, videos, PDFs) for workspace files plus absolute local
 //          file references reused by editor and right-dock panes.
 // Layer: Web chat presentation component
 // Exports: WorkspaceFilePreview, isMarkdownPreviewablePath
 
 import type { ProjectFileChangeEvent, ProjectReadFileResult } from "@synara/contracts";
-import type { FileContents as PierreFileContents } from "@pierre/diffs";
-import {
-  Editor as PierreEditor,
-  type EditorOptions as PierreEditorOptions,
-} from "@pierre/diffs/edit";
-import { EditProvider, File as PierreFile } from "@pierre/diffs/react";
 import {
   isSupportedLocalImagePath,
   isSupportedLocalPdfPath,
+  isSupportedLocalVideoPath,
   lowerCaseExtensionOf,
 } from "@synara/shared/localPreviewFiles";
 import {
@@ -32,8 +28,6 @@ import {
   use,
   useCallback,
   useEffect,
-  useInsertionEffect,
-  useId,
   useMemo,
   useRef,
   useState,
@@ -48,16 +42,13 @@ import {
   getSelectionWithin,
   type ChatFileReference,
 } from "~/lib/chatReferences";
-import {
-  buildDiffPanelUnsafeCSS,
-  resolveDiffThemeName,
-  type DiffThemeName,
-} from "~/lib/diffRendering";
+import { resolveDiffThemeName, type DiffThemeName } from "~/lib/diffRendering";
 import { extractEditorGutterChanges, type EditorGutterChangeRange } from "~/lib/editorGutterDiff";
 import { formatFileCommentRange, type FileCommentSelection } from "~/lib/fileComments";
 import { showFileReferenceContextMenu } from "~/lib/fileReferenceContextMenu";
 import { gitWorkingTreeDiffQueryOptions } from "~/lib/gitReactQuery";
 import { PlusIcon } from "~/lib/icons";
+import { buildLocalImageUrl } from "~/lib/localImageUrls";
 import { toggleMarkdownTaskMarker } from "~/lib/markdownTaskList";
 import { isRpcCapacityExceededError } from "~/lib/expensiveReadRetry";
 import {
@@ -89,8 +80,11 @@ import { WorkspaceFilePreviewHeader } from "./chat/WorkspaceFilePreviewHeader";
 import { TranscriptSelectionAction } from "./chat/TranscriptSelectionAction";
 import { useCodeSelectionAction } from "./chat/useCodeSelectionAction";
 import { LocalImagePreview } from "./LocalImagePreview";
+import { LocalVideoPreview } from "./LocalVideoPreview";
 import { PdfFilePreview } from "./PdfFilePreview";
 import { Skeleton } from "./ui/skeleton";
+import { CodeEditorPane } from "./codeEditor/CodeEditorPane";
+import { useCodeEditorSaveKeyDownHandler } from "./codeEditor/editorSaveShortcut";
 
 const MARKDOWN_PREVIEW_EXTENSIONS = new Set([".markdown", ".md", ".mdx"]);
 
@@ -269,138 +263,61 @@ function FileContentsView(props: { path: string; contents: string; themeName: Di
   );
 }
 
-function createPierreEditor(options: PierreEditorOptions<undefined>) {
-  return new PierreEditor(options);
-}
-
 type EditableFileContentsProps = {
   path: string;
+  workspaceRoot: string;
   contents: string;
-  cacheKey: string;
+  version: number;
   hidden: boolean;
-  themeName: DiffThemeName;
   theme: "light" | "dark";
   saving: boolean;
   invalid: boolean;
   onContentsChange: (contents: string) => void;
   onSave: () => void;
+  onReferenceInChat?: ((reference: ChatFileReference) => void) | undefined;
 };
 
-function PierreEditableFileContents(props: EditableFileContentsProps) {
-  const editorContainerRef = useRef<HTMLDivElement>(null);
-  const editorId = useId();
-  const labelEditor = useCallback(() => {
-    editorContainerRef.current
-      ?.querySelector("diffs-container")
-      ?.shadowRoot?.querySelector<HTMLElement>('[contenteditable="true"]')
-      ?.setAttribute("aria-label", `Edit ${props.path}`);
-  }, [props.path]);
-  const editorObserverRef = useRef<MutationObserver | null>(null);
-  const attachEditor = useCallback(() => {
-    const shadowRoot = editorContainerRef.current?.querySelector("diffs-container")?.shadowRoot;
-    if (!shadowRoot) return;
-    labelEditor();
-    if (editorObserverRef.current === null) {
-      editorObserverRef.current = new MutationObserver(labelEditor);
-    }
-    editorObserverRef.current.observe(shadowRoot, { childList: true, subtree: true });
-  }, [labelEditor]);
-  useEffect(() => {
-    attachEditor();
-    return () => {
-      editorObserverRef.current?.disconnect();
-      editorObserverRef.current = null;
-    };
-  }, [attachEditor]);
-  // Local typing updates this snapshot in the same batch as the parent draft.
-  // Only a different incoming document (reload/watcher) resets Pierre's history.
-  const [document, setDocument] = useState({
-    contents: props.contents,
-    seedContents: props.contents,
-    revision: 0,
-  });
-  if (document.contents !== props.contents) {
-    setDocument({
-      contents: props.contents,
-      seedContents: props.contents,
-      revision: document.revision + 1,
-    });
-  }
-  const onContentsChangeRef = useRef(props.onContentsChange);
-  useInsertionEffect(() => {
-    onContentsChangeRef.current = props.onContentsChange;
-  });
-  const file = useMemo<PierreFileContents>(
-    () => ({
-      name: props.path,
-      contents: document.seedContents,
-      lang: getSyntaxLanguageForPath(props.path),
-      cacheKey: `${props.cacheKey}:${editorId}:${document.revision}`,
-    }),
-    [document.seedContents, document.revision, editorId, props.cacheKey, props.path],
-  );
-  const editorOptions = useMemo<PierreEditorOptions<undefined>>(
-    () => ({
-      onAttach: attachEditor,
-      onChange: (nextFile) => {
-        const contents = nextFile.contents;
-        setDocument((current) => ({ ...current, contents }));
-        onContentsChangeRef.current(contents);
-      },
-    }),
-    [attachEditor],
-  );
-
-  return (
-    <div
-      ref={editorContainerRef}
-      className="editor-file-editor__pierre"
-      hidden={props.hidden}
-      aria-busy={props.saving}
-      aria-invalid={props.invalid ? "true" : undefined}
-      onKeyDown={(event) => {
-        if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
-          event.preventDefault();
-          props.onSave();
-        }
-      }}
-    >
-      <EditProvider createEditor={createPierreEditor}>
-        <PierreFile
-          file={file}
-          edit
-          editorOptions={editorOptions}
-          options={{
-            disableFileHeader: true,
-            overflow: "scroll",
-            preferredHighlighter: "shiki-js",
-            theme: props.themeName,
-            unsafeCSS: buildDiffPanelUnsafeCSS(props.theme),
-          }}
-        />
-      </EditProvider>
-    </div>
-  );
-}
-
-// Keep the editing engine stable for the open document: changing it while
-// typing would discard focus, selection and native undo history.
 function EditableFileContents(props: EditableFileContentsProps) {
+  // Preserve the established large-file budget and keep the selected engine
+  // mounted when edits shrink the document or Markdown switches to Preview.
   const [plainText] = useState(
     () =>
       props.contents.length > MAX_SYNTAX_HIGHLIGHT_INPUT_CHARS ||
       props.contents.split("\n").length > 1_000,
   );
-  return plainText ? (
-    <NumberedPlainEditableFileContents {...props} />
-  ) : (
-    <PierreEditableFileContents {...props} />
+  return (
+    <div
+      data-editable-file-contents
+      className={props.hidden ? "hidden" : "flex min-h-0 min-w-0 flex-1 flex-col"}
+      aria-busy={props.saving}
+      aria-invalid={props.invalid || undefined}
+    >
+      {plainText ? (
+        <NumberedPlainEditableFileContents {...props} />
+      ) : (
+        <CodeEditorPane
+          fileName={props.path}
+          workspaceRoot={props.workspaceRoot}
+          value={props.contents}
+          valueVersion={props.version}
+          resolvedTheme={props.theme}
+          onChange={props.onContentsChange}
+          onSave={props.onSave}
+          onReferenceInChat={props.onReferenceInChat}
+        />
+      )}
+    </div>
   );
 }
 
+// The lightweight preview edits the same native session as the other surfaces.
+// It deliberately does not initialize a second text model or language service.
 function NumberedPlainEditableFileContents(props: EditableFileContentsProps) {
+  const { t } = useTranslation();
+
   const editorRef = useRef<HTMLTextAreaElement>(null);
   const gutterRef = useRef<HTMLDivElement>(null);
+  const saveKeyDown = useCodeEditorSaveKeyDownHandler(props.onSave);
   const lineCount = props.contents.split("\n").length;
   const numbers = useMemo(
     () =>
@@ -419,7 +336,7 @@ function NumberedPlainEditableFileContents(props: EditableFileContentsProps) {
   }, []);
   useEffect(syncGutter, [props.contents, props.hidden, syncGutter]);
   return (
-    <div className="editor-file-editor-wrap" hidden={props.hidden}>
+    <div className="editor-file-editor-wrap" onKeyDownCapture={saveKeyDown}>
       {numbers ? (
         <div className="editor-file-editor__gutter" aria-hidden="true">
           <div ref={gutterRef}>{numbers}</div>
@@ -428,20 +345,14 @@ function NumberedPlainEditableFileContents(props: EditableFileContentsProps) {
       <textarea
         ref={editorRef}
         className="editor-file-editor"
-        aria-label={`Edit ${props.path}`}
+        aria-label={t("workspace:edit", { value0: props.path })}
         aria-busy={props.saving}
-        aria-invalid={props.invalid ? "true" : undefined}
+        aria-invalid={props.invalid || undefined}
         value={props.contents}
         spellCheck={false}
         wrap="off"
         onScroll={syncGutter}
-        onChange={(event) => props.onContentsChange(event.target.value)}
-        onKeyDown={(event) => {
-          if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
-            event.preventDefault();
-            props.onSave();
-          }
-        }}
+        onChange={(event) => props.onContentsChange(event.currentTarget.value)}
       />
     </div>
   );
@@ -506,11 +417,13 @@ const FILE_PREVIEW_SKELETON_LINES = [
 ];
 
 function FilePreviewLoadingState() {
+  const { t } = useTranslation();
+
   return (
     <div
       className="min-h-0 flex-1 space-y-2.5 overflow-hidden px-3 py-3"
       role="status"
-      aria-label="Loading file..."
+      aria-label={t("workspace:filePreview_loadingFile")}
     >
       {FILE_PREVIEW_SKELETON_LINES.map((line) => (
         <div key={`${line.indent}-${line.width}`} className="flex h-3 items-center gap-2">
@@ -521,7 +434,7 @@ function FilePreviewLoadingState() {
           />
         </div>
       ))}
-      <span className="sr-only">Loading file...</span>
+      <span className="sr-only">{t("workspace:filePreview_loadingFile")}</span>
     </div>
   );
 }
@@ -530,7 +443,7 @@ export interface WorkspaceFilePreviewProps {
   workspaceRoot: string | null;
   /**
    * Workspace-relative path of the previewed file. Binary previews (images,
-   * PDFs) may instead be absolute paths outside the workspace — e.g. a
+   * videos, PDFs) may instead be absolute paths outside the workspace — e.g. a
    * session's scratch directory — served by the local-image route, which never
    * touch the workspace-relative file-read RPC.
    */
@@ -558,6 +471,8 @@ export interface WorkspaceFilePreviewProps {
 }
 
 export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
+  const { t } = useTranslation();
+
   const liveRevalidationEnabled = props.liveRevalidationEnabled ?? true;
   const { resolvedTheme } = useTheme();
   const diffThemeName = resolveDiffThemeName(resolvedTheme);
@@ -593,11 +508,15 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
   const filePath = relocatedFullPath ?? requestedFilePath;
   const markdownPreviewDefault = props.markdownPreviewDefault ?? false;
   const fileIsImage = filePath !== null && isSupportedLocalImagePath(filePath);
+  const fileIsVideo = filePath !== null && isSupportedLocalVideoPath(filePath);
   const fileIsPdf = filePath !== null && isSupportedLocalPdfPath(filePath);
+  // Images, videos and PDFs stream through the local-image HTTP route instead
+  // of the text file-read RPC.
+  const fileIsBinaryPreview = fileIsImage || fileIsVideo || fileIsPdf;
   const fileIsLocalAbsolute = filePath !== null && isLocalAbsolutePath(filePath);
   const fileIsWorkspaceRelative = filePath !== null && isWorkspaceRelativePathSafe(filePath);
   const fileIsScratchBinaryPreview =
-    filePath !== null && (fileIsImage || fileIsPdf) && isScratchWorkspacePath(filePath);
+    filePath !== null && fileIsBinaryPreview && isScratchWorkspacePath(filePath);
   const fileNeedsLocalPreviewGrant =
     filePath !== null && fileIsLocalAbsolute && !fileIsScratchBinaryPreview;
   const fileIsMarkdown = filePath !== null && isMarkdownPreviewablePath(filePath);
@@ -624,19 +543,24 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
     fileNeedsLocalPreviewGrant && isLocalPreviewGrantUsable(localPreviewGrantQuery.data)
       ? (localPreviewGrantQuery.data?.grant ?? null)
       : null;
+  // Keep the player mounted across renewal so a temporary grant outage cannot
+  // discard a loaded frame or its seek position.
+  const videoHadGrant = fileIsVideo && localPreviewGrantQuery.data !== undefined;
   const binaryPreviewKey = `${props.workspaceRoot ?? ""}\0${filePath ?? ""}\0${localPreviewGrant ?? ""}\0${binaryPreviewRevision}`;
+  // A renewed grant must not remount a playing video; LocalVideoPreview adopts
+  // the fresh grant URL itself if the current one stops working.
+  const videoPreviewKey = `${props.workspaceRoot ?? ""}\0${filePath ?? ""}\0${binaryPreviewRevision}`;
   const fileQuery = useQuery(
     projectReadFileQueryOptions({
       cwd: props.workspaceRoot,
       relativePath: filePath,
       previewGrant: localPreviewGrant,
-      // Images and PDFs are binary: they stream through the local-image HTTP
-      // route instead of the text file-read RPC.
+      // Images, videos and PDFs are binary: they stream through the
+      // local-image HTTP route instead of the text file-read RPC.
       enabled:
         liveRevalidationEnabled &&
         filePath !== null &&
-        !fileIsImage &&
-        !fileIsPdf &&
+        !fileIsBinaryPreview &&
         (fileNeedsLocalPreviewGrant ? localPreviewGrant !== null : props.workspaceRoot !== null),
     }),
   );
@@ -646,7 +570,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
       : null;
   const watchedWorkspaceRelativePath =
     resolvedWorkspaceRelativePath ??
-    ((fileIsImage || fileIsPdf) &&
+    (fileIsBinaryPreview &&
     workspaceRoot &&
     requestedFilePath &&
     isWorkspaceRelativePathSafe(requestedFilePath)
@@ -665,7 +589,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
       // them stale until the window regains focus. Only active variants are
       // re-read, so an idle workspace costs nothing here.
       void refreshGitAfterFileWrite(queryClient, workspaceRoot);
-      if (fileIsImage || fileIsPdf) {
+      if (fileIsBinaryPreview) {
         setBinaryPreviewReloading(true);
         setBinaryPreviewRevision((current) => current + 1);
       }
@@ -677,8 +601,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
       }
     },
     [
-      fileIsImage,
-      fileIsPdf,
+      fileIsBinaryPreview,
       queryClient,
       relocationRequestKey,
       requestedFilePath,
@@ -794,7 +717,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
 
   const handleFileReload = useCallback(() => {
     if (!filePath) return;
-    if (fileIsImage || fileIsPdf) {
+    if (fileIsBinaryPreview) {
       setBinaryPreviewReloading(true);
       setBinaryPreviewRevision((current) => current + 1);
       return;
@@ -803,7 +726,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
       cwd: workspaceRoot,
       relativePath: filePath,
     });
-  }, [fileIsImage, fileIsPdf, filePath, queryClient, workspaceRoot]);
+  }, [fileIsBinaryPreview, filePath, queryClient, workspaceRoot]);
 
   const handleEditBufferReload = editor.reloadFromDisk;
   // Wait for the file read before asking for the working-tree diff: while the
@@ -813,8 +736,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
     props.workspaceRoot !== null &&
     resolvedWorkspaceRelativePath !== null &&
     fileQuery.data !== undefined &&
-    !fileIsImage &&
-    !fileIsPdf &&
+    !fileIsBinaryPreview &&
     !showMarkdownPreview &&
     editableDocument === null;
   const workingTreeDiffQuery = useQuery(
@@ -986,8 +908,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
   const editFile =
     onEditFile &&
     canToggleTasks &&
-    !fileIsImage &&
-    !fileIsPdf &&
+    !fileIsBinaryPreview &&
     filePath !== null &&
     fileQuery.data !== undefined &&
     resolveWorkspaceFileEditorReadOnlyReason(fileQuery.data) === null
@@ -997,7 +918,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
   if (!props.workspaceRoot && !fileIsLocalAbsolute && !fileIsScratchBinaryPreview) {
     return (
       <PanelStateMessage density="compact" fill="flex">
-        <p>No workspace is attached to this chat.</p>
+        <p>{t("workspace:filePreview_noWorkspace")}</p>
       </PanelStateMessage>
     );
   }
@@ -1006,19 +927,19 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
     return (
       props.emptyState ?? (
         <PanelStateMessage density="compact" fill="flex">
-          <p>Select a file from the explorer.</p>
+          <p>{t("workspace:filePreview_selectFileFromExplorer")}</p>
         </PanelStateMessage>
       )
     );
   }
-  if (fileNeedsLocalPreviewGrant && !localPreviewGrant) {
+  if (fileNeedsLocalPreviewGrant && !localPreviewGrant && !videoHadGrant) {
     if (localPreviewGrantQuery.error) {
       return (
         <PanelStateMessage density="compact" fill="flex" className="items-start justify-start p-3">
           <p className="text-left text-ui-sm text-destructive/85">
             {localPreviewGrantQuery.error instanceof Error
               ? localPreviewGrantQuery.error.message
-              : "Could not create local file preview grant."}
+              : t("workspace:filePreview_couldNotCreatePreview")}
           </p>
         </PanelStateMessage>
       );
@@ -1060,6 +981,23 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
   const showFileReadErrorIndicator =
     hasFileContents && fileReadError !== null && !activeEditBuffer?.error;
 
+  // A rejected Range request may mean the server restarted before the token's
+  // advertised expiry. Fetch a new grant at the point of recovery or download.
+  const resolveGrantedVideoUrl = async (download: boolean) => {
+    const { data: grant } = await localPreviewGrantQuery.refetch({
+      cancelRefetch: false,
+      throwOnError: true,
+    });
+    return buildLocalImageUrl({
+      src: filePath,
+      cwd: props.workspaceRoot ?? undefined,
+      canonicalPath: grant?.canonicalPath,
+      grant: grant?.grant,
+      download,
+      ...(download ? {} : { cacheKey: binaryPreviewRevision }),
+    });
+  };
+
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col app-content-surface">
       <WorkspaceFilePreviewHeader
@@ -1070,24 +1008,27 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
         onMarkdownPreviewChange={handleMarkdownPreviewChange}
         onReferenceInChat={onReferenceInChat}
         onAskWhyInChat={onAskWhyInChat}
-        contentsForCopy={fileIsImage || fileQuery.data === undefined ? null : displayedFileContents}
+        contentsForCopy={
+          fileIsBinaryPreview || fileQuery.data === undefined ? null : displayedFileContents
+        }
         truncated={fileQuery.data?.truncated ?? false}
         onEditFile={editFile}
         dirty={editBufferDirty}
         saveState={
           activeEditBuffer
             ? activeEditBuffer.error
-              ? "Save failed"
+              ? t("workspace:saveFailed")
               : activeEditBuffer.saving
-                ? "Saving..."
+                ? t("common:saving2")
                 : editBufferDirty
-                  ? "Unsaved changes"
-                  : "Saved"
+                  ? t("workspace:unsavedChanges")
+                  : t("workspace:saved")
             : undefined
         }
+        saving={activeEditBuffer?.saving ?? false}
         onSave={activeEditBuffer ? editor.save : undefined}
         readOnlyReason={readOnlyReason}
-        reloading={fileIsImage || fileIsPdf ? binaryPreviewReloading : fileQuery.isFetching}
+        reloading={fileIsBinaryPreview ? binaryPreviewReloading : fileQuery.isFetching}
         onReload={workspaceRoot && filePath ? handleFileReload : undefined}
       />
       {activeEditBuffer?.error ? (
@@ -1101,7 +1042,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
             className="shrink-0 rounded-md px-2 py-1 font-medium text-foreground/80 hover:bg-foreground/8"
             onClick={handleEditBufferReload}
           >
-            Reload from disk
+            {t("workspace:reloadFromDisk")}
           </button>
         </div>
       ) : editBufferExternallyChanged ? (
@@ -1110,14 +1051,14 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
           className="flex shrink-0 items-center gap-3 border-b border-amber-500/25 bg-amber-500/5 px-3 py-2 text-ui-sm text-foreground/80"
         >
           <span className="min-w-0 flex-1">
-            This file changed on disk. Your unsaved edits are preserved.
+            {t("workspace:thisFileChangedOnDiskYourUnsavedEditsAre")}
           </span>
           <button
             type="button"
             className="shrink-0 rounded-md px-2 py-1 font-medium text-foreground/80 hover:bg-foreground/8"
             onClick={handleEditBufferReload}
           >
-            Reload from disk
+            {t("workspace:reloadFromDisk")}
           </button>
         </div>
       ) : showFileReadErrorIndicator ? (
@@ -1131,17 +1072,16 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
         >
           {fileReadCapacityError
             ? fileQuery.isFetching
-              ? "Refreshing file..."
-              : "File refresh delayed."
+              ? t("workspace:refreshingFile")
+              : t("workspace:fileRefreshDelayed")
             : fileReadError instanceof Error
               ? fileReadError.message
-              : "Could not refresh file."}
+              : t("workspace:couldNotRefreshFile")}
         </div>
       ) : null}
       {changeGutterEnabled && workingTreeDiffQuery.data?.truncated === true ? (
         <DiffTruncationWarning className="rounded-none border-x-0 border-t-0">
-          Only part of this file&apos;s working-tree diff is available. Change markers may be
-          incomplete.
+          {t("workspace:onlyPartOfThisFileSWorkingTreeDiff")}
         </DiffTruncationWarning>
       ) : null}
       {locatingOutOfRootFile ? (
@@ -1164,12 +1104,44 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
             onPreviewError={handleBinaryPreviewError}
           />
         </div>
+      ) : fileIsVideo ? (
+        <div
+          className="editor-file-viewer min-h-0 flex-1 overflow-auto"
+          onContextMenu={handleContentsContextMenu}
+        >
+          <LocalVideoPreview
+            key={videoPreviewKey}
+            src={filePath}
+            cwd={props.workspaceRoot}
+            previewGrant={localPreviewGrant}
+            cacheKey={binaryPreviewRevision}
+            label={basenameOfPath(filePath)}
+            className="min-h-full"
+            videoClassName="max-h-[calc(100vh-13rem)]"
+            resolveRecoveryUrl={
+              fileNeedsLocalPreviewGrant ? () => resolveGrantedVideoUrl(false) : undefined
+            }
+            resolveDownloadUrl={
+              fileNeedsLocalPreviewGrant ? () => resolveGrantedVideoUrl(true) : undefined
+            }
+            onRetry={() => {
+              if (fileNeedsLocalPreviewGrant) {
+                void localPreviewGrantQuery.refetch({ cancelRefetch: false });
+              }
+              handleFileReload();
+            }}
+            onPreviewReady={handleBinaryPreviewReady}
+            onPreviewError={handleBinaryPreviewError}
+          />
+        </div>
       ) : fileQuery.isLoading ? (
         <FilePreviewLoadingState />
       ) : !hasFileContents && fileReadError ? (
         <PanelStateMessage density="compact" fill="flex" className="items-start justify-start p-3">
           <p className="text-left text-ui-sm text-destructive/85">
-            {fileReadError instanceof Error ? fileReadError.message : "Could not read file."}
+            {fileReadError instanceof Error
+              ? fileReadError.message
+              : t("workspace:filePreview_couldNotReadFile")}
           </p>
         </PanelStateMessage>
       ) : !hasFileContents ? (
@@ -1179,11 +1151,12 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
           {activeEditBuffer && editableDocument ? (
             <EditableFileContents
               key={activeEditBuffer.key}
-              path={filePath}
+              path={editableDocument.relativePath}
+              workspaceRoot={workspaceRoot!}
               contents={activeEditBuffer.contents}
-              cacheKey={activeEditBuffer.key}
+              version={editor.state.version}
+              onReferenceInChat={props.onReferenceInChat}
               hidden={showMarkdownPreview}
-              themeName={diffThemeName}
               theme={resolvedTheme}
               saving={activeEditBuffer.saving}
               invalid={activeEditBuffer.error !== null}
@@ -1228,7 +1201,9 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
                 <FilePreviewChangeGutter ranges={changeRanges} subtle={changeGutterSubtle} />
               ) : null}
               {!showMarkdownPreview && lineCount > 0 ? (
-                <span className="sr-only">{lineCount} lines</span>
+                <span className="sr-only">
+                  {lineCount} {t("workspace:lines")}
+                </span>
               ) : null}
               {previewSelectionAction.pendingAction ? (
                 <TranscriptSelectionAction
@@ -1247,8 +1222,10 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
                     left: hoveredCommentLine.left,
                     height: hoveredCommentLine.height,
                   }}
-                  aria-label={`Comment on line ${hoveredCommentLine.lineNumber}`}
-                  title="Comment"
+                  aria-label={t("workspace:commentOnLine", {
+                    value0: hoveredCommentLine.lineNumber,
+                  })}
+                  title={t("workspace:filePreview_comment")}
                   onMouseDown={(event) => event.preventDefault()}
                   onClick={(event) => {
                     event.preventDefault();

@@ -1,21 +1,17 @@
 // FILE: environmentPanelStyles.ts
 // Purpose: Shared Environment panel typography tokens. Section labels, the panel title,
-//          and muted body copy (e.g. recap) all reuse the composer placeholder color so
-//          secondary chrome reads consistently across the chat shell.
+//          and muted body copy (e.g. recap) share the quiet-label tone. They are labels and
+//          content, not an empty-field hint, so they do not use the fainter composer
+//          placeholder colour, which reads near 2:1.
 // Layer: Environment panel design tokens
 
 import { COMPACT_CHAT_MARKDOWN_COZY_CLASS_NAME } from "~/components/chatMarkdownSpacing";
-import {
-  COMPOSER_EDITOR_TYPOGRAPHY_CLASS_NAME,
-  COMPOSER_PLACEHOLDER_TEXT_CLASS_NAME,
-} from "~/components/chat/composerPickerStyles";
+import { COMPOSER_EDITOR_TYPOGRAPHY_CLASS_NAME } from "~/components/chat/composerPickerStyles";
 import { cn } from "~/lib/utils";
+import { MUTED_LABEL_TEXT_CLASS_NAME } from "~/surfaceStyles";
 
 /** Panel title ("Environment") and section labels ("Editor", "Recap"). */
-export const ENVIRONMENT_PANEL_LABEL_CLASS_NAME = cn(
-  "font-normal",
-  COMPOSER_PLACEHOLDER_TEXT_CLASS_NAME,
-);
+export const ENVIRONMENT_PANEL_LABEL_CLASS_NAME = cn("font-normal", MUTED_LABEL_TEXT_CLASS_NAME);
 
 /** Top-of-card title row. */
 export const ENVIRONMENT_PANEL_TITLE_CLASS_NAME = cn(ENVIRONMENT_PANEL_LABEL_CLASS_NAME, "text-ui");
@@ -42,10 +38,10 @@ export const ENVIRONMENT_PANEL_SECTION_LABEL_CLASS_NAME = cn(
 /** Muted secondary copy such as the recap body. */
 export const ENVIRONMENT_PANEL_MUTED_BODY_CLASS_NAME = cn(
   COMPOSER_EDITOR_TYPOGRAPHY_CLASS_NAME,
-  COMPOSER_PLACEHOLDER_TEXT_CLASS_NAME,
+  MUTED_LABEL_TEXT_CLASS_NAME,
 );
 
-/** Recap markdown — same placeholder tone with markdown-specific spacing overrides. */
+/** Recap markdown — same quiet tone with markdown-specific spacing overrides. */
 export const ENVIRONMENT_PANEL_RECAP_MARKDOWN_CLASS_NAME = cn(
   ENVIRONMENT_PANEL_MUTED_BODY_CLASS_NAME,
   // Literal, not `!${...}`: Tailwind scans source text, so a template-built class emits no CSS.

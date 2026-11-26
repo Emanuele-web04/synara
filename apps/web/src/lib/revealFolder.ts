@@ -3,6 +3,7 @@
 //          through the desktop shell bridge, with a toast on failure.
 // Layer: lib
 
+import { t } from "~/i18n";
 import { toastManager } from "~/components/ui/toast";
 import { readNativeApi } from "~/nativeApi";
 
@@ -11,8 +12,8 @@ export function revealFolderInShell(input: { path: string; onRevealed?: () => vo
   if (!api) {
     toastManager.add({
       type: "error",
-      title: "Unable to open folder",
-      description: "The desktop connection is not available yet.",
+      title: t("workspace:revealFolderFailed"),
+      description: t("workspace:desktopConnectionUnavailable"),
     });
     return;
   }
@@ -22,8 +23,8 @@ export function revealFolderInShell(input: { path: string; onRevealed?: () => vo
     .catch((error) => {
       toastManager.add({
         type: "error",
-        title: "Unable to open folder",
-        description: error instanceof Error ? error.message : "An unknown error occurred.",
+        title: t("workspace:revealFolderFailed"),
+        description: error instanceof Error ? error.message : t("workspace:anUnknownErrorOccurred"),
       });
     });
 }

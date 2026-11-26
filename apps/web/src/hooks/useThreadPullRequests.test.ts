@@ -36,6 +36,40 @@ describe("resolveThreadPullRequestFallback", () => {
       }),
     ).toBeNull();
   });
+
+  it("keeps an explicitly linked PR when the worktree is on another branch", () => {
+    expect(
+      resolveThreadPullRequestFallback({
+        branch: "feat/current-branch",
+        hasDedicatedWorktree: true,
+        lastKnownPr: staleOpenPullRequest,
+        pullRequests: [
+          {
+            pullRequest: staleOpenPullRequest,
+            source: "agent",
+            linkedAt: "2026-11-13T10:00:00.000Z",
+          },
+        ],
+      }),
+    ).toMatchObject({ number: 841, state: "open" });
+  });
+
+  it("still validates a branch-discovered PR against the branch", () => {
+    expect(
+      resolveThreadPullRequestFallback({
+        branch: "feat/current-branch",
+        hasDedicatedWorktree: true,
+        lastKnownPr: staleOpenPullRequest,
+        pullRequests: [
+          {
+            pullRequest: staleOpenPullRequest,
+            source: "discovered",
+            linkedAt: "2026-11-13T10:00:00.000Z",
+          },
+        ],
+      }),
+    ).toBeNull();
+  });
 });
 
 describe("useThreadPullRequests requireLiveStatus", () => {
@@ -136,6 +170,36 @@ describe("useThreadPullRequests requireLiveStatus", () => {
     // returned: the raw lastKnownPr must not badge the thread.
     expect(map.get(THREAD)).toBeNull();
   });
+
+  it.each([false, true])(
+    "hides an unlinked worktree PR from live badges (live-only %s)",
+    (requireLiveStatus) => {
+      const map = readPullRequestMap({
+        threads: [
+          threadSource({
+            lastKnownPr: null,
+            pullRequests: [
+              {
+                pullRequest: { ...openStoredPr, url: "https://github.com/ACME/repo/pull/42/files" },
+                linkedAt: "2026-11-13T09:00:00.000Z",
+                dismissedAt: "2026-11-13T10:00:00.000Z",
+                source: "created",
+              },
+            ],
+          }),
+        ],
+        requireLiveStatus,
+        seed: (queryClient) => {
+          queryClient.setQueryData(["git", "status", WORKTREE], {
+            ...liveStatusOnBranch,
+            pr: openStoredPr,
+          });
+        },
+      });
+
+      expect(map.get(THREAD)).toBeNull();
+    },
+  );
 
   it("surfaces a stored PR once the live resolve query returns it", () => {
     const map = readPullRequestMap({

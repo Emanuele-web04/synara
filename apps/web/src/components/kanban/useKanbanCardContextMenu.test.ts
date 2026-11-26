@@ -5,6 +5,20 @@
 import { ProjectId, ThreadId } from "@synara/contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+// This fixture invokes the hook directly without a mounted React context.
+// Keep translation resources real while adapting its hook to the harness.
+vi.mock("~/i18n", async (importOriginal) => {
+  const runtime = await importOriginal<typeof import("~/i18n")>();
+  return {
+    ...runtime,
+    useTranslation: () => ({
+      t: runtime.t,
+      locale: runtime.i18n.language,
+      formatLocale: runtime.getFormatLocale() ?? "en",
+    }),
+  };
+});
+
 const harness = vi.hoisted(() => ({
   clicked: "delete" as string,
   showContextMenu: vi.fn(),
@@ -42,6 +56,10 @@ vi.mock("~/appSettings", () => ({
   resolveAssistantDeliveryMode: () => "buffered" as const,
   getProviderInstanceOptions: () => [{ instanceId: "codex", provider: "codex" }],
   getProviderStartOptions: () => undefined,
+  resolveNewChatDefault: (settings: { defaultProvider: string }) => ({
+    defaultProvider: settings.defaultProvider,
+    defaultProviderInstanceId: null,
+  }),
 }));
 vi.mock("~/hooks/useCopyToClipboard", () => ({
   useCopyPathToClipboard: () => vi.fn(),

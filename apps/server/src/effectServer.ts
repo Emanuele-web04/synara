@@ -1,4 +1,7 @@
+import { remoteConnectionsUnavailableReason } from "./remoteFeaturePolicy";
 import { ProjectionPendingInteractionRepositoryLive } from "./persistence/Layers/ProjectionPendingInteractions";
+import { ProjectionTurnRepositoryLive } from "./persistence/Layers/ProjectionTurns";
+import { ProviderSessionRuntimeRepositoryLive } from "./persistence/Layers/ProviderSessionRuntime";
 import http from "node:http";
 
 import type { ServerSettingsError } from "@synara/contracts";
@@ -35,11 +38,17 @@ import {
   type OrchestrationReactorShape,
 } from "./orchestration/Services/OrchestrationReactor";
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery";
+import { ProviderCommandReactor } from "./orchestration/Services/ProviderCommandReactor";
 import { ProjectionPendingInteractionRepository } from "./persistence/Services/ProjectionPendingInteractions";
 import { ThreadDeletionReactor } from "./orchestration/Services/ThreadDeletionReactor";
 import { ThreadSnoozeReactor } from "./orchestration/Services/ThreadSnoozeReactor";
+import { UsageLimitRecoveryReactor } from "./orchestration/Services/UsageLimitRecoveryReactor";
 import {
   claimQuitResumeRecordAtStartup,
+  captureCrashResumeRecord,
+  persistCrashResumeRecord,
+  type QuitResumeRecordRead,
+  readQuitResumeRecord,
   resumeQuitInterruptedChats,
 } from "./orchestration/quitResume";
 import { reconcileRestartStuckTurns } from "./orchestration/startupTurnReconciliation";
@@ -56,8 +65,12 @@ import { makeBoundedNodeHttpServer } from "./nodeHttpServer";
 import { websocketRpcRouteLayer } from "./wsRpc";
 import { recoverGitHandoffOperations } from "./gitHandoffOperations";
 import { externalMcpRouteLayer } from "./externalMcp/httpRoute";
+import { hostRemoteWebSocketRouteLayer } from "./remoteSessions";
+import { hostConnectionRouteLayer } from "./hostConnections/httpRoute";
 import { ExternalMcpGateway } from "./externalMcp/Services/ExternalMcpGateway";
 import { ExternalMcpService } from "./externalMcp/Services/ExternalMcpService";
+import { mcpConnectorsRouteLayer } from "./mcpConnectors/httpRoute";
+import { McpConnectors } from "./mcpConnectors/Services/McpConnectors";
 
 export interface ServerShape {
   readonly start: Effect.Effect<
@@ -68,6 +81,7 @@ export interface ServerShape {
     | AgentGatewayCredentials
     | ExternalMcpGateway
     | ExternalMcpService
+    | McpConnectors
     | FileSystem.FileSystem
     | Path.Path
     | Keybindings
@@ -82,6 +96,7 @@ export interface ServerShape {
     | OrchestrationReactor
     | ProjectionPendingInteractionRepository
     | ProjectionSnapshotQuery
+    | ProviderCommandReactor
     | ProviderSessionReaper
     | ProviderRuntimeReconciler
     | ProviderService
@@ -89,6 +104,7 @@ export interface ServerShape {
     | ServerSettingsService
     | ThreadDeletionReactor
     | ThreadSnoozeReactor
+    | UsageLimitRecoveryReactor
     | SqlClient.SqlClient
   >;
   readonly stopSignal: Effect.Effect<void, never>;
@@ -156,9 +172,11 @@ export function startServerRuntimePipeline<R>(input: {
     // process start cannot replay state-dependent commands against the terminal
     // projection.
     yield* input.orchestrationReactor.reconcileSettledOpenTurns;
-    for (const reactor of input.reactors) {
-      yield* Scope.provide(reactor.start(), input.subscriptionsScope);
-    }
+    yield* Effect.forEach(
+      input.reactors,
+      (reactor) => Scope.provide(reactor.start(), input.subscriptionsScope),
+      { concurrency: "unbounded", discard: true },
+    );
   });
 }
 
@@ -189,21 +207,26 @@ export const createEffectServer = Effect.fn(function* (
   const keepAwake = yield* KeepAwakeService;
   const threadDeletionReactor = yield* ThreadDeletionReactor;
   const threadSnoozeReactor = yield* ThreadSnoozeReactor;
+  const usageLimitRecoveryReactor = yield* UsageLimitRecoveryReactor;
   const readiness = yield* makeServerReadiness;
 
-  // Start the runtime before serving config snapshots. This both performs the
-  // startup sync and attaches the file watcher; calling only the sync helper
-  // leaves live edits invisible until the next server restart.
-  yield* keybindings.start.pipe(
-    Effect.catch((error) =>
-      Effect.logWarning("failed to start keybindings runtime on startup", {
-        path: error.configPath,
-        detail: error.detail,
-        cause: error.cause,
-      }),
-    ),
+  // Start keybindings and settings concurrently before serving config snapshots;
+  // they own independent config files and watchers.
+  yield* Effect.all(
+    [
+      keybindings.start.pipe(
+        Effect.catch((error) =>
+          Effect.logWarning("failed to start keybindings runtime on startup", {
+            path: error.configPath,
+            detail: error.detail,
+            cause: error.cause,
+          }),
+        ),
+      ),
+      serverSettings.start,
+    ],
+    { concurrency: "unbounded", discard: true },
   );
-  yield* serverSettings.start;
   yield* readiness.markPushBusReady;
   yield* readiness.markKeybindingsReady;
 
@@ -224,6 +247,10 @@ export const createEffectServer = Effect.fn(function* (
     websocketRpcRouteLayer,
     agentGatewayRouteLayer,
     externalMcpRouteLayer,
+    ...(remoteConnectionsUnavailableReason(config.stateDir)
+      ? []
+      : [hostRemoteWebSocketRouteLayer, hostConnectionRouteLayer]),
+    mcpConnectorsRouteLayer,
   );
   const httpApp = yield* HttpRouter.toHttpEffect(routesLayer);
   yield* httpServer
@@ -260,19 +287,38 @@ export const createEffectServer = Effect.fn(function* (
       subscriptionsScope,
     }),
   );
+  const previousResumeRecord = yield* readQuitResumeRecord(config.quitResumeStatePath);
+  let inMemoryCrashResume: QuitResumeRecordRead = { kind: "absent" };
   yield* startServerRuntimePipeline({
     orchestrationReactor,
     // Heal turns orphaned by the previous process exit (their in-memory runtimes
     // died, so they can never complete on their own) before clients can observe
     // the stale "Working" state.
-    reconcileRestartStuckTurns: reconcileRestartStuckTurns.pipe(
+    reconcileRestartStuckTurns: Effect.gen(function* () {
+      // Journal replay has finished; capture only work still orphaned now.
+      // An explicit quit record (including an invalid one) takes precedence.
+      if (previousResumeRecord.kind === "absent") {
+        const crashResumeRecord = yield* captureCrashResumeRecord;
+        if (crashResumeRecord.kind === "record") {
+          // Keep the captured intent if this startup dies during reconciliation.
+          inMemoryCrashResume = yield* persistCrashResumeRecord({
+            path: config.quitResumeStatePath,
+            record: crashResumeRecord.record,
+          });
+        }
+      }
+      yield* reconcileRestartStuckTurns;
+    }).pipe(
       Effect.provide(ProjectionPendingInteractionRepositoryLive),
+      Effect.provide(ProjectionTurnRepositoryLive),
+      Effect.provide(ProviderSessionRuntimeRepositoryLive),
     ),
     reactors: [
       automationScheduler,
       automationRunReactor,
       threadDeletionReactor,
       threadSnoozeReactor,
+      usageLimitRecoveryReactor,
       providerSessionReaper,
       providerRuntimeReconciler,
       { start: () => keepAwake.start },
@@ -286,9 +332,12 @@ export const createEffectServer = Effect.fn(function* (
       (cause) => new ServerLifecycleError({ operation: "recoverGitHandoffOperations", cause }),
     ),
   );
-  // Claim the previous quit's "Resume chats automatically" record while no
-  // command (and so no new quit) can run yet; a missing record costs one stat.
-  const quitResumeRecord = yield* claimQuitResumeRecordAtStartup;
+  // Consume only after reconciliation, before admitting commands. If startup
+  // fails earlier, both explicit quit and crash records remain available.
+  const claimedResumeRecord = yield* claimQuitResumeRecordAtStartup;
+  // A disk claim wins. Only a failed write can supply this same-startup fallback.
+  const quitResumeRecord =
+    claimedResumeRecord.kind === "absent" ? inMemoryCrashResume : claimedResumeRecord;
   yield* runtimeStartup.markCommandReady;
   // The recorded chats get their continuation turn now that the orphaned turns
   // above are settled. Forked so the (rare) dispatch work never delays readiness.

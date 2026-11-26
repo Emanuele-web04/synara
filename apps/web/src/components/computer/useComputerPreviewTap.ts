@@ -1,3 +1,4 @@
+import { readExecutionContext } from "~/lib/hosts/executionContext";
 // FILE: useComputerPreviewTap.ts
 // Purpose: Draws the desktop app's native frame tap into a canvas.
 // Layer: Web computer surface hook
@@ -66,7 +67,9 @@ export function useComputerPreviewTap(input: {
   }, []);
 
   useEffect(() => {
-    const onFrame = window.desktopBridge?.computerPreview?.onFrame;
+    const onFrame = readExecutionContext()?.remote
+      ? undefined
+      : window.desktopBridge?.computerPreview?.onFrame;
     if (
       !enabled ||
       !pageVisible ||

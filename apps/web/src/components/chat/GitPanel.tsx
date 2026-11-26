@@ -17,6 +17,7 @@ import { useTheme } from "~/hooks/useTheme";
 import {
   buildFileDiffRenderKey,
   getRenderablePatch,
+  resolveFileDiffIndexPaths,
   resolveFileDiffPath,
   sortFileDiffsByPath,
   splitRepoRelativePath,
@@ -42,6 +43,7 @@ import { DockPaneHeader } from "./DockPaneHeader";
 import { FileDiffCard, FileDiffSurface } from "./FileDiffView";
 import { FileEntryIcon } from "./FileEntryIcon";
 import { PanelStateMessage } from "./PanelStateMessage";
+import { useTranslation } from "~/i18n";
 
 type GitPanelSection = "staged" | "unstaged";
 
@@ -69,7 +71,7 @@ function GitFileRow(props: {
   actionIcon: "stage" | "unstage";
   actionDisabled: boolean;
   onSelect: (file: FileDiffMetadata) => void;
-  onAction: (paths: string[]) => void;
+  onAction: (files: FileDiffMetadata[]) => void;
 }) {
   const filePath = resolveFileDiffPath(props.fileDiff);
   const { dir, name } = splitRepoRelativePath(filePath);
@@ -105,7 +107,7 @@ function GitFileRow(props: {
         label={props.actionLabel}
         tooltip={props.actionLabel}
         disabled={props.actionDisabled}
-        onClick={() => props.onAction([filePath])}
+        onClick={() => props.onAction([props.fileDiff])}
       >
         {props.actionIcon === "stage" ? (
           <PlusIcon className="size-3.5" />
@@ -129,10 +131,9 @@ function GitFileSection(props: {
   actionIcon: "stage" | "unstage";
   actionDisabled: boolean;
   onSelect: (file: FileDiffMetadata) => void;
-  onAction: (paths: string[]) => void;
+  onAction: (files: FileDiffMetadata[]) => void;
 }) {
   const stat = summarizeFileDiffStats(props.files);
-  const allPaths = props.files.map((file) => resolveFileDiffPath(file));
   return (
     <section className="min-w-0">
       <header className="flex items-center gap-2 px-1.5 py-1">
@@ -148,14 +149,14 @@ function GitFileSection(props: {
             size="xs"
             className="ml-auto shrink-0"
             disabled={props.actionDisabled}
-            onClick={() => props.onAction(allPaths)}
+            onClick={() => props.onAction(props.files)}
           >
             {props.actionAllLabel}
           </Button>
         ) : null}
       </header>
       {props.files.length === 0 ? (
-        <p className="px-1.5 py-1 text-ui-sm text-muted-foreground/70">{props.emptyLabel}</p>
+        <p className="px-1.5 py-1 text-ui-sm text-muted-foreground">{props.emptyLabel}</p>
       ) : (
         <div className="flex flex-col gap-0.5">
           {props.files.map((file) => {
@@ -196,6 +197,8 @@ export function GitPanel(props: {
   projectId: ProjectId | null;
   onClose?: () => void;
 }) {
+  const { t } = useTranslation();
+
   const queryClient = useQueryClient();
   const { resolvedTheme } = useTheme();
   const theme = resolvedTheme as "light" | "dark";
@@ -232,11 +235,14 @@ export function GitPanel(props: {
   const unstageMutation = useMutation(gitUnstageFilesMutationOptions({ cwd, queryClient }));
   const mutating = stageMutation.isPending || unstageMutation.isPending;
 
-  const stage = (paths: string[]) => {
+  const stage = (files: FileDiffMetadata[]) => {
+    const paths = files.map((file) => resolveFileDiffPath(file));
     if (!cwd || paths.length === 0) return;
     stageMutation.mutate(paths);
   };
-  const unstage = (paths: string[]) => {
+  // A staged rename also stages its old path's deletion; reset both sides.
+  const unstage = (files: FileDiffMetadata[]) => {
+    const paths = files.flatMap((file) => resolveFileDiffIndexPaths(file));
     if (!cwd || paths.length === 0) return;
     unstageMutation.mutate(paths);
   };
@@ -288,21 +294,21 @@ export function GitPanel(props: {
   const hasChanges = stagedFiles.length > 0 || unstagedFiles.length > 0;
 
   if (!cwd) {
-    return <PanelStateMessage>Source control is unavailable for this thread.</PanelStateMessage>;
+    return <PanelStateMessage>{t("git:gitPanel_unavailableForThread")}</PanelStateMessage>;
   }
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col">
       <DockPaneHeader
-        title="Source control"
+        title={t("git:gitPanel_title")}
         onClose={props.onClose}
-        closeLabel="Close source control"
+        closeLabel={t("git:closeSourceControl")}
         actions={
           <IconButton
             size="icon-xs"
             variant="ghost"
-            label="Refresh changes"
-            tooltip="Refresh changes"
+            label={t("git:gitPanel_refreshLabel")}
+            tooltip={t("git:gitPanel_refreshLabel")}
             className={DOCK_HEADER_ICON_BUTTON_CLASS}
             onClick={refresh}
           >
@@ -314,8 +320,7 @@ export function GitPanel(props: {
       <div className="flex max-h-[48%] min-h-0 shrink-0 flex-col gap-2 overflow-auto px-1.5 py-2">
         {truncated ? (
           <DiffTruncationWarning>
-            Synara stopped reading source-control changes at the diff size limit. Some files or
-            changes may be missing; bulk actions only affect the files shown.
+            {t("git:synaraStoppedReadingSourceControlChangesAtTheDiff")}
           </DiffTruncationWarning>
         ) : null}
         {error ? (
@@ -324,17 +329,19 @@ export function GitPanel(props: {
           </Alert>
         ) : null}
         {!error && isLoading && !hasChanges ? (
-          <p className="px-1.5 py-1 text-ui-sm text-muted-foreground/70">Loading changes...</p>
+          <p className="px-1.5 py-1 text-ui-sm text-muted-foreground/70">
+            {t("git:gitPanel_loading")}
+          </p>
         ) : null}
         {!error && !isLoading && !hasChanges ? (
           <p className="px-1.5 py-2 text-center text-ui text-muted-foreground/70">
-            No changes in the working tree.
+            {t("git:gitPanel_noChanges")}
           </p>
         ) : null}
         {hasChanges ? (
           <>
             <GitFileSection
-              title="Staged"
+              title={t("git:gitPanel_staged")}
               emptyLabel="No staged changes."
               files={stagedFiles}
               theme={theme}
@@ -348,7 +355,7 @@ export function GitPanel(props: {
               onAction={unstage}
             />
             <GitFileSection
-              title="Changes"
+              title={t("git:panel_changes")}
               emptyLabel="No unstaged changes."
               files={unstagedFiles}
               theme={theme}
@@ -373,7 +380,9 @@ export function GitPanel(props: {
             theme={theme}
           />
         ) : (
-          <PanelStateMessage density="compact">Select a file to view its diff.</PanelStateMessage>
+          <PanelStateMessage density="compact">
+            {t("git:gitPanel_selectFileDiff")}
+          </PanelStateMessage>
         )}
       </div>
     </div>

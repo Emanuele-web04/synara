@@ -15,6 +15,7 @@ import type {
 import { Effect } from "effect";
 import nodePath from "node:path";
 
+import { resolveExecutable } from "@synara/shared/executable";
 import { PROVIDER_USAGE_PROVIDERS } from "@synara/shared/providerUsage";
 import {
   deriveProviderInstances,
@@ -128,7 +129,7 @@ async function resolveCredentialKey(
   const fetcher = PROVIDER_USAGE_FETCHERS[provider];
   try {
     const credentialKey = fetcher?.cacheKey ? await fetcher.cacheKey(ctx) : provider;
-    if (credentialKey === null || !ctx.instanceId) {
+    if (credentialKey === null || (!ctx.instanceId && fetcher?.retainSnapshot !== false)) {
       return credentialKey;
     }
     // A renamed/reconfigured route can retain its credential identity while its
@@ -140,6 +141,7 @@ async function resolveCredentialKey(
         homeDir: ctx.homeDir,
         codexBinaryPath: ctx.codexBinaryPath,
         claudeBinaryPath: ctx.claudeBinaryPath,
+        antigravityBinaryPath: ctx.antigravityBinaryPath,
         isolateCredentials: ctx.isolateCredentials,
         disableResetCredits: ctx.disableResetCredits,
         skipLocalUsage: ctx.skipLocalUsage,
@@ -184,13 +186,14 @@ async function getProviderUsageSnapshot(
   const cacheGeneration = snapshotCacheGenerations.get(scope) ?? Symbol();
   snapshotCacheGenerations.set(scope, cacheGeneration);
   const providerContext = buildProviderContext(provider, ctx);
+  const retainSnapshot = PROVIDER_USAGE_FETCHERS[provider]?.retainSnapshot !== false;
   const credentialKey = await resolveCredentialKey(provider, providerContext);
   const pending = inFlightFetches.get(scope);
   if (credentialKey !== null && pending?.credentialKey === credentialKey) {
     return pending.promise;
   }
 
-  if (!forceRefresh && credentialKey !== null) {
+  if (retainSnapshot && !forceRefresh && credentialKey !== null) {
     const cached = snapshotCache.get(scope);
     if (
       cached &&
@@ -215,10 +218,9 @@ async function getProviderUsageSnapshot(
           ctx,
         )
       : null;
+    if (!enriched || !retainSnapshot || credentialKey === null) return enriched;
     const refreshedCredentialKey = await resolveCredentialKey(provider, providerContext);
     if (
-      enriched &&
-      credentialKey !== null &&
       refreshedCredentialKey === credentialKey &&
       snapshotCacheGenerations.get(scope) === cacheGeneration
     ) {
@@ -428,6 +430,9 @@ function instanceUsageContext(
     ...(localUsageHomePath ? { localUsageHomePath } : {}),
     ...(start?.codex?.binaryPath ? { codexBinaryPath: start.codex.binaryPath } : {}),
     ...(start?.claudeAgent?.binaryPath ? { claudeBinaryPath: start.claudeAgent.binaryPath } : {}),
+    ...(start?.antigravity?.binaryPath
+      ? { antigravityBinaryPath: start.antigravity.binaryPath }
+      : {}),
   };
 }
 
@@ -446,9 +451,10 @@ export const listProviderUsage = Effect.fn(function* (input: ServerListProviderU
       (scope) => scope.includes(":") && !activeScopes.has(scope),
     ),
   );
-  const selected = input.provider
-    ? instances.filter((instance) => instance.driver === input.provider)
-    : instances;
+  const selected = instances.filter(
+    ({ driver }) =>
+      (!input.provider || driver === input.provider) && driver !== input.excludeProvider,
+  );
 
   return yield* Effect.tryPromise({
     try: async () => {
@@ -512,4 +518,140 @@ export const consumeCodexResetCreditEffect = Effect.fn(function* (
     catch: (cause) => cause,
   });
   return { outcome } as ServerConsumeCodexResetCreditResult;
+});
+
+// Explicit provider routing inputs exclude volatile Synara control-plane credentials.
+const RECOVERY_ENVIRONMENT_KEYS: Readonly<Partial<Record<ProviderKind, readonly string[]>>> = {
+  codex: [
+    "HOME",
+    "USERPROFILE",
+    "CODEX_HOME",
+    "XDG_CONFIG_HOME",
+    "OPENAI_BASE_URL",
+    "OPENAI_API_BASE",
+    "OPENAI_API_KEY",
+    "CODEX_API_KEY",
+    "OPENAI_ORG_ID",
+    "OPENAI_ORGANIZATION",
+    "OPENAI_PROJECT_ID",
+  ],
+  claudeAgent: [
+    "HOME",
+    "USERPROFILE",
+    "CLAUDE_CONFIG_DIR",
+    "CLAUDE_SECURESTORAGE_CONFIG_DIR",
+    "ANTHROPIC_BASE_URL",
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "ANTHROPIC_CUSTOM_HEADERS",
+    "CLAUDE_CODE_USE_BEDROCK",
+    "CLAUDE_CODE_USE_VERTEX",
+    "CLAUDE_CODE_USE_FOUNDRY",
+    "AWS_PROFILE",
+    "AWS_REGION",
+    "AWS_DEFAULT_REGION",
+    "GOOGLE_CLOUD_PROJECT",
+    "CLOUD_ML_REGION",
+    "ANTHROPIC_VERTEX_PROJECT_ID",
+    "ANTHROPIC_FOUNDRY_RESOURCE",
+    "USE_LOCAL_OAUTH",
+    "USE_STAGING_OAUTH",
+    "CLAUDE_LOCAL_OAUTH_API_BASE",
+    "CLAUDE_LOCAL_OAUTH_APPS_BASE",
+    "CLAUDE_CODE_CUSTOM_OAUTH_URL",
+  ],
+};
+
+/** Resolve native account identity and explicit launch scope without fetching or refreshing quota. */
+export const providerUsageRecoveryBindingKey = Effect.fn(function* (input: {
+  readonly provider: string;
+  readonly instanceId: string;
+  readonly workingDirectory?: string;
+  readonly projectRoot?: string;
+}) {
+  const serverConfig = yield* ServerConfig;
+  const serverSettings = yield* ServerSettingsService;
+  const settings = yield* serverSettings.getSettings;
+  const instance = deriveProviderInstances(settings).find(
+    (candidate) =>
+      candidate.enabled &&
+      candidate.driver === input.provider &&
+      candidate.instanceId === input.instanceId,
+  );
+  const fetcher = instance ? PROVIDER_USAGE_FETCHERS[instance.driver] : undefined;
+  // Each refusal is logged with its reason: an unproven identity keeps every limited
+  // turn manual, and a silent null made that indistinguishable from "not limited".
+  const refuse = (reason: string, cause?: unknown) =>
+    Effect.logWarning("usage-limit recovery unavailable: provider account binding refused", {
+      provider: input.provider,
+      instanceId: input.instanceId,
+      reason,
+      ...(cause !== undefined ? { cause: String(cause) } : {}),
+    }).pipe(Effect.as(null));
+  if (!instance) return yield* refuse("provider-instance-disabled-or-missing");
+  if (!fetcher?.recoveryIdentity) return yield* refuse("provider-has-no-identity-proof");
+  const result = yield* Effect.tryPromise({
+    try: async (): Promise<{ readonly key: string } | { readonly refused: string }> => {
+      const context = instanceUsageContext(
+        instance,
+        {
+          ...buildContext(),
+          homeDir: serverConfig.homeDir,
+          claudeBinaryPath: settings.providers.claudeAgent.binaryPath,
+          codexBinaryPath: settings.providers.codex.binaryPath,
+        },
+        serverConfig.stateDir,
+        serverConfig.baseDir,
+      );
+      const providerContext = buildProviderContext(instance.driver, {
+        ...context,
+        ...(input.workingDirectory !== undefined
+          ? { workingDirectory: input.workingDirectory }
+          : {}),
+        ...(input.projectRoot !== undefined ? { projectRoot: input.projectRoot } : {}),
+      });
+      const identity = await fetcher.recoveryIdentity!(providerContext);
+      if (!identity) return { refused: "account-identity-unproven" };
+      const binary =
+        instance.driver === "codex"
+          ? (providerContext.codexBinaryPath ?? "codex")
+          : (providerContext.claudeBinaryPath ?? "claude");
+      const resolvedBinary = resolveExecutable(binary, {
+        env: providerContext.env,
+        platform: providerContext.platform,
+        cwd: providerContext.workingDirectory ?? providerContext.homeDir,
+      });
+      if (resolvedBinary === null) return { refused: "provider-binary-unresolved" };
+      // Explicit environment/configuration can contain secrets; retain only the final hash.
+      // File-backed OAuth token rotation is deliberately absent from this launch fence.
+      return {
+        key: credentialFingerprint(
+          JSON.stringify({
+            identity,
+            resolvedBinary,
+            driver: instance.driver,
+            instanceId: instance.instanceId,
+            config: instance.config,
+            environment: instance.environment,
+            homeDir: providerContext.homeDir,
+            workingDirectory: providerContext.workingDirectory,
+            projectRoot: providerContext.projectRoot,
+            codexBinaryPath: providerContext.codexBinaryPath,
+            claudeBinaryPath: providerContext.claudeBinaryPath,
+            isolateCredentials: providerContext.isolateCredentials,
+            environmentScope: Object.fromEntries(
+              (RECOVERY_ENVIRONMENT_KEYS[instance.driver] ?? []).map((name) => [
+                name,
+                providerContext.env[name] ?? null,
+              ]),
+            ),
+          }),
+        ),
+      };
+    },
+    catch: (cause) => cause,
+  }).pipe(Effect.catch((cause) => refuse("account-identity-check-failed", cause)));
+  if (result === null) return null;
+  return "key" in result ? result.key : yield* refuse(result.refused);
 });

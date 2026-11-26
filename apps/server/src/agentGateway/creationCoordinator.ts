@@ -11,6 +11,7 @@ import {
   type ChatAttachment,
   type MessageId,
   type ModelSelection,
+  type RemoteAgentCallerPolicy,
   type OrchestrationThreadShell,
   type ProviderInteractionMode,
   type ProviderKind,
@@ -23,6 +24,7 @@ import { WORKTREE_BRANCH_PREFIX } from "@synara/shared/git";
 import { parseGitHubRepositoryNameWithOwnerFromPullRequestUrl } from "@synara/shared/githubRepository";
 import {
   autoRuntimeModeSelectionIssue,
+  providerSupportsDelegatedRuntimeMode,
   runtimeModeEscalatesPrivilege,
 } from "@synara/shared/runtimeMode";
 import { Cause, Effect, Option, Semaphore } from "effect";
@@ -33,9 +35,10 @@ import type { OrchestrationEngineShape } from "../orchestration/Services/Orchest
 import type { ProjectionSnapshotQueryShape } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import type { ProviderDiscoveryServiceShape } from "../provider/Services/ProviderDiscoveryService.ts";
 import { runWorktreeSetupScript } from "../worktreeSetup.ts";
-import type {
-  AgentGatewayOperationRecord,
-  AgentGatewayOperationRepositoryShape,
+import {
+  type AgentGatewayOperationRecord,
+  type AgentGatewayOperationRepositoryShape,
+  isTerminalAgentGatewayOperationStatus,
 } from "./Services/AgentGatewayOperationRepository.ts";
 import type {
   ExternalMcpRepositoryShape,
@@ -91,6 +94,68 @@ function parsePullRequestSelector(ref: string): PullRequestSelector | null {
   };
 }
 
+export interface ThreadCreationRecapInput {
+  readonly callerThreadId: string;
+  readonly callerTurnId: string;
+  readonly result: SynaraCreateThreadsResult;
+  /** Set when the threads were created on another paired computer. */
+  readonly remote?: { readonly environmentId: string; readonly hostName: string };
+}
+
+/**
+ * Append the transcript recap card to the caller's own turn. The ids are
+ * derived from the operation (and its computer) so a retry never adds a
+ * second card; a failed append only warns.
+ */
+export function appendThreadCreationRecap(
+  orchestrationEngine: Pick<OrchestrationEngineShape, "dispatch">,
+  input: ThreadCreationRecapInput,
+): Effect.Effect<void> {
+  const marker = stableGatewayDigest({
+    operationId: input.result.operationId,
+    kind: "threads-created-recap",
+    ...(input.remote ? { environmentId: input.remote.environmentId } : {}),
+  });
+  const createdAt = gatewayIsoNow();
+  const threadLabel = input.result.createdCount === 1 ? "thread" : "threads";
+  return orchestrationEngine
+    .dispatch({
+      type: "thread.activity.append",
+      commandId: CommandId.makeUnsafe(`agent:${marker}:threads-created-recap`),
+      threadId: ThreadId.makeUnsafe(input.callerThreadId),
+      activity: {
+        id: EventId.makeUnsafe(`gateway:${marker}:threads-created-recap`),
+        tone: "info",
+        kind: "synara.threads.created",
+        summary: `Created ${input.result.createdCount} Synara ${threadLabel}`,
+        payload: {
+          source: "synara_mcp",
+          ...(input.remote
+            ? { environmentId: input.remote.environmentId, hostName: input.remote.hostName }
+            : {}),
+          operationId: input.result.operationId,
+          requestId: input.result.requestId,
+          requestedCount: input.result.requestedCount,
+          createdCount: input.result.createdCount,
+          threads: JSON.parse(JSON.stringify(input.result.threads)),
+        },
+        turnId: TurnId.makeUnsafe(input.callerTurnId),
+        createdAt,
+      },
+      createdAt,
+    })
+    .pipe(
+      Effect.asVoid,
+      Effect.catch((error) =>
+        Effect.logWarning("agent gateway could not append thread creation recap", {
+          operationId: input.result.operationId,
+          callerThreadId: input.callerThreadId,
+          error: errorText(error),
+        }),
+      ),
+    );
+}
+
 interface CreationCoordinatorDependencies {
   readonly snapshotQuery: ProjectionSnapshotQueryShape;
   readonly orchestrationEngine: OrchestrationEngineShape;
@@ -127,6 +192,7 @@ interface CreationCoordinatorDependencies {
 export type GatewayCreationContext =
   | {
       readonly kind: "provider-session";
+      readonly remoteCaller?: RemoteAgentCallerPolicy;
       readonly callerThreadId: string;
       readonly callerTurnId: string | null;
       readonly assertAuthority: () => Effect.Effect<void, GatewayToolError>;
@@ -163,6 +229,7 @@ interface CreationOperationStore {
     readonly requestId: string;
     readonly fingerprint: string;
     readonly requestedCount: number;
+    readonly resumeContextJson?: string;
     readonly planJson: string;
     readonly now: string;
   }) => Effect.Effect<
@@ -173,6 +240,11 @@ interface CreationOperationStore {
     | {
         readonly kind: "concurrency_limited";
         readonly activeCount: number;
+        readonly limit: number;
+      }
+    | {
+        readonly kind: "turn_creation_limit";
+        readonly usedCount: number;
         readonly limit: number;
       },
     Error
@@ -259,8 +331,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
         .pipe(Effect.mapError((error) => new ToolInputError(errorText(error))));
       while (
         operation !== null &&
-        operation.status !== "completed" &&
-        operation.status !== "failed" &&
+        !isTerminalAgentGatewayOperationStatus(operation.status) &&
         Date.now() < deadline
       ) {
         yield* assertAuthority();
@@ -294,51 +365,6 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
       );
     });
 
-  const appendThreadCreationRecap = (input: {
-    readonly callerThreadId: string;
-    readonly callerTurnId: string;
-    readonly result: SynaraCreateThreadsResult;
-  }) => {
-    const marker = stableGatewayDigest({
-      operationId: input.result.operationId,
-      kind: "threads-created-recap",
-    });
-    const createdAt = gatewayIsoNow();
-    const threadLabel = input.result.createdCount === 1 ? "thread" : "threads";
-    return orchestrationEngine
-      .dispatch({
-        type: "thread.activity.append",
-        commandId: CommandId.makeUnsafe(`agent:${marker}:threads-created-recap`),
-        threadId: ThreadId.makeUnsafe(input.callerThreadId),
-        activity: {
-          id: EventId.makeUnsafe(`gateway:${marker}:threads-created-recap`),
-          tone: "info",
-          kind: "synara.threads.created",
-          summary: `Created ${input.result.createdCount} Synara ${threadLabel}`,
-          payload: {
-            source: "synara_mcp",
-            operationId: input.result.operationId,
-            requestId: input.result.requestId,
-            requestedCount: input.result.requestedCount,
-            createdCount: input.result.createdCount,
-            threads: JSON.parse(JSON.stringify(input.result.threads)),
-          },
-          turnId: TurnId.makeUnsafe(input.callerTurnId),
-          createdAt,
-        },
-        createdAt,
-      })
-      .pipe(
-        Effect.catch((error) =>
-          Effect.logWarning("agent gateway could not append thread creation recap", {
-            operationId: input.result.operationId,
-            callerThreadId: input.callerThreadId,
-            error: errorText(error),
-          }),
-        ),
-      );
-  };
-
   const run = (input: typeof SynaraCreateThreadsInput.Type, context: GatewayCreationContext) => {
     return Effect.gen(function* () {
       if (context.kind === "provider-session" && context.callerTurnId === null) {
@@ -358,8 +384,9 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
         );
       }
       if (
-        context.kind !== "provider-session" &&
-        input.threads.some((spec) => spec.notifyCreatorOnComplete)
+        (context.kind !== "provider-session" || context.remoteCaller) &&
+        (input.resumeCreatorOnComplete ||
+          input.threads.some((spec) => spec.notifyCreatorOnComplete))
       ) {
         return yield* Effect.fail(
           new GatewayToolError(
@@ -375,9 +402,11 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
             ? `hub-work:${context.workItemId}`
             : null;
       const caller =
-        context.kind !== "external-client"
-          ? yield* requireThreadShell(context.callerThreadId)
-          : null;
+        context.kind === "provider-session" && context.remoteCaller
+          ? context.remoteCaller
+          : context.kind !== "external-client"
+            ? yield* requireThreadShell(context.callerThreadId)
+            : null;
       const operationId = `gateway:create:${stableGatewayDigest({
         principalKind: context.kind,
         principalId:
@@ -385,7 +414,17 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
         ...(callerTurnId ? { callerTurnId } : {}),
         requestId: input.requestId,
       })}`;
-      const fingerprint = stableGatewayDigest(input, 64);
+      // Hub routing metadata belongs to admission, not standalone creation or
+      // its durable retry identity.
+      const fingerprint = stableGatewayDigest(
+        {
+          ...input,
+          threads: input.threads.map(
+            ({ taskKey: _taskKey, routingReason: _routingReason, ...spec }) => spec,
+          ),
+        },
+        64,
+      );
       const externalOperationRepository =
         context.kind === "external-client" ? externalMcpRepository : undefined;
       if (context.kind === "external-client" && externalOperationRepository === undefined) {
@@ -404,6 +443,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
                   callerThreadId: context.callerThreadId,
                   callerTurnId: callerTurnId!,
                   operationKind: "create_threads",
+                  ...(context.kind === "provider-session" ? { requestId: input.requestId } : {}),
                 }),
               getById: operationRepository.getById,
               reserve: (reservation) =>
@@ -412,6 +452,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
                   callerThreadId: context.callerThreadId,
                   callerTurnId: callerTurnId!,
                   operationKind: "create_threads",
+                  allowAdditionalPlans: context.kind === "provider-session",
                 }),
               markDispatching: operationRepository.markDispatching,
               recordWorktreeCreated: operationRepository.recordWorktreeCreated,
@@ -459,23 +500,6 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
         .pipe(Effect.mapError((error) => new ToolInputError(errorText(error))));
       if (existingOperation !== null) {
         yield* context.assertAuthority();
-        if (
-          context.kind === "provider-session" &&
-          existingOperation.requestId !== input.requestId
-        ) {
-          return yield* Effect.fail(
-            new GatewayToolError(
-              "creation_plan_locked",
-              "This caller turn already committed a different thread-creation plan. A new user turn is required for another plan.",
-              {
-                operationId: existingOperation.operationId,
-                requestId: existingOperation.requestId,
-                requestedCount: existingOperation.requestedCount,
-                status: existingOperation.status,
-              },
-            ),
-          );
-        }
         if (existingOperation.fingerprint !== fingerprint) {
           return yield* Effect.fail(
             new GatewayToolError(
@@ -506,7 +530,38 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
           context.assertAuthority,
         );
       }
-      if (authorizeManagedGoalCreation && caller && context.kind === "provider-session") {
+      let resumeContextJson: string | undefined;
+      if (input.resumeCreatorOnComplete) {
+        // Only a fresh human request can arm a follow-up. An automatically
+        // resumed turn can delegate and wait, but cannot recursively rearm itself.
+        if (
+          !caller ||
+          !("modelSelection" in caller) ||
+          caller.latestHumanMessageAt == null ||
+          caller.latestHumanMessageAt !== caller.latestUserMessageAt ||
+          caller.latestTurn === null ||
+          caller.latestHumanMessageAt > caller.latestTurn.requestedAt
+        ) {
+          return yield* Effect.fail(
+            new GatewayToolError(
+              "capability_denied",
+              "Asynchronous continuation can only be armed by the current human-started turn.",
+            ),
+          );
+        }
+        resumeContextJson = JSON.stringify({
+          provider: caller.modelSelection.provider,
+          instanceId: caller.modelSelection.instanceId,
+          runtimeMode: caller.runtimeMode,
+          latestUserMessageAt: caller.latestUserMessageAt,
+        });
+      }
+      if (
+        authorizeManagedGoalCreation &&
+        caller &&
+        "id" in caller &&
+        context.kind === "provider-session"
+      ) {
         yield* authorizeManagedGoalCreation({
           callerThreadId: caller.id,
           requestedCount: input.threads.length,
@@ -525,12 +580,16 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
 
       const prepared = yield* Effect.forEach(input.threads, (spec, index) =>
         Effect.gen(function* () {
-          if (context.kind === "external-client" && spec.projectId === undefined) {
+          if (
+            (context.kind === "external-client" ||
+              (context.kind === "provider-session" && context.remoteCaller)) &&
+            spec.projectId === undefined
+          ) {
             return yield* Effect.fail(
-              new ToolInputError("External MCP task creation requires an explicit projectId."),
+              new ToolInputError("Creating on another scope requires an explicit projectId."),
             );
           }
-          const projectId = ProjectId.makeUnsafe(spec.projectId ?? caller!.projectId);
+          const projectId = ProjectId.makeUnsafe((spec.projectId ?? caller?.projectId)!);
           if (context.kind === "external-client" && !context.allowedProjectIds.has(projectId)) {
             return yield* Effect.fail(
               new GatewayToolError(
@@ -601,6 +660,15 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
             return yield* Effect.fail(
               new ToolInputError(
                 `Your thread runs in "${caller!.runtimeMode}" mode, so created threads cannot use higher-privileged "${runtimeMode}".`,
+              ),
+            );
+          }
+          if (!providerSupportsDelegatedRuntimeMode(target.provider, runtimeMode)) {
+            return yield* Effect.fail(
+              new GatewayToolError(
+                "runtime_mode_unavailable",
+                `Provider "${target.provider}" cannot run in "${runtimeMode}" mode. Check compatibleRuntimeModes in synara_capabilities before selecting a target.`,
+                { provider: target.provider, instanceId: target.instanceId, runtimeMode },
               ),
             );
           }
@@ -979,6 +1047,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
               requestId: input.requestId,
               fingerprint,
               requestedCount: prepared.length,
+              ...(resumeContextJson ? { resumeContextJson } : {}),
               planJson: canonicalJson(
                 prepared.map((entry) => ({
                   index: entry.index,
@@ -1012,6 +1081,19 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
               new GatewayToolError(
                 "concurrency_limited",
                 `This integration already has ${reservation.activeCount} active externally created tasks/operations (limit ${reservation.limit}).`,
+              ),
+            );
+          }
+          if (reservation.kind === "turn_creation_limit") {
+            return yield* Effect.fail(
+              new GatewayToolError(
+                "creation_limit_exceeded",
+                `This turn has reserved ${reservation.usedCount} of its ${reservation.limit} delegated task slots.`,
+                {
+                  usedCount: reservation.usedCount,
+                  limit: reservation.limit,
+                  requestedCount: prepared.length,
+                },
               ),
             );
           }
@@ -1160,7 +1242,13 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
 
                   const interactionMode = interactionModeForGatewayTarget(entry.target);
                   yield* context.assertAuthority();
-                  if (context.kind !== "external-client" && assertCreateTargetProject) {
+                  // Remote caller roles were checked by their owning server. Their replay
+                  // identity is not a local thread and must not resolve against this DB.
+                  if (
+                    context.kind !== "external-client" &&
+                    !(context.kind === "provider-session" && context.remoteCaller) &&
+                    assertCreateTargetProject
+                  ) {
                     yield* assertCreateTargetProject({
                       callerThreadId: context.callerThreadId,
                       targetProjectId: entry.projectId,
@@ -1181,7 +1269,8 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
                       worktreePath,
                       creationSource:
                         context.kind === "external-client" ? "external_mcp" : "synara_mcp",
-                      ...(context.kind !== "external-client"
+                      ...(context.kind !== "external-client" &&
+                      !(context.kind === "provider-session" && context.remoteCaller)
                         ? {
                             sourceThreadId: ThreadId.makeUnsafe(context.callerThreadId),
                             ...((
@@ -1290,7 +1379,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
           yield* operationStore.complete(
             { operationId, resultJson: JSON.stringify(result), now: gatewayIsoNow() },
             Effect.gen(function* () {
-              if (recordManagedWorkerThreads && caller)
+              if (recordManagedWorkerThreads && caller && "id" in caller)
                 yield* recordManagedWorkerThreads({
                   callerThreadId: caller.id,
                   requestId: input.requestId,
@@ -1322,8 +1411,8 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
 
       if (outcome.kind === "replay") return outcome.result;
       const result = outcome.result;
-      if (context.kind === "provider-session") {
-        yield* appendThreadCreationRecap({
+      if (context.kind === "provider-session" && !context.remoteCaller) {
+        yield* appendThreadCreationRecap(orchestrationEngine, {
           callerThreadId: context.callerThreadId,
           callerTurnId: callerTurnId!,
           result,

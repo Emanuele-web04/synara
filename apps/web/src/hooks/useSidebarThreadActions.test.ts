@@ -5,6 +5,20 @@
 import { ProjectId, ThreadId } from "@synara/contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+// These fixtures invoke the hook directly with a slot-based React harness.
+// Keep the real translator without requiring react-i18next's mounted context.
+vi.mock("~/i18n", async (importOriginal) => {
+  const runtime = await importOriginal<typeof import("~/i18n")>();
+  return {
+    ...runtime,
+    useTranslation: () => ({
+      t: runtime.t,
+      locale: runtime.i18n.language,
+      formatLocale: runtime.getFormatLocale() ?? "en",
+    }),
+  };
+});
+
 const reactHarness = vi.hoisted(() => {
   interface HookSlot {
     value?: unknown;
@@ -102,6 +116,7 @@ const harness = vi.hoisted(() => ({
   resolveSplitViewFocusedThreadId: vi.fn(),
   splitViewsById: {} as Record<string, unknown>,
   shellSnapshotSequence: 0,
+  reconcileSpaceMoves: vi.fn(),
 }));
 
 vi.mock("react", () => ({
@@ -118,6 +133,9 @@ vi.mock("@tanstack/react-query", () => ({
 }));
 vi.mock("@tanstack/react-router", () => ({ useNavigate: () => harness.navigate }));
 vi.mock("../lib/gitReactQuery", () => ({ gitRemoveWorktreeMutationOptions: () => ({}) }));
+vi.mock("../lib/spaces", () => ({
+  reconcilePendingProjectSpaceMoves: harness.reconcileSpaceMoves,
+}));
 vi.mock("../composerDraftStore", () => ({
   useComposerDraftStore: (selector: (state: unknown) => unknown) =>
     selector({
@@ -237,7 +255,11 @@ function render(
     routeThreadId?: ThreadId | null;
     threadsHydrated?: boolean;
     archiveDeletesOrphanedWorktree?: boolean;
+    confirmThreadArchive?: boolean;
     sidebarTreeThreads?: readonly SidebarThreadSummary[];
+    filterThreadsToActiveSpace?: Parameters<
+      typeof useSidebarThreadActions
+    >[0]["filterThreadsToActiveSpace"];
   } = {},
 ) {
   reactHarness.beginRender();
@@ -245,11 +267,15 @@ function render(
     activeSplitView: overrides.activeSplitView ?? null,
     appSettings: {
       archiveDeletesOrphanedWorktree: overrides.archiveDeletesOrphanedWorktree ?? false,
-      confirmThreadArchive: false,
+      confirmThreadArchive: overrides.confirmThreadArchive ?? false,
       confirmThreadDelete: false,
+      sidebarThreadAttentionFirst: true,
       sidebarThreadSortOrder: "updated_at",
     },
     clearTerminalState: harness.clearTerminalState,
+    ...(overrides.filterThreadsToActiveSpace
+      ? { filterThreadsToActiveSpace: overrides.filterThreadsToActiveSpace }
+      : {}),
     handleNewChat: harness.handleNewChat,
     projectById: new Map([[PROJECT_ID, PROJECT]]),
     routeSplitViewId: overrides.routeSplitViewId ?? null,
@@ -274,6 +300,21 @@ async function flushActionResponses() {
   await new Promise<void>((resolve) => globalThis.setTimeout(resolve, 0));
 }
 
+function deferAcceptance(action: "archive" | "done") {
+  let accept!: () => void;
+  if (action === "archive") {
+    harness.archiveThread.mockImplementationOnce(
+      () => new Promise<number>((resolve) => (accept = () => resolve(1))),
+    );
+  } else {
+    harness.dispatchCommand.mockImplementationOnce(
+      () =>
+        new Promise<{ sequence: number }>((resolve) => (accept = () => resolve({ sequence: 1 }))),
+    );
+  }
+  return { accept: () => accept() };
+}
+
 beforeEach(() => {
   reactHarness.reset();
   sidebarThreads = [makeThread(THREAD_ID), makeThread(FALLBACK_ID)];
@@ -281,6 +322,7 @@ beforeEach(() => {
   harness.shellSnapshotSequence = 0;
   harness.alreadyUnarchived = false;
   harness.splitViewsById = {};
+  harness.reconcileSpaceMoves.mockReset().mockResolvedValue(true);
   for (const mock of [
     harness.pinThread,
     harness.unpinThread,
@@ -339,6 +381,20 @@ beforeEach(() => {
 });
 
 describe("useSidebarThreadActions", () => {
+  it("can unpin a child from its tab even though the sidebar hides it", async () => {
+    const child = makeThread(THREAD_ID, { parentThreadId: FALLBACK_ID, isPinned: true });
+    const parent = makeThread(FALLBACK_ID);
+    sidebarThreads = [child, parent];
+    const controller = render({ sidebarTreeThreads: [parent] });
+    expect(controller.pinnedThreadIdSet.has(THREAD_ID)).toBe(true);
+    controller.toggleThreadPinned(THREAD_ID);
+    await vi.waitFor(() =>
+      expect(harness.dispatchCommand).toHaveBeenCalledWith(
+        expect.objectContaining({ threadId: THREAD_ID, isPinned: false }),
+      ),
+    );
+  });
+
   it("uses elapsed durations and tomorrow at 9am in the user's local calendar", async () => {
     const now = new Date(2026, 9, 2, 23, 45);
     const clock = vi.spyOn(Date, "now").mockReturnValue(now.getTime());
@@ -596,6 +652,34 @@ describe("useSidebarThreadActions", () => {
     );
   });
 
+  it.each([true, false])(
+    "checks owner availability after archive confirmation (available: %s)",
+    async (availableAfterConfirmation) => {
+      let confirm!: (value: boolean) => void;
+      harness.confirm.mockImplementation(
+        () =>
+          new Promise<boolean>((resolve) => {
+            confirm = resolve;
+          }),
+      );
+      let available = true;
+      const pending = render({ confirmThreadArchive: true }).confirmAndArchiveThread(
+        THREAD_ID,
+        () => available,
+      );
+      expect(harness.confirm).toHaveBeenCalledOnce();
+      available = availableAfterConfirmation;
+      confirm(true);
+      if (availableAfterConfirmation) {
+        await pending;
+        expect(harness.archiveThread).toHaveBeenCalledOnce();
+      } else {
+        await expect(pending).rejects.toThrow(/no longer available/);
+        expect(harness.archiveThread).not.toHaveBeenCalled();
+      }
+    },
+  );
+
   it("restores the saved chat draft when archiving the last thread leaves no fallback", async () => {
     sidebarThreads = [makeThread(THREAD_ID)];
 
@@ -767,6 +851,98 @@ describe("useSidebarThreadActions", () => {
     );
   });
 
+  describe("when the active Space limits the next chat", () => {
+    const otherSpaceThread = makeThread(ThreadId.makeUnsafe("thread-other-space"), {
+      projectId: ProjectId.makeUnsafe("project-other-space"),
+      latestHumanMessageAt: "2026-07-22T00:00:00.000Z",
+      latestUserMessageAt: "2026-07-22T00:00:00.000Z",
+    });
+    const SPACE_PROJECT_TWO = ProjectId.makeUnsafe("project-space-two");
+    const inActiveSpace = (threads: readonly SidebarThreadSummary[]) =>
+      threads.filter(
+        (thread) => thread.projectId === PROJECT_ID || thread.projectId === SPACE_PROJECT_TWO,
+      );
+    const closeFocusedChat = async (action: "archive" | "done") => {
+      const controller = render({
+        routeThreadId: THREAD_ID,
+        filterThreadsToActiveSpace: inActiveSpace,
+      });
+      if (action === "archive") {
+        await controller.archiveThread(THREAD_ID);
+        return;
+      }
+      deferWindowTimers();
+      controller.setThreadSettledWithToast(THREAD_ID, true);
+      await flushActionResponses();
+    };
+
+    it.each(["archive", "done"] as const)(
+      "stays in the Space when the newest chat belongs to another one (%s)",
+      async (action) => {
+        sidebarThreads = [
+          makeThread(THREAD_ID),
+          makeThread(FALLBACK_ID, { projectId: SPACE_PROJECT_TWO }),
+          otherSpaceThread,
+        ];
+
+        await closeFocusedChat(action);
+
+        expect(harness.navigate).toHaveBeenCalledWith(
+          expect.objectContaining({ params: { threadId: FALLBACK_ID } }),
+        );
+      },
+    );
+
+    it.each(["archive", "done"] as const)(
+      "opens a new chat instead of a chat in another Space (%s)",
+      async (action) => {
+        sidebarThreads = [makeThread(THREAD_ID), otherSpaceThread];
+
+        await closeFocusedChat(action);
+
+        expect(harness.navigate).not.toHaveBeenCalled();
+        expect(harness.handleNewChat).toHaveBeenCalledWith();
+      },
+    );
+
+    it.each(["archive", "done", "snooze"] as const)(
+      "filters after a pending Space move is reconciled (%s)",
+      async (action) => {
+        deferWindowTimers();
+        let finishMove!: (confirmed: boolean) => void;
+        let moved = false;
+        harness.reconcileSpaceMoves.mockImplementation(
+          () =>
+            new Promise<boolean>((resolve) => {
+              finishMove = resolve;
+            }),
+        );
+        sidebarThreads = [makeThread(THREAD_ID), makeThread(FALLBACK_ID), otherSpaceThread];
+        const controller = render({
+          routeThreadId: THREAD_ID,
+          filterThreadsToActiveSpace: (threads) =>
+            threads.filter((thread) =>
+              moved ? thread.id !== FALLBACK_ID : thread.id !== otherSpaceThread.id,
+            ),
+        });
+        const closing = action === "archive" ? controller.archiveThread(THREAD_ID) : undefined;
+        if (action === "done") controller.setThreadSettledWithToast(THREAD_ID, true);
+        if (action === "snooze") controller.snoozeThread(THREAD_ID, 30);
+        await flushActionResponses();
+        expect(harness.navigate).not.toHaveBeenCalled();
+
+        moved = true;
+        finishMove(true);
+        await closing;
+        await flushActionResponses();
+
+        expect(harness.navigate).toHaveBeenCalledWith(
+          expect.objectContaining({ params: { threadId: otherSpaceThread.id } }),
+        );
+      },
+    );
+  });
+
   it("skips archived, done, and subagent threads when choosing the next chat", async () => {
     sidebarThreads = [
       makeThread(THREAD_ID),
@@ -853,19 +1029,7 @@ describe("useSidebarThreadActions", () => {
     "preserves a newer route while the focused thread's %s request is pending",
     async (action) => {
       deferWindowTimers();
-      let acceptRequest!: () => void;
-      if (action === "archive") {
-        harness.archiveThread.mockImplementationOnce(
-          () => new Promise<number>((resolve) => (acceptRequest = () => resolve(1))),
-        );
-      } else {
-        harness.dispatchCommand.mockImplementationOnce(
-          () =>
-            new Promise<{ sequence: number }>(
-              (resolve) => (acceptRequest = () => resolve({ sequence: 1 })),
-            ),
-        );
-      }
+      const request = deferAcceptance(action);
       const controller = render({ routeThreadId: THREAD_ID });
       const pending =
         action === "archive"
@@ -873,7 +1037,7 @@ describe("useSidebarThreadActions", () => {
           : controller.setThreadSettledWithToast(THREAD_ID, true);
       render({ routeThreadId: FALLBACK_ID });
 
-      acceptRequest();
+      request.accept();
       await pending;
       await flushActionResponses();
 
@@ -886,19 +1050,7 @@ describe("useSidebarThreadActions", () => {
     "keeps focus when a background %s target is opened before acceptance",
     async (action) => {
       deferWindowTimers();
-      let acceptRequest!: () => void;
-      if (action === "archive") {
-        harness.archiveThread.mockImplementationOnce(
-          () => new Promise<number>((resolve) => (acceptRequest = () => resolve(1))),
-        );
-      } else {
-        harness.dispatchCommand.mockImplementationOnce(
-          () =>
-            new Promise<{ sequence: number }>(
-              (resolve) => (acceptRequest = () => resolve({ sequence: 1 })),
-            ),
-        );
-      }
+      const request = deferAcceptance(action);
       const controller = render({ routeThreadId: FALLBACK_ID });
       const pending =
         action === "archive"
@@ -906,7 +1058,7 @@ describe("useSidebarThreadActions", () => {
           : controller.setThreadSettledWithToast(THREAD_ID, true);
       render({ routeThreadId: THREAD_ID });
 
-      acceptRequest();
+      request.accept();
       await pending;
       await flushActionResponses();
 
@@ -919,19 +1071,7 @@ describe("useSidebarThreadActions", () => {
     "keeps focus after leaving and returning to a pending %s target",
     async (action) => {
       deferWindowTimers();
-      let acceptRequest!: () => void;
-      if (action === "archive") {
-        harness.archiveThread.mockImplementationOnce(
-          () => new Promise<number>((resolve) => (acceptRequest = () => resolve(1))),
-        );
-      } else {
-        harness.dispatchCommand.mockImplementationOnce(
-          () =>
-            new Promise<{ sequence: number }>(
-              (resolve) => (acceptRequest = () => resolve({ sequence: 1 })),
-            ),
-        );
-      }
+      const request = deferAcceptance(action);
       const controller = render({ routeThreadId: THREAD_ID });
       const pending =
         action === "archive"
@@ -940,7 +1080,7 @@ describe("useSidebarThreadActions", () => {
       render({ routeThreadId: FALLBACK_ID });
       render({ routeThreadId: THREAD_ID });
 
-      acceptRequest();
+      request.accept();
       await pending;
       await flushActionResponses();
 
@@ -953,19 +1093,7 @@ describe("useSidebarThreadActions", () => {
     "keeps a newer split route while the focused thread's %s request is pending",
     async (action) => {
       deferWindowTimers();
-      let acceptRequest!: () => void;
-      if (action === "archive") {
-        harness.archiveThread.mockImplementationOnce(
-          () => new Promise<number>((resolve) => (acceptRequest = () => resolve(1))),
-        );
-      } else {
-        harness.dispatchCommand.mockImplementationOnce(
-          () =>
-            new Promise<{ sequence: number }>(
-              (resolve) => (acceptRequest = () => resolve({ sequence: 1 })),
-            ),
-        );
-      }
+      const request = deferAcceptance(action);
       const controller = render({ routeThreadId: THREAD_ID });
       const pending =
         action === "archive"
@@ -973,7 +1101,7 @@ describe("useSidebarThreadActions", () => {
           : controller.setThreadSettledWithToast(THREAD_ID, true);
       render({ routeThreadId: THREAD_ID, routeSplitViewId: "split-newer" });
 
-      acceptRequest();
+      request.accept();
       await pending;
       await flushActionResponses();
 

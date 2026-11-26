@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { t } from "~/i18n";
 import {
   deriveFriendlyCommandTarget,
   deriveCommandReadTargets,
@@ -7,12 +8,49 @@ import {
   deriveReadableCommandDisplay,
   deriveReadableToolTitle,
   deriveSynaraMcpToolTitle,
+  extractMcpServerName,
   extractWebFetchUrl,
   isSynaraBrowserToolCall,
   normalizeCompactToolLabel,
   resolveCommandVisualKind,
   sanitizeSynaraMcpToolPreview,
 } from "./toolCallLabel";
+
+describe("tool presentation", () => {
+  it("derives English cache titles through a source translator", () => {
+    const sourceTranslate: typeof t = (message, values) => t(message, { ...values, lng: "en" });
+    const read = { fallbackLabel: "Tool", requestKind: "file-read" } as const;
+    const command = {
+      fallbackLabel: "Tool",
+      itemType: "command_execution",
+      command: "cat Settings",
+      isRunning: true,
+    } as const;
+    const computer = { fallbackLabel: "Tool", payload: { name: "computer_click" } };
+    const synara = { toolName: "synara_read_thread", status: "running" } as const;
+    expect(deriveReadableToolTitle(read, sourceTranslate)).toBe("Read");
+    expect(deriveReadableToolTitle(command, sourceTranslate)).toBe("Reading");
+    expect(deriveReadableToolTitle(computer, sourceTranslate)).toBe("Click");
+    expect(deriveSynaraMcpToolTitle(synara, sourceTranslate)).toBe("Synara is reading a thread");
+    expect(deriveReadableCommandDisplay("rg Settings .", true, sourceTranslate)).toEqual({
+      verb: "Searching",
+      target: "for Settings in current directory",
+      fullCommand: "rg Settings .",
+    });
+    expect(
+      deriveSynaraMcpToolTitle({ toolName: "synara_settings", status: "running" }, sourceTranslate),
+    ).toBe("Synara is handling settings");
+  });
+
+  it("translates known command verbs and preserves commands and arbitrary tool titles", () => {
+    expect(deriveReadableToolTitle({ title: "Settings", fallbackLabel: "Tool" })).toBe("Settings");
+    expect(deriveLiteralCommand("cat Settings")).toBe("cat Settings");
+    expect(deriveReadableCommandDisplay("cat Settings", true).verb).toBe("Reading");
+    expect(deriveSynaraMcpToolTitle({ toolName: "synara_read_thread", status: "running" })).toBe(
+      "Synara is reading a thread",
+    );
+  });
+});
 
 describe("extractWebFetchUrl", () => {
   it("pulls the url out of a WebFetch argument summary", () => {
@@ -51,6 +89,27 @@ describe("extractWebFetchUrl", () => {
     ).toBeNull();
     expect(extractWebFetchUrl({ toolName: "WebFetch", detail: '{"prompt":"hi"}' })).toBeNull();
     expect(extractWebFetchUrl({ toolName: "WebFetch", detail: undefined })).toBeNull();
+  });
+});
+
+describe("extractMcpServerName", () => {
+  it("reads the server from Claude's mcp__server__tool names", () => {
+    expect(extractMcpServerName("mcp__superx_so_connector__get_me", null)).toBe(
+      "superx_so_connector",
+    );
+  });
+
+  it("reads Codex's nested { server, tool } pair", () => {
+    expect(
+      extractMcpServerName("get_me", {
+        data: { item: { type: "mcpToolCall", server: "stripe", tool: "list_customers" } },
+      }),
+    ).toBe("stripe");
+  });
+
+  it("is null for tools that are not MCP calls", () => {
+    expect(extractMcpServerName("Bash", { data: { item: { command: "ls" } } })).toBeNull();
+    expect(extractMcpServerName(undefined, null)).toBeNull();
   });
 });
 

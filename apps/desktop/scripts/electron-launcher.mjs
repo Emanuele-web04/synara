@@ -16,7 +16,11 @@ import {
 } from "node:fs";
 import { createRequire } from "node:module";
 import { TCC_SERVICE_NAMES } from "@synara/shared/computerGrants";
-import { resolveSynaraDesktopFlavor, synaraDesktopIdentity } from "@synara/shared/desktopIdentity";
+import {
+  resolveSynaraDesktopFlavor,
+  synaraDesktopIdentity,
+  synaraSourceDesktopIdentity,
+} from "@synara/shared/desktopIdentity";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createSourceDesktopEnvironment } from "./source-desktop-launch.mjs";
@@ -26,10 +30,10 @@ const desktopFlavor = resolveSynaraDesktopFlavor({
   isDevelopment: true,
   requestedFlavor: process.env.SYNARA_DESKTOP_FLAVOR,
 });
-const desktopIdentity = synaraDesktopIdentity(desktopFlavor);
+const desktopIdentity = synaraSourceDesktopIdentity(synaraDesktopIdentity(desktopFlavor));
 const APP_DISPLAY_NAME = desktopIdentity.displayName;
 const APP_BUNDLE_ID = desktopIdentity.bundleId;
-const LAUNCHER_VERSION = 7;
+const LAUNCHER_VERSION = 9;
 // Kept in sync with BRAND_ASSET_PATHS.productionMacIconComposer and the macOS
 // icon constants in scripts/lib/desktop-platform-build-config.ts. The packaged
 // build compiles the same asset; this launcher does it for dev and Canary,
@@ -52,6 +56,7 @@ export function configureMacLauncher(electronPath, environment = process.env) {
   const configuration = Object.fromEntries(
     [
       "SYNARA_HOME",
+      "SYNARA_REMOTE_HOME",
       "SYNARA_DESKTOP_FLAVOR",
       "SYNARA_SOURCE_DESKTOP_BUILD_MARKER",
       "VITE_DEV_SERVER_URL",
@@ -194,6 +199,24 @@ function patchMainBundleInfoPlist(appBundlePath, iconPath, runCommand) {
     infoPlistPath,
     "NSAudioCaptureUsageDescription",
     AUDIO_CAPTURE_USAGE_DESCRIPTION,
+    runCommand,
+  );
+  setPlistString(
+    infoPlistPath,
+    "NSScreenCaptureUsageDescription",
+    "Synara captures the windows you authorize for Computer use.",
+    runCommand,
+  );
+  setPlistString(
+    infoPlistPath,
+    "NSAccessibilityUsageDescription",
+    "Synara controls the windows you authorize for Computer use.",
+    runCommand,
+  );
+  setPlistString(
+    infoPlistPath,
+    "NSLocalNetworkUsageDescription",
+    "Synara connects to the browsers it drives on this Mac so agents can browse in the background.",
     runCommand,
   );
 

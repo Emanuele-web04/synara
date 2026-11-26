@@ -6,16 +6,23 @@ import { toPersistenceSqlError } from "./Errors.ts";
 type MessageEvent = Extract<OrchestrationEvent, { readonly type: "thread.message-sent" }>;
 
 /** JSON keeps lone UTF-16 surrogates intact until adjacent chunks are joined in JS. */
-export const selectMessageTextChunks = (
-  sql: SqlClient.SqlClient,
-  table: string,
-  segment = false,
-) => sql`
+export const selectMessageTextChunks = (sql: SqlClient.SqlClient, table: string, segment = false) =>
+  segment
+    ? sql`
   (SELECT json_group_array(json(chunks.text_json) ORDER BY chunks.event_sequence)
    FROM message_text_chunks AS chunks
    WHERE chunks.thread_id = ${sql.literal(table)}.thread_id
      AND chunks.message_id = ${sql.literal(table)}.message_id
-     ${segment ? sql`AND chunks.segment_sequence = ${sql.literal(table)}.sequence` : sql``}) AS "textChunks"
+     AND chunks.segment_sequence = ${sql.literal(table)}.sequence) AS "textChunks"
+`
+    : sql`
+  CASE WHEN ${sql.literal(table)}.is_streaming = 1 THEN
+    (SELECT json_group_array(json(chunks.text_json) ORDER BY chunks.event_sequence)
+     FROM message_text_chunks AS chunks
+     WHERE chunks.thread_id = ${sql.literal(table)}.thread_id
+       AND chunks.message_id = ${sql.literal(table)}.message_id)
+  ELSE '[]'
+  END AS "textChunks"
 `;
 
 export const selectSegmentEndedAt = (sql: SqlClient.SqlClient, table: string) => sql`

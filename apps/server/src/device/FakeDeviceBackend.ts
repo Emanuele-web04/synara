@@ -26,11 +26,16 @@ import type {
 import {
   DeviceBackendError,
   type DeviceBackend,
+  type DeviceConfiguration,
   type DeviceFrameListener,
   type DeviceKeyEvent,
+  type DeviceLaunchOptions,
   type DeviceListOptions,
+  type DeviceLogQuery,
+  type DeviceLogResult,
   type DeviceStreamFrame,
   type DeviceSwipeGesture,
+  type DeviceTypeTextOutcome,
 } from "./DeviceBackend.ts";
 
 export interface FakeDeviceSeed {
@@ -44,11 +49,29 @@ export type FakeDeviceCall =
   | { readonly kind: "boot"; readonly udid: string }
   | { readonly kind: "shutdown"; readonly udid: string }
   | { readonly kind: "install"; readonly udid: string; readonly appPath: string }
-  | { readonly kind: "launch"; readonly udid: string; readonly bundleId: string }
+  | {
+      readonly kind: "launch";
+      readonly udid: string;
+      readonly bundleId: string;
+      readonly options?: DeviceLaunchOptions;
+    }
   | { readonly kind: "openUrl"; readonly udid: string; readonly url: string }
-  | { readonly kind: "tap"; readonly udid: string; readonly x: number; readonly y: number }
+  | {
+      readonly kind: "tap";
+      readonly udid: string;
+      readonly x: number;
+      readonly y: number;
+      readonly holdMs?: number;
+    }
   | { readonly kind: "swipe"; readonly udid: string; readonly gesture: DeviceSwipeGesture }
   | { readonly kind: "typeText"; readonly udid: string; readonly text: string }
+  | { readonly kind: "setFocusedValue"; readonly udid: string; readonly value: string }
+  | {
+      readonly kind: "configure";
+      readonly udid: string;
+      readonly configuration: DeviceConfiguration;
+    }
+  | { readonly kind: "readLogs"; readonly udid: string; readonly query: DeviceLogQuery }
   | { readonly kind: "keyEvent"; readonly udid: string; readonly event: DeviceKeyEvent }
   | { readonly kind: "pressButton"; readonly udid: string; readonly button: DeviceHardwareButton }
   | { readonly kind: "screenshot"; readonly udid: string }
@@ -111,6 +134,12 @@ export class FakeDeviceBackend implements DeviceBackend {
   private readonly sequences = new Map<string, number>();
   private readonly installedBundles = new Map<string, string>();
   private readonly attachedGeometry = new Set<string>();
+  /** Reads left during which the tree keeps changing, like a running animation. */
+  private animatingReads = 0;
+  /** Text in the fake's focused field, as typing or setting a value leaves it. */
+  private fieldValue = "";
+  /** What `usesUsKeyboardLayout` answers; tests flip it to exercise the value path. */
+  usKeyboardLayout = true;
   private readonly recordings = new Map<
     string,
     { readonly path: string; readonly startedAt: string }
@@ -135,6 +164,11 @@ export class FakeDeviceBackend implements DeviceBackend {
 
   setAvailability(availability: DeviceAvailability): void {
     this.availabilityValue = availability;
+  }
+
+  /** Make the next `reads` describes return a different tree each time. */
+  animateFor(reads: number): void {
+    this.animatingReads = reads;
   }
 
   failNext(kind: FakeDeviceCall["kind"], error: DeviceBackendError): void {
@@ -235,8 +269,9 @@ export class FakeDeviceBackend implements DeviceBackend {
     udid: string,
     bundleId: string,
     _launchArguments?: readonly string[],
+    options?: DeviceLaunchOptions,
   ): Promise<DeviceLaunchAppResult> {
-    this.record({ kind: "launch", udid, bundleId });
+    this.record({ kind: "launch", udid, bundleId, ...(options ? { options } : {}) });
     this.requireBooted(udid);
     return { udid, bundleId, pid: 4_242 };
   }
@@ -246,8 +281,19 @@ export class FakeDeviceBackend implements DeviceBackend {
     this.requireBooted(udid);
   }
 
-  async tap(udid: string, x: number, y: number): Promise<void> {
-    this.record({ kind: "tap", udid, x, y });
+  async tap(
+    udid: string,
+    x: number,
+    y: number,
+    options: { readonly holdMs?: number } = {},
+  ): Promise<void> {
+    this.record({
+      kind: "tap",
+      udid,
+      x,
+      y,
+      ...(options.holdMs === undefined ? {} : { holdMs: options.holdMs }),
+    });
     this.requireBooted(udid);
   }
 
@@ -266,9 +312,42 @@ export class FakeDeviceBackend implements DeviceBackend {
     return FAKE_DEEP_ROW_START_Y - this.scrollOffset;
   }
 
-  async typeText(udid: string, text: string): Promise<void> {
+  async typeText(udid: string, text: string): Promise<DeviceTypeTextOutcome> {
     this.record({ kind: "typeText", udid, text });
     this.requireBooted(udid);
+    // Mirrors the helper: only printable ASCII (and newline/tab) has a key.
+    const typed = [...text].filter((character) => /^[\x20-\x7e\n\t]$/u.test(character));
+    this.fieldValue += typed.join("").replace(/\n/gu, "");
+    return { skipped: [...text].length - typed.length };
+  }
+
+  async setFocusedValue(udid: string, value: string): Promise<void> {
+    this.record({ kind: "setFocusedValue", udid, value });
+    this.requireBooted(udid);
+    this.fieldValue = value;
+  }
+
+  async usesUsKeyboardLayout(udid: string): Promise<boolean> {
+    this.requireBooted(udid);
+    return this.usKeyboardLayout;
+  }
+
+  async configure(udid: string, configuration: DeviceConfiguration): Promise<void> {
+    this.record({ kind: "configure", udid, configuration });
+    this.requireBooted(udid);
+  }
+
+  async readLogs(udid: string, query: DeviceLogQuery): Promise<DeviceLogResult> {
+    this.record({ kind: "readLogs", udid, query });
+    this.requireBooted(udid);
+    return {
+      bundleId: query.bundleId,
+      process: "FakeApp",
+      log: ["2026-10-14 01:00:00.000 E  FakeApp[1:1] request failed"],
+      console: ["hello from print"],
+      crashes: [],
+      omitted: 0,
+    };
   }
 
   async keyEvent(udid: string, event: DeviceKeyEvent): Promise<void> {
@@ -283,8 +362,12 @@ export class FakeDeviceBackend implements DeviceBackend {
 
   async screenshot(
     udid: string,
-    options: { readonly save?: boolean } = {},
-  ): Promise<DeviceScreenshotResult> {
+    options: {
+      readonly save?: boolean;
+      readonly resolution?: "pixels" | "points";
+      readonly proof?: boolean;
+    } = {},
+  ): Promise<DeviceScreenshotResult & { readonly proofBytesBase64?: string }> {
     this.record({ kind: "screenshot", udid });
     const device = this.requireBooted(udid);
     return {
@@ -298,6 +381,7 @@ export class FakeDeviceBackend implements DeviceBackend {
       height: 1,
       sizeBytes: Buffer.from(PNG_BASE64, "base64").byteLength,
       bytesBase64: PNG_BASE64,
+      ...(options.proof ? { proofBytesBase64: PNG_BASE64 } : {}),
       capturedAt: new Date(this.now()).toISOString(),
     };
   }
@@ -341,6 +425,8 @@ export class FakeDeviceBackend implements DeviceBackend {
   async describeUi(udid: string): Promise<DeviceDescribeUiResult> {
     this.record({ kind: "describeUi", udid });
     this.requireBooted(udid);
+    const animationFrame = this.animatingReads;
+    if (this.animatingReads > 0) this.animatingReads -= 1;
     return {
       udid,
       capturedAt: new Date(this.now()).toISOString(),
@@ -359,8 +445,37 @@ export class FakeDeviceBackend implements DeviceBackend {
             value: null,
             frame: { x: 24, y: 700, width: 345, height: 50 },
             activationPoint: { x: 196, y: 725 },
+            identifier: "continue-button",
+            enabled: true,
             children: [],
           },
+          {
+            role: "TextField",
+            subrole: null,
+            label: "Email",
+            value: this.fieldValue.length > 0 ? this.fieldValue : "you@example.com",
+            frame: { x: 24, y: 300, width: 345, height: 44 },
+            activationPoint: null,
+            identifier: "email-field",
+            enabled: true,
+            focused: true,
+            placeholder: "you@example.com",
+            children: [],
+          },
+          // Present only while animating, changing every read like a spinner.
+          ...(animationFrame > 0
+            ? [
+                {
+                  role: "StaticText",
+                  subrole: null,
+                  label: `Loading ${animationFrame}`,
+                  value: null,
+                  frame: { x: 24, y: 400, width: 345, height: 20 },
+                  activationPoint: null,
+                  children: [],
+                },
+              ]
+            : []),
           // A switch row: its frame centre is dead space, so only the
           // activation point toggles it. Mirrors real UIKit settings rows.
           {
@@ -433,6 +548,21 @@ export class FakeDeviceBackend implements DeviceBackend {
     this.requireBooted(udid);
     this.attachedGeometry.add(udid);
     this.listeners.set(udid, onFrame);
+  }
+
+  private readonly interruptionListeners = new Set<(udid: string, reason: string) => void>();
+
+  onStreamInterrupted(listener: (udid: string, reason: string) => void): () => void {
+    this.interruptionListeners.add(listener);
+    return () => {
+      this.interruptionListeners.delete(listener);
+    };
+  }
+
+  /** End a device's stream the way a helper crash does: no detach, frames just stop. */
+  interruptStream(udid: string, reason = "device helper exited (code=null, signal=SIGKILL)"): void {
+    this.listeners.delete(udid);
+    for (const listener of this.interruptionListeners) listener(udid, reason);
   }
 
   async detachStream(udid: string): Promise<void> {

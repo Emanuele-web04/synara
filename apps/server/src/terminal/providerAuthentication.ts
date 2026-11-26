@@ -13,6 +13,7 @@ import {
 import { expandProviderAccountHomePath } from "../providerAccountHomePath";
 import { providerHomeEnvironment } from "../provider/providerProcessEnv";
 import { ensurePrivateDirectorySync } from "../privatePathPermissions";
+import { runProcess } from "../processRunner";
 import { buildProviderProfileProcessEnv } from "./managedTerminalWrappers";
 import { deriveManagedTerminalProfiles } from "./providerTerminalProfiles";
 
@@ -125,13 +126,28 @@ export async function resolveProviderAuthenticationLaunch(input: {
     Buffer.from(input.instanceId).toString("hex"),
   );
   ensurePrivateDirectorySync(cwd);
+  const env = buildProviderChildEnvironment({
+    provider: instance.driver === "claudeAgent" ? "claude" : instance.driver,
+    baseEnv: buildProviderProfileProcessEnv(profile, input.baseEnv),
+  });
+  let args: readonly string[] = PROVIDER_AUTHENTICATION[instance.driver].args;
+  if (instance.driver === "opencode") {
+    const help = await runProcess(profile.targetPath, [...args, "--help"], {
+      env,
+      cwd,
+      timeoutMs: 5_000,
+      maxBufferBytes: 64 * 1024,
+      allowNonZeroExit: true,
+    });
+    if (help.timedOut || help.signal)
+      throw new Error("Unable to check OpenCode's supported sign-in options. Retry signing in.");
+    if (/^\s*--standalone(?:\s|$)/m.test(`${help.stdout}\n${help.stderr}`))
+      args = [...args, "--standalone"];
+  }
   return {
     command: profile.targetPath,
-    args: PROVIDER_AUTHENTICATION[instance.driver].args,
-    env: buildProviderChildEnvironment({
-      provider: instance.driver === "claudeAgent" ? "claude" : instance.driver,
-      baseEnv: buildProviderProfileProcessEnv(profile, input.baseEnv),
-    }),
+    args,
+    env,
     cwd,
   };
 }

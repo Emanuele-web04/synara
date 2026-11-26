@@ -4,9 +4,34 @@ import {
   APPROVAL_ALREADY_ANSWERED_INVARIANT_MARKER,
   collectErrorMessages,
   describeErrorMessage,
+  sanitizeUserFacingErrorMessage,
 } from "./errorMessages";
 
 describe("errorMessages", () => {
+  it("keeps the provider error reason without multiline or inline stack frames", () => {
+    expect(
+      sanitizeUserFacingErrorMessage(
+        "Error: quota exceeded\n    at send (/app/send.ts:2:1)",
+        "fallback",
+      ),
+    ).toBe("Error: quota exceeded");
+    expect(
+      sanitizeUserFacingErrorMessage("Connection refused at file:///app/send.ts:2:1", "fallback"),
+    ).toBe("Connection refused");
+    expect(
+      sanitizeUserFacingErrorMessage("Request failed at send (/app/send.ts:2:1)", "fallback"),
+    ).toBe("Request failed");
+    expect(
+      sanitizeUserFacingErrorMessage(
+        "Request failed at async send (C:\\app\\send.ts:2:1)",
+        "fallback",
+      ),
+    ).toBe("Request failed");
+    expect(sanitizeUserFacingErrorMessage("Rate limit resets at noon", "fallback")).toBe(
+      "Rate limit resets at noon",
+    );
+    expect(sanitizeUserFacingErrorMessage(" \n ", "fallback")).toBe("fallback");
+  });
   it("uses Error messages", () => {
     expect(describeErrorMessage(new Error("native binding missing"), "fallback")).toBe(
       "native binding missing",

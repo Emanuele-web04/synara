@@ -134,6 +134,24 @@ describe("source desktop launch", () => {
     });
   });
 
+  it.each([undefined, "/tmp/custom-remote"])(
+    "isolates Remote from inherited Stable and Beta homes (%s)",
+    (remoteHome) => {
+      const { spawnProcess } = captureSourceDesktopSpawn({
+        SYNARA_DESKTOP_FLAVOR: "remote",
+        SYNARA_HOME: "/tmp/stable-data",
+        SYNARA_BETA_HOME: "/tmp/beta-data",
+        ...(remoteHome ? { SYNARA_REMOTE_HOME: remoteHome } : {}),
+      });
+      const expectedHome = remoteHome ?? join("/Users/tester", ".synara-remote");
+      expect(spawnProcess.mock.calls[0][2].env).toMatchObject({
+        SYNARA_DESKTOP_FLAVOR: "remote",
+        SYNARA_HOME: expectedHome,
+        SYNARA_REMOTE_HOME: expectedHome,
+      });
+    },
+  );
+
   it("guards and spawns the smoke desktop with its isolated environment", () => {
     const smokeHome = "/tmp/synara-desktop-smoke";
     const smokeUserData = join(smokeHome, "electron-user-data");

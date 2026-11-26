@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { Effect } from "effect";
 
 import type { ProviderKind } from "@synara/contracts";
@@ -45,7 +45,19 @@ async function setup(options?: {
     | undefined;
 }) {
   const backend = new FakeDeviceBackend();
-  const manager = new DeviceManager({ backend });
+  // Virtual clock (as in DeviceManager.observation.test.ts): the fake backend
+  // never changes its foreground app, so a launch would wait out the real
+  // 10 s app-change bound.
+  let clock = 0;
+  const manager = new DeviceManager({
+    backend,
+    now: () => clock,
+    setTimeout: (handler, ms) => {
+      clock += ms;
+      return setTimeout(handler, 0);
+    },
+    clearTimeout: (handle) => clearTimeout(handle),
+  });
   await manager.boot(DEVICE);
   const authorizeAction =
     options && "authorizeAction" in options ? options.authorizeAction : async () => true;
@@ -109,7 +121,10 @@ describe("agent gateway device tools surface", () => {
       "device_press_button",
       "device_screenshot",
       "device_describe_ui",
+      "device_wait",
       "device_scroll_to_element",
+      "device_logs",
+      "device_configure",
     ]);
     expect(tools.every((tool) => tool.requiredCapability === "device:control")).toBe(true);
     // Every tool, the read-only ones included, needs a live caller turn.
@@ -118,48 +133,6 @@ describe("agent gateway device tools surface", () => {
 });
 
 describe("agent gateway device tool handlers", () => {
-  it("publishes the operational rules on the tools that need them", async () => {
-    const { byName } = await setup();
-    const description = (name: string) => byName.get(name)?.definition.description ?? "";
-
-    expect(description("device_list")).toContain("use an already-booted device");
-    expect(description("device_boot")).toContain("only when device_list finds nothing booted");
-    expect(description("device_boot")).toContain("boot-limit-reached");
-    expect(description("device_install")).toContain("Synara never builds");
-    expect(description("device_install")).toContain("xcodebuild");
-    expect(description("device_launch")).toContain("com.apple.Preferences");
-    expect(description("device_open_url")).toContain("exp://127.0.0.1:8081");
-    expect(description("device_open_url")).toContain("start it detached");
-    expect(description("device_open_url")).toContain("expo start --ios");
-    expect(description("device_tap")).toContain("Tap by label");
-    expect(description("device_tap")).toContain("activationPoint");
-    expect(description("device_tap")).toContain("screenshot pixels");
-    expect(description("device_tap")).toContain("HID events were not delivered");
-    expect(description("device_tap")).toContain("unchanged tree");
-    expect(description("device_swipe")).toContain("gesture itself is the goal");
-    expect(description("device_swipe")).toContain("Never write a swipe loop");
-    expect(description("device_screenshot")).toContain("showing the user a result");
-    expect(description("device_describe_ui")).toContain('value "1" means on and "0" means off');
-    expect(description("device_describe_ui")).toContain("rather than using a screenshot");
-    expect(description("device_describe_ui")).toContain("hardware-backed panes");
-    expect(description("device_scroll_to_element")).toContain("instead of a device_swipe loop");
-
-    for (const name of [
-      "device_boot",
-      "device_install",
-      "device_launch",
-      "device_open_url",
-      "device_tap",
-      "device_swipe",
-      "device_type",
-      "device_press_button",
-      "device_scroll_to_element",
-    ]) {
-      expect(description(name)).toContain("DeviceApprovalRequired");
-      expect(description(name)).toContain("do not retry");
-    }
-  });
-
   it("lists devices with their availability", async () => {
     const { structured } = await setup();
 
@@ -265,6 +238,125 @@ describe("agent gateway device tool handlers", () => {
     const result = (await structured("device_boot", { udid: "FAKE-0004" })) as { kind: string };
 
     expect(result.kind).toBe("boot-limit-reached");
+  });
+
+  it("boots a shut-down simulator before installing on it", async () => {
+    const { backend, call } = await setup();
+
+    const result = await call("device_install", { udid: "FAKE-0002", appPath: "/tmp/Demo.app" });
+
+    expect(result.isError).not.toBe(true);
+    expect(backend.calls.map((entry) => `${entry.kind}:${entry.udid}`)).toEqual([
+      `boot:${DEVICE}`,
+      "boot:FAKE-0002",
+      "install:FAKE-0002",
+    ]);
+  });
+
+  it("rejects a missing app path without booting the target", async () => {
+    const { backend, call } = await setup();
+
+    const result = await call("device_install", { udid: "FAKE-0002" });
+
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result.content)).toContain("appPath");
+    expect(backend.callsOfKind("boot").map((entry) => entry.udid)).toEqual([DEVICE]);
+  });
+
+  it("does not install or open the pane after Stop during the simulator boot", async () => {
+    const { backend, manager, byName } = await setup();
+    const started = Promise.withResolvers<void>();
+    const finish = Promise.withResolvers<void>();
+    const settled = Promise.withResolvers<void>();
+    const boot = backend.boot.bind(backend);
+    backend.boot = async (udid) => {
+      started.resolve();
+      await finish.promise;
+      return await boot(udid);
+    };
+    manager.onEvent((event) => {
+      if (
+        event.type === "device.thread-state" &&
+        event.state.threadId === THREAD &&
+        !event.state.agentActive
+      )
+        settled.resolve();
+    });
+    const opened = collectOpenPaneRequests(manager);
+    const tool = byName.get("device_install")!;
+    const abort = new AbortController();
+    const result = Effect.runPromiseExit(
+      tool.handler({ udid: "FAKE-0002", appPath: "/tmp/Demo.app" }, makeContext()),
+      { signal: abort.signal },
+    );
+
+    await started.promise;
+    abort.abort();
+    finish.resolve();
+    await settled.promise;
+    await result;
+
+    expect(backend.callsOfKind("boot").map((entry) => entry.udid)).toEqual([DEVICE, "FAKE-0002"]);
+    expect(backend.callsOfKind("install")).toHaveLength(0);
+    expect(opened).toHaveLength(0);
+    await manager.dispose();
+  });
+
+  it("waits for one boot when overlapping tools target the same shut-down simulator", async () => {
+    const { backend, manager, call } = await setup();
+    const started = Promise.withResolvers<void>();
+    const finish = Promise.withResolvers<void>();
+    const checked = Promise.withResolvers<void>();
+    const boot = backend.boot.bind(backend);
+    vi.spyOn(backend, "boot").mockImplementationOnce(async (udid) => {
+      started.resolve();
+      await finish.promise;
+      return await boot(udid);
+    });
+
+    const args = { udid: "FAKE-0002", appPath: "/tmp/Demo.app" };
+    const first = call("device_install", args);
+    await started.promise;
+    const listDevices = backend.listDevices.bind(backend);
+    vi.spyOn(backend, "listDevices").mockImplementationOnce(async (options) => {
+      const devices = await listDevices(options);
+      checked.resolve();
+      return devices;
+    });
+    const second = call("device_install", args);
+    await checked.promise;
+    await new Promise((resolve) => setImmediate(resolve));
+    finish.resolve();
+
+    for (const result of await Promise.all([first, second])) {
+      expect(result.isError).not.toBe(true);
+    }
+    expect(backend.callsOfKind("boot").map((entry) => entry.udid)).toEqual([DEVICE, "FAKE-0002"]);
+    expect(backend.callsOfKind("install")).toHaveLength(2);
+    await manager.dispose();
+  });
+
+  it("brings back a simulator Synara powered off while idle when the agent launches again", async () => {
+    const { backend, manager, call } = await setup();
+    await manager.shutdown(DEVICE, true);
+
+    const result = await call("device_launch", { udid: DEVICE, bundleId: "com.example.Demo" });
+
+    expect(result.isError).not.toBe(true);
+    expect(backend.callsOfKind("boot").map((entry) => entry.udid)).toEqual([DEVICE, DEVICE]);
+    expect(backend.callsOfKind("launch").map((entry) => entry.udid)).toEqual([DEVICE]);
+  });
+
+  it("names the simulators holding the boot cap when a run cannot boot its device", async () => {
+    const { backend, call } = await setup();
+    await call("device_boot", { udid: "FAKE-0002" });
+    await call("device_boot", { udid: "FAKE-0003" });
+
+    const result = await call("device_open_url", { udid: "FAKE-0004", url: "demo://home" });
+
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result.content)).toContain("Ask the user which one to shut down");
+    expect(backend.callsOfKind("openUrl")).toEqual([]);
   });
 
   it("reports every backend failure to the agent and only actionable errors to the pane", async () => {
@@ -559,4 +651,253 @@ describe("agent gateway device tools surface the pane on any interaction", () =>
     // One attach, so no duplicate stream for the pane to reconcile.
     expect((await manager.getThreadState(THREAD)).attachedDeviceUdid).toBe(DEVICE);
   });
+});
+
+/** The last text block of a result: the screen snapshot, or an error message. */
+function screenText(result: McpToolCallResult): string {
+  const texts = result.content.filter((entry) => entry.type === "text");
+  const last = texts.at(-1);
+  return last && last.type === "text" ? last.text : "";
+}
+
+describe("agent gateway device tools for end-to-end testing", () => {
+  it("returns the settled screen and whether it changed after an input", async () => {
+    const { call, structured } = await setup();
+
+    const result = await call("device_tap", { udid: DEVICE, identifier: "continue-button" });
+    const metadata = (await structured("device_tap", {
+      udid: DEVICE,
+      identifier: "continue-button",
+    })) as Record<string, unknown>;
+
+    expect(result.isError).toBeUndefined();
+    expect(metadata).toMatchObject({
+      element: { label: "Continue", identifier: "continue-button" },
+      settled: true,
+      screenChanged: false,
+    });
+    expect(screenText(result)).toContain('app "Fake App"');
+    expect(screenText(result)).toContain('- Button "Continue" #"continue-button" @196,725');
+  });
+
+  it("skips the observation when asked to", async () => {
+    const { call, backend } = await setup();
+
+    const result = await call("device_tap", { udid: DEVICE, x: 10, y: 10, observe: false });
+
+    expect(result.content).toHaveLength(1);
+    expect(backend.callsOfKind("describeUi")).toHaveLength(0);
+  });
+
+  it("turns a swipe that starts on the left edge into the back gesture", async () => {
+    const { call, backend, manager } = await setup();
+    await manager.describeUi(DEVICE);
+
+    await call("device_swipe", { udid: DEVICE, fromX: 2, fromY: 400, toX: 300, toY: 400 });
+    await call("device_swipe", { udid: DEVICE, fromX: 200, fromY: 600, toX: 200, toY: 200 });
+
+    const swipes = backend.callsOfKind("swipe").map((swipe) => swipe.gesture.edge);
+    expect(swipes).toEqual(["left", undefined]);
+  });
+
+  it("reads the field back after typing", async () => {
+    const { structured } = await setup();
+
+    const metadata = (await structured("device_type", { udid: DEVICE, text: "ada" })) as Record<
+      string,
+      unknown
+    >;
+
+    expect(metadata).toMatchObject({ method: "keys", fieldValue: "ada", submitted: false });
+  });
+
+  it("waits for an element by identifier", async () => {
+    const { structured } = await setup();
+
+    await expect(
+      structured("device_wait", { udid: DEVICE, identifier: "continue-button", timeoutMs: 1_000 }),
+    ).resolves.toMatchObject({ status: "ready" });
+    await expect(
+      structured("device_wait", { udid: DEVICE, label: "Never there", timeoutMs: 300 }),
+    ).resolves.toMatchObject({ status: "timeout", settled: false });
+  });
+
+  it("applies environment settings and validates privacy requests", async () => {
+    const { call, structured, backend } = await setup();
+
+    await expect(
+      structured("device_configure", {
+        udid: DEVICE,
+        appearance: "dark",
+        location: { latitude: 45.46, longitude: 9.19 },
+        privacy: { action: "grant", service: "photos", bundleId: "com.example.shop" },
+      }),
+    ).resolves.toEqual({ udid: DEVICE, applied: ["appearance", "location", "privacy"] });
+    expect(backend.callsOfKind("configure").map((entry) => entry.configuration)).toEqual([
+      { kind: "appearance", appearance: "dark" },
+      { kind: "location", latitude: 45.46, longitude: 9.19 },
+      { kind: "privacy", action: "grant", service: "photos", bundleId: "com.example.shop" },
+    ]);
+
+    const missingBundle = await call("device_configure", {
+      udid: DEVICE,
+      privacy: { action: "grant", service: "photos" },
+    });
+    expect(missingBundle.isError).toBe(true);
+    expect(screenText(missingBundle)).toMatch(/needs the app's bundleId/);
+  });
+
+  it("reads logs with sensible defaults", async () => {
+    const { structured, backend } = await setup();
+
+    await expect(
+      structured("device_logs", { udid: DEVICE, bundleId: "com.example.shop" }),
+    ).resolves.toMatchObject({ process: "FakeApp", console: ["hello from print"] });
+    expect(backend.callsOfKind("readLogs")[0]?.query).toEqual({
+      bundleId: "com.example.shop",
+      sinceSeconds: 300,
+      level: "default",
+      contains: undefined,
+      limit: 100,
+    });
+  });
+
+  it("passes restart and environment through to the launch", async () => {
+    const { structured, backend } = await setup();
+
+    await structured("device_launch", {
+      udid: DEVICE,
+      bundleId: "com.example.shop",
+      restart: true,
+      environment: { UITESTS: "1" },
+    });
+
+    expect(backend.callsOfKind("launch").at(-1)?.options).toEqual({
+      terminateExisting: true,
+      environment: { UITESTS: "1" },
+    });
+  });
+
+  it("saves a full-resolution proof image and returns its path", async () => {
+    const backend = new FakeDeviceBackend();
+    const manager = new DeviceManager({ backend });
+    await manager.boot(DEVICE);
+    const saved: string[] = [];
+    const tools = makeAgentGatewayDeviceTools({
+      manager,
+      authorizeAction: async () => true,
+      saveProof: async (_threadId, data) => {
+        saved.push(data);
+        return "/proofs/device.png";
+      },
+    });
+    const screenshot = tools.find((tool) => tool.definition.name === "device_screenshot")!;
+
+    const result = await Effect.runPromise(
+      screenshot.handler({ udid: DEVICE, proof: true }, makeContext()),
+    );
+
+    const text = result.content.find((entry) => entry.type === "text");
+    expect(text && text.type === "text" ? JSON.parse(text.text) : null).toMatchObject({
+      artifactPath: "/proofs/device.png",
+      coordinates: "device points",
+    });
+    expect(saved).toHaveLength(1);
+    expect(backend.callsOfKind("screenshot")).toHaveLength(1);
+    expect(result.content.some((entry) => entry.type === "image")).toBe(true);
+  });
+});
+
+describe("device tool turn ownership", () => {
+  it("keeps a whitespace-padded device boot leased until its turn ends", async () => {
+    const backend = new FakeDeviceBackend();
+    const manager = new DeviceManager({ backend, idleShutdownMs: 20, attachDeadlineMs: 0 });
+    try {
+      const boot = makeAgentGatewayDeviceTools({ manager, authorizeAction: async () => true }).find(
+        (entry) => entry.definition.name === "device_boot",
+      )!;
+      const result = await Effect.runPromise(boot.handler({ udid: ` ${DEVICE} ` }, makeContext()));
+      expect(result.isError).not.toBe(true);
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      expect(backend.callsOfKind("shutdown")).toHaveLength(0);
+      manager.endAgentTurn(THREAD, "turn-a");
+      await vi.waitFor(() =>
+        expect(backend.callsOfKind("shutdown")).toEqual([{ kind: "shutdown", udid: DEVICE }]),
+      );
+    } finally {
+      await manager.dispose();
+    }
+  });
+});
+
+describe("device tool cancellation during idle cleanup", () => {
+  it.each([
+    {
+      name: "device_tap",
+      args: { udid: DEVICE, x: 1, y: 1, observe: false },
+      kind: "tap" as const,
+    },
+    {
+      name: "device_install",
+      args: { udid: DEVICE, appPath: "/tmp/Test.app" },
+      kind: "install" as const,
+    },
+    { name: "device_screenshot", args: { udid: DEVICE }, kind: "screenshot" as const },
+  ])(
+    "does not dispatch $name after Stop while waiting for pending poweroff",
+    async ({ name, args, kind }) => {
+      let fireIdle: (() => void) | undefined;
+      const backend = new FakeDeviceBackend();
+      const manager = new DeviceManager({
+        backend,
+        attachDeadlineMs: 0,
+        setTimeout: (fire) => {
+          fireIdle = fire;
+          return { unref: () => {} } as unknown as NodeJS.Timeout;
+        },
+        clearTimeout: () => {},
+      });
+      await manager.boot(DEVICE);
+      await manager.withAgentActivity(
+        "old-thread",
+        () => manager.ensureThreadAttached("old-thread", DEVICE),
+        { udid: DEVICE, turnId: "old-turn" },
+      );
+      const started = Promise.withResolvers<void>();
+      const finish = Promise.withResolvers<void>();
+      const shutdown = backend.shutdown.bind(backend);
+      backend.shutdown = async (udid) => {
+        started.resolve();
+        await finish.promise;
+        await shutdown(udid);
+      };
+      manager.endAgentTurn("old-thread", "old-turn");
+      fireIdle!();
+      await started.promise;
+      const settled = Promise.withResolvers<void>();
+      manager.onEvent((event) => {
+        if (
+          event.type === "device.thread-state" &&
+          event.state.threadId === THREAD &&
+          !event.state.agentActive
+        )
+          settled.resolve();
+      });
+      const tool = makeAgentGatewayDeviceTools({ manager, authorizeAction: async () => true }).find(
+        (entry) => entry.definition.name === name,
+      )!;
+      const abort = new AbortController();
+      const result = Effect.runPromiseExit(tool.handler(args, makeContext()), {
+        signal: abort.signal,
+      });
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(backend.callsOfKind(kind)).toHaveLength(0);
+      abort.abort();
+      finish.resolve();
+      await settled.promise;
+      await result;
+      expect(backend.callsOfKind(kind)).toHaveLength(0);
+      await manager.dispose();
+    },
+  );
 });

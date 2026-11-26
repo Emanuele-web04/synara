@@ -11,7 +11,9 @@ const required = [
   "apps/desktop/dist-electron/cuaDriverHostStandalone.js",
   "apps/server/dist/index.mjs",
   "apps/server/dist/restoreMigrationBackup.mjs",
+  "apps/server/dist/compactDatabase.mjs",
   "apps/server/dist/runtimeDependencySmoke.mjs",
+  "apps/server/dist/languageWorker.mjs",
   "apps/server/dist/client/index.html",
   "apps/server/dist/device-helper/build.sh",
 ];
@@ -20,6 +22,7 @@ const buildVariables = [
   "SYNARA_WEB_SOURCEMAP",
   "SYNARA_SERVER_SOURCEMAP",
   "SYNARA_DESKTOP_SOURCEMAP",
+  "SYNARA_STABLE_ACCOUNT_URL",
   "VITE_WS_URL",
 ];
 export const sha256 = (bytes: string | Buffer) => createHash("sha256").update(bytes).digest("hex");

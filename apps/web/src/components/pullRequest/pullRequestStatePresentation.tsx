@@ -153,3 +153,23 @@ export function PullRequestConflictIcon({ className }: { className?: string }) {
   const Icon = PR_STATE_PRESENTATION_ICONS[presentation.iconKind];
   return <Icon aria-hidden className={cn("shrink-0", presentation.colorClass, className)} />;
 }
+
+export const PR_STATE_LABEL_KEYS: Record<PrStatePresentation["label"], string> = {
+  "PR open": "git:pr_open",
+  "PR closed": "git:pr_closed",
+  "PR merged": "git:pr_merged",
+  "PR draft": "git:pRDraft",
+  "PR has conflicts": "git:pRHasConflicts",
+};
+
+export const ISSUE_STATE_LABEL_KEYS: Record<IssueStatePresentation["label"], string> = {
+  "Issue open": "git:issueOpen",
+  "Issue closed": "git:issueClosed",
+  "Issue not planned": "git:issueNotPlanned",
+};
+
+export const ISSUE_STATE_SHORT_LABEL_KEYS: Record<IssueStatePresentation["shortLabel"], string> = {
+  Open: "onboarding:notification_open",
+  Closed: "chat:closed",
+  "Not planned": "git:notPlanned",
+};

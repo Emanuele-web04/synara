@@ -68,7 +68,7 @@ import {
   type ProviderChildKind,
 } from "../../providerChildEnvironment.ts";
 import { buildOpenCodeServerProcessEnv } from "../providerBinaryResolution.ts";
-import { ServerSettingsService } from "../../serverSettings";
+import { ServerSettingsService, withoutNewThreadDefaultsOnlyChanges } from "../../serverSettings";
 import { isWindowsShellCommandMissingResult } from "../../shell-command-detection";
 import {
   buildCursorAgentCommand,
@@ -87,8 +87,10 @@ import {
 import {
   claudeAuthMetadata,
   isStructuredClaudeAuthFalseNegativeCandidate,
+  parseClaudeAccountIdentityFromOutput,
   parseClaudeAuthStatusFromOutput,
 } from "../claudeAuthStatus";
+import { codexAccountIdentityFromAuthRecord } from "../codexAccountIdentity";
 import { acquireClaudeAuthStatusLock } from "../claudeAuthStatusLock";
 import { loadClaudeAgentSdk } from "../claudeAgentSdk.ts";
 import { buildClaudeProcessEnv, readClaudeCliCredentialsSummary } from "../claudeProcessEnv";
@@ -107,6 +109,7 @@ import {
   orderProviderStatuses,
   readProviderStatusCache,
   resolveProviderStatusCachePath,
+  withoutProviderAccountIdentity,
   writeProviderStatusCache,
 } from "../providerStatusCache";
 import { makeProviderMaintenanceCommandCoordinator } from "../providerMaintenanceCommandCoordinator";
@@ -122,9 +125,13 @@ import {
 } from "../providerMaintenance";
 import { isClaudeAutoModeCliVersionSupported } from "../claudeCliVersion.ts";
 import { collectUint8StreamText } from "../../stream/collectUint8StreamText";
-import { buildCodexProcessEnv } from "../../codexProcessEnv.ts";
+import {
+  buildCodexProcessEnv,
+  readEffectiveCodexAuthCredentialsStoreMode,
+} from "../../codexProcessEnv.ts";
 import { readGrokCachedLogin } from "../../providerUsage/providers/grok";
 import { buildProviderProcessEnv, type ProviderProcessEnvDriver } from "../providerProcessEnv.ts";
+import { PiNotInstalledError, resolvePiInstallation } from "../piSdkImports.ts";
 
 export { parseClaudeAuthStatusFromOutput } from "../claudeAuthStatus";
 export type { CommandResult } from "../providerCliOutput";
@@ -146,7 +153,8 @@ const PI_PROVIDER = "pi" as const;
 const OMP_PROVIDER = "omp" as const;
 type ProviderStatuses = ReadonlyArray<ServerProviderStatus>;
 const DISABLED_PROVIDER_STATUS_MESSAGE = "Provider is disabled in Synara settings.";
-const MINIMUM_ANTIGRAVITY_CLI_VERSION = "1.0.12";
+// `agy acp`, which Synara drives Antigravity through, shipped in 1.5.0.
+const MINIMUM_ANTIGRAVITY_CLI_VERSION = "1.5.0";
 
 const PROVIDERS = [
   CODEX_PROVIDER,
@@ -506,9 +514,18 @@ function codexAccountAuthLabel(input: {
   }
 }
 
-function extractCodexAccountTypeFromOutput(result: CommandResult): string | undefined {
+const CODEX_CHATGPT_LOGIN = /^logged in using chatgpt\s*$/m;
+const CODEX_API_KEY_LOGIN = /^logged in using an api key\b/m;
+
+function extractCodexAccountTypeFromOutput(
+  result: CommandResult,
+): "apiKey" | "chatgpt" | undefined {
   const parsed = decodeUnknownJson(result.stdout.trim());
-  if (Result.isFailure(parsed)) return undefined;
+  if (Result.isFailure(parsed)) {
+    const output = `${result.stdout}\n${result.stderr}`.toLowerCase();
+    if (CODEX_API_KEY_LOGIN.test(output)) return "apiKey";
+    return CODEX_CHATGPT_LOGIN.test(output) ? "chatgpt" : undefined;
+  }
   const walk = (value: unknown): string | undefined => {
     if (Array.isArray(value)) {
       for (const entry of value) {
@@ -529,7 +546,14 @@ function extractCodexAccountTypeFromOutput(result: CommandResult): string | unde
     }
     return undefined;
   };
-  return walk(parsed.success);
+  const reportedTypes = [walk(parsed.success), extractAuthMethod(parsed.success)].map((type) =>
+    type?.toLowerCase().replace(/[\s_-]+/g, ""),
+  );
+  if (reportedTypes.includes("apikey")) return "apiKey";
+  if (reportedTypes.includes("chatgpt") || reportedTypes.includes("chatgptauthtokens")) {
+    return "chatgpt";
+  }
+  return undefined;
 }
 
 // ── Claude SDK capability probe ─────────────────────────────────────
@@ -725,9 +749,9 @@ export function parseAuthStatusFromOutput(result: CommandResult): {
     // Current Codex CLI prints login status as plain text (on stderr), not JSON.
     // Only explicit login methods establish voice capability; unknown successful
     // output remains authenticated without advertising ChatGPT-only dictation.
-    const voiceTranscriptionAvailable = /^logged in using chatgpt\s*$/m.test(lowerOutput)
+    const voiceTranscriptionAvailable = CODEX_CHATGPT_LOGIN.test(lowerOutput)
       ? true
-      : /^logged in using an api key\b/m.test(lowerOutput)
+      : CODEX_API_KEY_LOGIN.test(lowerOutput)
         ? false
         : undefined;
     return {
@@ -1108,21 +1132,35 @@ export function makeClaudeProbeEnv(
   });
 }
 
-export const readCodexConfigModelProviderForEnv = (env: NodeJS.ProcessEnv) =>
+const readCodexHomeFile = (env: NodeJS.ProcessEnv, fileName: string) =>
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const codexHome = env.CODEX_HOME?.trim() || path.join(OS.homedir(), ".codex");
-    const configPath = path.join(codexHome, "config.toml");
-
-    const content = yield* fileSystem
-      .readFileString(configPath)
+    return yield* fileSystem
+      .readFileString(path.join(codexHome, fileName))
       .pipe(Effect.orElseSucceed(() => undefined));
-    if (content === undefined) {
-      return undefined;
+  });
+
+export const readCodexConfigModelProviderForEnv = (env: NodeJS.ProcessEnv) =>
+  Effect.map(readCodexHomeFile(env, "config.toml"), (content) =>
+    content === undefined ? undefined : parseCodexConfigModelProvider(content),
+  );
+
+// A non-file credentials store can leave an old auth.json in the same home.
+const readCodexAccountIdentity = (env: NodeJS.ProcessEnv) =>
+  Effect.gen(function* () {
+    const config = yield* readCodexHomeFile(env, "config.toml");
+    try {
+      if (readEffectiveCodexAuthCredentialsStoreMode(config ?? "") !== "file") return {};
+    } catch {
+      return {};
     }
 
-    return parseCodexConfigModelProvider(content);
+    const content = yield* readCodexHomeFile(env, "auth.json");
+    if (content === undefined) return {};
+    const record = decodeUnknownJson(content);
+    return Result.isFailure(record) ? {} : codexAccountIdentityFromAuthRecord(record.success);
   });
 
 const hasCustomModelProviderForEnv = (env: NodeJS.ProcessEnv) =>
@@ -1181,6 +1219,7 @@ export const makeCheckCodexProviderStatus = (
         driver: CODEX_PROVIDER,
         status: "error" as const,
         available: false,
+        ...(versionProbe.outcome === "missing" ? { installed: false } : {}),
         authStatus: "unknown" as const,
         checkedAt,
         message:
@@ -1312,8 +1351,14 @@ export const makeCheckCodexProviderStatus = (
 
     const authOutput = authProbe.success.value;
     const parsed = parseAuthStatusFromOutput(authOutput);
-    const codexPlanType = extractSubscriptionTypeFromOutput(authOutput);
     const codexAccountType = extractCodexAccountTypeFromOutput(authOutput);
+    const accountIdentity =
+      parsed.authStatus === "authenticated" &&
+      authOutput.code === 0 &&
+      codexAccountType === "chatgpt"
+        ? yield* readCodexAccountIdentity(probeEnv)
+        : {};
+    const codexPlanType = extractSubscriptionTypeFromOutput(authOutput) ?? accountIdentity.planType;
     const codexLabel =
       parsed.authStatus === "authenticated"
         ? codexAccountAuthLabel({ type: codexAccountType, planType: codexPlanType })
@@ -1336,6 +1381,7 @@ export const makeCheckCodexProviderStatus = (
       supportsAutoRuntimeMode,
       ...(codexAuthType ? { authType: codexAuthType } : {}),
       ...(codexLabel ? { authLabel: codexLabel } : {}),
+      ...(accountIdentity.email ? { accountEmail: accountIdentity.email } : {}),
       ...(parsed.voiceTranscriptionAvailable !== undefined
         ? { voiceTranscriptionAvailable: parsed.voiceTranscriptionAvailable }
         : {}),
@@ -1393,6 +1439,7 @@ export const makeCheckClaudeProviderStatus = (
         driver: CLAUDE_AGENT_PROVIDER,
         status: "error" as const,
         available: false,
+        ...(versionProbe.outcome === "missing" ? { installed: false } : {}),
         authStatus: "unknown" as const,
         checkedAt,
         message:
@@ -1547,6 +1594,10 @@ export const makeCheckClaudeProviderStatus = (
       subscriptionType = yield* resolveSubscriptionType;
     }
     const authMetadata = claudeAuthMetadata({ subscriptionType, authMethod });
+    const accountIdentity =
+      effectiveParsed.authStatus === "authenticated"
+        ? parseClaudeAccountIdentityFromOutput(authOutput)
+        : {};
 
     return {
       provider: CLAUDE_AGENT_PROVIDER,
@@ -1558,6 +1609,10 @@ export const makeCheckClaudeProviderStatus = (
       version: parsedVersion,
       supportsAutoRuntimeMode,
       ...(authMetadata ? { authType: authMetadata.type, authLabel: authMetadata.label } : {}),
+      ...(accountIdentity.email ? { accountEmail: accountIdentity.email } : {}),
+      ...(accountIdentity.organization
+        ? { accountOrganization: accountIdentity.organization }
+        : {}),
       checkedAt,
       ...(effectiveParsed.message ? { message: effectiveParsed.message } : {}),
     } satisfies ServerProviderStatus;
@@ -1602,6 +1657,7 @@ export const makeCheckGrokProviderStatus = (
         driver: GROK_PROVIDER,
         status: "error" as const,
         available: false,
+        ...(versionProbe.outcome === "missing" ? { installed: false } : {}),
         authStatus: "unknown" as const,
         checkedAt,
         message:
@@ -1701,6 +1757,7 @@ export const makeCheckDroidProviderStatus = (
         driver: DROID_PROVIDER,
         status: "error" as const,
         available: false,
+        ...(versionProbe.outcome === "missing" ? { installed: false } : {}),
         authStatus: "unknown" as const,
         checkedAt,
         message:
@@ -1846,6 +1903,7 @@ export const makeCheckOpenCodeProviderStatus = (
         driver: OPENCODE_PROVIDER,
         status: "error" as const,
         available: false,
+        ...(versionProbe.outcome === "missing" ? { installed: false } : {}),
         authStatus: "unknown" as const,
         checkedAt,
         message:
@@ -1914,20 +1972,38 @@ export const checkPiProviderStatus = (
 ): Effect.Effect<ServerProviderStatus, never, ChildProcessSpawner.ChildProcessSpawner> =>
   Effect.gen(function* () {
     const checkedAt = new Date().toISOString();
-    const executable = nonEmptyTrimmed(binaryPath) ?? "pi";
     const probeEnvResult = tryMakeProviderProbeEnv(PI_PROVIDER, environment, instanceId, paths);
     if (!probeEnvResult.ok) {
       return providerHomePreparationFailure(PI_PROVIDER, checkedAt, probeEnvResult.cause);
     }
     const probeEnv = probeEnvResult.env;
+    const installation = yield* Effect.result(
+      Effect.tryPromise({
+        try: () => resolvePiInstallation({ binaryPath, env: probeEnv }),
+        catch: (cause) => cause,
+      }),
+    );
+    if (Result.isFailure(installation)) {
+      return {
+        provider: PI_PROVIDER,
+        instanceId: PI_PROVIDER,
+        driver: PI_PROVIDER,
+        status: "error" as const,
+        available: false,
+        ...(installation.failure instanceof PiNotInstalledError ? { installed: false } : {}),
+        authStatus: "unknown" as const,
+        checkedAt,
+        message:
+          installation.failure instanceof Error
+            ? installation.failure.message
+            : "Could not locate the selected Pi CLI installation.",
+      } satisfies ServerProviderStatus;
+    }
 
     const versionProbe = yield* probeProviderCliVersion(
-      runPiCommand(["--version"], executable, probeEnv),
+      runPiCommand(["--version"], installation.success.binaryPath, probeEnv),
       PI_HEALTH_TIMEOUT_MS,
     );
-
-    // Pi itself is SDK-backed in Synara. Keep this CLI probe advisory so health
-    // refreshes do not import the SDK and initialize its native clipboard module.
     if (versionProbe.outcome === "missing" || versionProbe.outcome === "failure") {
       const error = versionProbe.cause;
       return {
@@ -1938,10 +2014,7 @@ export const checkPiProviderStatus = (
         available: true,
         authStatus: "unknown" as const,
         checkedAt,
-        message:
-          versionProbe.outcome === "missing"
-            ? "Pi SDK is bundled, but the Pi CLI (`pi`) is not on PATH, so Synara could not verify the installed CLI version."
-            : `Pi SDK is bundled, but the CLI health check failed: ${error instanceof Error ? error.message : String(error)}.`,
+        message: `Pi is installed, but the CLI health check failed: ${error instanceof Error ? error.message : String(error)}.`,
       } satisfies ServerProviderStatus;
     }
 
@@ -1955,7 +2028,7 @@ export const checkPiProviderStatus = (
         authStatus: "unknown" as const,
         checkedAt,
         message:
-          "Pi SDK is bundled, but the CLI health check timed out before Synara could verify the installed version.",
+          "Pi is installed, but the CLI health check timed out before Synara could verify the installed version.",
       } satisfies ServerProviderStatus;
     }
 
@@ -1971,8 +2044,8 @@ export const checkPiProviderStatus = (
         authStatus: "unknown" as const,
         checkedAt,
         message: detail
-          ? `Pi SDK is bundled, but the CLI health check failed. ${detail}`
-          : "Pi SDK is bundled, but the CLI health check failed.",
+          ? `Pi is installed, but the CLI health check failed. ${detail}`
+          : "Pi is installed, but the CLI health check failed.",
       } satisfies ServerProviderStatus;
     }
 
@@ -2026,6 +2099,7 @@ export const checkOmpProviderStatus = (
         driver: OMP_PROVIDER,
         status: "error" as const,
         available: false,
+        ...(versionProbe.outcome === "missing" ? { installed: false } : {}),
         authStatus: "unknown" as const,
         checkedAt,
         message:
@@ -2109,6 +2183,7 @@ export const checkAntigravityProviderStatus = (
         driver: ANTIGRAVITY_PROVIDER,
         status: "error",
         available: false,
+        ...(versionProbe.outcome === "missing" ? { installed: false } : {}),
         authStatus: "unknown",
         checkedAt,
         message:
@@ -2225,6 +2300,7 @@ export const makeCheckCursorProviderStatus = (
         driver: CURSOR_PROVIDER,
         status: "error" as const,
         available: false,
+        ...(versionProbe.outcome === "missing" ? { installed: false } : {}),
         authStatus: "unknown" as const,
         checkedAt,
         message:
@@ -2458,6 +2534,7 @@ export const makeCheckDevinProviderStatus = (
         driver: DEVIN_PROVIDER,
         status: "error" as const,
         available: false,
+        ...(versionProbe.outcome === "missing" ? { installed: false } : {}),
         authStatus: "unknown" as const,
         checkedAt,
         message:
@@ -2557,6 +2634,8 @@ export function providerStatusesEqual(
       status.authStatus === next.authStatus &&
       (status.authType ?? null) === (next.authType ?? null) &&
       (status.authLabel ?? null) === (next.authLabel ?? null) &&
+      (status.accountEmail ?? null) === (next.accountEmail ?? null) &&
+      (status.accountOrganization ?? null) === (next.accountOrganization ?? null) &&
       status.voiceTranscriptionAvailable === next.voiceTranscriptionAvailable &&
       status.supportsAutoRuntimeMode === next.supportsAutoRuntimeMode &&
       (status.autoRuntimeModeBinaryPath ?? null) === (next.autoRuntimeModeBinaryPath ?? null) &&
@@ -2608,8 +2687,9 @@ export function stabilizeProviderStatusesAgainstTransientTimeouts(
     // A single slow CLI probe should not make an already usable provider look broken.
     // The previous update advisory is network-backed evidence, though, so it must
     // not survive a probe that could not confirm the installed version.
+    // Keep the account label tied to a confirmed login as well.
     const stabilizedStatus = {
-      ...previous,
+      ...withoutProviderAccountIdentity(previous),
       checkedAt: status.checkedAt,
       ...(status.updateState !== undefined ? { updateState: status.updateState } : {}),
     };
@@ -2674,9 +2754,18 @@ function projectStatusForProviderInstance(
   if (isExactInstanceStatus || instance.isDefault || status.authStatus === "unknown") {
     return projected;
   }
-  const { authType, authLabel, voiceTranscriptionAvailable, ...withoutAuthMetadata } = projected;
+  const {
+    authType,
+    authLabel,
+    accountEmail,
+    accountOrganization,
+    voiceTranscriptionAvailable,
+    ...withoutAuthMetadata
+  } = projected;
   void authType;
   void authLabel;
+  void accountEmail;
+  void accountOrganization;
   void voiceTranscriptionAvailable;
   return {
     ...withoutAuthMetadata,
@@ -3528,7 +3617,12 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
         });
       }
 
-      yield* serverSettings.streamChanges.pipe(
+      // New-chat defaults change with every composer pick and never affect
+      // providers, so they must not start CLI probes.
+      yield* withoutNewThreadDefaultsOnlyChanges(
+        serverSettings.streamChanges,
+        yield* serverSettings.getSettings.pipe(Effect.catch(() => Effect.succeed(null))),
+      ).pipe(
         Stream.runForEach((settings) =>
           Effect.gen(function* () {
             // Publish settings-only projection changes immediately from the

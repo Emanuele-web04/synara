@@ -1,3 +1,4 @@
+import { getFormatLocale } from "./i18n";
 import { type TimestampFormat } from "./appSettings";
 
 export function getTimestampFormatOptions(
@@ -32,14 +33,15 @@ function getTimestampFormatter(
   timestampFormat: TimestampFormat,
   includeSeconds: boolean,
   includeDate = false,
+  locale = getFormatLocale(),
 ): Intl.DateTimeFormat {
-  const cacheKey = `${timestampFormat}:${includeSeconds ? "seconds" : "minutes"}:${includeDate ? "date" : "time"}`;
+  const cacheKey = `${locale ?? "system"}:${timestampFormat}:${includeSeconds ? "seconds" : "minutes"}:${includeDate ? "date" : "time"}`;
   const cachedFormatter = timestampFormatterCache.get(cacheKey);
   if (cachedFormatter) {
     return cachedFormatter;
   }
 
-  const formatter = new Intl.DateTimeFormat(undefined, {
+  const formatter = new Intl.DateTimeFormat(locale, {
     ...(includeDate ? CALENDAR_DATE_OPTIONS : {}),
     ...getTimestampFormatOptions(timestampFormat, includeSeconds),
   });
@@ -47,31 +49,43 @@ function getTimestampFormatter(
   return formatter;
 }
 
-export function formatTimestamp(isoDate: string, timestampFormat: TimestampFormat): string {
-  return getTimestampFormatter(timestampFormat, true).format(new Date(isoDate));
+export function formatTimestamp(
+  isoDate: string,
+  timestampFormat: TimestampFormat,
+  locale = getFormatLocale(),
+): string {
+  return getTimestampFormatter(timestampFormat, true, false, locale).format(new Date(isoDate));
 }
 
-export function formatShortTimestamp(isoDate: string, timestampFormat: TimestampFormat): string {
-  return getTimestampFormatter(timestampFormat, false).format(new Date(isoDate));
+export function formatShortTimestamp(
+  isoDate: string,
+  timestampFormat: TimestampFormat,
+  locale = getFormatLocale(),
+): string {
+  return getTimestampFormatter(timestampFormat, false, false, locale).format(new Date(isoDate));
 }
 
 export function formatShortDateTimestamp(
   isoDate: string,
   timestampFormat: TimestampFormat,
+  locale = getFormatLocale(),
 ): string {
-  return getTimestampFormatter(timestampFormat, false, true).format(new Date(isoDate));
+  return getTimestampFormatter(timestampFormat, false, true, locale).format(new Date(isoDate));
 }
 
 const dayLabelFormatterCache = new Map<string, Intl.DateTimeFormat>();
 
-function getDayLabelFormatter(options: Intl.DateTimeFormatOptions): Intl.DateTimeFormat {
-  const cacheKey = JSON.stringify(options);
+function getDayLabelFormatter(
+  options: Intl.DateTimeFormatOptions,
+  locale = getFormatLocale(),
+): Intl.DateTimeFormat {
+  const cacheKey = `${locale ?? "system"}:${JSON.stringify(options)}`;
   const cachedFormatter = dayLabelFormatterCache.get(cacheKey);
   if (cachedFormatter) {
     return cachedFormatter;
   }
 
-  const formatter = new Intl.DateTimeFormat(undefined, options);
+  const formatter = new Intl.DateTimeFormat(locale, options);
   dayLabelFormatterCache.set(cacheKey, formatter);
   return formatter;
 }
@@ -102,9 +116,10 @@ export function formatDayAwareTimestamp(
   isoDate: string,
   timestampFormat: TimestampFormat,
   now: Date = new Date(),
+  locale = getFormatLocale(),
 ): string {
   const date = new Date(isoDate);
-  const time = getTimestampFormatter(timestampFormat, false).format(date);
+  const time = getTimestampFormatter(timestampFormat, false, false, locale).format(date);
   if (isSameCalendarDay(date, now)) {
     return time;
   }
@@ -112,11 +127,14 @@ export function formatDayAwareTimestamp(
   const daysAgo = calendarDaysBetween(date, now);
   const dayLabel =
     daysAgo > 0 && daysAgo < 7
-      ? getDayLabelFormatter({ weekday: "long" }).format(date)
-      : getDayLabelFormatter({
-          month: "short",
-          day: "numeric",
-          ...(date.getFullYear() === now.getFullYear() ? {} : { year: "numeric" }),
-        }).format(date);
+      ? getDayLabelFormatter({ weekday: "long" }, locale).format(date)
+      : getDayLabelFormatter(
+          {
+            month: "short",
+            day: "numeric",
+            ...(date.getFullYear() === now.getFullYear() ? {} : { year: "numeric" }),
+          },
+          locale,
+        ).format(date);
   return `${dayLabel} ${time}`;
 }

@@ -7,10 +7,11 @@
 // Exports: TaskQuickAdd
 
 import { type KeyboardEvent, type RefObject, useState } from "react";
+import { useTranslation } from "~/i18n";
 
 export function TaskQuickAdd({
   inputRef,
-  placeholder = "Add a task, or press Tab to hand it to an agent",
+  placeholder,
   onCreate,
 }: {
   inputRef: RefObject<HTMLInputElement | null>;
@@ -18,6 +19,8 @@ export function TaskQuickAdd({
   /** `open` asks to open the new task's card right away (Tab). */
   onCreate: (title: string, options: { open: boolean; onError: () => void }) => void;
 }) {
+  const { t } = useTranslation();
+
   const [draftTitle, setDraftTitle] = useState("");
 
   const addTask = (open: boolean) => {
@@ -60,12 +63,12 @@ export function TaskQuickAdd({
       </svg>
       <input
         ref={inputRef}
-        aria-label="New task"
-        placeholder={placeholder}
+        aria-label={t("common:kanban_newTask")}
+        placeholder={placeholder ?? t("common:task_quickAddPlaceholder")}
         value={draftTitle}
         onChange={(event) => setDraftTitle(event.target.value)}
         onKeyDown={handleKeyDown}
-        className="font-system-ui h-10 min-w-0 flex-1 bg-transparent text-ui text-foreground outline-none placeholder:text-muted-foreground/70"
+        className="font-system-ui h-10 min-w-0 flex-1 -mx-1 rounded-md bg-transparent px-1 text-ui text-foreground outline-none placeholder:text-muted-foreground/70 focus-visible:ring-2 focus-visible:ring-[color:var(--color-border-focus)]"
       />
     </label>
   );

@@ -1,3 +1,4 @@
+import { t } from "~/i18n";
 // FILE: linkContextMenu.ts
 // Purpose: Right-click menu shared by chat links (assistant markdown links and
 //          link chips): open in the built-in review view or in-app browser, open in
@@ -89,13 +90,18 @@ export async function showLinkContextMenu(input: {
         ? [
             {
               id: "open-github-item" as const,
-              label: parseGitHubItemUrl(url)?.kind === "issue" ? "Open issue" : "Open pull request",
+              label:
+                parseGitHubItemUrl(url)?.kind === "issue"
+                  ? t("workspace:linkMenuIssue")
+                  : t("workspace:linkMenuPullRequest"),
             },
           ]
         : []),
-      ...(actions ? [{ id: "open-in-browser" as const, label: "Open in browser" }] : []),
-      { id: "open-external" as const, label: "Open in external browser" },
-      { id: "copy-link" as const, label: "Copy link", separatorBefore: true },
+      ...(actions
+        ? [{ id: "open-in-browser" as const, label: t("workspace:linkMenuBrowser") }]
+        : []),
+      { id: "open-external" as const, label: t("git:openInExternalBrowser") },
+      { id: "copy-link" as const, label: t("computer:panel_copyLink"), separatorBefore: true },
     ],
     input.position,
   );

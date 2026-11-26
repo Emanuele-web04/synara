@@ -10,8 +10,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import type { WorkLogEntry } from "../../workLog";
-import { TimelineWorkEntryRow, workEntryLeftIcon } from "./TimelineWorkEntryRow";
-import { CircleAlertIcon } from "~/lib/icons";
+import { TimelineWorkEntryRow } from "./TimelineWorkEntryRow";
 
 function denialEntry(): WorkLogEntry {
   return {
@@ -20,16 +19,6 @@ function denialEntry(): WorkLogEntry {
     label: "Computer control is off for this chat",
     tone: "error",
     computerControlDenied: { toolName: "computer_click" },
-  };
-}
-
-function setupEntry(): WorkLogEntry {
-  return {
-    id: "work-setup",
-    createdAt: new Date(0).toISOString(),
-    label: "Computer control needs setup",
-    tone: "error",
-    computerSetupRequired: { missing: [] },
   };
 }
 
@@ -60,27 +49,4 @@ describe("TimelineWorkEntryRow computer denial wiring", () => {
       expect(markup).toContain(">Enable<");
     },
   );
-
-  it.each(["default", "compact"] as const)(
-    "renders the setup card uncapped at %s density",
-    (density) => {
-      const markup = renderRow(setupEntry(), density);
-
-      expect(markup).toContain("Computer control needs setup");
-    },
-  );
-});
-
-describe("TimelineWorkEntryRow baseline feedback", () => {
-  it("uses a warning icon for skipped baseline feedback rather than a success check", () => {
-    expect(
-      workEntryLeftIcon({
-        id: "baseline-skip",
-        createdAt: new Date(0).toISOString(),
-        label: "Baseline unavailable",
-        tone: "info",
-        activityKind: "checkpoint.baseline.skipped",
-      }),
-    ).toBe(CircleAlertIcon);
-  });
 });

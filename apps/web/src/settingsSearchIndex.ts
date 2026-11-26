@@ -4,22 +4,34 @@
 // Layer: Route/UI support
 // Exports: entry type, the index, section label lookup, and the ranking helper
 
+import { isElectron } from "~/env";
 import { rankProviderDiscoveryItems } from "~/lib/providerDiscovery";
+import { providerAccountQualifiedLabel } from "~/lib/providerInstancePresentation";
+import { getNavigatorPlatform, isLinuxPlatform, isWindowsPlatform } from "~/lib/utils";
+import { i18n, t } from "~/i18n";
 import {
-  settingRowAnchorId,
+  GENERATED_SETTINGS_SEARCH_ROWS,
+  type GeneratedSettingsSearchRow,
+} from "./settingsSearchRows.generated";
+import {
+  isSettingsSectionAvailable,
+  providerAccountAnchorId,
   SETTINGS_NAV_ITEMS,
   type SettingsSectionId,
 } from "./settingsNavigation";
 
 /**
- * One searchable settings result. `title` usually matches a string SettingsRow heading so
- * the default anchor can be derived; `target: null` marks panel-only or conditional rows.
+ * One searchable settings result. `title` is a stable catalog key; `target` is an explicit DOM anchor,
+ * independent of the translated heading; `target: null` marks panel-only or conditional rows.
  */
 export interface SettingsSearchEntry {
   id: string;
   section: SettingsSectionId;
   title: string;
-  keywords: string;
+  /** Catalog keys (or, for literal entries, plain words) the query is also matched against. */
+  keywords: readonly string[];
+  /** The row's own description key, shown under the title where results have room. */
+  description?: string;
   target?: string | null;
   /**
    * Whether this row exists on the machine the user is actually looking at.
@@ -28,6 +40,19 @@ export interface SettingsSearchEntry {
    * user Synara has a setting it does not.
    */
   applies?: (context: SettingsSearchContext) => boolean;
+  /**
+   * Title and keywords are user data (an account's name and email), shown and matched
+   * as written instead of being looked up as catalog keys.
+   */
+  literal?: boolean;
+}
+
+/** One configured agent account, so search can find it by name, email, or agent. */
+export interface SettingsSearchAccount {
+  readonly instanceId: string;
+  readonly label: string;
+  readonly providerLabel: string;
+  readonly identity: string | null;
 }
 
 /**
@@ -36,633 +61,352 @@ export interface SettingsSearchEntry {
  * the index answers "does this row render", not "what does it say".
  */
 export interface SettingsSearchContext {
-  /**
-   * The desktop backend drives the screen the user is already looking at, so
-   * the preview describes the same visible desktop. True only once the status
-   * is known.
-   */
-  readonly computerBackendIsVisibleDesktop: boolean;
+  /** Configured accounts; each becomes a result that opens its row on Accounts. */
+  readonly accounts?: ReadonlyArray<SettingsSearchAccount> | undefined;
+  readonly keepAwakeAvailable?: boolean;
 }
 
-const DEFAULT_SETTINGS_SEARCH_CONTEXT: SettingsSearchContext = {
-  computerBackendIsVisibleDesktop: false,
-};
+const DEFAULT_SETTINGS_SEARCH_CONTEXT: SettingsSearchContext = {};
 
 /** DOM id a result deep-links to, or null for panel-level entries with no anchored row. */
 export function settingsSearchEntryTarget(entry: SettingsSearchEntry): string | null {
-  return entry.target === undefined ? settingRowAnchorId(entry.title) : entry.target;
+  return entry.target ?? null;
 }
 
-// Mirrors row titles/descriptions rendered in settings panels. Panels stay mounted but render
-// null while inactive, so the sidebar cannot read every row at runtime; keep this list in sync
-// when rows are added, renamed, hidden conditionally, or represented as panel-level results.
+/** Text of a catalog key (or a literal entry's own words) in the given language. */
+function entryText(entry: SettingsSearchEntry, value: string, lng?: string): string {
+  if (entry.literal) return value;
+  return lng ? i18n.t(value, { lng }) : t(value);
+}
+
+/** One line about a result: the row's description, else its search words. */
+export function settingsSearchEntryDescription(entry: SettingsSearchEntry): string {
+  if (entry.literal) return entry.keywords.join(" ");
+  return t(entry.description ?? entry.keywords.at(-1) ?? "");
+}
+
+/** The title a result shows: a catalog title translated, an account name as written. */
+export function settingsSearchEntryTitle(entry: SettingsSearchEntry): string {
+  return entryText(entry, entry.title);
+}
+
+function accountSearchEntries(
+  accounts: ReadonlyArray<SettingsSearchAccount>,
+): SettingsSearchEntry[] {
+  return accounts.map((account) => ({
+    id: `accounts:account:${account.instanceId}`,
+    section: "accounts",
+    title: providerAccountQualifiedLabel(account.providerLabel, account.label),
+    keywords: [account.identity ?? "", account.providerLabel].filter(Boolean),
+    target: providerAccountAnchorId(account.instanceId),
+    literal: true,
+  }));
+}
+
+/**
+ * Words people search with that a row's own copy does not say (synonyms, older names),
+ * keyed by the row's anchor. The row itself — title, description, page — comes from
+ * {@link GENERATED_SETTINGS_SEARCH_ROWS}, read from the settings source.
+ */
+export const ROW_EXTRA_KEYWORDS: Readonly<Record<string, readonly string[]>> = {
+  "setting-default-provider": [
+    "settings:chooseTheProviderUsedForNewChatsAgentCodex",
+    "default provider default agent default account",
+  ],
+  "setting-new-threads": ["settings:pickTheDefaultWorkspaceModeForNewlyCreatedDraft2"],
+  "setting-delete-worktree-on-archive": ["settings:afterArchiveSUndoPeriodRemoveACleanWorktree2"],
+  "setting-move-sent-messages-to-top": ["settings:moveEachSentMessageToTheTopOfThe2"],
+  "setting-thread-tabs": ["settings:showOpenThreadsAsTabsInTheChatHeader3"],
+  "setting-welcome-tour": ["settings:replayTheFirstRunSetupFeatureTourProviderSelection2"],
+  "setting-project-order": ["settings:controlsHowProjectsAreArrangedInTheMainSidebar2"],
+  "setting-thread-order": ["settings:controlsHowThreadsAreArrangedInsideEachProjectIn2"],
+  "setting-working-and-unread-on-top": [
+    "settings:withRecentlyActiveOrderMoveWorkingAndUnreadThreads",
+  ],
+  "setting-chats": ["settings:showTheStandaloneChatsListInTheSidebarFooter2"],
+  "setting-hubs": ["settings:showTheHubsTabInTheSidebarSwitcherSidebar"],
+  "setting-automation-runs": ["settings:showTheThreadEachStandaloneAutomationRunCreatesIn"],
+  "setting-open-by-default": ["settings:openTheChatEnvironmentPanelAutomaticallyOnNormalThreads"],
+  "setting-subagents": ["settings:showACompactSummaryOfTheChatSSubagents2"],
+  "setting-repository": ["settings:showTheGitHubRepositoryLinkInTheChatEnvironment"],
+  "setting-pull-request": ["settings:showTheOpenPullRequestCIChecksAndReview"],
+  "setting-editor": ["settings:showTheEditorSectionInAppEditorViewAnd"],
+  "setting-ascii-background": ["settings:asciiBackgroundSearch"],
+  "setting-app-icon": ["settings:chooseTheIconSynaraUsesInTheDockOr2"],
+  "setting-use-custom-title-bar": [
+    "settings:framelessWindowSystemTitleBarWindowsLinuxCaptionControls",
+  ],
+  "setting-use-system-ui-font": ["settings:useTheOperatingSystemInterfaceFontThroughoutSynara"],
+  "setting-ui-density": ["settings:controlSpacingInTheSidebarComposerChatGuttersAnd2"],
+  "setting-chat-width": ["settings:controlHowWideTheChatColumnGrowsSoTables"],
+  "setting-base-font-size": ["settings:adjustTheAppTextBaseInPixelsChatAnd"],
+  "setting-terminal-font": ["settings:typeAnyMonospaceFontInstalledOnThisDeviceE"],
+  "setting-time-format": ["settings:systemDefaultFollowsYourBrowserOrOSClockPreference2"],
+  "setting-activity-toasts": ["settings:showAnInAppToastWhenAChatOr2"],
+  "setting-desktop-notifications": ["settings:showAnOSNotificationWhenAChatOrManaged2"],
+  "setting-wait-for-subagents": ["settings:alertOnceTheAgentAndAllOfItsBackground2"],
+  "setting-enable-appsnap": ["settings:captureTheFrontmostMacOSAppWindowWithAConfigurable"],
+  "setting-shortcut": ["settings:pressTheLeftAndRightOptionKeysAtThe"],
+  "setting-destination": ["settings:snapsJoinTheTaskYouInteractedWithInThe"],
+  "setting-capture-sound": ["settings:playAShortShutterCueWhenAWindowIs2"],
+  "setting-preview": ["settings:showTheInChatComputerPreviewTheFirstTime"],
+  "setting-cursor-colors": ["settings:theAgentPointerSColorsStockMonochromeByDefault"],
+  "setting-side-chat-expiry": ["settings:expireASideChatAfterItSitsIdleFor"],
+  "setting-follow-up-behavior": ["settings:chooseWhetherMessagesSentDuringAnActiveTurnWait"],
+  "setting-enter-while-dictating": ["settings:chooseWhatEnterDoesWhileAVoiceNoteIs2"],
+  "setting-assistant-output": ["settings:showTokenByTokenOutputWhileAResponseIs2"],
+  "setting-fold-finished-turns": ["settings:hideAFinishedTurnSToolCallsAndIntermediate"],
+  "setting-effort-slider": ["settings:showReasoningEffortAsASliderInTheComposer"],
+  "setting-composer-suggestions": ["settings:showAPredictedNextMessageInTheEmptyComposerAfter"],
+  "setting-automatically-open-simulator": [
+    "settings:disableAutomaticIOSSimulatorDevicePaneOpeningUseSimulator",
+  ],
+  "setting-open-pull-requests-and-issues": ["settings:chooseWhereGitHubLinksInChatsOpenBuiltIn"],
+  "setting-pull-request-diff-colors": ["settings:showAdditionsInGreenAndDeletionsInRedIn2"],
+  "setting-include-fork-upstreams": ["settings:alsoListPullRequestsAndIssuesFromEachProject2"],
+  "setting-diff-layout": ["settings:defaultStackedSplitReviewPanelSideBySideUnified"],
+  "setting-diff-line-wrapping": ["settings:setTheDefaultWrapStateWhenTheDiffPanel"],
+  "setting-delete-confirmation": ["settings:askBeforeDeletingAThreadAndItsChatHistory2"],
+  "setting-archive-confirmation": ["settings:askBeforeArchivingAThreadSafetyConfirm"],
+  "setting-terminal-close-confirmation": ["settings:askBeforeClosingATerminalTabAndClearingIts2"],
+  "setting-keybindings": ["settings:openThePersistedKeybindingsJsonFileToEditAdvanced2"],
+  "setting-source-control-writing-style": [
+    "settings:repositoryConventionsConventionalCommitsCustomInstructionsCommitMessagesPR",
+  ],
+  "setting-synara-attribution": ["settings:addsCreatedWithSynaraToTheEndOfPullRequests2"],
+  "setting-saved-model-slugs": ["settings:addCustomModelSlugsForSupportedProvidersCustomModel"],
+  "setting-keep-synara-responsive": [
+    "settings:lowerAgentCPUSchedulingPriorityPerformanceLoadNiceResponsiveness",
+  ],
+  "setting-automatic-cli-update-checks": ["settings:checkCodexClaudeAndOtherProviderCLIsForNewer2"],
+  "setting-provider-updates": ["settings:updateInstalledProviderToolsThatSynaraCanSafelyUpdate"],
+  "setting-version": ["settings:currentApplicationVersionAbout"],
+  "setting-app-tour": ["settings:appTourKeywords"],
+  "setting-release-history": ["settings:aRunningLogOfEveryUpdateNewestFirstChangelog"],
+  "setting-keep-computer-awake": ["settings:caffeinateSleepMacOSPreventSleepKeepAwakeAgentWorking"],
+  "setting-stay-awake-for-remote-access": [
+    "Keep the Mac awake while plugged in and remote access is on. prevent sleep power battery",
+  ],
+};
+
+/** Rows that exist only on some machines; omitted rows are offered everywhere. */
+export const ROW_APPLIES: Readonly<Record<string, (context: SettingsSearchContext) => boolean>> = {
+  "setting-app-icon": () => isElectron,
+  "setting-use-custom-title-bar": () => {
+    const platform = getNavigatorPlatform();
+    return isElectron && (isWindowsPlatform(platform) || isLinuxPlatform(platform));
+  },
+  "setting-keep-computer-awake": ({ keepAwakeAvailable }) => keepAwakeAvailable === true,
+  // Only the desktop app can keep the machine awake for remote access.
+  "setting-stay-awake-for-remote-access": () =>
+    typeof window !== "undefined" && Boolean(window.desktopBridge?.keepAwake),
+};
+
+function generatedRowEntry(row: GeneratedSettingsSearchRow): SettingsSearchEntry {
+  const applies = ROW_APPLIES[row.target];
+  return {
+    id: `${row.section}:${row.target.replace(/^setting-/, "")}`,
+    section: row.section,
+    title: row.title,
+    keywords: [...(ROW_EXTRA_KEYWORDS[row.target] ?? []), row.description].filter(
+      (value) => value.length > 0,
+    ),
+    ...(row.description ? { description: row.description } : {}),
+    target: row.target,
+    ...(applies ? { applies } : {}),
+  };
+}
+
+// Results that are a page or a group rather than one row (no row to read them from), plus
+// the theme picker, which sits on the page instead of in a row. Everything else is generated.
 export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
-  // ── General ────────────────────────────────────────────────────────────────
+  // ── Accounts (first, so they win ties with other "account" rows) ─────────────
   {
-    id: "general:default-provider",
-    section: "general",
-    title: "Default provider",
-    keywords: "Choose the provider used for new chats. agent codex claude",
+    id: "accounts:accounts",
+    section: "accounts",
+    title: "settings:nav_accounts",
+    keywords: ["settings:accounts_searchKeywords"],
+    target: null,
   },
   {
-    id: "general:new-threads",
-    section: "general",
-    title: "New threads",
-    keywords:
-      "Pick the default workspace mode for newly created draft threads. local worktree environment",
-  },
-  {
-    id: "general:delete-worktree-on-archive",
-    section: "general",
-    title: "Delete worktree on archive",
-    keywords:
-      "After Archive's Undo period, remove a clean worktree only when its task has stopped and no other task uses it. Keep its branch for recovery. worktree archive cleanup disk space remove delete",
-  },
-  {
-    id: "general:move-sent-messages-to-top",
-    section: "general",
-    title: "Move sent messages to top",
-    keywords:
-      "Move each sent message to the top of the conversation. Turn off to keep it at the bottom and follow replies as they stream. chat enter send scroll anchor",
-  },
-  {
-    id: "general:thread-tabs",
-    section: "general",
-    title: "Thread tabs",
-    keywords:
-      "Show open threads as tabs in the chat header. Turn off to show only the current thread's title. horizontal tabs strip header chat title",
-  },
-  {
-    id: "general:welcome-tour",
-    section: "general",
-    title: "Welcome tour",
-    keywords:
-      "Replay the first-run setup: feature tour, provider selection, appearance, and first project. onboarding welcome wizard getting started setup",
-  },
-  {
-    id: "general:project-order",
-    section: "general",
-    title: "Project order",
-    keywords: "Controls how projects are arranged in the main sidebar. sort updated created manual",
-  },
-  {
-    id: "general:thread-order",
-    section: "general",
-    title: "Thread order",
-    keywords:
-      "Controls how threads are arranged inside each project in the main sidebar. sort updated created",
-  },
-  {
-    id: "general:chats-section",
-    section: "general",
-    title: "Chats",
-    keywords:
-      "Show the standalone Chats list in the sidebar footer chats not tied to a project. sidebar section",
-  },
-  {
-    id: "general:groups-section",
-    section: "general",
-    title: "Hubs",
-    keywords: "Show the Hubs tab in the sidebar switcher. sidebar section content outbox groups",
-  },
-  {
-    id: "general:automation-run-threads",
-    section: "general",
-    title: "Automation runs",
-    keywords:
-      "Show the thread each standalone automation run creates in the sidebar. hide automation run threads clutter scheduled",
-  },
-  {
-    id: "general:environment-default-open",
-    section: "general",
-    title: "Open by default",
-    keywords:
-      "Open the chat Environment panel automatically on normal threads. default closed open environment panel preference",
-  },
-  {
-    id: "general:environment-subagents",
-    section: "general",
-    title: "Subagents",
-    keywords:
-      "Show a compact summary of the chat's subagents in the Environment panel and open the full list in the right dock. agents roster lineage running done stop background",
-  },
-  {
-    id: "general:environment-usage",
-    section: "general",
-    title: "Usage",
-    keywords: "Show the provider usage row in the chat Environment panel.",
-  },
-  {
-    id: "general:environment-repository",
-    section: "general",
-    title: "Repository",
-    keywords: "Show the GitHub repository link in the chat Environment panel. git changes worktree",
-  },
-  {
-    id: "general:environment-pull-request",
-    section: "general",
-    title: "Pull request",
-    keywords:
-      "Show the open pull request CI checks and review comments in the chat Environment panel. pr fix github",
-  },
-  {
-    id: "general:environment-editor",
-    section: "general",
-    title: "Editor",
-    keywords:
-      "Show the Editor section in-app editor view and Open in editor picker in the chat Environment panel.",
-  },
-  {
-    id: "general:environment-recap",
-    section: "general",
-    title: "Recap",
-    keywords: "Show the auto-generated chat recap in the Environment panel.",
-  },
-  {
-    id: "general:environment-pinned",
-    section: "general",
-    title: "Pinned messages",
-    keywords: "Show the pinned-messages checklist in the Environment panel.",
-  },
-  {
-    id: "general:environment-instructions",
-    section: "general",
-    title: "Project instructions",
-    keywords: "Show project-level instructions in the Environment panel.",
-  },
-  {
-    id: "general:environment-notepad",
-    section: "general",
-    title: "Notepad",
-    keywords: "Show the per-thread notepad in the Environment panel.",
+    id: "accounts:add-account",
+    section: "accounts",
+    title: "settings:addAccount",
+    keywords: ["settings:accounts_addAccountKeywords"],
+    target: null,
   },
 
-  // ── Appearance ───────────────────────────────────────────────────────────────
+  // ── Every anchored settings row, read from the settings source ──────────────
+  ...GENERATED_SETTINGS_SEARCH_ROWS.map(generatedRowEntry),
+
+  // ── Pages and groups ─────────────────────────────────────────────────────────
   {
+    id: "shortcuts:shortcuts",
+    section: "shortcuts",
+    title: "settings:nav_keyboardShortcuts",
+    keywords: ["common:advanced_keybindings"],
+    target: null,
+  },
+  {
+    target: "setting-providers",
+    id: "providers:agents",
+    section: "providers",
+    title: "settings:providers_agentsList",
+    description: "settings:chooseVisibleCodingAgentsAndManageTheirInstalledCLI",
+    // The one list that replaced Enabled providers, Available CLIs, and Installed CLIs.
+    keywords: [
+      "settings:allowBackgroundChecksAndNewTurnsEnablingAProvider",
+      "settings:showOrHideInstalledProvidersInThePickerAnd",
+      "settings:reviewProviderVersionsAndUpdateToolsBinaryOverridesPath",
+      "enabled providers available CLIs installed CLIs picker order",
+    ],
+  },
+  {
+    id: "privacy:share-product-analytics",
+    section: "privacy",
+    title: "Share product analytics",
+    keywords: ["Privacy consent anonymous statistics collection tracking performance Cloudflare"],
+  },
+  {
+    target: "setting-theme",
     id: "appearance:theme",
     section: "appearance",
-    title: "Theme",
-    keywords: "Choose how Synara looks across the app. dark light system color",
-  },
-  {
-    id: "appearance:app-icon",
-    section: "appearance",
-    title: "App icon",
-    keywords: "Choose the icon Synara uses in the dock or taskbar desktop application logo.",
-    target: null,
-  },
-  {
-    id: "appearance:custom-title-bar",
-    section: "appearance",
-    title: "Use custom title bar",
-    keywords:
-      "frameless window system title bar Windows Linux caption controls minimize maximize close chrome",
-    target: null,
-  },
-  {
-    id: "appearance:system-ui-font",
-    section: "appearance",
-    title: "Use system UI font",
-    keywords: "Use the operating system interface font throughout Synara.",
-  },
-  {
-    id: "appearance:ui-density",
-    section: "appearance",
-    title: "UI density",
-    keywords:
-      "Control spacing in the sidebar, composer, chat gutters, and settings rows without changing font size. compact comfortable",
-  },
-  {
-    id: "appearance:chat-width",
-    section: "appearance",
-    title: "Chat width",
-    keywords:
-      "Control how wide the chat column grows so tables and wide content get more room. standard wide full",
-  },
-  {
-    id: "appearance:base-font-size",
-    section: "appearance",
-    title: "Base font size",
-    keywords:
-      "Adjust the app text base in pixels. Chat and UI typography scale proportionally. font",
-  },
-  {
-    id: "appearance:terminal-font-size",
-    section: "appearance",
-    title: "Terminal font size",
-    keywords: "Adjust terminal text independently from the app and chat font size.",
-  },
-  {
-    id: "appearance:terminal-font",
-    section: "appearance",
-    title: "Terminal font",
-    keywords:
-      "Type any monospace font installed on this device e.g. Fira Code. system monospace family",
-  },
-  {
-    id: "appearance:font-smoothing",
-    section: "appearance",
-    title: "Font smoothing",
-    keywords: "Use macOS-style antialiasing for lighter, crisper text rendering.",
-    target: null,
-  },
-  {
-    id: "appearance:time-format",
-    section: "appearance",
-    title: "Time format",
-    keywords:
-      "System default follows your browser or OS clock preference. timestamp 12-hour 24-hour locale",
-  },
-
-  // ── Notifications ─────────────────────────────────────────────────────────────
-  {
-    id: "notifications:activity-toasts",
-    section: "notifications",
-    title: "Activity toasts",
-    keywords:
-      "Show an in-app toast when a chat or managed terminal agent finishes or needs input. alerts",
-  },
-  {
-    id: "notifications:desktop-notifications",
-    section: "notifications",
-    title: "Desktop notifications",
-    keywords:
-      "Show an OS notification when a chat or managed terminal agent finishes or needs input while the app is in the background. alerts toast",
-  },
-  {
-    id: "notifications:wait-for-subagents",
-    section: "notifications",
-    title: "Wait for subagents",
-    keywords:
-      "Alert once the agent and all of its background subagents have finished. Turn this off to be alerted each time the agent or one of its subagents stops. alerts notification",
-  },
-
-  // ── AppSnap ───────────────────────────────────────────────────────────────────
-  {
-    id: "appsnap:enable",
-    section: "appsnap",
-    title: "Enable AppSnap",
-    keywords:
-      "Capture the frontmost macOS app window with a configurable two-key shortcut and add it to a recent task. appshot screenshot snap window capture hotkey",
-  },
-  {
-    id: "appsnap:shortcut",
-    section: "appsnap",
-    title: "Shortcut",
-    keywords: "Press the left and right Option keys at the same time. hotkey chord alt keys",
-  },
-  {
-    id: "appsnap:destination",
-    section: "appsnap",
-    title: "Destination",
-    keywords:
-      "Snaps join the task you interacted with in the last minute, otherwise a fresh task opens. automatic target composer",
-  },
-  {
-    id: "appsnap:capture-sound",
-    section: "appsnap",
-    title: "Capture sound",
-    keywords: "Play a short shutter cue when a window is captured. sound effect audio mute",
+    title: "onboarding:changed_theme",
+    keywords: ["settings:chooseHowSynaraLooksAcrossTheAppDarkLight"],
   },
   {
     id: "appsnap:permissions",
     section: "appsnap",
-    title: "Permission status",
-    keywords:
-      "Input Monitoring and Screen Recording permissions for AppSnap in macOS System Settings. privacy security recheck grant",
+    title: "settings:permissionStatus",
+    keywords: ["settings:inputMonitoringAndScreenRecordingPermissionsForAppSnapIn"],
     // Renders only in the macOS desktop app, so no stable anchor on other platforms.
     target: null,
   },
-
-  // ── Computer use ──────────────────────────────────────────────────────────────
   {
     id: "computer:status",
     section: "computer",
-    title: "Computer status",
-    keywords:
-      "Whether agents can see and control this computer's desktop right now. desktop backend beta availability health kwin hyprland nested wayland linux mac macos screen recording accessibility computer use control status set up install plugin repair",
+    title: "settings:computerStatus",
+    keywords: ["settings:whetherAgentsCanSeeAndControlThisComputerS"],
     // The status row is conditional and its title is dynamic (Ready /
     // Reconnecting / Unavailable), so link to the section rather than an
     // anchored row.
     target: null,
   },
   {
-    id: "computer:open-automatically",
-    section: "computer",
-    title: "Preview",
-    keywords:
-      "Show the in-chat Computer preview the first time an agent acts on the desktop, and choose its size. open automatically compact large. auto open computer use",
-    applies: () => true,
-  },
-  {
+    target: "setting-computer-control",
     id: "computer:how-agents-use-the-desktop",
     section: "computer",
-    title: "Computer control",
-    keywords:
-      "Let the agent use the desktop in any chat. Approval gates and Stop still apply. enable toggle permission desktop agent computer use control",
-  },
-  {
-    id: "computer:cursor-colors",
-    section: "computer",
-    title: "Cursor colors",
-    keywords:
-      "The agent pointer's colors: stock monochrome by default, or custom fill and rim. agent cursor arrow pointer color hex custom",
+    title: "settings:computerControl",
+    keywords: ["settings:letTheAgentUseTheDesktopInAnyChat2"],
   },
   {
     id: "computer:always-allowed",
     section: "computer",
-    title: "Always allowed",
-    keywords:
-      "Durable per-app always-allow grants from computer approvals, with expiry and revoke. always allow approval grant revoke app bundle consent computer use",
+    title: "settings:alwaysAllowed",
+    keywords: ["settings:durablePerAppAlwaysAllowGrantsFromComputerApprovals"],
     target: null,
   },
-
-  // ── Behavior ──────────────────────────────────────────────────────────────────
-  {
-    id: "behavior:sidechat-expiry",
-    section: "behavior",
-    title: "Side chat expiry",
-    keywords:
-      "Expire a side chat after it sits idle for this long. sidechat inactivity timeout 1 hour 24 hours never disable",
-  },
-  {
-    id: "behavior:follow-up-behavior",
-    section: "behavior",
-    title: "Follow-up behavior",
-    keywords:
-      "Choose whether messages sent during an active turn wait in the queue or steer the current run. Ctrl Cmd Enter opposite send",
-  },
-  {
-    id: "behavior:enter-while-dictating",
-    section: "behavior",
-    title: "Enter while dictating",
-    keywords:
-      "Choose what Enter does while a voice note is recording: stop and transcribe into the composer, or stop and send the message. voice dictation microphone transcribe",
-  },
-  {
-    id: "behavior:assistant-output",
-    section: "behavior",
-    title: "Assistant output",
-    keywords: "Show token-by-token output while a response is in progress. streaming",
-  },
-  {
-    id: "behavior:fold-finished-turns",
-    section: "behavior",
-    title: "Fold finished turns",
-    keywords:
-      "Hide a finished turn's tool calls and intermediate messages behind a single Worked for line. A turn stays open while it runs or while its background subagents are still working. collapse steps transcript",
-  },
-  {
-    id: "behavior:effort-slider",
-    section: "behavior",
-    title: "Effort slider",
-    keywords:
-      "Show reasoning effort as a slider in the composer model menu once a chat has started. fast mode reasoning thinking level picker",
-  },
-  {
-    id: "behavior:auto-open-simulator",
-    section: "behavior",
-    title: "Automatically open simulator",
-    keywords:
-      "Disable automatic iOS Simulator device pane opening. Use Simulator.app without the mirrored panel reopening. background launch",
-  },
-  {
-    id: "behavior:github-link-destination",
-    section: "behavior",
-    title: "Open pull requests and issues",
-    keywords:
-      "Choose where GitHub links in chats open. built-in review view in-app browser external browser destination pr issue",
-  },
-  {
-    id: "behavior:pull-request-diff-colors",
-    section: "behavior",
-    title: "Pull request diff colors",
-    keywords:
-      "Show additions in green and deletions in red in pull request summaries. pr diff stats green red",
-  },
-  {
-    id: "behavior:include-fork-upstreams",
-    section: "behavior",
-    title: "Include fork upstreams",
-    keywords:
-      "Also list pull requests and issues from each project's other GitHub remotes, such as the repository a fork was made from. code review inbox github upstream remote fork",
-  },
-  {
-    id: "behavior:diff-layout",
-    section: "behavior",
-    title: "Diff layout",
-    keywords: "Default stacked split review panel side by side unified layout per thread",
-  },
-  {
-    id: "behavior:diff-line-wrapping",
-    section: "behavior",
-    title: "Diff line wrapping",
-    keywords: "Set the default wrap state when the diff panel opens. word wrap",
-  },
-  {
-    id: "behavior:delete-confirmation",
-    section: "behavior",
-    title: "Delete confirmation",
-    keywords: "Ask before deleting a thread and its chat history. safety confirm",
-  },
-  {
-    id: "behavior:archive-confirmation",
-    section: "behavior",
-    title: "Archive confirmation",
-    keywords: "Ask before archiving a thread. safety confirm",
-  },
-  {
-    id: "behavior:terminal-close-confirmation",
-    section: "behavior",
-    title: "Terminal close confirmation",
-    keywords: "Ask before closing a terminal tab and clearing its history. safety confirm",
-  },
-  {
-    id: "behavior:keep-computer-awake",
-    section: "behavior",
-    title: "Keep computer awake",
-    keywords:
-      "caffeinate sleep macOS prevent sleep keep awake agent working system on off idle active",
-    // Row only renders on macOS with caffeinate available.
-    target: null,
-  },
-
-  // ── Keybindings ───────────────────────────────────────────────────────────────
-  {
-    id: "shortcuts:keyboard-shortcuts",
-    section: "shortcuts",
-    title: "Keybindings",
-    keywords:
-      "Every keyboard shortcut available in Synara: change, add, remove, or reset them. keybindings hotkeys key combo cmd ctrl customize rebind unassigned reset defaults",
-    target: null,
-  },
-
-  // ── Worktrees ─────────────────────────────────────────────────────────────────
   {
     id: "worktrees:managed-worktrees",
     section: "worktrees",
-    title: "Managed worktrees",
-    keywords:
-      "Review and clean up the worktrees created by Synara. git branch remove automatic cleanup merged pull request archived",
+    title: "onboarding:managedWorktrees",
+    keywords: [
+      "settings:worktreeCleanupSearchKeywords",
+      "settings:reviewAndCleanUpTheWorktreesCreatedBySynara",
+    ],
     target: null,
   },
-
-  // ── Archived ──────────────────────────────────────────────────────────────────
   {
     id: "archived:archived-threads",
     section: "archived",
-    title: "Archived threads",
-    keywords: "View and restore archived threads. unarchive history",
+    title: "settings:archivedThreads",
+    keywords: ["settings:viewAndRestoreArchivedThreadsUnarchiveHistory"],
     target: null,
   },
-
-  // ── Models ────────────────────────────────────────────────────────────────────
-  {
-    id: "models:source-control-writing-style",
-    section: "models",
-    title: "Source control writing style",
-    keywords:
-      "Repository conventions Conventional Commits custom instructions commit messages PR titles descriptions",
-  },
-  {
-    id: "models:git-writing-model",
-    section: "models",
-    title: "Git writing model",
-    keywords: "Used for generated commit messages, PR titles, and branch names.",
-  },
-  {
-    id: "models:saved-model-slugs",
-    section: "models",
-    title: "Saved model slugs",
-    keywords: "Add custom model slugs for supported providers. custom model",
-  },
-
-  // ── Providers ─────────────────────────────────────────────────────────────────
-  {
-    id: "providers:cpu-priority",
-    section: "providers",
-    title: "Keep Synara responsive",
-    keywords:
-      "Lower agent CPU scheduling priority performance load nice responsiveness restart sessions",
-  },
-  {
-    id: "providers:automatic-cli-update-checks",
-    section: "providers",
-    title: "Automatic CLI update checks",
-    keywords:
-      "Check Codex Claude and other provider CLIs for newer versions in the background. updates upgrade disable nags",
-  },
-  {
-    id: "providers:enabled-providers",
-    section: "providers",
-    title: "Enabled providers",
-    keywords:
-      "Allow background checks and new turns. Enabling a provider does not install it or sign it in. enable disable activity",
-  },
-  {
-    id: "providers:available-clis",
-    section: "providers",
-    title: "Available CLIs",
-    keywords:
-      "Show or hide installed providers in the picker and drag them into your preferred order. visible providers visibility order",
-  },
-  {
-    id: "providers:provider-updates",
-    section: "providers",
-    title: "Provider updates",
-    keywords: "Update installed provider tools that Synara can safely update. upgrade cli",
-  },
-  {
-    id: "providers:installed-clis",
-    section: "providers",
-    title: "Installed CLIs",
-    keywords: "Review provider versions and update tools. binary overrides path install",
-  },
-
-  // ── Skills ────────────────────────────────────────────────────────────────────
   {
     id: "skills:skills",
     section: "skills",
-    title: "Skills",
-    keywords: "Every skill found across providers, with toggles to control availability. agent",
+    title: "common:plugin_skillsSection",
+    keywords: ["settings:everySkillFoundAcrossProvidersWithTogglesToControl"],
     target: null,
   },
-
-  // ── Usage ─────────────────────────────────────────────────────────────────────
   {
     id: "usage:usage",
     section: "usage",
-    title: "Usage and billing",
-    keywords: "Remaining quota and credits for each signed-in provider. limits credits",
+    title: "settings:usageAndBilling",
+    keywords: ["settings:remainingQuotaAndCreditsForEachSignedInProvider"],
     target: null,
   },
-
   {
     id: "usage:sidebar-rings",
     section: "usage",
-    title: "Sidebar usage rings",
-    keywords:
-      "Choose up to two provider accounts for usage rings at the bottom of the sidebar rail. multiple Claude accounts quota",
+    title: "settings:sidebarUsageRings",
+    keywords: ["settings:chooseUpToTwoProviderAccountsForUsageRings"],
     target: null,
   },
-
-  // ── Advanced ──────────────────────────────────────────────────────────────────
   {
-    id: "advanced:keybindings",
-    section: "advanced",
-    title: "Keybindings",
-    keywords:
-      "Open the persisted keybindings.json file to edit advanced bindings directly. shortcuts",
+    id: "connectors:catalog",
+    section: "connectors",
+    title: "settings:connectors",
+    keywords: ["settings:connectorsSearch"],
+    target: null,
+    applies: () => isSettingsSectionAvailable("connectors"),
   },
   {
-    id: "advanced:recovery-tools",
-    section: "advanced",
-    title: "Recovery tools",
-    keywords:
-      "Rebuild local project indexes without clearing existing chats when the local state gets out of sync.",
-  },
-  {
+    target: "setting-external-mcp-integrations",
     id: "integrations:external-mcp",
     section: "integrations",
-    title: "External MCP integrations",
-    keywords:
-      "Pair Codex Claude and other local MCP clients with scoped project access. revoke credential task create wait read worktree approval",
+    title: "settings:externalMCPIntegrations",
+    keywords: ["settings:pairCodexClaudeAndOtherLocalMCPClientsWith"],
   },
   {
-    id: "advanced:version",
-    section: "advanced",
-    title: "Version",
-    keywords: "Current application version. about",
+    id: "connections:this-computer",
+    section: "connections",
+    title: "Control this computer",
+    keywords: [
+      "Devices that can control this Mac or computer. allow connections add iphone ipad qr code pairing approve revoke access trusted devices",
+    ],
+    target: null,
   },
   {
-    id: "advanced:feature-tour",
-    section: "advanced",
-    title: "What’s new since 0.9.2",
-    keywords:
-      "Replay feature tour redesigned workspace provider accounts Code review slider updates",
+    id: "connections:other-computers",
+    section: "connections",
+    title: "Control other devices",
+    keywords: [
+      "Computers you can control from this one. host server laptop connect open remote relay back to this computer disconnect forget pairing code share workspace discoverable",
+    ],
+    target: null,
   },
   {
-    id: "advanced:release-history",
-    section: "advanced",
-    title: "Release history",
-    keywords:
-      "A running log of every update, newest first. changelog what's new about release notes",
+    id: "connections:ssh",
+    section: "connections",
+    title: "SSH",
+    keywords: [
+      "Link a headless machine with a short code, or forward the SSH port. device code link approve vps cli browserless",
+    ],
+    target: null,
   },
-] as const;
+  {
+    id: "connections:advanced",
+    section: "connections",
+    title: "Account devices and sessions",
+    keywords: [
+      "Advanced: devices signed in to your account, active sessions, and unlinking this machine. revoke sign out lost stolen last used end session unlink",
+    ],
+    target: null,
+  },
+];
 
 const SETTINGS_SECTION_LABEL_BY_ID = new Map<SettingsSectionId, string>(
   SETTINGS_NAV_ITEMS.map((item) => [item.id, item.label]),
 );
 
 export function settingsSectionLabel(section: SettingsSectionId): string {
-  return SETTINGS_SECTION_LABEL_BY_ID.get(section) ?? section;
+  const label = SETTINGS_SECTION_LABEL_BY_ID.get(section);
+  return label === undefined ? section : t(label);
 }
 
-/**
- * Fuzzy-rank settings rows for the sidebar search. Title carries the strongest intent;
- * the description/synonym keywords and the owning section label match more loosely so a
- * query like "appearance" or "wrap" still surfaces the right rows.
- */
+/** Fuzzy-rank settings rows for the sidebar search and the command palette. */
 export function rankSettingsSearchEntries(
   query: string,
   limit: number,
@@ -673,13 +417,44 @@ export function rankSettingsSearchEntries(
     return [];
   }
   const resolvedContext = context ?? DEFAULT_SETTINGS_SEARCH_CONTEXT;
-  const available = SETTINGS_SEARCH_ENTRIES.filter(
-    (entry) => entry.applies?.(resolvedContext) ?? true,
-  );
-  const ranked = rankProviderDiscoveryItems(available, trimmed, (entry) => [
-    { value: entry.title },
-    { value: entry.keywords, weight: 200 },
-    { value: settingsSectionLabel(entry.section), weight: 400 },
-  ]);
+  const available = [
+    ...SETTINGS_SEARCH_ENTRIES.filter((entry) => entry.applies?.(resolvedContext) ?? true),
+    ...(isSettingsSectionAvailable("accounts")
+      ? accountSearchEntries(resolvedContext.accounts ?? [])
+      : []),
+  ];
+  const ranked = rankProviderDiscoveryItems(available, trimmed, searchHaystack);
   return ranked.slice(0, limit);
+}
+
+type SearchHaystack = ReadonlyArray<{ readonly value: string; readonly weight?: number }>;
+
+// English copy is bundled, so an entry's match text never changes; build it once per entry
+// rather than on every keystroke. Account entries are rebuilt per query and fall out of the
+// map with them.
+const HAYSTACK_BY_ENTRY = new WeakMap<SettingsSearchEntry, SearchHaystack>();
+
+/**
+ * Title carries the strongest intent; the description/synonym keywords and the owning
+ * section label match more loosely so a query like "appearance" or "wrap" still surfaces
+ * the right rows.
+ */
+function searchHaystack(entry: SettingsSearchEntry): SearchHaystack {
+  const cached = HAYSTACK_BY_ENTRY.get(entry);
+  if (cached) return cached;
+  const haystack: SearchHaystack = [
+    { value: entryText(entry, entry.title, "en") },
+    {
+      value: entry.keywords.map((keyword) => entryText(entry, keyword, "en")).join(" "),
+      weight: 200,
+    },
+    {
+      value: i18n.t(SETTINGS_SECTION_LABEL_BY_ID.get(entry.section) ?? entry.section, {
+        lng: "en",
+      }),
+      weight: 400,
+    },
+  ];
+  HAYSTACK_BY_ENTRY.set(entry, haystack);
+  return haystack;
 }

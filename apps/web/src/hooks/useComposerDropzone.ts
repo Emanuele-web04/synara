@@ -6,7 +6,13 @@
 import { useEffect, useRef, type ClipboardEvent, type DragEvent } from "react";
 
 import { CHAT_FILE_REFERENCE_DRAG_TYPE } from "~/lib/chatReferences";
-import { isDroppedComposerDirectory, splitDroppedComposerFiles } from "~/lib/composerDropPaths";
+import {
+  CODE_FILES_DRAG_TYPE,
+  hasDroppedPathReferenceTypes,
+  isDroppedComposerDirectory,
+  readDroppedPathReferences,
+  splitDroppedComposerFiles,
+} from "~/lib/composerDropPaths";
 
 export interface ComposerDropzoneFileSplit {
   readonly imageFiles: File[];
@@ -68,7 +74,12 @@ export function shouldBlockDisabledComposerDropzoneTransfer(
   disabled: boolean,
   types: readonly string[],
 ): boolean {
-  return disabled && (types.includes(CHAT_FILE_REFERENCE_DRAG_TYPE) || types.includes("Files"));
+  return (
+    disabled &&
+    (types.includes(CHAT_FILE_REFERENCE_DRAG_TYPE) ||
+      types.includes("Files") ||
+      (types.includes(CODE_FILES_DRAG_TYPE) && hasDroppedPathReferenceTypes(types)))
+  );
 }
 
 function shouldResetComposerDropzoneAfterUnhandledFileDrop(
@@ -120,6 +131,12 @@ function isComposerHandledDragForMode(
   if (dataTransfer.types.includes(CHAT_FILE_REFERENCE_DRAG_TYPE)) {
     return true;
   }
+  if (
+    dataTransfer.types.includes(CODE_FILES_DRAG_TYPE) &&
+    hasDroppedPathReferenceTypes(dataTransfer.types)
+  ) {
+    return true;
+  }
   if (!dataTransfer.types.includes("Files")) {
     return false;
   }
@@ -152,7 +169,7 @@ export function useComposerDropzone(input: {
         readonly genericFiles: "fallthrough";
       };
   readonly appendReferenceText?: ((text: string) => void) | undefined;
-  /** Absolute paths from desktop OS drops that should become @mentions (folders). */
+  /** Local paths from desktop OS/editor drops that should become @mentions. */
   readonly appendPathMentions?: ((paths: readonly string[]) => void) | undefined;
   readonly focusComposer?: (() => void) | undefined;
   readonly dragDepthRef?: { current: number } | undefined;
@@ -225,7 +242,12 @@ export function useComposerDropzone(input: {
       resetComposerDragState();
       return;
     }
-    if (!isComposerHandledDragForMode(event.dataTransfer, fileSupport.genericFiles)) return;
+    if (!isComposerHandledDragForMode(event.dataTransfer, fileSupport.genericFiles)) {
+      // URI payloads are protected until drop. Permit delivery without claiming
+      // the hover: ordinary web links share this type with local file URLs.
+      if (hasDroppedPathReferenceTypes(event.dataTransfer.types)) event.preventDefault();
+      return;
+    }
     event.preventDefault();
     event.dataTransfer.dropEffect = "copy";
     setIsDragOverComposer(true);
@@ -246,7 +268,11 @@ export function useComposerDropzone(input: {
   };
 
   const onComposerDrop = (event: DragEvent<HTMLDivElement>) => {
-    if (shouldBlockDisabledComposerDropzoneTransfer(disabled, event.dataTransfer.types)) {
+    const referencedPaths = readDroppedPathReferences(event.dataTransfer);
+    if (
+      shouldBlockDisabledComposerDropzoneTransfer(disabled, event.dataTransfer.types) ||
+      (disabled && referencedPaths.length > 0)
+    ) {
       event.preventDefault();
       resetComposerDragState();
       return;
@@ -259,6 +285,14 @@ export function useComposerDropzone(input: {
       return;
     }
     if (!event.dataTransfer.types.includes("Files")) {
+      // Folder-only editor drops have paths without native File objects.
+      resetComposerDragState();
+      if (referencedPaths.length === 0 || !appendPathMentions) {
+        return;
+      }
+      event.preventDefault();
+      appendPathMentions(referencedPaths);
+      focusComposer?.();
       return;
     }
     // Desktop OS drops: resolve absolute paths so folders become @mentions
@@ -266,6 +300,7 @@ export function useComposerDropzone(input: {
     const dropped = splitDroppedComposerFiles({
       files: event.dataTransfer.files,
       items: event.dataTransfer.items,
+      referencedPaths,
     });
     const splitFiles = {
       imageFiles: dropped.imageFiles,

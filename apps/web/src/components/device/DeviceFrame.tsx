@@ -21,6 +21,7 @@ import { memo, useId, useMemo, type CSSProperties, type ReactNode } from "react"
 
 import { cn } from "~/lib/utils";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { useTranslation } from "~/i18n";
 
 export type DeviceKind = "iPhone" | "androidPhone" | "iPad";
 
@@ -347,11 +348,11 @@ export const DeviceSilhouette = memo(function DeviceSilhouette({
  */
 const NUB_ACTIONS: Record<
   string,
-  { readonly label: string; readonly button?: DeviceHardwareButton; readonly hint?: string }
+  { readonly labelKey: string; readonly button?: DeviceHardwareButton; readonly hintKey?: string }
 > = {
-  volumeUp: { label: "Volume up", button: "volume-up" },
-  volumeDown: { label: "Volume down", button: "volume-down" },
-  power: { label: "Lock", button: "lock" },
+  volumeUp: { labelKey: "computer:volumeUp", button: "volume-up" },
+  volumeDown: { labelKey: "computer:volumeDown", button: "volume-down" },
+  power: { labelKey: "computer:lock", button: "lock" },
 };
 
 /** Direction a pressed nub travels: always into the chassis. */
@@ -413,6 +414,8 @@ export const DeviceScreen = memo(function DeviceScreen({
   landscape?: boolean;
   onPressButton?: ((button: DeviceHardwareButton) => void) | undefined;
 }) {
+  const { t } = useTranslation();
+
   const geo = useMemo(
     () => screenGeometry(kind, pixelWidth, pixelHeight),
     [kind, pixelWidth, pixelHeight],
@@ -485,7 +488,7 @@ export const DeviceScreen = memo(function DeviceScreen({
           if (!action) return null;
           const press = action.button;
           const interactive = press !== undefined && onPressButton !== undefined;
-          if (!interactive && !action.hint) return null;
+          if (!interactive && !action.hintKey) return null;
           return (
             <Tooltip key={name}>
               <TooltipTrigger
@@ -493,7 +496,7 @@ export const DeviceScreen = memo(function DeviceScreen({
                   interactive ? (
                     <button
                       type="button"
-                      aria-label={action.label}
+                      aria-label={t(action.labelKey)}
                       disabled={buttonsDisabled}
                       onClick={() => onPressButton?.(press)}
                       className={cn(
@@ -510,7 +513,7 @@ export const DeviceScreen = memo(function DeviceScreen({
                     // tab stop and offers no press affordance — only the
                     // tooltip that says why.
                     <span
-                      aria-label={action.label}
+                      aria-label={t(action.labelKey)}
                       className="absolute cursor-default rounded-full"
                       style={style}
                     />
@@ -518,7 +521,12 @@ export const DeviceScreen = memo(function DeviceScreen({
                 }
               />
               <TooltipPopup side={side === "top" ? "top" : side}>
-                {action.hint ? `${action.label} — ${action.hint}` : action.label}
+                {action.hintKey
+                  ? t("workspace:symbol3", {
+                      value0: t(action.labelKey),
+                      value1: t(action.hintKey),
+                    })
+                  : t(action.labelKey)}
               </TooltipPopup>
             </Tooltip>
           );

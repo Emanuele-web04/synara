@@ -44,6 +44,8 @@ export interface AcpToolCallState {
   readonly status?: "pending" | "inProgress" | "completed" | "failed";
   readonly command?: string;
   readonly detail?: string;
+  /** ACP extension metadata is kept separate from the provider-visible tool data. */
+  readonly metadata?: Record<string, unknown>;
   readonly data: Record<string, unknown>;
 }
 
@@ -83,12 +85,14 @@ export type AcpParsedSessionEvent =
       readonly _tag: "ToolCallUpdated";
       readonly toolCall: AcpToolCallState;
       readonly rawPayload: unknown;
+      readonly replayed?: boolean;
     }
   | {
       readonly _tag: "ContentDelta";
       readonly itemId?: string;
       readonly text: string;
       readonly streamKind?: AcpTextStreamKind;
+      readonly metadata?: Record<string, unknown>;
       readonly rawPayload: unknown;
     }
   | {
@@ -446,6 +450,7 @@ function makeToolCallState(
     readonly rawOutput?: unknown;
     readonly content?: ReadonlyArray<Acp.ToolCallContent> | null | undefined;
     readonly locations?: ReadonlyArray<Acp.ToolCallLocation> | null | undefined;
+    readonly metadata?: Record<string, unknown> | null | undefined;
   },
   options?: {
     readonly fallbackStatus?: "pending" | "inProgress" | "completed" | "failed";
@@ -459,7 +464,6 @@ function makeToolCallState(
   // A subagent's own description ("Explore composer UI") is the row heading; the
   // provider title ("Task: Explore composer UI") is only the fallback.
   const title = subagent?.description ?? (input.title?.trim() || undefined);
-  const command = subagent ? undefined : extractToolCallCommand(input.rawInput, title);
   const textContent = extractTextContentFromToolCallContent(input.content);
   const structuredContent = summarizeToolCallContent(input.content);
   const locationDetail = summarizeToolCallLocations(input.locations);
@@ -479,6 +483,15 @@ function makeToolCallState(
     : imageGeneration
       ? ACP_IMAGE_GENERATION_TOOL_KIND
       : (protocolKind ?? inferToolKindFromProviderTitle(title));
+  // Only execution-like calls carry a command. `extractToolCallCommand` also
+  // scrapes backticked paths out of titles ("Read `/home/x`"), which Grok
+  // emits for kind:"read" — without this gate the transcript rendered every
+  // file read as "Ran <path>" with the terminal icon.
+  const command =
+    subagent ||
+    (kind !== undefined && kind !== "other" && kind !== "execute" && kind !== "terminal")
+      ? undefined
+      : extractToolCallCommand(input.rawInput, title);
   const normalizedTitle =
     title && title.toLowerCase() !== "terminal" && title.toLowerCase() !== "tool call"
       ? title
@@ -571,6 +584,9 @@ function makeToolCallState(
     ...(status ? { status } : {}),
     ...(command ? { command } : {}),
     ...(presentation?.detail ? { detail: presentation.detail } : {}),
+    ...(input.metadata && Object.keys(input.metadata).length > 0
+      ? { metadata: input.metadata }
+      : {}),
     data,
   };
 }
@@ -591,6 +607,7 @@ function parseTypedToolCallState(
       rawOutput: event.rawOutput,
       content: event.content,
       locations: event.locations,
+      metadata: event._meta,
     },
     options,
   );
@@ -624,6 +641,9 @@ export function mergeToolCallState(
     ...(status ? { status } : {}),
     ...(command ? { command } : {}),
     ...(detail ? { detail } : {}),
+    ...(next.metadata || previous?.metadata
+      ? { metadata: { ...previous?.metadata, ...next.metadata } }
+      : {}),
     data: {
       ...previous?.data,
       ...next.data,
@@ -726,6 +746,7 @@ export function parseSessionUpdateEvent(params: Acp.SessionNotification): {
           ...(itemId ? { itemId } : {}),
           text: upd.content.text,
           streamKind: "assistant_text",
+          ...(upd._meta ? { metadata: upd._meta } : {}),
           rawPayload: params,
         });
       }
@@ -739,6 +760,7 @@ export function parseSessionUpdateEvent(params: Acp.SessionNotification): {
           ...(itemId ? { itemId } : {}),
           text: upd.content.text,
           streamKind: "reasoning_text",
+          ...(upd._meta ? { metadata: upd._meta } : {}),
           rawPayload: params,
         });
       }

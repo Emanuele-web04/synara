@@ -3,6 +3,7 @@
 // Layer: Route-level screen
 // Exports: PluginLibrary
 
+import { COARSE_HIT_AREA_CLASS_NAME, FOCUS_RING_CLASS_NAME } from "~/touchTargetStyles";
 import {
   PROVIDER_DISPLAY_NAMES,
   type ProviderKind,
@@ -11,22 +12,13 @@ import {
 } from "@synara/contracts";
 import { useQuery } from "@tanstack/react-query";
 import React, { useMemo, type ReactNode, useDeferredValue, useState } from "react";
-import type { IconType } from "react-icons";
-import {
-  SiCanva,
-  SiFigma,
-  SiGithub,
-  SiGmail,
-  SiGooglecalendar,
-  SiGoogledrive,
-  SiHuggingface,
-  SiLinear,
-  SiNotion,
-  SiSlack,
-  SiStripe,
-  SiVercel,
-} from "react-icons/si";
 import { PROVIDER_ICON_COMPONENT_BY_PROVIDER } from "./ProviderIcon";
+import {
+  type BrandArtwork,
+  KNOWN_BRAND_ARTWORK,
+  normalizeBrandKey,
+  readableBrandColor,
+} from "~/lib/brandIcons";
 import { useStore } from "~/store";
 import { DEFAULT_PROVIDER_ORDER } from "~/providerOrdering";
 import { useAppSettings } from "~/appSettings";
@@ -66,6 +58,7 @@ import {
   useDesktopTopBarWindowControlsGutterClassName,
 } from "~/hooks/useDesktopTopBarGutter";
 import { Skeleton } from "./ui/skeleton";
+import { useTranslation, t } from "~/i18n";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -77,30 +70,12 @@ type PluginEntry = {
   plugin: ProviderPluginDescriptor;
   isFeatured: boolean;
 };
-type PluginBrandArtwork = {
-  color: string;
-  icon: IconType;
-};
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
 const PROVIDER_ICON: Record<ProviderKind, React.FC<React.SVGProps<SVGSVGElement>>> = {
   ...PROVIDER_ICON_COMPONENT_BY_PROVIDER,
   codex: HammerIcon,
-};
-const KNOWN_PLUGIN_BRANDS: Record<string, PluginBrandArtwork> = {
-  canva: { icon: SiCanva, color: "#00C4CC" },
-  figma: { icon: SiFigma, color: "#F24E1E" },
-  github: { icon: SiGithub, color: "#181717" },
-  gmail: { icon: SiGmail, color: "#EA4335" },
-  googlecalendar: { icon: SiGooglecalendar, color: "#4285F4" },
-  googledrive: { icon: SiGoogledrive, color: "#0F9D58" },
-  huggingface: { icon: SiHuggingface, color: "#FF9D00" },
-  linear: { icon: SiLinear, color: "#5E6AD2" },
-  notion: { icon: SiNotion, color: "#111111" },
-  slack: { icon: SiSlack, color: "#4A154B" },
-  stripe: { icon: SiStripe, color: "#635BFF" },
-  vercel: { icon: SiVercel, color: "#111111" },
 };
 
 // ── Utilities ──────────────────────────────────────────────────────────────
@@ -111,25 +86,18 @@ function pluginEntryKey(entry: Pick<PluginEntry, "marketplacePath" | "plugin">):
 
 function sectionTitle(value: string): string {
   const n = value.trim();
-  return n.length === 0 ? "Unknown" : n;
+  return n.length === 0 ? t("common:common_unknown") : n;
 }
 
 function resolvePluginAccent(plugin: ProviderPluginDescriptor): string | undefined {
   return plugin.interface?.brandColor?.trim() || undefined;
 }
 
-function normalizeBrandKey(value: string | undefined): string {
-  return (value ?? "")
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]/g, "");
-}
-
 function resolvePluginLogo(plugin: ProviderPluginDescriptor): string | undefined {
   return plugin.interface?.logo?.trim() || undefined;
 }
 
-function resolvePluginBrand(plugin: ProviderPluginDescriptor): PluginBrandArtwork | undefined {
+function resolvePluginBrand(plugin: ProviderPluginDescriptor): BrandArtwork | undefined {
   const candidates = [
     plugin.interface?.composerIcon,
     plugin.interface?.displayName,
@@ -138,7 +106,7 @@ function resolvePluginBrand(plugin: ProviderPluginDescriptor): PluginBrandArtwor
 
   for (const candidate of candidates) {
     if (!candidate) continue;
-    const knownBrand = KNOWN_PLUGIN_BRANDS[candidate];
+    const knownBrand = KNOWN_BRAND_ARTWORK[candidate];
     if (knownBrand) return knownBrand;
   }
 
@@ -197,7 +165,10 @@ function PluginGlyph({ plugin }: { plugin: ProviderPluginDescriptor }) {
         className="inline-flex size-11 shrink-0 items-center justify-center rounded-[14px] border border-border/60 bg-background"
         style={accent ? { boxShadow: `0 0 0 0.5px ${accent}25` } : undefined}
       >
-        <BrandIcon className="size-5" style={{ color: brand.color }} />
+        <BrandIcon
+          className="size-5"
+          style={{ color: readableBrandColor(brand.color) ?? "var(--foreground)" }}
+        />
       </span>
     );
   }
@@ -242,7 +213,9 @@ function TabButton({
     <button
       type="button"
       className={cn(
-        "inline-flex h-10 items-center border-b-2 px-1 text-ui-lg font-medium transition-colors",
+        "inline-flex h-10 items-center rounded-t-sm border-b-2 px-1 text-ui-lg font-medium transition-colors",
+        FOCUS_RING_CLASS_NAME,
+        COARSE_HIT_AREA_CLASS_NAME,
         active
           ? "border-foreground text-foreground"
           : "border-transparent text-muted-foreground hover:text-foreground/80",
@@ -274,6 +247,8 @@ function ProviderToggleButton({
       type="button"
       className={cn(
         "inline-flex h-7 items-center gap-1.5 rounded-full px-2.5 text-ui font-medium transition-colors",
+        FOCUS_RING_CLASS_NAME,
+        COARSE_HIT_AREA_CLASS_NAME,
         active
           ? "bg-[var(--color-text-foreground)] text-[var(--color-background-surface)] shadow-xs"
           : "text-muted-foreground hover:bg-[var(--sidebar-accent)] hover:text-foreground",
@@ -341,8 +316,10 @@ function PluginGridItem({ entry }: { entry: PluginEntry }) {
 }
 
 function SkillGridItem({ skill }: { skill: ProviderSkillDescriptor }) {
+  const { t } = useTranslation();
+
   const description =
-    skill.interface?.shortDescription ?? skill.description ?? "No description available.";
+    skill.interface?.shortDescription ?? skill.description ?? t("common:noDescriptionAvailable");
 
   return (
     <div className="flex items-center gap-3 rounded-xl px-3 py-3 transition-colors hover:bg-[var(--sidebar-accent)]">
@@ -368,6 +345,8 @@ export function PluginLibrary(props?: {
   readonly cwd?: string | null;
   readonly embedded?: boolean;
 }) {
+  const { t } = useTranslation();
+
   const embedded = props?.embedded ?? false;
   const desktopTopBarTrafficLightGutterClassName = useDesktopTopBarTrafficLightGutterClassName();
   const desktopTopBarWindowControlsGutterClassName =
@@ -563,40 +542,44 @@ export function PluginLibrary(props?: {
     <>
       <div className="flex items-end gap-3">
         <TabButton
-          label="Plugins"
+          label={t("common:plugin_pluginsTab")}
           active={selectedTab === "plugins"}
           onClick={() => setSelectedTab("plugins")}
         />
         <TabButton
-          label="Skills"
+          label={t("common:plugin_skillsSection")}
           active={selectedTab === "skills"}
           onClick={() => setSelectedTab("skills")}
         />
       </div>
       <div className="flex-1" />
-      <div className="inline-flex rounded-full border border-border/60 bg-background/60 p-0.5">
-        {enabledProviderOrder.map((provider) => {
-          const capabilities = providerCapabilities[provider];
-          const label = PROVIDER_DISPLAY_NAMES[provider];
-          return (
-            <ProviderToggleButton
-              key={provider}
-              label={label}
-              provider={provider}
-              active={effectiveProvider === provider}
-              disabled={!capabilities.plugins && !capabilities.skills}
-              onClick={() => {
-                setSelectedProvider(provider);
-                if (selectedTab === "plugins" && !capabilities.plugins && capabilities.skills) {
-                  setSelectedTab("skills");
-                }
-                if (selectedTab === "skills" && !capabilities.skills && capabilities.plugins) {
-                  setSelectedTab("plugins");
-                }
-              }}
-            />
-          );
-        })}
+      {/* Scrolls sideways when the providers outgrow the bar; the block padding leaves room
+          for the pills' coarse-pointer hit areas inside the scroller. */}
+      <div className="-my-2 min-w-0 overflow-x-auto py-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        <div className="inline-flex rounded-full border border-border/60 bg-background/60 p-0.5">
+          {enabledProviderOrder.map((provider) => {
+            const capabilities = providerCapabilities[provider];
+            const label = PROVIDER_DISPLAY_NAMES[provider];
+            return (
+              <ProviderToggleButton
+                key={provider}
+                label={label}
+                provider={provider}
+                active={effectiveProvider === provider}
+                disabled={!capabilities.plugins && !capabilities.skills}
+                onClick={() => {
+                  setSelectedProvider(provider);
+                  if (selectedTab === "plugins" && !capabilities.plugins && capabilities.skills) {
+                    setSelectedTab("skills");
+                  }
+                  if (selectedTab === "skills" && !capabilities.skills && capabilities.plugins) {
+                    setSelectedTab("plugins");
+                  }
+                }}
+              />
+            );
+          })}
+        </div>
       </div>
     </>
   );
@@ -607,7 +590,9 @@ export function PluginLibrary(props?: {
       {!embedded ? (
         <div className="px-6 py-10 text-center">
           <h1 className="text-[28px] font-semibold text-foreground">
-            {providerLabel ? `Make ${providerLabel} work your way` : "Plugins and skills"}
+            {providerLabel
+              ? t("common:makeWorkYourWay", { value0: providerLabel })
+              : t("common:pluginsAndSkills")}
           </h1>
         </div>
       ) : null}
@@ -627,7 +612,9 @@ export function PluginLibrary(props?: {
               if (selectedTab === "plugins") setPluginSearch(e.target.value);
               else setSkillSearch(e.target.value);
             }}
-            placeholder={selectedTab === "plugins" ? "Search plugins" : "Search skills"}
+            placeholder={
+              selectedTab === "plugins" ? t("common:searchPlugins") : t("common:searchSkills")
+            }
             className="text-ui leading-snug"
           />
         </InputGroup>
@@ -640,9 +627,7 @@ export function PluginLibrary(props?: {
           (pluginsQuery.data?.marketplaceLoadErrors.length ?? 0) > 0)) && (
         <div className="mx-auto max-w-2xl space-y-1.5 px-6 pb-4">
           {!discoveryCwd && selectedTab === "skills" ? (
-            <InlineWarning>
-              Skills need a workspace path. Open a project or thread first.
-            </InlineWarning>
+            <InlineWarning>{t("common:skillsNeedAWorkspacePathOpenAProjectOr")}</InlineWarning>
           ) : null}
           {selectedTab === "plugins" && pluginsQuery.data?.remoteSyncError ? (
             <InlineWarning>{pluginsQuery.data.remoteSyncError}</InlineWarning>
@@ -667,13 +652,13 @@ export function PluginLibrary(props?: {
                 <EmptyPanel
                   title={
                     providerLabel
-                      ? `Plugins unavailable for ${providerLabel}`
-                      : "No enabled providers"
+                      ? t("common:pluginsUnavailableFor", { value0: providerLabel })
+                      : t("common:noEnabledProviders")
                   }
                   description={
                     providerLabel
-                      ? "This provider does not expose plugin discovery."
-                      : "Enable a provider in Settings → Providers to browse plugins and skills."
+                      ? t("common:thisProviderDoesNotExposePluginDiscovery")
+                      : t("common:enableAProviderInSettingsProvidersToBrowsePlugins")
                   }
                 />
               </div>
@@ -685,8 +670,8 @@ export function PluginLibrary(props?: {
               </div>
             ) : filteredPluginEntries.length === 0 ? (
               <EmptyPanel
-                title="No installed plugins found"
-                description="This view only shows plugins already available in your Codex setup."
+                title={t("common:noInstalledPluginsFound")}
+                description={t("common:thisViewOnlyShowsPluginsAlreadyAvailableInYour")}
               />
             ) : (
               <div className="space-y-6">
@@ -710,13 +695,13 @@ export function PluginLibrary(props?: {
                 <EmptyPanel
                   title={
                     providerLabel
-                      ? `Skills unavailable for ${providerLabel}`
-                      : "No enabled providers"
+                      ? t("common:skillsUnavailableFor", { value0: providerLabel })
+                      : t("common:noEnabledProviders")
                   }
                   description={
                     providerLabel
-                      ? "This provider does not expose skill discovery."
-                      : "Enable a provider in Settings → Providers to browse plugins and skills."
+                      ? t("common:thisProviderDoesNotExposeSkillDiscovery")
+                      : t("common:enableAProviderInSettingsProvidersToBrowsePlugins")
                   }
                 />
               </div>
@@ -727,10 +712,13 @@ export function PluginLibrary(props?: {
                 ))}
               </div>
             ) : filteredSkills.length === 0 ? (
-              <EmptyPanel title="No skills found" description="No skills match this search." />
+              <EmptyPanel
+                title={t("common:plugin_noSkillsFound")}
+                description={t("common:noSkillsMatchThisSearch")}
+              />
             ) : (
               <div>
-                <SectionHeader title="Skills" />
+                <SectionHeader title={t("common:plugin_skillsSection")} />
                 <div className="grid grid-cols-1 sm:grid-cols-2">
                   {filteredSkills.map((skill) => (
                     <SkillGridItem key={skill.path} skill={skill} />

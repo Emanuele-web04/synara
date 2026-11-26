@@ -1,9 +1,13 @@
 // FILE: AdvancedSettingsPanel.tsx
-// Purpose: Own advanced settings state and workflows for auth, keybindings, and recovery.
+// Purpose: Own advanced settings state and workflows for auth and recovery, plus the
+//          keybindings-file, app-tour, and About rows that other settings pages show.
 // Layer: Settings UI components
-// Exports: AdvancedSettingsPanel
+// Exports: AdvancedSettingsPanel, KeybindingsFileSettingsSection, AppTourSettingsRow,
+//          AboutSettingsSection
 
+import { FOCUS_RING_CLASS_NAME } from "~/touchTargetStyles";
 import { useQuery } from "@tanstack/react-query";
+import { useNavigate } from "@tanstack/react-router";
 import { useCallback, useMemo, useState } from "react";
 
 import { logoutCurrentBrowserSession } from "~/authLogout";
@@ -22,13 +26,137 @@ import { useStore } from "~/store";
 import { createAllThreadsMessagelessSelector, createThreadShellsSelector } from "~/storeSelectors";
 import { useSettingsRestoreSignal } from "./SettingControls";
 import { SettingsRow, SettingsSection } from "./SettingsPanelPrimitives";
+import { useTranslation } from "~/i18n";
 
-export function AdvancedSettingsPanel(props: {
-  active: boolean;
-  onOpenReleaseHistory: () => void;
-  resetEpoch: number;
-}) {
+/** The persisted `keybindings.json`, opened in the preferred editor. Shown on Keyboard shortcuts. */
+export function KeybindingsFileSettingsSection(props: { resetEpoch: number }) {
+  const { t } = useTranslation();
   const configQuery = useQuery(serverConfigQueryOptions());
+  const [isOpeningKeybindings, setIsOpeningKeybindings] = useState(false);
+  const [openKeybindingsError, setOpenKeybindingsError] = useState<string | null>(null);
+
+  useSettingsRestoreSignal(props.resetEpoch, () => {
+    setOpenKeybindingsError(null);
+  });
+
+  const keybindingsConfigPath = configQuery.data?.keybindingsConfigPath ?? null;
+  const availableEditors = configQuery.data?.availableEditors;
+
+  const openKeybindingsFile = useCallback(() => {
+    if (!keybindingsConfigPath) return;
+    setOpenKeybindingsError(null);
+    setIsOpeningKeybindings(true);
+    const editor = resolveAndPersistPreferredEditor(availableEditors ?? []);
+    if (!editor) {
+      setOpenKeybindingsError(t("settings:common_noAvailableEditors"));
+      setIsOpeningKeybindings(false);
+      return;
+    }
+    void ensureNativeApi()
+      .shell.openInEditor(keybindingsConfigPath, editor)
+      .catch((error) => {
+        setOpenKeybindingsError(
+          error instanceof Error ? error.message : t("settings:unableToOpenKeybindingsFile"),
+        );
+      })
+      .finally(() => {
+        setIsOpeningKeybindings(false);
+      });
+  }, [availableEditors, keybindingsConfigPath, t]);
+
+  return (
+    <SettingsSection title="settings:shortcuts_keybindingsFile">
+      <SettingsRow
+        id="setting-keybindings"
+        title="common:advanced_keybindings"
+        description="settings:openThePersistedKeybindingsJsonFileToEditAdvanced"
+        status={
+          <>
+            <span className="block break-all font-mono text-ui-sm text-foreground">
+              {keybindingsConfigPath ?? t("settings:advanced_resolvingKeybindingsPath")}
+            </span>
+            {openKeybindingsError ? (
+              <span className="mt-1 block text-destructive">{openKeybindingsError}</span>
+            ) : (
+              <span className="mt-1 block">{t("settings:advanced_opensInEditor")}</span>
+            )}
+          </>
+        }
+        control={
+          <Button
+            size="xs"
+            variant="outline"
+            disabled={!keybindingsConfigPath || isOpeningKeybindings}
+            onClick={openKeybindingsFile}
+          >
+            {isOpeningKeybindings
+              ? t("settings:advanced_opening")
+              : t("settings:advanced_openFile")}
+          </Button>
+        }
+      />
+    </SettingsSection>
+  );
+}
+
+/** Replays the feature tour. Shown under General › Getting started. */
+export function AppTourSettingsRow() {
+  const { t } = useTranslation();
+  const navigate = useNavigate();
+  return (
+    <SettingsRow
+      id="setting-app-tour"
+      title="settings:appTour"
+      description="settings:appTourDescription"
+      control={
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => {
+            // The tour points at the workspace's sidebar and rail, so leave Settings
+            // first; the chat sidebar is not mounted here.
+            void navigate({ to: "/" }).then(() => useFeatureTourStore.getState().open());
+          }}
+        >
+          {t("settings:replayAppTour")}
+        </Button>
+      }
+    />
+  );
+}
+
+/** Version and release history. Shown on the About page. */
+export function AboutSettingsSection(props: { onOpenReleaseHistory: () => void }) {
+  const { t } = useTranslation();
+  return (
+    <SettingsSection title="settings:advanced_about">
+      <SettingsRow
+        id="setting-version"
+        title="settings:advanced_version"
+        description="settings:advanced_versionDescription"
+        control={
+          <code className="text-ui leading-snug font-medium text-muted-foreground">
+            {APP_VERSION}
+          </code>
+        }
+      />
+      <SettingsRow
+        id="setting-release-history"
+        title="common:advanced_releaseHistory"
+        description="settings:advanced_releaseHistoryDescription"
+        control={
+          <Button size="sm" variant="outline" onClick={props.onOpenReleaseHistory}>
+            {t("settings:advanced_viewReleaseHistory")}
+          </Button>
+        }
+      />
+    </SettingsSection>
+  );
+}
+
+export function AdvancedSettingsPanel(props: { active: boolean; resetEpoch: number }) {
+  const { t } = useTranslation();
+
   const authSessionQuery = useQuery(serverAuthSessionQueryOptions());
   const syncServerReadModel = useStore((store) => store.syncServerReadModel);
   // Keep these subscriptions inside the only panel that uses recovery eligibility.
@@ -37,45 +165,18 @@ export function AdvancedSettingsPanel(props: {
   const projectCount = useStore((store) => store.projects.length);
   const threadsHydrated = useStore((store) => store.threadsHydrated);
 
-  const [isOpeningKeybindings, setIsOpeningKeybindings] = useState(false);
   const [isRepairingLocalState, setIsRepairingLocalState] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [showRecoveryTools, setShowRecoveryTools] = useState(false);
-  const [openKeybindingsError, setOpenKeybindingsError] = useState<string | null>(null);
 
   useSettingsRestoreSignal(props.resetEpoch, () => {
     setShowRecoveryTools(false);
-    setOpenKeybindingsError(null);
   });
 
-  const keybindingsConfigPath = configQuery.data?.keybindingsConfigPath ?? null;
-  const availableEditors = configQuery.data?.availableEditors;
   const shouldOfferRecoveryTools = useMemo(() => {
     if (!threadsHydrated || projectCount === 0) return false;
     return threadShells.length === 0 || allThreadsMessageless;
   }, [allThreadsMessageless, projectCount, threadShells.length, threadsHydrated]);
-
-  const openKeybindingsFile = useCallback(() => {
-    if (!keybindingsConfigPath) return;
-    setOpenKeybindingsError(null);
-    setIsOpeningKeybindings(true);
-    const editor = resolveAndPersistPreferredEditor(availableEditors ?? []);
-    if (!editor) {
-      setOpenKeybindingsError("No available editors found.");
-      setIsOpeningKeybindings(false);
-      return;
-    }
-    void ensureNativeApi()
-      .shell.openInEditor(keybindingsConfigPath, editor)
-      .catch((error) => {
-        setOpenKeybindingsError(
-          error instanceof Error ? error.message : "Unable to open keybindings file.",
-        );
-      })
-      .finally(() => {
-        setIsOpeningKeybindings(false);
-      });
-  }, [availableEditors, keybindingsConfigPath]);
 
   const repairLocalState = useCallback(async () => {
     if (isRepairingLocalState) return;
@@ -96,52 +197,52 @@ export function AdvancedSettingsPanel(props: {
         syncServerReadModel(snapshot);
         toastManager.add({
           type: "success",
-          title: "Local state repaired",
-          description: "Project indexes were rebuilt without clearing existing chats.",
+          title: t("settings:localStateRepaired"),
+          description: t("settings:projectIndexesWereRebuiltWithoutClearingExistingChats"),
         });
       })
       .catch((error: unknown) => {
         toastManager.add({
           type: "error",
-          title: "Repair failed",
-          description: error instanceof Error ? error.message : "Unable to repair local state.",
+          title: t("settings:advanced_repairFailed"),
+          description:
+            error instanceof Error ? error.message : t("settings:unableToRepairLocalState"),
         });
       })
       .finally(() => {
         setIsRepairingLocalState(false);
       });
-  }, [isRepairingLocalState, syncServerReadModel]);
+  }, [isRepairingLocalState, syncServerReadModel, t]);
 
   const logoutCurrentSession = useCallback(async () => {
     if (isLoggingOut) return;
     const api = readNativeApi() ?? ensureNativeApi();
     setIsLoggingOut(true);
     const result = await logoutCurrentBrowserSession({
-      confirm: () =>
-        api.dialogs.confirm(
-          "Sign out this browser?\n\nIts session and every live connection opened with it will be revoked.",
-        ),
+      confirm: () => api.dialogs.confirm(t("settings:signOutThisBrowserItsSessionAndEveryLive")),
       logout: () => api.server.logoutAuthSession(),
       navigate: (path) => window.location.assign(path),
       onError: (error) =>
         toastManager.add({
           type: "error",
-          title: "Sign out failed",
-          description: error instanceof Error ? error.message : "Unable to revoke this session.",
+          title: t("settings:signOutFailed"),
+          description:
+            error instanceof Error ? error.message : t("settings:unableToRevokeThisSession"),
         }),
     });
     if (result !== "redirecting") setIsLoggingOut(false);
-  }, [isLoggingOut]);
+  }, [isLoggingOut, t]);
 
   if (!props.active) return null;
 
   return (
     <div className="space-y-6">
       {authSessionQuery.data?.authenticated ? (
-        <SettingsSection title="Session">
+        <SettingsSection title="settings:session">
           <SettingsRow
-            title="This browser"
-            description="Revoke this browser session and close every live Synara connection it owns. A fresh pairing link is required to reconnect."
+            id="setting-this-browser"
+            title="settings:thisBrowser"
+            description="settings:revokeThisBrowserSessionAndCloseEveryLiveSynara"
             status={`Authenticated as ${authSessionQuery.data.role ?? "client"}.`}
             control={
               <Button
@@ -150,44 +251,18 @@ export function AdvancedSettingsPanel(props: {
                 disabled={isLoggingOut}
                 onClick={() => void logoutCurrentSession()}
               >
-                {isLoggingOut ? "Signing out..." : "Sign out"}
+                {isLoggingOut ? t("settings:signingOut") : t("settings:signOut")}
               </Button>
             }
           />
         </SettingsSection>
       ) : null}
 
-      <SettingsSection title="Developer tools">
+      <SettingsSection title="settings:advanced_developerTools">
         <SettingsRow
-          title="Keybindings"
-          description="Open the persisted `keybindings.json` file to edit advanced bindings directly."
-          status={
-            <>
-              <span className="block break-all font-mono text-ui-sm text-foreground">
-                {keybindingsConfigPath ?? "Resolving keybindings path..."}
-              </span>
-              {openKeybindingsError ? (
-                <span className="mt-1 block text-destructive">{openKeybindingsError}</span>
-              ) : (
-                <span className="mt-1 block">Opens in your preferred editor.</span>
-              )}
-            </>
-          }
-          control={
-            <Button
-              size="xs"
-              variant="outline"
-              disabled={!keybindingsConfigPath || isOpeningKeybindings}
-              onClick={openKeybindingsFile}
-            >
-              {isOpeningKeybindings ? "Opening..." : "Open file"}
-            </Button>
-          }
-        />
-
-        <SettingsRow
-          title="Recovery tools"
-          description="Rebuild local project indexes without clearing existing chats when the local state gets out of sync."
+          id="setting-recovery-tools"
+          title="settings:advanced_recoveryTools"
+          description="settings:advanced_recoveryToolsDescription"
           status={
             shouldOfferRecoveryTools
               ? "Visible because projects exist but no chat history is currently available."
@@ -200,7 +275,9 @@ export function AdvancedSettingsPanel(props: {
               disabled={!shouldOfferRecoveryTools || isRepairingLocalState}
               onClick={() => void repairLocalState()}
             >
-              {isRepairingLocalState ? "Repairing..." : "Repair state"}
+              {isRepairingLocalState
+                ? t("settings:advanced_repairing")
+                : t("settings:advanced_repairState")}
             </Button>
           }
         >
@@ -208,12 +285,15 @@ export function AdvancedSettingsPanel(props: {
             <div className="mt-3 border-t border-border/70 pt-3">
               <button
                 type="button"
-                className="flex w-full items-center justify-between text-left"
+                className={cn(
+                  "flex w-full items-center justify-between rounded-sm text-left",
+                  FOCUS_RING_CLASS_NAME,
+                )}
                 aria-expanded={showRecoveryTools}
                 onClick={() => setShowRecoveryTools((current) => !current)}
               >
                 <span className="text-ui leading-snug font-medium text-muted-foreground">
-                  What this does
+                  {t("settings:advanced_whatThisDoes")}
                 </span>
                 <DisclosureChevron
                   open={showRecoveryTools}
@@ -227,48 +307,11 @@ export function AdvancedSettingsPanel(props: {
                   SETTINGS_INSET_LIST_CLASS_NAME,
                 )}
               >
-                <div>
-                  Rebuilds local project indexes and refreshes project snapshots. Existing chats
-                  stay in place.
-                </div>
+                <div>{t("settings:advanced_recoveryDetail")}</div>
               </DisclosureRegion>
             </div>
           ) : null}
         </SettingsRow>
-      </SettingsSection>
-
-      <SettingsSection title="About">
-        <SettingsRow
-          title="Version"
-          description="Current application version."
-          control={
-            <code className="text-ui leading-snug font-medium text-muted-foreground">
-              {APP_VERSION}
-            </code>
-          }
-        />
-        <SettingsRow
-          title="What’s new since 0.9.2"
-          description="Explore the redesigned workspace, provider accounts, and Code review."
-          control={
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => useFeatureTourStore.getState().open()}
-            >
-              Replay feature tour
-            </Button>
-          }
-        />
-        <SettingsRow
-          title="Release history"
-          description="A running log of every update, newest first. Same notes the post-update dialog shows, kept here so you can revisit them any time."
-          control={
-            <Button size="sm" variant="outline" onClick={props.onOpenReleaseHistory}>
-              View release history
-            </Button>
-          }
-        />
       </SettingsSection>
     </div>
   );

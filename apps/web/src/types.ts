@@ -10,6 +10,8 @@ import type {
   TurnDispatchMode,
   OrchestrationLatestTurn,
   OrchestrationThreadPullRequest,
+  OrchestrationThreadPullRequestLink,
+  OrchestrationThread,
   OrchestrationProposedPlanId,
   PinnedMessage,
   PendingClaudeCacheReview,
@@ -51,6 +53,8 @@ export type ProjectScript = ContractProjectScript;
 
 export interface ChatImageAttachment {
   type: "image";
+  /** Decoded source alias supplied by the host for inline assistant images. */
+  sourcePath?: string;
   id: string;
   name: string;
   mimeType: string;
@@ -256,17 +260,25 @@ export interface Thread extends ThreadWorkspaceState {
   sidechatLastActivityAt?: string | null;
   sidechatExpiredAt?: string | null;
   handoff?: ThreadHandoff | null;
+  usageLimitRecovery?: OrchestrationThread["usageLimitRecovery"];
+  /** Latest authoritative event/snapshot carrying the recovery, including cancellation. */
+  usageLimitRecoverySequence?: number;
   claudeCacheReview?: PendingClaudeCacheReview | null;
   /** Client projection cursor shared by shell and detail cache-review updates. */
   claudeCacheReviewSequence?: number;
   /** Last snapshot/event sequence carrying snooze metadata. */
   snoozeSequence?: number;
   lastKnownPr?: OrchestrationThreadPullRequest | null;
+  pullRequests?: ReadonlyArray<OrchestrationThreadPullRequestLink>;
   latestUserMessageAt?: string | null;
   latestHumanMessageAt?: string | null;
   hasPendingApprovals?: boolean;
   hasPendingUserInput?: boolean;
   hasActionableProposedPlan?: boolean;
+  /** Server-authoritative outstanding background tasks; absent from older servers. */
+  pendingBackgroundTaskCount?: number;
+  /** Server-derived head of the newest assistant reply; only thread shells carry it. */
+  latestReplyPreview?: string;
   pendingInteractions?: OrchestrationPendingInteraction[];
   turnDiffSummaries: TurnDiffSummary[];
   activities: OrchestrationThreadActivity[];
@@ -311,16 +323,24 @@ export interface ThreadShell extends ThreadWorkspaceState {
   sidechatLastActivityAt?: string | null;
   sidechatExpiredAt?: string | null;
   handoff?: ThreadHandoff | null;
+  usageLimitRecovery?: OrchestrationThread["usageLimitRecovery"];
+  /** Latest authoritative event/snapshot carrying the recovery, including cancellation. */
+  usageLimitRecoverySequence?: number;
   claudeCacheReview?: PendingClaudeCacheReview | null;
   claudeCacheReviewSequence?: number;
   /** Last snapshot/event sequence carrying snooze metadata. */
   snoozeSequence?: number;
   lastKnownPr?: OrchestrationThreadPullRequest | null;
+  pullRequests?: ReadonlyArray<OrchestrationThreadPullRequestLink>;
   latestUserMessageAt?: string | null;
   latestHumanMessageAt?: string | null;
   hasPendingApprovals?: boolean;
   hasPendingUserInput?: boolean;
   hasActionableProposedPlan?: boolean;
+  /** Server-authoritative outstanding background tasks; absent from older servers. */
+  pendingBackgroundTaskCount?: number;
+  /** Server-derived head of the newest assistant reply; absent when there is none. */
+  latestReplyPreview?: string;
   pendingInteractions?: OrchestrationPendingInteraction[];
   lastVisitedAt?: string | undefined;
 }
@@ -375,6 +395,9 @@ export interface SidebarThreadSummary {
   sidechatExpiredAt?: string | null;
   handoff?: ThreadHandoff | null;
   lastKnownPr?: OrchestrationThreadPullRequest | null;
+  pullRequests?: ReadonlyArray<OrchestrationThreadPullRequestLink>;
+  /** Plain-text head of the newest assistant reply, for list rows. */
+  latestReplyPreview?: string;
 }
 
 /** Lightweight composer identity that ignores live turn/status churn. */
@@ -393,6 +416,7 @@ export interface ThreadSession {
   provider: ProviderKind;
   runtimeMode?: RuntimeMode;
   providerInstanceId?: ProviderInstanceId;
+  supportsNativeTurnSteering?: boolean;
   status: SessionPhase | "error" | "closed";
   activeTurnId?: TurnId | undefined;
   createdAt: string;

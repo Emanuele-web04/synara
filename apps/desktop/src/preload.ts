@@ -6,6 +6,8 @@ import type {
   DesktopBridge,
   DesktopComputerPreviewFrame,
   DesktopDiagnosticActivity,
+  DesktopWindowTranslucency,
+  ProductAnalyticsInput,
 } from "@synara/contracts";
 import { normalizeDesktopWsUrl, resolveDesktopWsUrlFromEnv } from "./desktopWsBridge";
 import { DESKTOP_IPC_CHANNELS } from "./ipcChannels";
@@ -15,6 +17,8 @@ import {
 } from "./runningChatsQuitGuard";
 
 const IPC = DESKTOP_IPC_CHANNELS;
+// Live computerPreview.onFrame listeners in this renderer.
+let computerPreviewListenerCount = 0;
 
 function getDesktopWsUrl(): string | null {
   try {
@@ -24,6 +28,17 @@ function getDesktopWsUrl(): string | null {
     return resolveDesktopWsUrlFromEnv(process.env);
   }
 }
+
+function getWindowTranslucency(): DesktopWindowTranslucency | undefined {
+  try {
+    const value: unknown = ipcRenderer.sendSync(IPC.windowTranslucency);
+    return value === "native" || value === "compositor" ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+const windowTranslucency = getWindowTranslucency();
 
 function getBetaDiagnosticsBridge(): DesktopBridge["betaDiagnostics"] {
   try {
@@ -113,6 +128,11 @@ function parseBrowserAnnotationEvent(payload: unknown): BrowserAnnotationEvent |
 }
 
 const betaDiagnosticsBridge = getBetaDiagnosticsBridge();
+const productAnalyticsBridge: DesktopBridge["productAnalytics"] = {
+  getState: () => ipcRenderer.invoke(IPC.productAnalytics.getState),
+  setEnabled: (enabled) => ipcRenderer.invoke(IPC.productAnalytics.setEnabled, enabled),
+  track: (input: ProductAnalyticsInput) => ipcRenderer.send(IPC.productAnalytics.track, input),
+};
 let lastBrowserResize = -Infinity;
 function recordBrowserActivity(activity: DesktopDiagnosticActivity): void {
   try {
@@ -129,8 +149,12 @@ function recordBrowserActivity(activity: DesktopDiagnosticActivity): void {
 }
 
 contextBridge.exposeInMainWorld("desktopBridge", {
+  productAnalytics: productAnalyticsBridge,
   ...(betaDiagnosticsBridge ? { betaDiagnostics: betaDiagnosticsBridge } : {}),
   getWsUrl: getDesktopWsUrl,
+  whenBackendReady: () => ipcRenderer.invoke(IPC.backendReady),
+  remoteResourceUrl: (hostId, reference) =>
+    ipcRenderer.sendSync(IPC.remoteResourceUrl, hostId, reference),
   // Absolute path for OS-dropped File objects (folders with spaces/parens, etc.).
   getPathForFile: (file: File) => {
     try {
@@ -145,6 +169,7 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   confirm: (message) => ipcRenderer.invoke(IPC.confirm, message),
   setTheme: (theme) => ipcRenderer.invoke(IPC.setTheme, theme),
   setWindowMaterial: (input) => ipcRenderer.invoke(IPC.setWindowMaterial, input),
+  ...(windowTranslucency ? { windowTranslucency } : {}),
   getAppIcon: () => ipcRenderer.invoke(IPC.getAppIcon),
   setAppIcon: (icon) => ipcRenderer.invoke(IPC.setAppIcon, icon),
   showContextMenu: (items, position) => ipcRenderer.invoke(IPC.contextMenu, items, position),
@@ -183,6 +208,12 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     setPreference: (enabled) => ipcRenderer.invoke(IPC.customTitleBarSetPreference, enabled),
     relaunch: () => ipcRenderer.invoke(IPC.customTitleBarRelaunch),
   },
+  keepAwake: {
+    getState: () => ipcRenderer.invoke(IPC.keepAwake.getState),
+    setEnabled: (enabled) => ipcRenderer.invoke(IPC.keepAwake.setEnabled, enabled),
+    setRemoteAccessAllowed: (allowed) =>
+      ipcRenderer.invoke(IPC.keepAwake.setRemoteAccessAllowed, allowed),
+  },
   computerPreview: {
     onFrame: (listener) => {
       const wrappedListener = (_event: Electron.IpcRendererEvent, payload: unknown) => {
@@ -191,8 +222,17 @@ contextBridge.exposeInMainWorld("desktopBridge", {
       };
 
       ipcRenderer.on(IPC.computerPreviewFrame, wrappedListener);
+      // A frame listener is the preview's demand signal: the main process runs
+      // the native capture helper only while this window has one.
+      computerPreviewListenerCount += 1;
+      if (computerPreviewListenerCount === 1) ipcRenderer.send(IPC.computerPreviewSubscribe);
+      let released = false;
       return () => {
+        if (released) return;
+        released = true;
         ipcRenderer.removeListener(IPC.computerPreviewFrame, wrappedListener);
+        computerPreviewListenerCount -= 1;
+        if (computerPreviewListenerCount === 0) ipcRenderer.send(IPC.computerPreviewUnsubscribe);
       };
     },
   },

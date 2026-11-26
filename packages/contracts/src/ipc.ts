@@ -1,3 +1,20 @@
+import type {
+  AccountSaveInboxRecapInput,
+  SavedInboxRecap,
+  ListSavedInboxRecapsInput,
+  ListSavedInboxRecapsResponse,
+  SavedInboxRecapIdInput,
+} from "./inboxRecaps";
+import type { RemoteResourceReference } from "./remoteResources";
+import type { DesktopProductAnalyticsBridge } from "./productAnalytics";
+import type {
+  EditorDebugStartInput,
+  EditorDebugActionInput,
+  EditorDebugActionResult,
+  EditorDebugPollInput,
+  EditorDebugSnapshot,
+} from "./editorDebug";
+import type { EditorIntelligenceInput, EditorIntelligenceResult } from "./editorIntelligence";
 import { Schema } from "effect";
 import type {
   LoadProjectImportHistoryInput,
@@ -8,6 +25,26 @@ import type {
   ListProjectImportsResult,
 } from "./projectImport";
 
+import type {
+  AccountDeleteInput,
+  AccountAuthenticateOtpInput,
+  AccountBeginSsoInput,
+  AccountBeginSsoResult,
+  AccountCompleteSsoInput,
+  AccountMe,
+  AccountOpenVerificationUrlInput,
+  AccountSendOtpInput,
+  AccountSendOtpResult,
+  AccountStatus,
+  AccountUpdateProfileInput,
+  AccountUploadAvatarInput,
+} from "./account";
+import type { AccountUsageSummaryInput, UsageSummary } from "./accountUsage";
+import type {
+  AccountBillingCheckoutRequest,
+  AccountBillingRedirect,
+  AccountBillingStatus,
+} from "./accountBilling";
 import type {
   AuthBearerBootstrapResult,
   AuthBootstrapInput,
@@ -29,6 +66,17 @@ import type {
   ExternalMcpRefreshPairingInput,
   ExternalMcpRevokeIntegrationInput,
 } from "./externalMcp";
+import type {
+  McpConnector,
+  McpConnectorConnectInput,
+  McpConnectorConnectResult,
+  McpConnectorDisconnectInput,
+  McpConnectorDisconnectResult,
+  McpConnectorSetup,
+  McpConnectorProposal,
+  McpConnectorResolveProposalInput,
+  McpConnectorResolveProposalResult,
+} from "./mcpConnectors";
 import type {
   AutomationCancelRunInput,
   AutomationCancelRunResult,
@@ -263,8 +311,6 @@ import type {
   ComputerInputClickInput,
   ComputerInputKeyInput,
   ComputerInputScrollInput,
-  ComputerListWindowsInput,
-  ComputerListWindowsResult,
   ComputerProvisionInput,
   ComputerProvisionResult,
   ComputerSetControlEnabledInput,
@@ -276,12 +322,18 @@ import type {
 import type { ComputerGetAuditHistoryInput, ComputerGetAuditHistoryResult } from "./computerAudit";
 import type { StudioListThreadOutputsInput, StudioListThreadOutputsResult } from "./studio";
 import type {
+  OrchestrationGetInlineVisualInput,
+  OrchestrationGetInlineVisualResult,
+} from "./inlineVisual";
+import type {
   ServerConfig,
   ServerDiagnosticsResult,
   ServerReadThreadDiagnosticsInput,
   ServerReadThreadDiagnosticsResult,
   ServerGenerateAutomationIntentInput,
   ServerGenerateAutomationIntentResult,
+  ServerGenerateComposerPredictionInput,
+  ServerGenerateComposerPredictionResult,
   ServerGenerateThreadRecapInput,
   ServerGenerateThreadRecapResult,
   ServerGetEnvironmentResult,
@@ -323,6 +375,8 @@ import type {
 } from "./terminal";
 import type {
   ClientOrchestrationCommand,
+  OrchestrationSettleTurnDispatchInput,
+  OrchestrationSettleTurnDispatchResult,
   OrchestrationGetFullThreadDiffInput,
   OrchestrationGetFullThreadDiffResult,
   OrchestrationGetThreadDetailSnapshotInput,
@@ -377,6 +431,8 @@ import type {
   StatsGetProfileTokenStatsResult,
   StatsGetRecapInput,
   StatsGetRecapResult,
+  StatsGetUsageAnalyticsInput,
+  StatsGetUsageAnalyticsResult,
 } from "./stats";
 import type { BrowserAnnotationMethods } from "./browserAnnotations";
 import { type KeybindingCommand, MAX_KEYBINDING_VALUE_LENGTH } from "./keybindings";
@@ -431,6 +487,13 @@ export interface DesktopWindowMaterial {
   blurRadius: number;
 }
 
+/**
+ * How the desktop window backs the translucent shell. `native`: macOS vibrancy with the
+ * adjustable desktop blur (`setWindowMaterial`). `compositor`: a transparent window that the
+ * Linux compositor (Hyprland) blurs with its own settings, so the radius is not ours to set.
+ */
+export type DesktopWindowTranslucency = "native" | "compositor";
+
 export interface DesktopRuntimeInfo {
   hostArch: DesktopRuntimeArch;
   appArch: DesktopRuntimeArch;
@@ -452,9 +515,8 @@ export interface DesktopUpdateState {
   errorContext: "check" | "download" | "install" | null;
   canRetry: boolean;
   installFailureCount: number;
-  // Build flavor of the running desktop app ("production" | "beta" | "canary" | "cua").
-  // The web UI uses it for beta-only branding; production builds never see it.
-  flavor: "production" | "beta" | "canary" | "cua";
+  // Packaged app identity used by update controls and flavor-specific branding.
+  flavor: "production" | "beta" | "canary" | "cua" | "remote";
   // Public URL where the user can manually download the release when the
   // in-app updater cannot apply it (silent installer failure, unsigned build,
   // read-only install location, unsupported platform). Null when no GitHub
@@ -481,7 +543,7 @@ export interface DesktopBetaChannelState {
   /** False on web builds and unsupported probing environments. */
   readonly supported: boolean;
   /** Flavor of the running desktop app; the card only acts on "production". */
-  readonly flavor: "production" | "beta" | "canary" | "cua";
+  readonly flavor: "production" | "beta" | "canary" | "cua" | "remote";
   readonly installed: boolean;
   readonly version: string | null;
   /** True when this platform can install beta in place (macOS today). */
@@ -789,6 +851,17 @@ export interface DesktopCustomTitleBarState {
   restartRequired: boolean;
 }
 
+/**
+ * "Keep this computer awake" for remote access. `enabled` is the persisted
+ * preference; `active` says whether the sleep blocker is held right now, which
+ * also needs remote access allowed and (where the OS reports it) AC power.
+ */
+export interface DesktopKeepAwakeState {
+  enabled: boolean;
+  active: boolean;
+  onBattery: boolean;
+}
+
 export const DesktopAppIcon = Schema.Literals(["default", "icon", "dark", "beta"]);
 export type DesktopAppIcon = typeof DesktopAppIcon.Type;
 
@@ -824,9 +897,21 @@ export interface SynaraStorageSnapshot {
   readonly entries: Readonly<Record<string, string>>;
 }
 
+/**
+ * Full Disk Access as observed by the desktop main process when the info was
+ * requested. "unknown" means there was no Safari data to prove it either way.
+ */
+export type DesktopSafariFullDiskAccess = "granted" | "denied" | "unknown";
+
 export type DesktopSafariAccessInfo =
   | { supported: false }
-  | { supported: true; appName: string; appPath: string | null };
+  | {
+      supported: true;
+      appName: string;
+      appPath: string | null;
+      /** Absent from desktop builds that predate the access probe. */
+      fullDiskAccess?: DesktopSafariFullDiskAccess;
+    };
 
 /**
  * One frame of the desktop app's native computer preview tap: a complete JPEG
@@ -906,6 +991,20 @@ export const DesktopDiagnosticBreadcrumb = Schema.Struct({
 });
 export type DesktopDiagnosticBreadcrumb = typeof DesktopDiagnosticBreadcrumb.Type;
 
+/** Updater failure categories shared by the local queue and diagnostics ingest. */
+export const DesktopUpdateFailureReason = Schema.Literals([
+  "timeout",
+  "network",
+  "http-client",
+  "http-server",
+  "manifest",
+  "release-feed",
+  "verification",
+  "cancelled",
+  "unknown",
+]);
+export type DesktopUpdateFailureReason = typeof DesktopUpdateFailureReason.Type;
+
 /** Handled failures carry fixed categories, never exception text or operation arguments. */
 export const DesktopDiagnosticIssue = Schema.Struct({
   code: Schema.Literals([
@@ -947,6 +1046,7 @@ export const DESKTOP_DIAGNOSTIC_ISSUE_PREFIX = "SYNARA_DIAGNOSTIC_ISSUE ";
 export type DesktopDiagnosticReportStatus = "queued" | "sent" | "unavailable";
 
 export interface DesktopBridge {
+  productAnalytics?: DesktopProductAnalyticsBridge;
   /** Present only when the desktop main process enables baked-in Beta diagnostics. */
   betaDiagnostics?: {
     rendererReady: () => void;
@@ -961,6 +1061,9 @@ export interface DesktopBridge {
     revealApp: () => Promise<boolean>;
   };
   getWsUrl: () => string | null;
+  /** Resolves once the desktop has seen its backend become ready, or stop trying. */
+  whenBackendReady?: () => Promise<void>;
+  remoteResourceUrl?: (hostId: string, reference: RemoteResourceReference) => string | null;
   /**
    * Absolute filesystem path for a File from drag/drop or file inputs.
    * Electron only (`webUtils.getPathForFile`). Returns null when unavailable.
@@ -976,6 +1079,11 @@ export interface DesktopBridge {
   setTheme: (theme: DesktopTheme) => Promise<void>;
   /** macOS only; resolves false when the adjustable blur is unavailable. */
   setWindowMaterial?: (input: DesktopWindowMaterial) => Promise<boolean>;
+  /**
+   * Set when the desktop window was created see-through. Absent on opaque windows
+   * (Windows, Linux without a blurring compositor) and in browsers.
+   */
+  windowTranslucency?: DesktopWindowTranslucency;
   getAppIcon?: () => Promise<DesktopAppIcon>;
   setAppIcon: (icon: DesktopAppIcon) => Promise<void>;
   showContextMenu: <T extends string>(
@@ -1005,6 +1113,16 @@ export interface DesktopBridge {
     getState: () => Promise<DesktopCustomTitleBarState>;
     setPreference: (enabled: boolean) => Promise<DesktopCustomTitleBarState>;
     relaunch: () => Promise<void>;
+  };
+  /**
+   * Keep the computer awake while remote access is allowed and it runs on AC
+   * power. The renderer reports the owner's "Allow connections" switch; the
+   * main process persists both and owns the sleep blocker.
+   */
+  keepAwake?: {
+    getState: () => Promise<DesktopKeepAwakeState>;
+    setEnabled: (enabled: boolean) => Promise<DesktopKeepAwakeState>;
+    setRemoteAccessAllowed: (allowed: boolean) => Promise<DesktopKeepAwakeState>;
   };
   /**
    * Live desktop frames from the native computer frame tap, desktop app only.
@@ -1155,6 +1273,19 @@ export interface NativeApi {
     close: (input: TerminalCloseInput) => Promise<void>;
     onEvent: (callback: (event: TerminalEvent) => void) => () => void;
   };
+  /** Absent on older servers. Core editing remains available without language services. */
+  editor?: {
+    debugStart?: (
+      input: EditorDebugStartInput,
+      options?: { signal?: AbortSignal },
+    ) => Promise<{ sessionId: string }>;
+    debugAction?: (input: EditorDebugActionInput) => Promise<EditorDebugActionResult>;
+    debugPoll?: (input: EditorDebugPollInput) => Promise<EditorDebugSnapshot>;
+    intelligence: (
+      input: EditorIntelligenceInput,
+      options?: { signal?: AbortSignal },
+    ) => Promise<EditorIntelligenceResult>;
+  };
   projects: {
     discoverScripts: (input: ProjectDiscoverScriptsInput) => Promise<ProjectDiscoverScriptsResult>;
     listDirectories: (input: ProjectListDirectoriesInput) => Promise<ProjectListDirectoriesResult>;
@@ -1302,6 +1433,16 @@ export interface NativeApi {
     refreshExternalMcpPairing: (
       input: ExternalMcpRefreshPairingInput,
     ) => Promise<ExternalMcpCreateIntegrationResult>;
+    listMcpConnectors: () => Promise<ReadonlyArray<McpConnector>>;
+    listMcpConnectorProposals: () => Promise<ReadonlyArray<McpConnectorProposal>>;
+    resolveMcpConnectorProposal: (
+      input: McpConnectorResolveProposalInput,
+    ) => Promise<McpConnectorResolveProposalResult>;
+    connectMcpConnector: (input: McpConnectorConnectInput) => Promise<McpConnectorConnectResult>;
+    disconnectMcpConnector: (
+      input: McpConnectorDisconnectInput,
+    ) => Promise<McpConnectorDisconnectResult>;
+    getMcpConnectorSetup: () => Promise<McpConnectorSetup>;
     refreshProviders: () => Promise<ServerRefreshProvidersResult>;
     updateProvider: (input: ServerProviderUpdateInput) => Promise<ServerProviderUpdateResult>;
     listWorktrees: () => Promise<ServerListWorktreesResult>;
@@ -1323,6 +1464,10 @@ export interface NativeApi {
     generateThreadRecap: (
       input: ServerGenerateThreadRecapInput,
     ) => Promise<ServerGenerateThreadRecapResult>;
+    generateComposerPrediction: (
+      input: ServerGenerateComposerPredictionInput,
+      options?: { readonly signal?: AbortSignal },
+    ) => Promise<ServerGenerateComposerPredictionResult>;
     generateAutomationIntent: (
       input: ServerGenerateAutomationIntentInput,
     ) => Promise<ServerGenerateAutomationIntentResult>;
@@ -1339,6 +1484,9 @@ export interface NativeApi {
       input: StatsGetProfileTokenStatsInput,
     ) => Promise<StatsGetProfileTokenStatsResult>;
     getRecap: (input: StatsGetRecapInput) => Promise<StatsGetRecapResult>;
+    getUsageAnalytics: (
+      input: StatsGetUsageAnalyticsInput,
+    ) => Promise<StatsGetUsageAnalyticsResult>;
   };
   provider: {
     getComposerCapabilities: (
@@ -1363,6 +1511,9 @@ export interface NativeApi {
       input: OrchestrationSearchThreadsInput,
     ) => Promise<OrchestrationSearchThreadsResult>;
     dispatchCommand: (command: ClientOrchestrationCommand) => Promise<{ sequence: number }>;
+    settleTurnDispatch?: (
+      input: typeof OrchestrationSettleTurnDispatchInput.Type,
+    ) => Promise<OrchestrationSettleTurnDispatchResult>;
     importThread: (
       input: OrchestrationImportThreadInput,
     ) => Promise<OrchestrationImportThreadResult>;
@@ -1379,6 +1530,9 @@ export interface NativeApi {
     getFullThreadDiff: (
       input: OrchestrationGetFullThreadDiffInput,
     ) => Promise<OrchestrationGetFullThreadDiffResult>;
+    getInlineVisual: (
+      input: OrchestrationGetInlineVisualInput,
+    ) => Promise<OrchestrationGetInlineVisualResult>;
     replayEvents: (
       fromSequenceExclusive: number,
       threadId?: ThreadId,
@@ -1399,6 +1553,76 @@ export interface NativeApi {
     onDomainEvent: (callback: (event: OrchestrationEvent) => void) => () => void;
     onShellEvent: (callback: (event: OrchestrationShellStreamItem) => void) => () => void;
     onThreadEvent: (callback: (event: OrchestrationThreadStreamItem) => void) => () => void;
+  };
+  /**
+   * The Synara account session for this machine. The server owns the stored
+   * credentials and every WorkOS round trip; the app only ever sees the state.
+   */
+  account: {
+    /**
+     * The current session, refreshing the access token if it has expired. A
+     * refresh token that can no longer be redeemed reports `signed-out` rather
+     * than failing — an expired session is a state, not an error.
+     */
+    status: () => Promise<AccountStatus>;
+    billingStatus: () => Promise<AccountBillingStatus>;
+    billingCheckout: (input: AccountBillingCheckoutRequest) => Promise<AccountBillingRedirect>;
+    billingPortal: () => Promise<AccountBillingRedirect>;
+    /**
+     * Asks WorkOS to email a 6-digit sign-in code to `email`. Answers the
+     * same shape whether or not the address has an account — signing up and
+     * signing in are one path, decided when the code is redeemed.
+     */
+    sendOtp: (input: AccountSendOtpInput) => Promise<AccountSendOtpResult>;
+    /**
+     * Email OTP sign-in, entirely in-app: redeems the emailed 6-digit code.
+     * The code is a credential forwarded to WorkOS through the server and
+     * account service and stored nowhere along the way — do not log the
+     * input, and do not retain it in component state longer than the form
+     * lives.
+     */
+    authenticateOtp: (input: AccountAuthenticateOtpInput) => Promise<AccountStatus>;
+    /**
+     * Starts the desktop SSO path for one provider: authorization code +
+     * PKCE with a loopback redirect, so "Continue with Google/GitHub"
+     * genuinely deep-links to that provider. The server owns the loopback
+     * listener, the PKCE verifier, and the state; the app only receives the
+     * attempt id and the URL to open.
+     */
+    beginSso: (input: AccountBeginSsoInput) => Promise<AccountBeginSsoResult>;
+    /**
+     * Waits for the browser callback, exchanges the code server-side, and
+     * persists the session. Issued without an RPC timeout; a dropped socket
+     * loses nothing.
+     */
+    completeSso: (
+      input: AccountCompleteSsoInput,
+      options?: { readonly signal?: AbortSignal },
+    ) => Promise<AccountStatus>;
+    /** Abandons a pending SSO attempt, closing its loopback listener. */
+    cancelSso: (input: AccountCompleteSsoInput) => Promise<void>;
+    /**
+     * The account-wide usage summary — the "Account" side of the usage
+     * tab's device/account toggle. Server-brokered like every account call.
+     */
+    usageSummary: (input: AccountUsageSummaryInput) => Promise<UsageSummary>;
+    saveInboxRecap: (input: AccountSaveInboxRecapInput) => Promise<SavedInboxRecap>;
+    listInboxRecaps: (input: ListSavedInboxRecapsInput) => Promise<ListSavedInboxRecapsResponse>;
+    deleteInboxRecap: (input: SavedInboxRecapIdInput) => Promise<void>;
+    /** Writes the profile, and renames the workspace when `workspaceName` differs. */
+    updateProfile: (input: AccountUpdateProfileInput) => Promise<AccountMe>;
+    /**
+     * Uploads a compressed avatar image (base64 over the WS JSON protocol)
+     * and switches the avatar source to "uploaded". Answers the refreshed
+     * `/me`, exactly like updateProfile.
+     */
+    uploadAvatar: (input: AccountUploadAvatarInput) => Promise<AccountMe>;
+    /** Removes the uploaded avatar; the source reverts to "sso" server-side. */
+    deleteAvatar: () => Promise<AccountMe>;
+    deleteAccount: (input: AccountDeleteInput) => Promise<void>;
+    signOut: () => Promise<void>;
+    /** Opens an SSO authorize page this server issued in the system browser. */
+    openVerificationUrl: (input: AccountOpenVerificationUrlInput) => Promise<void>;
   };
   projectAgent: {
     getOverview: (input: ProjectAgentGetOverviewInput) => Promise<ProjectAgentOverview>;

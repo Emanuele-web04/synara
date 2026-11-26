@@ -9,10 +9,6 @@
 import { cn } from "~/lib/utils";
 import { PR_QUIET_INK_CLASS_NAME } from "./pullRequestText";
 
-function formatCount(value: number): string {
-  return value.toLocaleString("en-US");
-}
-
 export function PullRequestDiffStat({
   additions,
   deletions,
@@ -34,10 +30,10 @@ export function PullRequestDiffStat({
       )}
     >
       <span className={tone === "diff" ? "text-[var(--color-decoration-added)]" : undefined}>
-        +{formatCount(additions)}
+        +{additions.toLocaleString("en-US")}
       </span>
       <span className={tone === "diff" ? "text-[var(--color-decoration-deleted)]" : undefined}>
-        -{formatCount(deletions)}
+        -{deletions.toLocaleString("en-US")}
       </span>
     </span>
   );

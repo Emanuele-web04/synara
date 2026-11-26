@@ -1,93 +1,48 @@
 import * as Crypto from "node:crypto";
 
-import { ORCHESTRATION_WS_METHODS, WS_METHODS, WsRpcError } from "@synara/contracts";
-import { Effect, Ref } from "effect";
-
-export type WsRequestClass = "control" | "standard" | "expensive-read";
-
-export const WS_REQUEST_CLASS_LIMITS: Readonly<Record<WsRequestClass, number>> = {
-  control: 16,
-  standard: 12,
-  "expensive-read": 2,
-};
-
-const CONTROL_METHODS = new Set<string>([
-  WS_METHODS.serverGetRuntimeStatus,
-  ORCHESTRATION_WS_METHODS.dispatchCommand,
-  ORCHESTRATION_WS_METHODS.settleTurnDispatch,
-  ORCHESTRATION_WS_METHODS.reconcileProviderDelivery,
-  ORCHESTRATION_WS_METHODS.prepareQuitResume,
-  WS_METHODS.terminalWrite,
-  WS_METHODS.terminalAckOutput,
-  WS_METHODS.terminalResize,
-  WS_METHODS.terminalClose,
-  WS_METHODS.serverStopLocalServer,
-  WS_METHODS.automationCancelRun,
-  WS_METHODS.automationMarkRunRead,
-  WS_METHODS.automationArchiveRun,
-]);
-
-const EXPENSIVE_READ_METHODS = new Set<string>([
-  ORCHESTRATION_WS_METHODS.listProjectImports,
-  ORCHESTRATION_WS_METHODS.loadProjectImportHistory,
-  ORCHESTRATION_WS_METHODS.getSnapshot,
-  ORCHESTRATION_WS_METHODS.getThreadDetailSnapshot,
-  ORCHESTRATION_WS_METHODS.searchThreads,
-  ORCHESTRATION_WS_METHODS.repairState,
-  ORCHESTRATION_WS_METHODS.getTurnDiff,
-  ORCHESTRATION_WS_METHODS.getFullThreadDiff,
-  ORCHESTRATION_WS_METHODS.replayEvents,
-  ORCHESTRATION_WS_METHODS.listProviderDeliveryBlockers,
-  WS_METHODS.projectsSearchEntries,
-  WS_METHODS.projectsSearchLocalEntries,
-  WS_METHODS.projectsSearchContent,
-  WS_METHODS.projectsReadFile,
-  WS_METHODS.projectsResolveWorkspaceFileReferences,
-  WS_METHODS.studioListThreadOutputs,
-  WS_METHODS.filesystemBrowse,
-  WS_METHODS.gitStatus,
-  WS_METHODS.gitReadWorkingTreeDiff,
-  WS_METHODS.gitBlameLine,
-  WS_METHODS.gitReadFileAtRev,
-  WS_METHODS.gitListRecentCommits,
-  WS_METHODS.gitWorkingTreeDiffStats,
-  WS_METHODS.gitSummarizeDiff,
-  WS_METHODS.gitPullRequestSnapshot,
-  WS_METHODS.serverGetProviderUsageSnapshot,
-  WS_METHODS.serverListProviderUsage,
-  WS_METHODS.serverGetDiagnostics,
-  WS_METHODS.serverPrewarmVoice,
-  WS_METHODS.serverGenerateThreadRecap,
-  WS_METHODS.serverGenerateAutomationIntent,
-  WS_METHODS.serverTranscribeVoice,
-  WS_METHODS.statsGetProfileStats,
-  WS_METHODS.statsGetProfileTokenStats,
-  WS_METHODS.statsGetRecap,
-  WS_METHODS.providerCompactThread,
-  WS_METHODS.providerListCommands,
-  WS_METHODS.providerListSkills,
-  WS_METHODS.providerListSkillsCatalog,
-  WS_METHODS.providerListPlugins,
-  WS_METHODS.providerReadPlugin,
-  WS_METHODS.providerListModels,
-  WS_METHODS.providerListAgents,
-]);
-
-export function classifyWsRequest(method: string): WsRequestClass {
-  if (CONTROL_METHODS.has(method)) return "control";
-  if (EXPENSIVE_READ_METHODS.has(method)) return "expensive-read";
-  return "standard";
-}
+import { WsRpcError } from "@synara/contracts";
+import {
+  classifyWsRequest,
+  makeWsRequestCapacityError,
+  WS_REQUEST_CLASS_LIMITS,
+  type WsRequestClass,
+} from "@synara/shared/wsRequestClass";
+import { Clock, Effect, Layer, Ref } from "effect";
+import { Headers } from "effect/unstable/http";
+import { RpcMiddleware, RpcSchema } from "effect/unstable/rpc";
+import {
+  remoteMethodUnavailable,
+  REMOTE_NATIVE_UNAVAILABLE,
+} from "@synara/shared/remoteCapabilities";
+import {
+  provideWsConnectionSession,
+  WS_CONNECTION_SESSION_HEADER,
+  WsConnectionSessions,
+} from "./wsConnectionSessions";
 
 export interface WsRequestLease {
   readonly clientId: number;
   readonly leaseId: string;
   readonly method: string;
   readonly requestClass: WsRequestClass;
+  readonly acquiredAtMs: number;
+}
+
+/**
+ * Capacity rejections are logged at most once per client and class in this
+ * interval, so a saturated lane names what holds it without flooding the log.
+ */
+export const WS_REQUEST_REJECTION_LOG_INTERVAL_MS = 10_000;
+
+interface RejectionLogState {
+  readonly loggedAtMs: number;
+  readonly suppressed: number;
 }
 
 interface AdmissionLedger {
   readonly clients: ReadonlyMap<number, ReadonlyMap<string, WsRequestLease>>;
+  /** Keyed by `${clientId}:${requestClass}`; dropped when the client drains. */
+  readonly rejectionLogs: ReadonlyMap<string, RejectionLogState>;
   readonly admittedTotal: number;
   readonly releasedTotal: number;
   readonly rejectedTotal: number;
@@ -103,6 +58,7 @@ export interface WsRequestAdmissionSnapshot {
 
 const initialLedger = (): AdmissionLedger => ({
   clients: new Map(),
+  rejectionLogs: new Map(),
   admittedTotal: 0,
   releasedTotal: 0,
   rejectedTotal: 0,
@@ -112,49 +68,67 @@ export const makeWsRequestAdmission = Effect.gen(function* () {
   const ledgerRef = yield* Ref.make<AdmissionLedger>(initialLedger());
 
   const acquire = (clientId: number, method: string) =>
-    Ref.modify(
-      ledgerRef,
-      (ledger): readonly [Effect.Effect<WsRequestLease, WsRpcError>, AdmissionLedger] => {
-        const requestClass = classifyWsRequest(method);
-        const clientLeases = ledger.clients.get(clientId) ?? new Map<string, WsRequestLease>();
-        const activeForClass = Array.from(clientLeases.values()).reduce(
-          (count, lease) => count + (lease.requestClass === requestClass ? 1 : 0),
-          0,
-        );
-        if (activeForClass >= WS_REQUEST_CLASS_LIMITS[requestClass]) {
-          const code =
-            requestClass === "expensive-read"
-              ? "RPC_EXPENSIVE_READ_CAPACITY_EXCEEDED"
-              : "RPC_REQUEST_CAPACITY_EXCEEDED";
-          return [
-            Effect.fail(
-              new WsRpcError({
-                message: `WebSocket ${requestClass} request capacity exceeded.`,
-                code,
-                retryable: true,
-                retryAfterMs: 250,
-              }),
-            ),
-            { ...ledger, rejectedTotal: ledger.rejectedTotal + 1 },
-          ] as const;
-        }
+    Effect.flatMap(Clock.currentTimeMillis, (nowMs) =>
+      Ref.modify(
+        ledgerRef,
+        (ledger): readonly [Effect.Effect<WsRequestLease, WsRpcError>, AdmissionLedger] => {
+          const requestClass = classifyWsRequest(method);
+          const clientLeases = ledger.clients.get(clientId) ?? new Map<string, WsRequestLease>();
+          const heldForClass = Array.from(clientLeases.values()).filter(
+            (lease) => lease.requestClass === requestClass,
+          );
+          if (heldForClass.length >= WS_REQUEST_CLASS_LIMITS[requestClass]) {
+            const rejected = Effect.fail(makeWsRequestCapacityError(requestClass));
+            const logKey = `${clientId}:${requestClass}`;
+            const previous = ledger.rejectionLogs.get(logKey);
+            const rejectionLogs = new Map(ledger.rejectionLogs);
+            if (
+              previous !== undefined &&
+              nowMs - previous.loggedAtMs < WS_REQUEST_REJECTION_LOG_INTERVAL_MS
+            ) {
+              rejectionLogs.set(logKey, { ...previous, suppressed: previous.suppressed + 1 });
+              return [
+                rejected,
+                { ...ledger, rejectionLogs, rejectedTotal: ledger.rejectedTotal + 1 },
+              ] as const;
+            }
+            rejectionLogs.set(logKey, { loggedAtMs: nowMs, suppressed: 0 });
+            // Method names and hold times only; request payloads never reach the log.
+            const logged = Effect.logWarning("WebSocket request rejected: class capacity in use", {
+              clientId,
+              method,
+              requestClass,
+              limit: WS_REQUEST_CLASS_LIMITS[requestClass],
+              heldBy: heldForClass.map((lease) => ({
+                method: lease.method,
+                heldForMs: Math.max(0, nowMs - lease.acquiredAtMs),
+              })),
+              suppressedSinceLastLog: previous?.suppressed ?? 0,
+            });
+            return [
+              logged.pipe(Effect.andThen(rejected)),
+              { ...ledger, rejectionLogs, rejectedTotal: ledger.rejectedTotal + 1 },
+            ] as const;
+          }
 
-        const lease: WsRequestLease = {
-          clientId,
-          leaseId: Crypto.randomUUID(),
-          method,
-          requestClass,
-        };
-        const nextClientLeases = new Map(clientLeases);
-        nextClientLeases.set(lease.leaseId, lease);
-        const nextClients = new Map(ledger.clients);
-        nextClients.set(clientId, nextClientLeases);
-        return [
-          Effect.succeed(lease),
-          { ...ledger, clients: nextClients, admittedTotal: ledger.admittedTotal + 1 },
-        ] as const;
-      },
-    ).pipe(Effect.flatten);
+          const lease: WsRequestLease = {
+            clientId,
+            leaseId: Crypto.randomUUID(),
+            method,
+            requestClass,
+            acquiredAtMs: nowMs,
+          };
+          const nextClientLeases = new Map(clientLeases);
+          nextClientLeases.set(lease.leaseId, lease);
+          const nextClients = new Map(ledger.clients);
+          nextClients.set(clientId, nextClientLeases);
+          return [
+            Effect.succeed(lease),
+            { ...ledger, clients: nextClients, admittedTotal: ledger.admittedTotal + 1 },
+          ] as const;
+        },
+      ).pipe(Effect.flatten),
+    );
 
   const release = (lease: WsRequestLease) =>
     Ref.update(ledgerRef, (ledger) => {
@@ -163,11 +137,21 @@ export const makeWsRequestAdmission = Effect.gen(function* () {
       const nextClientLeases = new Map(clientLeases);
       nextClientLeases.delete(lease.leaseId);
       const nextClients = new Map(ledger.clients);
-      if (nextClientLeases.size === 0) nextClients.delete(lease.clientId);
-      else nextClients.set(lease.clientId, nextClientLeases);
+      let rejectionLogs = ledger.rejectionLogs;
+      if (nextClientLeases.size === 0) {
+        nextClients.delete(lease.clientId);
+        // A drained client starts its next saturation with a fresh log line.
+        const prefix = `${lease.clientId}:`;
+        if (Array.from(rejectionLogs.keys()).some((key) => key.startsWith(prefix))) {
+          rejectionLogs = new Map(
+            Array.from(rejectionLogs).filter(([key]) => !key.startsWith(prefix)),
+          );
+        }
+      } else nextClients.set(lease.clientId, nextClientLeases);
       return {
         ...ledger,
         clients: nextClients,
+        rejectionLogs,
         releasedTotal: ledger.releasedTotal + 1,
       };
     });
@@ -192,3 +176,38 @@ export const makeWsRequestAdmission = Effect.gen(function* () {
 
   return { acquire, release, guard, snapshot } as const;
 });
+
+export class WsRequestAdmissionMiddleware extends RpcMiddleware.Service<WsRequestAdmissionMiddleware>()(
+  "synara/WsRequestAdmissionMiddleware",
+  { error: WsRpcError, requiredForClient: false },
+) {}
+
+export const wsRequestAdmissionMiddlewareLayer = Layer.effect(
+  WsRequestAdmissionMiddleware,
+  Effect.gen(function* () {
+    const admission = yield* makeWsRequestAdmission;
+    const connectionSessions = yield* WsConnectionSessions;
+    return ((effect, options) => {
+      // Handler fibers descend from the RPC server fiber (forked at layer build),
+      // not from the connection's HTTP upgrade fiber, so connection-scoped
+      // services must be re-provided here from the connection-session registry.
+      const session = connectionSessions.lookup(
+        Headers.get(options.headers, WS_CONNECTION_SESSION_HEADER),
+      );
+      // Unknown transport context must never inherit local-loopback identity.
+      if (!session) {
+        return Effect.fail(new WsRpcError({ message: "Unauthorized request." }));
+      }
+      if (
+        session.attachmentPrincipal.ownerId.startsWith("remote-device:") &&
+        remoteMethodUnavailable(options.rpc._tag)
+      ) {
+        return Effect.fail(new WsRpcError({ message: REMOTE_NATIVE_UNAVAILABLE }));
+      }
+      const scoped = provideWsConnectionSession(effect, session);
+      return RpcSchema.isStreamSchema(options.rpc.successSchema)
+        ? scoped
+        : admission.guard(options.clientId, options.rpc._tag, scoped);
+    }) satisfies RpcMiddleware.RpcMiddleware<never, WsRpcError, never>;
+  }),
+);

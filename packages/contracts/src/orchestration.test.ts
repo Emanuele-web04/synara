@@ -10,6 +10,7 @@ import {
   OrchestrationCommand,
   OrchestrationGetTurnDiffInput,
   OrchestrationReadModel,
+  OrchestrationShellSnapshot,
   ProjectCreatedPayload,
   OrchestrationProposedPlan,
   OrchestrationSession,
@@ -595,12 +596,14 @@ it.effect("strips client-sent dispatchOrigin from thread.turn.start commands", (
       },
       dispatchMode: "queue",
       dispatchOrigin: "automation",
+      initialGoalStartedAt: "2026-01-01T00:00:00.000Z",
       runtimeMode: "full-access",
       interactionMode: "default",
       createdAt: "2026-01-01T00:00:00.000Z",
     });
     assert.strictEqual(command.type, "thread.turn.start");
     assert.strictEqual("dispatchOrigin" in command, false);
+    assert.strictEqual("initialGoalStartedAt" in command, false);
   }),
 );
 
@@ -822,5 +825,29 @@ it.effect("ThreadHandoff decodes legacy provider names instead of failing the ro
       bootstrapStatus: "completed",
     });
     assert.equal(current.sourceProvider, "codex");
+  }),
+);
+
+it.effect("preserves optional empty thread shell verification across versions", () =>
+  Effect.gen(function* () {
+    const decode = Schema.decodeUnknownEffect(OrchestrationShellSnapshot);
+    const snapshot = {
+      snapshotSequence: 0,
+      spaces: [],
+      projects: [],
+      threads: [],
+      updatedAt: "2026-10-13T10:00:00.000Z",
+    };
+    assert.deepStrictEqual(yield* decode(snapshot), snapshot);
+    for (const emptyThreadShellVerified of [true, false]) {
+      const input = { ...snapshot, emptyThreadShellVerified };
+      assert.deepStrictEqual(yield* decode(input), input);
+    }
+    for (const emptyThreadShellVerified of ["true", 1, null]) {
+      assert.equal(
+        yield* decode({ ...snapshot, emptyThreadShellVerified }).pipe(Effect.isFailure),
+        true,
+      );
+    }
   }),
 );

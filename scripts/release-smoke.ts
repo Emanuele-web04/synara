@@ -96,11 +96,12 @@ function verifyCanonicalIdentity(): void {
   }
   const expectedBinaries = {
     synara: "dist/index.mjs",
+    "synara-compact-database": "dist/compactDatabase.mjs",
     "synara-restore-migration-backup": "dist/restoreMigrationBackup.mjs",
   };
   if (JSON.stringify(serverPackage.bin ?? {}) !== JSON.stringify(expectedBinaries)) {
     throw new Error(
-      "Expected the CLI to expose only the Synara entry point and migration recovery binary.",
+      "Expected the CLI to expose only the Synara entry point and database maintenance binaries.",
     );
   }
   if (SYNARA_PRODUCTION_BUNDLE_ID !== "com.emanueledipietro.synara") {
@@ -154,6 +155,10 @@ async function verifyReleaseWorkflowSafety(): Promise<void> {
     workflow,
     "  preflight:\n    name: Preflight\n    runs-on: ubuntu-24.04\n    timeout-minutes: 15\n    permissions:\n      contents: read",
     "Expected preflight to receive read-only repository access.",
+  );
+  const macBuildJob = workflow.slice(
+    workflow.indexOf("  build_mac:\n"),
+    workflow.indexOf("  build:\n"),
   );
   const buildJob = workflow.slice(
     workflow.indexOf("  build:\n"),
@@ -212,17 +217,19 @@ async function verifyReleaseWorkflowSafety(): Promise<void> {
       throw new Error(`Incorrect Defender evidence upload after ${outcome} scan.`);
     }
   }
-  assertContains(
-    buildJob,
-    "uses: ./.github/workflows/release-platform.yml",
-    "Missing native workflow.",
-  );
+  for (const job of [macBuildJob, buildJob])
+    assertContains(
+      job,
+      "uses: ./.github/workflows/release-platform.yml",
+      "Missing native workflow.",
+    );
   type Step = {
     name?: string;
     id?: string;
     uses?: string;
     if?: string;
     run?: string;
+    env?: Record<string, string>;
     with?: Record<string, string>;
     "continue-on-error"?: boolean | string;
   };
@@ -241,12 +248,179 @@ async function verifyReleaseWorkflowSafety(): Promise<void> {
   ) {
     throw new Error("Successful packaging and qualification must share one runner.");
   }
+  // Intel qualification starts beside packaging and waits in-job. The name it
+  // waits for is assembled from the caller's job name and the packaging job's
+  // name, and the wait must precede the artifact download it protects.
+  const qualifyIntel = (
+    parseYaml(platformWorkflow) as {
+      jobs: Record<string, { name?: string; needs?: unknown; "timeout-minutes"?: number }>;
+    }
+  ).jobs;
+  const packagingTimeout = qualifyIntel.build?.["timeout-minutes"];
+  const qualifyTimeout = qualifyIntel.qualify_intel?.["timeout-minutes"];
+  const qualifySteps = platformDefinition.jobs.qualify_intel?.steps ?? [];
+  const waitIndex = qualifySteps.findIndex((step) =>
+    step.run?.includes("node scripts/wait-for-release-job.ts"),
+  );
+  const downloadIndex = qualifySteps.findIndex((step) =>
+    step.uses?.startsWith("actions/download-artifact@"),
+  );
+  const waitStep = qualifySteps[waitIndex];
+  const waitMinutes = Number(waitStep?.run?.match(/--timeout-minutes (\d+)/)?.[1]);
+  if (
+    qualifyIntel.qualify_intel?.needs !== undefined ||
+    qualifyIntel.build?.name !== "Package and qualify" ||
+    !macBuildJob.includes("    name: Build ${{ matrix.label }}\n") ||
+    !macBuildJob.includes("      label: ${{ matrix.label }}\n") ||
+    waitStep?.env?.PACKAGING_JOB !== "Build ${{ inputs.label }} / Package and qualify" ||
+    waitStep?.env?.GH_TOKEN !== "${{ github.token }}" ||
+    waitStep?.run !==
+      `node scripts/wait-for-release-job.ts --job "$PACKAGING_JOB" --timeout-minutes ${waitMinutes}` ||
+    waitStep.if !== undefined ||
+    waitStep["continue-on-error"] !== undefined ||
+    waitIndex < 0 ||
+    downloadIndex < waitIndex ||
+    typeof packagingTimeout !== "number" ||
+    typeof qualifyTimeout !== "number" ||
+    !(waitMinutes > packagingTimeout) ||
+    !(qualifyTimeout > waitMinutes)
+  ) {
+    throw new Error(
+      "Intel qualification must wait for this attempt's packaging job before downloading its app.",
+    );
+  }
+  // The publisher never selects Intel by name. An old receipt cannot qualify a
+  // replacement archive with a different ID after a packaging-only rerun.
+  const releaseSteps = (parseYaml(workflow) as { jobs: Record<string, { steps: Step[] }> }).jobs
+    .release!.steps;
+  const lookupIndex = qualifySteps.findIndex((step) => step.id === "intel_package");
+  const intelStartupIndex = qualifySteps.findIndex((step) =>
+    step.run?.includes("node scripts/verify-packaged-desktop-startup.ts"),
+  );
+  const recordIndex = qualifySteps.findIndex((step) => step.run?.includes("> desktop-mac-x64.id"));
+  const receiptUploadIndex = qualifySteps.findIndex(
+    (step) => step.with?.name === "intel-qualification-receipt",
+  );
+  const releaseStepIndex = (name: string) => releaseSteps.findIndex((step) => step.name === name);
+  const otherDownload = releaseStepIndex("Download non-Intel desktop artifacts");
+  const receiptDownload = releaseStepIndex("Download Intel qualification receipt");
+  const receiptRead = releaseStepIndex("Read the qualified Intel artifact ID");
+  const intelDownload = releaseStepIndex("Download the qualified Intel desktop artifact");
+  const mergeManifest = releaseStepIndex("Merge macOS updater manifests");
+  const intelLookup = qualifySteps[lookupIndex];
+  const record = qualifySteps[recordIndex];
+  const upload = qualifySteps[receiptUploadIndex];
+  const intelReleaseSteps = [receiptDownload, receiptRead, intelDownload].map(
+    (index) => releaseSteps[index],
+  );
+  if (
+    !(
+      waitIndex < lookupIndex &&
+      lookupIndex < downloadIndex &&
+      downloadIndex < intelStartupIndex &&
+      intelStartupIndex < recordIndex &&
+      recordIndex < receiptUploadIndex
+    ) ||
+    !intelLookup?.run?.includes("artifacts?name=desktop-mac-x64") ||
+    qualifySteps[downloadIndex]?.with?.["artifact-ids"] !==
+      "${{ steps.intel_package.outputs.id }}" ||
+    qualifySteps[downloadIndex]?.with?.name !== undefined ||
+    record?.env?.INTEL_ARTIFACT_ID !== "${{ steps.intel_package.outputs.id }}" ||
+    !upload?.uses?.startsWith("actions/upload-artifact@") ||
+    upload.with?.path !== "desktop-mac-x64.id" ||
+    upload.with?.["if-no-files-found"] !== "error" ||
+    [
+      intelLookup,
+      qualifySteps[downloadIndex],
+      qualifySteps[intelStartupIndex],
+      record,
+      upload,
+    ].some((step) => step?.if !== undefined || step?.["continue-on-error"] !== undefined) ||
+    !(
+      otherDownload >= 0 &&
+      otherDownload < receiptDownload &&
+      receiptDownload < receiptRead &&
+      receiptRead < intelDownload &&
+      intelDownload < mergeManifest
+    ) ||
+    [otherDownload, receiptDownload, intelDownload].some(
+      (index) => !releaseSteps[index]?.uses?.startsWith("actions/download-artifact@"),
+    ) ||
+    releaseSteps[otherDownload]?.with?.pattern !== "desktop-!(mac-x64)" ||
+    releaseSteps[receiptDownload]?.with?.name !== "intel-qualification-receipt" ||
+    releaseSteps[receiptDownload]?.with?.path !== "intel-qualification" ||
+    releaseSteps[receiptRead]?.id !== "intel_qualification" ||
+    !releaseSteps[receiptRead]?.run?.includes("<intel-qualification/desktop-mac-x64.id") ||
+    releaseSteps[intelDownload]?.with?.["artifact-ids"] !==
+      "${{ steps.intel_qualification.outputs.id }}" ||
+    releaseSteps[intelDownload]?.with?.name !== undefined ||
+    releaseSteps[intelDownload]?.with?.path !== "release-assets" ||
+    intelReleaseSteps.some(
+      (step) =>
+        step?.if !== "needs.preflight.outputs.desktop_flavor != 'remote'" ||
+        step["continue-on-error"] !== undefined,
+    )
+  ) {
+    throw new Error(
+      "Intel publication must consume only the artifact ID recorded after startup smoke.",
+    );
+  }
   const nativeSteps = Object.values(platformDefinition.jobs)[0]!.steps;
   const stepById = (id: string): Step => {
     const step = nativeSteps.find((step) => step.id === id);
     if (!step) throw new Error(`Missing native release step ${id}.`);
     return step;
   };
+  // Both resumed packaging and Intel-only qualification import shared runtime code.
+  // Frozen, script-free dependencies must be present before either source verifier.
+  for (const [jobName, job] of Object.entries(platformDefinition.jobs)) {
+    const verificationIndex = job.steps.findIndex((step) =>
+      /node scripts\/verify-(?:release-artifact-checkpoint|packaged-desktop-startup)\.ts/.test(
+        step.run ?? "",
+      ),
+    );
+    if (verificationIndex < 0) continue;
+    const preparation = job.steps.slice(0, verificationIndex);
+    const bunIndex = preparation.findIndex((step) => step.uses?.startsWith("oven-sh/setup-bun@"));
+    const installIndex = preparation.findIndex((step) => {
+      const command =
+        step.run
+          ?.replace(/\\\r?\n/g, " ")
+          .trim()
+          .split(/\s+/) ?? [];
+      return command[0] === "bun" && command[1] === "install";
+    });
+    const install = preparation[installIndex];
+    const args =
+      install?.run
+        ?.replace(/\\\r?\n/g, " ")
+        .trim()
+        .split(/\s+/) ?? [];
+    if (
+      bunIndex < 0 ||
+      installIndex <= bunIndex ||
+      preparation[bunIndex]?.if ||
+      install?.if ||
+      preparation[bunIndex]?.with?.["bun-version-file"] !== "package.json" ||
+      !args.includes("--frozen-lockfile") ||
+      !args.includes("--ignore-scripts")
+    ) {
+      throw new Error(
+        `${jobName} source verification requires unconditional pinned Bun and frozen, script-free dependencies.`,
+      );
+    }
+    // The startup smoke imports the server's supervised process teardown, so a
+    // filtered install must keep the server workspace beside @synara/scripts.
+    if (
+      args.includes("--filter") &&
+      !args.includes("'!@synara/marketing'") &&
+      !(args.includes("'@synara/scripts'") && args.includes("'@synara/cli'"))
+    ) {
+      throw new Error(
+        `${jobName} must install the scripts and server workspaces it verifies with.`,
+      );
+    }
+  }
   const evaluates = (step: Step, context: Record<string, unknown>): boolean => {
     if (!step.if) throw new Error(`Missing conditional admission for ${step.name}.`);
     const expression = step.if.replace(/^\$\{\{\s*|\s*\}\}$/g, "");
@@ -427,25 +601,27 @@ async function verifyReleaseWorkflowSafety(): Promise<void> {
   );
   // Execute the actual job predicate against failed/skipped prerequisites. A
   // matching source string would not detect a permissive OR elsewhere in it.
-  const predicate = buildJob.match(/    if: \$\{\{ (.+) \}\}/)?.[1];
+  const predicate = macBuildJob.match(/    if: \$\{\{ (.+) \}\}/)?.[1];
   if (!predicate) throw new Error("Missing packaging admission predicate.");
   const admits = new Function("needs", "cancelled", `return ${predicate};`) as (
     needs: Record<string, unknown>,
     cancelled: () => boolean,
   ) => boolean;
-  const prerequisites = ["preflight", "build_mac_icon", "build_portable", "prepare_cua"];
-  const dependencies = buildJob.match(/    needs: \[(.+)\]/)?.[1]?.split(/,\s*/) ?? [];
+  const prerequisites = ["preflight", "restore_mac_icon", "build_mac_icon", "build_portable"];
+  const dependencies = macBuildJob.match(/    needs: \[(.+)\]/)?.[1]?.split(/,\s*/) ?? [];
   for (const name of prerequisites)
     if (!dependencies.includes(name)) throw new Error(`Packaging does not await ${name}.`);
-  for (const testGate of ["quality", "server_tests"])
-    if (dependencies.includes(testGate))
-      throw new Error(`Packaging unnecessarily waits for ${testGate}.`);
+  for (const independentJob of ["quality", "server_tests", "prepare_cua"])
+    if (dependencies.includes(independentJob))
+      throw new Error(`Packaging unnecessarily waits for ${independentJob}.`);
+  // Baseline: an exact icon catalog miss compiled on macOS 26.
   const successful: Record<string, { result: string; outputs?: Record<string, string> }> =
     Object.fromEntries(prerequisites.map((name) => [name, { result: "success" }]));
   successful.preflight = {
     result: "success",
-    outputs: { package_artifacts: "true", prepare_cua: "true", build_icon: "true" },
+    outputs: { package_artifacts: "true", build_icon: "true" },
   };
+  successful.restore_mac_icon = { result: "success", outputs: { hit: "" } };
   if (!admits(successful, () => false)) throw new Error("Valid packaging is blocked.");
   if (admits(successful, () => true)) throw new Error("Cancelled release can package artifacts.");
   for (const name of prerequisites) {
@@ -454,22 +630,80 @@ async function verifyReleaseWorkflowSafety(): Promise<void> {
         throw new Error(`Packaging admitted ${name}=${result}.`);
     }
   }
-  for (const platform of ["linux", "win"]) {
-    const noMac = {
-      ...successful,
-      preflight: {
-        result: "success",
-        outputs: {
-          package_artifacts: "true",
-          build_icon: "false",
-          prepare_cua: platform === "win" ? "false" : "true",
+  // An exact hit publishes the catalog from Linux and skips the macOS compile.
+  // The catalog must come from exactly one verified source; a hit never
+  // excuses a failed restore, and a miss never excuses a missing compile.
+  const restored = {
+    ...successful,
+    restore_mac_icon: { result: "success", outputs: { hit: "true" } },
+    build_mac_icon: { result: "skipped" },
+  };
+  if (!admits(restored, () => false)) throw new Error("A verified icon catalog hit is blocked.");
+  for (const result of ["success", "failure", "cancelled", ""])
+    if (admits({ ...restored, build_mac_icon: { result } }, () => false))
+      throw new Error(`Packaging admitted an icon hit with build_mac_icon=${result}.`);
+  for (const result of ["failure", "cancelled", "skipped", ""])
+    if (
+      admits({ ...restored, restore_mac_icon: { result, outputs: { hit: "true" } } }, () => false)
+    )
+      throw new Error(`Packaging admitted an icon hit from restore_mac_icon=${result}.`);
+  if (
+    admits(
+      {
+        ...successful,
+        preflight: {
+          result: "success",
+          outputs: { package_artifacts: "true", build_icon: "false" },
         },
       },
-      build_mac_icon: { result: "skipped" },
-      prepare_cua: { result: platform === "win" ? "skipped" : "success" },
-    };
-    if (!admits(noMac, () => false))
-      throw new Error(`${platform} packaging is blocked by an intentional skip.`);
+      () => false,
+    )
+  )
+    throw new Error("macOS packaging can start for a scope without macOS.");
+  const nonMacDependencies = buildJob.match(/    needs: \[(.+)\]/)?.[1]?.split(/,\s*/) ?? [];
+  if (
+    nonMacDependencies.length !== 2 ||
+    !["preflight", "build_portable"].every((job) => nonMacDependencies.includes(job))
+  )
+    throw new Error("Non-macOS packaging must depend only on preflight and the portable build.");
+  const nonMacPredicate = buildJob.match(/    if: \$\{\{ (.+) \}\}/)?.[1];
+  if (!nonMacPredicate) throw new Error("Missing non-macOS packaging admission predicate.");
+  const admitsNonMac = new Function("needs", "cancelled", `return ${nonMacPredicate};`);
+  const nonMacNeeds = {
+    preflight: { result: "success", outputs: { package_non_mac: "true" } },
+    build_portable: { result: "success" },
+  };
+  if (!admitsNonMac(nonMacNeeds, () => false))
+    throw new Error("Non-macOS packaging waits for an unrelated job.");
+  if (
+    admitsNonMac(nonMacNeeds, () => true) ||
+    admitsNonMac(
+      { ...nonMacNeeds, preflight: { result: "success", outputs: { package_non_mac: "false" } } },
+      () => false,
+    )
+  )
+    throw new Error("Non-macOS packaging admitted an unselected or cancelled scope.");
+  for (const job of nonMacDependencies) {
+    for (const result of ["failure", "cancelled", "skipped", ""])
+      if (admitsNonMac({ ...nonMacNeeds, [job]: { ...successful[job], result } }, () => false))
+        throw new Error(`Non-macOS packaging admitted ${job}=${result}.`);
+  }
+
+  const cua = nativeSteps.find((step) => step.uses === "./.github/actions/provision-cua");
+  const artifact = nativeSteps.find((step) => step.id === "build_artifact");
+  if (!cua || !artifact || nativeSteps.indexOf(cua) >= nativeSteps.indexOf(artifact))
+    throw new Error("Every Cua platform must verify its own helper before packaging.");
+  for (const platform of ["mac", "linux", "win"]) {
+    for (const restored of ["success", "skipped"]) {
+      const needsCua = platform !== "win" && restored !== "success";
+      if (
+        evaluates(cua, {
+          inputs: { platform },
+          steps: { restore_checkpoint: { outcome: restored } },
+        }) !== needsCua
+      )
+        throw new Error(`Incorrect Cua provisioning admission for ${platform} / ${restored}.`);
+    }
   }
   for (const gate of [
     "  quality:\n    name: Quality gates\n    needs: preflight\n    runs-on: ubuntu-24.04\n    timeout-minutes: 15\n    permissions:\n      contents: read",
@@ -479,11 +713,12 @@ async function verifyReleaseWorkflowSafety(): Promise<void> {
   ]) {
     assertContains(workflow, gate, "Expected read-only, sharded quality gates before publication.");
   }
-  assertContains(
-    buildJob,
-    "permissions:\n      contents: read",
-    "Artifact builds must remain read-only.",
-  );
+  for (const job of [macBuildJob, buildJob])
+    assertContains(
+      job,
+      "permissions:\n      contents: read",
+      "Artifact builds must remain read-only.",
+    );
   assertContains(
     readFileSync(resolve(repoRoot, "scripts/lib/release-build-scope.ts"), "utf8"),
     'runner: "macos-15",',
@@ -507,51 +742,127 @@ async function verifyReleaseWorkflowSafety(): Promise<void> {
     "pkg-config libssl-dev libx11-dev libxtst-dev libxrandr-dev libxfixes-dev libxrender-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libwayland-dev",
     "Expected the Linux release to install the native driver's build dependencies.",
   );
+  // Cua preparation reads only its checkout; the paired benchmark alone archives
+  // an older baseline commit (scripts/benchmark-cua-build.ts) and needs history.
+  const prepareCheckout = (
+    parseYaml(workflow) as {
+      jobs: Record<string, { steps: Array<{ uses?: string; with?: Record<string, string> }> }>;
+    }
+  ).jobs.prepare_cua!.steps.find((step) => step.uses?.startsWith("actions/checkout@"));
+  const fetchDepth = new Function(
+    "needs",
+    `return ${String(prepareCheckout?.with?.["fetch-depth"]).replace(/^\$\{\{\s*|\s*\}\}$/g, "")};`,
+  );
+  for (const benchmark of ["true", "false", ""])
+    if (
+      fetchDepth({ preflight: { outputs: { benchmark_native: benchmark } } }) !==
+      (benchmark === "true" ? "0" : "1")
+    )
+      throw new Error("Cua benchmarks require full history; ordinary Cua preparation does not.");
   assertContains(
     workflow,
     "    permissions:\n      contents: read\n      id-token: write\n    steps:",
     "Expected only CLI publication to combine repository reads with npm OIDC.",
   );
   const workflowDefinition = parseYaml(workflow) as {
-    jobs: Record<string, { needs: string[]; if: string }>;
+    concurrency: { group: string; "cancel-in-progress": boolean };
+    jobs: Record<string, { needs: string[]; if: string; permissions?: Record<string, string> }>;
   };
+  const releaseQueue = workflowDefinition.concurrency;
+  const resolveQueue = new Function(
+    "github",
+    "inputs",
+    `return ${releaseQueue.group.replace(/^\$\{\{\s*|\s*\}\}$/g, "")};`,
+  );
+  const tagQueue = resolveQueue({ event_name: "push" }, {});
+  const manualQueue = resolveQueue({ event_name: "workflow_dispatch" }, { publish_release: true });
+  const buildQueue = resolveQueue({ event_name: "workflow_dispatch" }, { publish_release: false });
+  if (
+    !tagQueue ||
+    tagQueue !== manualQueue ||
+    tagQueue === buildQueue ||
+    releaseQueue["cancel-in-progress"]
+  )
+    throw new Error("Publication must serialize independently of build-only diagnostics.");
   for (const name of ["release", "publish_cli"]) {
     const publisher = workflowDefinition.jobs[name]!;
-    for (const gate of ["preflight", "quality", "server_tests", "build"])
+    for (const gate of ["preflight", "quality", "server_tests", "build_mac", "build"])
       if (!publisher.needs.includes(gate))
         throw new Error(`${name} does not directly await ${gate}.`);
     const expression = publisher.if.replace(/^\$\{\{\s*|\s*\}\}$/g, "");
-    if (/\b(?:always|cancelled|failure|success)\s*\(/.test(expression))
-      throw new Error(`${name} must retain implicit success admission.`);
-    const allows = new Function("needs", "vars", `return ${expression};`);
-    for (const publish of ["true", "false"])
-      for (const prerelease of ["true", "false"]) {
-        const needs = Object.fromEntries(
-          publisher.needs.map((gate) => [
-            gate,
-            { result: "success", outputs: {} as Record<string, string> },
-          ]),
-        );
-        needs.preflight!.outputs = { publish_release: publish, is_prerelease: prerelease };
-        if (
-          Boolean(allows(needs, { SYNARA_PUBLISH_CLI: "1" })) !==
-          (publish === "true" && (name === "release" || prerelease === "false"))
+    const hasStatusCheck = /\b(?:always|cancelled|failure|success)\s*\(/.test(expression);
+    const evaluate = new Function(
+      "needs",
+      "vars",
+      "cancelled",
+      "failure",
+      "success",
+      "always",
+      `return ${expression};`,
+    );
+    const successfulNeeds = (buildServer = "true") => {
+      const needs = Object.fromEntries(
+        publisher.needs.map((gate) => [
+          gate,
+          { result: "success", outputs: {} as Record<string, string> },
+        ]),
+      );
+      needs.preflight!.outputs = {
+        publish_release: "true",
+        is_prerelease: "false",
+        build_server: buildServer,
+      };
+      if (name === "release" && buildServer === "false")
+        needs.build_server_tarball!.result = "skipped";
+      return needs;
+    };
+    // GitHub adds success() only when the job expression has no status-check function.
+    const allows = (needs: ReturnType<typeof successfulNeeds>, cancelled = false) => {
+      const success = !cancelled && Object.values(needs).every((gate) => gate.result === "success");
+      return (
+        (hasStatusCheck || success) &&
+        Boolean(
+          evaluate(
+            needs,
+            { SYNARA_PUBLISH_CLI: "1" },
+            () => cancelled,
+            () => Object.values(needs).some((gate) => gate.result === "failure"),
+            () => success,
+            () => true,
+          ),
         )
-          throw new Error(`${name} publication policy changed.`);
-      }
-    for (const gate of ["quality", "server_tests"])
-      for (const result of ["failure", "cancelled", "skipped", ""]) {
-        const needs = Object.fromEntries(
-          publisher.needs.map((gate) => [
-            gate,
-            { result: "success", outputs: {} as Record<string, string> },
-          ]),
-        );
-        needs.preflight!.outputs = { publish_release: "true", is_prerelease: "false" };
-        needs[gate]!.result = result;
-        if (allows(needs, { SYNARA_PUBLISH_CLI: "1" }))
-          throw new Error(`${name} admits ${gate}=${result}.`);
-      }
+      );
+    };
+    for (const publish of ["true", "false"])
+      for (const prerelease of ["true", "false"])
+        for (const buildServer of ["true", "false"]) {
+          const needs = successfulNeeds(buildServer);
+          needs.preflight!.outputs.publish_release = publish;
+          needs.preflight!.outputs.is_prerelease = prerelease;
+          if (
+            allows(needs) !== (publish === "true" && (name === "release" || prerelease === "false"))
+          )
+            throw new Error(`${name} publication policy changed.`);
+        }
+    for (const buildServer of ["true", "false"]) {
+      const ready = successfulNeeds(buildServer);
+      if (!allows(ready) || allows(ready, true))
+        throw new Error(`${name} success/cancellation admission changed.`);
+      for (const gate of publisher.needs)
+        for (const result of ["failure", "cancelled", "skipped", ""]) {
+          const needs = successfulNeeds(buildServer);
+          needs[gate]!.result = result;
+          const intentionalSkip =
+            name === "release" &&
+            gate === "build_server_tarball" &&
+            buildServer === "false" &&
+            result === "skipped";
+          if (allows(needs) !== intentionalSkip || allows(needs, true))
+            throw new Error(
+              `${name} admits incorrect ${gate}=${result} (build_server=${buildServer}).`,
+            );
+        }
+    }
   }
   const serverJob = workflow.slice(
     workflow.indexOf("  build_server_tarball:\n"),
@@ -568,11 +879,9 @@ async function verifyReleaseWorkflowSafety(): Promise<void> {
     "permissions:\n      contents: read",
     "Server artifact access must remain read-only.",
   );
-  assertContains(
-    workflow,
-    "  release:\n    name: Publish GitHub Release\n    if: ${{ needs.preflight.outputs.publish_release == 'true' && needs.quality.result == 'success' && needs.server_tests.result == 'success' }}\n    needs: [preflight, quality, server_tests, build, build_server_tarball]\n    runs-on: ubuntu-24.04\n    timeout-minutes: 10\n    permissions:\n      contents: write",
-    "Expected only GitHub release publication to receive contents write access.",
-  );
+  for (const [name, job] of Object.entries(workflowDefinition.jobs))
+    if ((job.permissions?.contents === "write") !== (name === "release"))
+      throw new Error("Only GitHub release publication may receive contents write access.");
   assertContains(
     workflow,
     "repositories: ${{ github.event.repository.name }}\n          permission-contents: write",
@@ -592,11 +901,6 @@ async function verifyReleaseWorkflowSafety(): Promise<void> {
     workflow,
     "publish_release: ${{ steps.release_mode.outputs.publish_release }}",
     "Expected preflight to expose the resolved publication mode.",
-  );
-  assertContains(
-    workflow,
-    "if: ${{ needs.preflight.outputs.publish_release == 'true' && needs.quality.result == 'success' && needs.server_tests.result == 'success' }}",
-    "Expected GitHub publication to require explicit publication mode.",
   );
   assertContains(
     workflow,
@@ -645,34 +949,94 @@ async function verifyReleaseWorkflowSafety(): Promise<void> {
   );
   const iconJob = workflow.slice(
     workflow.indexOf("  build_mac_icon:\n"),
-    workflow.indexOf("  build:\n"),
+    workflow.indexOf("  prepare_cua:\n"),
   );
-  assertContains(
-    iconJob,
-    "DESKTOP_FLAVOR: ${{ needs.preflight.outputs.desktop_flavor }}",
-    "Expected the macOS icon job to receive the resolved desktop flavor.",
+  const restoreIconJob = workflow.slice(
+    workflow.indexOf("  restore_mac_icon:\n"),
+    workflow.indexOf("  build_mac_icon:\n"),
   );
-  const brandAssets = readFileSync(resolve(repoRoot, "scripts/lib/brand-assets.ts"), "utf8");
-  const betaComposerPath = /betaMacIconComposer: "([^"]+)"/.exec(brandAssets)?.[1];
-  const prodComposerPath = /productionMacIconComposer: "([^"]+)"/.exec(brandAssets)?.[1];
-  if (betaComposerPath === undefined || prodComposerPath === undefined) {
-    throw new Error("Expected brand-assets.ts to declare Icon Composer sources per flavor.");
+  // Both icon paths select the source through brand-assets.ts for the resolved
+  // flavor; scripts/lib/mac-icon-catalog.test.ts pins the selection and actool
+  // arguments, so the cached and compiled catalogs cannot drift apart.
+  for (const [job, command] of [
+    [iconJob, 'node scripts/mac-icon-catalog.ts compile --flavor "$DESKTOP_FLAVOR"'],
+    [restoreIconJob, 'node scripts/mac-icon-catalog.ts key --flavor "$DESKTOP_FLAVOR"'],
+    [restoreIconJob, 'node scripts/mac-icon-catalog.ts verify --flavor "$DESKTOP_FLAVOR"'],
+  ] as const) {
+    assertContains(job, command, "Expected the macOS icon catalog to use the resolved flavor.");
+    assertContains(
+      job,
+      "DESKTOP_FLAVOR: ${{ needs.preflight.outputs.desktop_flavor }}",
+      "Expected the macOS icon jobs to receive the resolved desktop flavor.",
+    );
   }
   assertContains(
-    iconJob,
-    `icon_source="${prodComposerPath}"`,
-    "Expected the macOS icon job to default to the production Icon Composer source.",
+    readFileSync(resolve(repoRoot, "scripts/lib/mac-icon-catalog.ts"), "utf8"),
+    "desktopIconAssetPaths(flavor).macIconComposer",
+    "Expected the icon catalog to compile the flavor's brand-assets.ts Icon Composer source.",
   );
+  // The Linux restore holds no signing secret and compiles nothing. Its only
+  // cross-run source is the trusted default-branch producer used for Cua.
   assertContains(
-    iconJob,
-    `icon_source="${betaComposerPath}"`,
-    "Expected the macOS icon job to compile the beta Icon Composer source for beta releases.",
+    restoreIconJob,
+    "    runs-on: ubuntu-24.04\n    timeout-minutes: 10\n    permissions:\n      contents: read\n      actions: read\n",
+    "Expected the icon restore to run on Linux with read-only access.",
   );
+  assertNotContains(restoreIconJob, "secrets.", "The icon restore must not receive secrets.");
+  assertNotContains(restoreIconJob, " compile ", "The icon restore must never compile.");
   assertContains(
-    iconJob,
-    "--app-icon Synara",
-    "Expected every flavor's icon catalog to keep the Synara asset name.",
+    restoreIconJob,
+    "const { findCuaArtifact } = await import(`${process.env.GITHUB_WORKSPACE}/apps/desktop/scripts/find-cua-artifact.mjs`);",
+    "Expected the icon restore to accept only the trusted producer's artifacts.",
   );
+  type IconStep = { id?: string; if?: string; with?: Record<string, string> };
+  const iconJobs = (
+    parseYaml(workflow) as { jobs: Record<string, { if: string; steps: IconStep[] }> }
+  ).jobs;
+  const restoreSteps = iconJobs.restore_mac_icon!.steps;
+  // The icon-only validation stage must exercise the macOS 26 compile.
+  for (const id of ["cache", "persistent"]) {
+    const lookup = restoreSteps.find((step) => step.id === id);
+    const restores = new Function(
+      "needs",
+      "steps",
+      `return ${lookup?.if?.replace(/\.([a-z]+(?:-[a-z]+)+)/g, '["$1"]')};`,
+    );
+    for (const packageArtifacts of ["true", "false"])
+      if (
+        restores(
+          { preflight: { outputs: { package_artifacts: packageArtifacts } } },
+          { cache: { outputs: { "cache-hit": "" } } },
+        ) !==
+        (packageArtifacts === "true")
+      )
+        throw new Error("The icon validation stage must compile instead of restoring.");
+  }
+  const verifyStep = restoreSteps.find((step) => step.id === "verify");
+  const publishStep = restoreSteps.find((step) => step.with?.name === "mac-icon-catalog");
+  if (!verifyStep?.if || publishStep?.if !== "steps.verify.outputs.hit == 'true'")
+    throw new Error("The restored icon catalog must be published only after verification.");
+  // GitHub output names such as cache-hit become bracket access in JavaScript.
+  const verifyPredicate = verifyStep.if.replace(/\.([a-z]+(?:-[a-z]+)+)/g, '["$1"]');
+  for (const cacheHit of ["true", "false", ""])
+    for (const artifactId of ["", "42"]) {
+      const verifies = new Function("steps", `return ${verifyPredicate};`)({
+        cache: { outputs: { "cache-hit": cacheHit } },
+        persistent: { outputs: { "artifact-id": artifactId } },
+      });
+      if (verifies !== (cacheHit === "true" || artifactId !== ""))
+        throw new Error("Every restored icon catalog must be verified, and only those.");
+    }
+  const compiles = new Function("needs", `return ${iconJobs.build_mac_icon!.if};`);
+  for (const buildIcon of ["true", "false"])
+    for (const hit of ["true", ""])
+      if (
+        compiles({
+          preflight: { outputs: { build_icon: buildIcon } },
+          restore_mac_icon: { outputs: { hit } },
+        }) !== (buildIcon === "true" && hit !== "true")
+      )
+        throw new Error("macOS 26 must compile the icon catalog exactly on an exact-key miss.");
   const collectStep = packagingJob.slice(
     packagingJob.indexOf("  - name: Collect release assets"),
     packagingJob.indexOf("  - name: Verify and record artifact provenance"),

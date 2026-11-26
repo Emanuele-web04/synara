@@ -1,11 +1,18 @@
+// Owns desktop updater transitions, including staged updates retained across later checks.
+// main.ts owns transfers and artifact verification before publishing download completion.
 import type { DesktopRuntimeInfo, DesktopUpdateState } from "@synara/contracts";
 
-import { getCanRetryAfterDownloadFailure, nextStatusAfterDownloadFailure } from "./updateState";
+import {
+  getCanRetryAfterDownloadFailure,
+  isUpdateVersionAllowedForFlavor,
+  isUpdateVersionNewer,
+  nextStatusAfterDownloadFailure,
+} from "./updateState";
 
 export function createInitialDesktopUpdateState(
   currentVersion: string,
   runtimeInfo: DesktopRuntimeInfo,
-  flavor: "production" | "beta" | "canary" | "cua" = "production",
+  flavor: DesktopUpdateState["flavor"] = "production",
 ): DesktopUpdateState {
   return {
     enabled: false,
@@ -49,10 +56,10 @@ export function reduceDesktopUpdateStateOnCheckFailure(
 ): DesktopUpdateState {
   return {
     ...state,
-    status: "error",
+    status: state.downloadedVersion === null ? "error" : "downloaded",
     message,
     checkedAt,
-    downloadPercent: null,
+    downloadPercent: state.downloadedVersion === null ? null : 100,
     errorContext: "check",
     canRetry: true,
   };
@@ -63,6 +70,16 @@ export function reduceDesktopUpdateStateOnUpdateAvailable(
   version: string,
   checkedAt: string,
 ): DesktopUpdateState {
+  // The feed compares against the running app, so it may offer the already-staged release.
+  if (state.downloadedVersion !== null && !isUpdateVersionNewer(state.downloadedVersion, version)) {
+    return {
+      ...state,
+      status: "downloaded",
+      checkedAt,
+      downloadPercent: 100,
+      canRetry: true,
+    };
+  }
   const installFailureCount = state.availableVersion === version ? state.installFailureCount : 0;
   return {
     ...state,
@@ -82,6 +99,22 @@ export function reduceDesktopUpdateStateOnNoUpdate(
   state: DesktopUpdateState,
   checkedAt: string,
 ): DesktopUpdateState {
+  // A withdrawn or temporarily stale feed does not invalidate a verified pending payload.
+  if (
+    state.downloadedVersion !== null &&
+    isUpdateVersionNewer(state.currentVersion, state.downloadedVersion) &&
+    isUpdateVersionAllowedForFlavor(state.downloadedVersion, state.flavor)
+  ) {
+    return {
+      ...state,
+      status: "downloaded",
+      downloadPercent: 100,
+      checkedAt,
+      message: null,
+      errorContext: null,
+      canRetry: true,
+    };
+  }
   return {
     ...state,
     status: "up-to-date",
@@ -116,6 +149,7 @@ export function reduceDesktopUpdateStateOnDownloadFailure(
   return {
     ...state,
     status: nextStatusAfterDownloadFailure(state),
+    downloadedVersion: null,
     message,
     downloadPercent: null,
     errorContext: "download",
@@ -141,6 +175,8 @@ export function reduceDesktopUpdateStateOnDownloadComplete(
   state: DesktopUpdateState,
   version: string,
 ): DesktopUpdateState {
+  // A cancelled transfer can finish fingerprinting after a newer target has been selected.
+  if (state.status !== "downloading" || state.availableVersion !== version) return state;
   return {
     ...state,
     status: "downloaded",

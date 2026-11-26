@@ -7,6 +7,7 @@ import { cn } from "~/lib/utils";
 import { buildDiffPanelCompareRefValue, parseDiffPanelCompareRefValue } from "./DiffPanel.logic";
 import { Input } from "./ui/input";
 import { MenuGroup, MenuGroupLabel, MenuRadioGroup, MenuRadioItem } from "./ui/menu";
+import { useTranslation } from "~/i18n";
 
 const COMPARE_REF_BRANCH_LIMIT = 8;
 const COMPARE_REF_COMMIT_LIMIT = 8;
@@ -40,6 +41,8 @@ export function DiffPanelCompareRefMenuSection(props: {
   iconClassName: string;
   onSelectCompareRef: (ref: string) => void;
 }) {
+  const { t } = useTranslation();
+
   const [refDraft, setRefDraft] = useState("");
   const branchesQuery = useQuery({
     ...gitBranchesQueryOptions(props.cwd),
@@ -74,7 +77,7 @@ export function DiffPanelCompareRefMenuSection(props: {
 
   return (
     <MenuGroup>
-      <MenuGroupLabel>Compare with</MenuGroupLabel>
+      <MenuGroupLabel>{t("common:compareWith")}</MenuGroupLabel>
       <MenuRadioGroup
         value={activeRef.length > 0 ? buildDiffPanelCompareRefValue(activeRef) : ""}
         onValueChange={(value) => {
@@ -118,7 +121,7 @@ export function DiffPanelCompareRefMenuSection(props: {
           nativeInput
           size="sm"
           type="text"
-          placeholder="Branch, tag, or commit"
+          placeholder={t("common:branchTagOrCommit")}
           value={refDraft}
           onChange={(event) => setRefDraft(event.target.value)}
           onKeyDownCapture={(event) => {

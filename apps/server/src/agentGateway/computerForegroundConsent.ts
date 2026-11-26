@@ -8,7 +8,10 @@ import {
   computerForegroundAuthorizationForMessages,
   type ComputerForegroundAuthorization,
 } from "../computer/computerVisibleUse.ts";
-import type { AgentGatewayComputerToolsOptions } from "./computerTools.ts";
+import type {
+  AgentGatewayComputerToolsOptions,
+  ForegroundConsentOutcome,
+} from "./computerTools.ts";
 import type { ToolContext } from "./toolRuntime.ts";
 
 /** Include agent-origin rows so an existing row cannot look like new steering. */
@@ -73,30 +76,34 @@ export function makeComputerForegroundConsent(options: ComputerForegroundConsent
     args: Record<string, unknown>,
     context: ToolContext,
     signal: AbortSignal,
-  ): Promise<boolean> => {
-    if (context.callerTurnId === null) return false;
+  ): Promise<ForegroundConsentOutcome> => {
+    // No live turn means no card surface: the ask itself is impossible, so
+    // report it as cancelled rather than pretending the user declined.
+    if (context.callerTurnId === null) return "cancelled";
     await Effect.runPromise(context.assertCallerTurnActive(), { signal });
     if (options.gate.hasForegroundGrant(context.callerThreadId, context.callerTurnId)) {
-      return (await resolveForegroundAuthorization(context)).userRequestedVisibleUse;
+      return (await resolveForegroundAuthorization(context)).userRequestedVisibleUse
+        ? "authorized"
+        : "declined";
     }
     const before = await options.loadMessages(context.callerThreadId);
-    if (before === undefined) return false;
+    if (before === undefined) return "cancelled";
     const beforeMessageId = lastUserRowId(before);
-    const accepted = await options.gate.requestForegroundTask({
+    const outcome = await options.gate.requestForegroundTask({
       threadId: context.callerThreadId,
       turnId: context.callerTurnId,
       signal,
       publish: options.publish(name, args, context),
     });
-    if (!accepted) return false;
+    if (outcome !== "accept") return outcome === "decline" ? "declined" : "cancelled";
     const messages = await options.loadMessages(context.callerThreadId);
     if (messages === undefined || computerForegroundScopeChangedSince(messages, beforeMessageId))
-      return false;
+      return "declined";
     cardGrantFrontiers.set(context.callerThreadId, {
       turnId: context.callerTurnId,
       lastMessageId: lastUserRowId(messages),
     });
-    return true;
+    return "authorized";
   };
 
   return { resolveForegroundAuthorization, requestForegroundConsent };

@@ -17,6 +17,7 @@ import type { FileSystem, Path } from "effect";
 import { describe, expect, it } from "vitest";
 
 import {
+  withoutRemoteResumeComputerGrant,
   makeDispatchCommandNormalizer,
   type DispatchCommandNormalizerResult,
 } from "./dispatchCommandNormalization";
@@ -431,5 +432,27 @@ describe("makeDispatchCommandNormalizer", () => {
     } finally {
       fs.rmSync(attachmentsDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("withoutRemoteResumeComputerGrant", () => {
+  const resume: ClientOrchestrationCommand = {
+    type: "thread.turn.resume",
+    commandId: CommandId.makeUnsafe("cmd-resume"),
+    threadId: ThreadId.makeUnsafe("thread-resume"),
+    computerControlGeneration: 3,
+    createdAt: "2026-11-16T00:00:00.000Z",
+  };
+
+  it("keeps a remote device's Resume but drops its computer grant", () => {
+    const { computerControlGeneration: _grant, ...withoutGrant } = resume as Extract<
+      ClientOrchestrationCommand,
+      { type: "thread.turn.resume" }
+    >;
+    expect(withoutRemoteResumeComputerGrant(resume, "remote-device:phone")).toEqual(withoutGrant);
+  });
+
+  it("keeps the local owner's grant", () => {
+    expect(withoutRemoteResumeComputerGrant(resume, "local-loopback:local-loopback")).toBe(resume);
   });
 });

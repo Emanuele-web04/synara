@@ -28,7 +28,7 @@ Use `prepareProcess` from `@synara/shared/platformProcess` when a launch plan mu
 - `.cmd` and `.bat` routing through a shell-free `cmd.exe` plan;
 - Windows argument serialization and `windowsVerbatimArguments`;
 - WSL UNC detection and `wsl.exe` dispatch;
-- fail-fast `ExecutableNotFoundError` when `requireExecutable` is enabled (Node runtime only);
+- fail-fast `ExecutableNotFoundError` when `requireExecutable` is enabled (Node runtime only), preceded by `WorkingDirectoryNotFoundError` when the launch `cwd` is missing or not a directory, because a spawn into a missing `cwd` fails with the same ENOENT as a missing executable;
 - qualified relative commands such as `./bin/tool` resolved against the launch `cwd`, exactly as the child would see them.
 
 Node callers should normally use `spawnProcess`, `spawnProcessSync`, or `execProcessFile` from `@synara/shared/processRuntime`. Effect callers use `makeEffectProcessCommand` from `apps/server/src/platform/effectProcessRuntime.ts`; it has no `requireExecutable` because the Effect spawner is injectable and a missing executable surfaces as the spawner's own ENOENT error.

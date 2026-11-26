@@ -20,6 +20,7 @@ import {
   EnvironmentLabeledSection,
   EnvironmentRowChevron,
 } from "./EnvironmentRow";
+import { useTranslation } from "~/i18n";
 
 export function EnvironmentEditorSection({
   keybindings,
@@ -33,18 +34,14 @@ export function EnvironmentEditorSection({
   /** Open the in-app editor workspace view; omitted on surfaces that can't host it. */
   onOpenEditorView?: () => void;
 }) {
-  const {
-    options,
-    preferredEditor,
-    primaryOption,
-    openFavoriteShortcutLabel,
-    setDefaultEditor,
-    openInEditor,
-  } = useEditorLaunchers({
-    keybindings,
-    availableEditors,
-    openInTarget,
-  });
+  const { t } = useTranslation();
+
+  const { options, preferredEditor, primaryOption, openFavoriteShortcutLabel, openInEditor } =
+    useEditorLaunchers({
+      keybindings,
+      availableEditors,
+      openInTarget,
+    });
 
   // Render the section whenever there is at least one entry to show — the in-app
   // editor view, an external editor, or both.
@@ -56,11 +53,11 @@ export function EnvironmentEditorSection({
   const ActiveIcon = activeOption?.Icon;
 
   return (
-    <EnvironmentLabeledSection label="Editor">
+    <EnvironmentLabeledSection label={t("chat:general_editor")}>
       {onOpenEditorView ? (
         <EnvironmentRow
           icon={<EditorViewIcon aria-hidden className={ENVIRONMENT_ROW_ICON_CLASS_NAME} />}
-          label="Editor view"
+          label={t("chat:environment_editorView")}
           onClick={onOpenEditorView}
         />
       ) : null}
@@ -76,15 +73,16 @@ export function EnvironmentEditorSection({
                   <ActiveIcon aria-hidden className={ENVIRONMENT_ROW_ICON_CLASS_NAME} />
                 ) : null
               }
-              label={activeOption ? `Open in ${activeOption.label}` : "Open in editor"}
+              label={
+                activeOption
+                  ? t("chat:openIn", { value0: activeOption.label })
+                  : t("chat:environment_openInEditorDefault")
+              }
               trailing={<EnvironmentRowChevron />}
             />
           </MenuTrigger>
           <ComposerPickerMenuPopup align="start" side="bottom" className="w-44 min-w-44">
-            <MenuRadioGroup
-              value={preferredEditor ?? ""}
-              onValueChange={(value) => setDefaultEditor(value as EditorId)}
-            >
+            <MenuRadioGroup value={preferredEditor ?? ""}>
               {options.map(({ label, Icon, value }) => (
                 <MenuRadioItem
                   key={value}

@@ -8,6 +8,7 @@ import { ArrowRightIcon, TriangleAlertIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { ComposerStackedPanel } from "./ComposerStackedPanel";
 import { COMPOSER_NOTICE_CONTENT_CLASS_NAME } from "./composerStackedPanelStyles";
+import { useTranslation } from "~/i18n";
 
 export function ComposerBranchMismatchBanner({
   threadBranch,
@@ -16,6 +17,8 @@ export function ComposerBranchMismatchBanner({
   threadBranch: string;
   currentBranch: string;
 }) {
+  const { t } = useTranslation();
+
   return (
     <ComposerStackedPanel
       detached
@@ -29,19 +32,19 @@ export function ComposerBranchMismatchBanner({
       />
       <div className="min-w-0 flex-1">
         <p className="truncate text-ui-sm leading-5 font-medium text-foreground/95">
-          Sending a message will move this thread to the current branch
+          {t("chat:sendingAMessageWillMoveThisThreadToThe")}
         </p>
         <div className="mt-0.5 flex min-w-0 items-center gap-2 text-ui-sm leading-5">
           <code
             className="max-w-[40%] truncate text-muted-foreground/80"
-            title={`Thread branch: ${threadBranch}`}
+            title={t("chat:threadBranchTitle", { branch: threadBranch })}
           >
             {threadBranch}
           </code>
           <ArrowRightIcon aria-hidden="true" className="size-3 shrink-0 text-muted-foreground/50" />
           <code
             className="min-w-0 truncate font-medium text-foreground/85"
-            title={`Current branch: ${currentBranch}`}
+            title={t("chat:currentBranchTitle", { branch: currentBranch })}
           >
             {currentBranch}
           </code>

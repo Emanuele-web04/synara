@@ -5,7 +5,6 @@
 import "../../index.css";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { page } from "vitest/browser";
 import { render } from "vitest-browser-react";
 
 const harness = vi.hoisted(() => ({
@@ -144,7 +143,6 @@ describe("ConversationStorageSettingsPanels", () => {
     expect(document.body.textContent).toContain("Direct link");
     expect(document.body.textContent).toContain("Associated link");
     expect(document.body.textContent).not.toContain("Other worktree");
-    await page.screenshot({ path: "node_modules/.cache/worktree-settings-after.png" });
   });
 
   it("sorts archived threads once and keeps orphaned projects visible", async () => {

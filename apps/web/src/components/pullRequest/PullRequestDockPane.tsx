@@ -18,6 +18,7 @@ import {
 } from "./pullRequestDetail.logic";
 import { PullRequestDetailPanel } from "./PullRequestDetailPanel";
 import { useHostThreadSidechatAsk } from "./useHostThreadSidechatAsk";
+import { useTranslation } from "~/i18n";
 
 export function PullRequestDockPane({
   pane,
@@ -33,11 +34,13 @@ export function PullRequestDockPane({
   onSelectPullRequest?: ((number: number) => void) | undefined;
   pollingEnabled?: boolean;
 }) {
+  const { t } = useTranslation();
+
   const pollingEnabled = pollingEnabledProp ?? true;
   const hostSidechat = useHostThreadSidechatAsk(hostThreadId ?? null);
   const input = pullRequestDetailInputFromPane(pane);
   if (!input) {
-    return <PanelStateMessage>Select a pull request to open it here.</PanelStateMessage>;
+    return <PanelStateMessage>{t("git:selectAPullRequestToOpenItHere")}</PanelStateMessage>;
   }
   return (
     <PullRequestDetailPanel

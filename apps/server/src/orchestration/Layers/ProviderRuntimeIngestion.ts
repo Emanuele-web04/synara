@@ -42,6 +42,7 @@ import { providerSupportsNativeTurnSteering } from "@synara/shared/providerMetad
 import { isProviderKind } from "@synara/shared/providerInstances";
 import {
   coalesceProviderRuntimeProgress,
+  providerRuntimeCommandProgressKey,
   providerRuntimeProgressKey,
   PROVIDER_RUNTIME_PROGRESS_WINDOW_MS,
 } from "../providerRuntimeProgressCoalescing.ts";
@@ -58,9 +59,18 @@ import {
   isCodexGeneratedImageArtifact,
 } from "../../codexGeneratedImages.ts";
 import { copyAndAttributeStudioGeneratedImage } from "../../studioGeneratedImages.ts";
+import { stageAssistantImageAttachments } from "../../assistantImageAttachments.ts";
+import { ServerConfig } from "../../config.ts";
+import { ServerSettingsService } from "../../serverSettings.ts";
+import { providerUsageRecoveryBindingKey } from "../../providerUsage/index.ts";
+import { ManagedAttachmentRepository } from "../../persistence/Services/ManagedAttachments.ts";
+import { ManagedAttachmentRepositoryLive } from "../../persistence/Layers/ManagedAttachments.ts";
+import { GitCore } from "../../git/Services/GitCore.ts";
+import { listLocalPreviewWorktreeRoots } from "../../workspace/localPreviewWorktrees.ts";
 import { parseCheckpointFilesFromUnifiedDiff } from "../../checkpointing/Diffs.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { ComputerService } from "../../computer/Services/ComputerService.ts";
+import { DeviceService } from "../../device/Services/DeviceService.ts";
 import { activeThreadGoal } from "../../provider/goalMode.ts";
 import {
   classifyTerminalTurnApplicability,
@@ -91,6 +101,7 @@ import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
 import { isGitRepository } from "../../git/isRepo.ts";
 import {
   OrchestrationCommandIdentityCollisionError,
+  OrchestrationCommandInternalError,
   OrchestrationCommandPreviouslyRejectedError,
 } from "../Errors.ts";
 import { makeRuntimeJournalPoisonGate } from "../runtimeJournalPoisonGate.ts";
@@ -102,6 +113,7 @@ import { isExpiredSidechat } from "../sidechatLifecycle.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import {
   ProjectionSnapshotQuery,
+  type OrchestrationThreadWithoutActivities,
   type ProjectionGeneratedImageActivityRecord,
 } from "../Services/ProjectionSnapshotQuery.ts";
 import {
@@ -300,18 +312,20 @@ type NativeChildSlotState = {
 };
 
 /**
- * Promote a cheap thread *shell* into a full {@link OrchestrationThread} by
- * filling the heavy arrays with empties. Only valid for events that do not read
- * those arrays (see {@link eventNeedsHeavyThreadDetail}); the empties are never
- * observed on those code paths.
+ * Promote a cheap thread *shell* into a thread detail by filling the heavy
+ * arrays with empties. Only valid for events that do not read those arrays (see
+ * {@link eventNeedsHeavyThreadDetail}); the empties are never observed on those
+ * code paths. Ingestion never reads the activity timeline, so neither shape
+ * carries it and the compiler rejects any new read of `thread.activities`.
  */
-function threadDetailFromShell(shell: OrchestrationThreadShell): OrchestrationThread {
+function threadDetailFromShell(
+  shell: OrchestrationThreadShell,
+): OrchestrationThreadWithoutActivities {
   return {
     ...shell,
     deletedAt: null,
     messages: [],
     proposedPlans: [],
-    activities: [],
     checkpoints: [],
   };
 }
@@ -349,11 +363,12 @@ function eventNeedsHeavyThreadDetail(event: ProviderRuntimeEvent): boolean {
   }
   // Session exits and runtime errors flush the turn's pending generated images
   // into the terminal assistant message, which requires thread.messages.
+  // `turn.diff.updated` only needs checkpoints, which its handler reads through
+  // the narrow turn-diff context (Codex emits one per patch).
   return (
     event.type === "turn.proposed.completed" ||
     event.type === "turn.completed" ||
     event.type === "turn.aborted" ||
-    event.type === "turn.diff.updated" ||
     event.type === "session.exited" ||
     event.type === "runtime.error"
   );
@@ -465,7 +480,8 @@ function reasoningSummaryBufferKey(
   if (
     (event.provider !== "codex" &&
       event.provider !== "antigravity" &&
-      event.provider !== "claudeAgent") ||
+      event.provider !== "claudeAgent" &&
+      event.provider !== "opencode") ||
     !event.itemId
   ) {
     return null;
@@ -473,7 +489,9 @@ function reasoningSummaryBufferKey(
   if (
     event.type === "content.delta" &&
     (event.payload.streamKind === "reasoning_summary_text" ||
-      ((event.provider === "antigravity" || event.provider === "claudeAgent") &&
+      ((event.provider === "antigravity" ||
+        event.provider === "claudeAgent" ||
+        event.provider === "opencode") &&
         event.payload.streamKind === "reasoning_text"))
   ) {
     return [threadId, event.turnId ?? "no-turn", event.itemId].join(":");
@@ -506,11 +524,9 @@ function withBufferedReasoningSummary(
   event: ProviderRuntimeEvent,
   summary: BufferedReasoningSummary | undefined,
 ): ProviderRuntimeEvent {
+  // The caller has already verified the provider through the reasoning buffer key.
   if (
     event.type !== "item.completed" ||
-    (event.provider !== "codex" &&
-      event.provider !== "antigravity" &&
-      event.provider !== "claudeAgent") ||
     event.payload.itemType !== "reasoning" ||
     readableReasoningDetail(event.payload.detail)
   ) {
@@ -612,6 +628,29 @@ function asString(value: unknown): string | undefined {
 
 function asObject(value: unknown): Record<string, unknown> | undefined {
   return isJsonObject(value) ? value : undefined;
+}
+
+function stableActivityState(activity: {
+  readonly createdAt: string;
+  readonly sequence?: number | undefined;
+  readonly payload: unknown;
+}) {
+  const status = asObject(activity.payload)?.status;
+  return {
+    createdAt: activity.createdAt,
+    sequence: activity.sequence,
+    terminalStatus: status === "failed" || status === "completed" ? status : undefined,
+  };
+}
+
+// A stable activity keeps its first createdAt so its row stays anchored; the
+// payload carries when this update was observed so live rows can report recent
+// activity and elapsed time from the latest update, not the first.
+function withLastActivityAt(
+  payload: OrchestrationThreadActivity["payload"],
+  lastActivityAt: string,
+): OrchestrationThreadActivity["payload"] {
+  return isJsonObject(payload) ? { ...payload, lastActivityAt } : payload;
 }
 
 /**
@@ -816,9 +855,15 @@ export function selectProviderRuntimeJournalStream(input: {
 
 const make = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
+  const serverConfig = yield* ServerConfig;
+  const managedAttachmentRepository = yield* ManagedAttachmentRepository;
+  const gitCore = yield* GitCore;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const providerService = yield* ProviderService;
   const computerService = yield* Effect.serviceOption(ComputerService);
+  const deviceService = yield* Effect.serviceOption(DeviceService);
+  const recoverySettings = yield* Effect.serviceOption(ServerSettingsService);
+  const recoveryLiveAfter = new Date().toISOString();
   const projectionTurnRepository = yield* ProjectionTurnRepository;
   const projectionThreadActivityRepository = yield* ProjectionThreadActivityRepository;
   const projectionThreadSessionRepository = yield* ProjectionThreadSessionRepository;
@@ -829,14 +874,14 @@ const make = Effect.gen(function* () {
   // Throttle map for the durable last-runtime-activity timestamp: one row
   // write per thread per ~15s of observed activity instead of per event.
   const lastActivityFlushByThreadRef = yield* Ref.make(new Map<string, number>());
-  const outstandingTurnIdsByThreadRef = yield* Ref.make<ReadonlyMap<ThreadId, ReadonlySet<TurnId>>>(
-    new Map(),
-  );
+  const outstandingTurnIdsByThreadRef = yield* Ref.make<
+    ReadonlyMap<ThreadId, ReadonlyMap<TurnId, string | undefined>>
+  >(new Map());
 
-  const rememberOutstandingTurn = (threadId: ThreadId, turnId: TurnId) =>
+  const rememberOutstandingTurn = (threadId: ThreadId, turnId: TurnId, generation?: string) =>
     Ref.update(outstandingTurnIdsByThreadRef, (state) => {
       const next = new Map(state);
-      next.set(threadId, new Set([...(next.get(threadId) ?? []), turnId]));
+      next.set(threadId, new Map(next.get(threadId)).set(turnId, generation));
       return next;
     });
   const forgetOutstandingTurn = (threadId: ThreadId, turnId: TurnId) =>
@@ -844,17 +889,24 @@ const make = Effect.gen(function* () {
       const current = state.get(threadId);
       if (!current?.has(turnId)) return state;
       const next = new Map(state);
-      const remaining = new Set(current);
+      const remaining = new Map(current);
       remaining.delete(turnId);
       if (remaining.size === 0) next.delete(threadId);
       else next.set(threadId, remaining);
       return next;
     });
-  const clearOutstandingTurns = (threadId: ThreadId) =>
+  const clearOutstandingTurns = (threadId: ThreadId, generation?: string) =>
     Ref.update(outstandingTurnIdsByThreadRef, (state) => {
-      if (!state.has(threadId)) return state;
+      const current = state.get(threadId);
+      if (!current) return state;
       const next = new Map(state);
-      next.delete(threadId);
+      const remaining = new Map(
+        [...current].filter(
+          ([, heldGeneration]) => generation !== undefined && heldGeneration !== generation,
+        ),
+      );
+      if (remaining.size === 0) next.delete(threadId);
+      else next.set(threadId, remaining);
       return next;
     });
 
@@ -1061,9 +1113,9 @@ const make = Effect.gen(function* () {
   });
   // Keep row identity after the text buffer is consumed. On a cache miss the
   // durable activity restores ordering and terminal state across recovery.
-  const claudeReasoningActivityById = yield* Cache.make<
+  const stableActivityById = yield* Cache.make<
     string,
-    OrchestrationThreadActivity | undefined
+    ReturnType<typeof stableActivityState> | undefined
   >({
     capacity: BUFFERED_REASONING_SUMMARY_BY_KEY_CACHE_CAPACITY,
     timeToLive: BUFFERED_REASONING_SUMMARY_BY_KEY_TTL,
@@ -1169,10 +1221,11 @@ const make = Effect.gen(function* () {
       event.provider === "claudeAgent" &&
       (event.type === "item.updated" || event.type === "item.completed") &&
       event.payload.itemType === "reasoning";
-    if (isClaudeReasoning) {
-      const cached = Option.getOrUndefined(
-        yield* Cache.getOption(claudeReasoningActivityById, activity.id),
-      );
+    const hasStableActivity =
+      isClaudeReasoning || providerRuntimeCommandProgressKey(event) !== undefined;
+    let updatedAt: string | undefined;
+    if (hasStableActivity) {
+      const cached = Option.getOrUndefined(yield* Cache.getOption(stableActivityById, activity.id));
       const durable = cached
         ? undefined
         : Option.getOrUndefined(
@@ -1181,30 +1234,18 @@ const make = Effect.gen(function* () {
               activityId: activity.id,
             }),
           );
-      const previous: OrchestrationThreadActivity | undefined =
-        cached ??
-        (durable
-          ? {
-              id: durable.activityId,
-              createdAt: durable.createdAt,
-              tone: durable.tone,
-              kind: durable.kind,
-              summary: durable.summary,
-              payload: durable.payload as OrchestrationThreadActivity["payload"],
-              turnId: durable.turnId,
-              ...(durable.sequence !== undefined ? { sequence: durable.sequence } : {}),
-            }
-          : undefined);
+      const previous = cached ?? (durable ? stableActivityState(durable) : undefined);
       if (previous) {
-        yield* Cache.set(claudeReasoningActivityById, activity.id, previous);
+        yield* Cache.set(stableActivityById, activity.id, previous);
         // Interruption/failure is final; a delayed delta must not reopen a
         // completed block either. Completed snapshots may refine its detail.
         if (
-          asObject(previous.payload)?.status === "failed" ||
-          (asObject(previous.payload)?.status === "completed" &&
+          previous.terminalStatus === "failed" ||
+          (previous.terminalStatus === "completed" &&
             asObject(activity.payload)?.status !== "completed")
         )
           return;
+        updatedAt = activity.createdAt;
         activity = { ...activity, createdAt: previous.createdAt, sequence: previous.sequence };
       }
     }
@@ -1215,6 +1256,10 @@ const make = Effect.gen(function* () {
       if (Option.isSome(previous) && previous.value === fingerprint) {
         return;
       }
+    }
+    // Stamped after the fingerprint: a repeated identical snapshot stays a duplicate.
+    if (updatedAt !== undefined) {
+      activity = { ...activity, payload: withLastActivityAt(activity.payload, updatedAt) };
     }
 
     yield* orchestrationEngine.dispatch({
@@ -1228,11 +1273,24 @@ const make = Effect.gen(function* () {
       activity,
       createdAt: activity.createdAt,
     });
-    if (isClaudeReasoning) {
-      yield* Cache.set(claudeReasoningActivityById, activity.id, activity);
+    if (hasStableActivity) {
+      yield* Cache.set(stableActivityById, activity.id, stableActivityState(activity));
     }
     if (key && fingerprint) {
       yield* Cache.set(latestActivityUpdateFingerprintByKey, key, fingerprint);
+    }
+    if (
+      event.provider === "devin" &&
+      activity.kind === "tool.completed" &&
+      asObject(activity.payload)?.itemType === "collab_agent_tool_call"
+    ) {
+      // Native replay can confirm a locally stopped child is still running.
+      // Its identical pre-stop snapshot must reach the durable projection again.
+      const updateKey = providerActivityUpdateDedupeKey(event, threadId, {
+        ...activity,
+        kind: "tool.updated",
+      });
+      if (updateKey) yield* Cache.invalidate(latestActivityUpdateFingerprintByKey, updateKey);
     }
   });
 
@@ -1247,12 +1305,14 @@ const make = Effect.gen(function* () {
     );
   });
 
+  // Heavy events read messages, plans and checkpoints, never the activity
+  // timeline, so they skip its query (the costliest part of a detail read).
   const getThreadDetail = Effect.fnUntraced(function* (
     threadId: ThreadId,
-  ): Effect.fn.Return<OrchestrationThread | undefined> {
+  ): Effect.fn.Return<OrchestrationThreadWithoutActivities | undefined> {
     return Option.getOrUndefined(
       yield* projectionSnapshotQuery
-        .getThreadDetailById(threadId)
+        .getThreadDetailWithoutActivitiesById(threadId)
         .pipe(Effect.catch(() => Effect.succeed(Option.none()))),
     );
   });
@@ -1260,15 +1320,51 @@ const make = Effect.gen(function* () {
   // PERF: cheap counterpart to getThreadDetail for events that never read the
   // heavy thread arrays. Loads only the shell projection and promotes it with
   // empty arrays. See eventNeedsHeavyThreadDetail.
+  // Cache shell details across consecutive `content.delta` events (invalidated
+  // immediately on any non-delta event for the thread or after 500ms) so rapid
+  // token streaming doesn't run a 3-query SQLite transaction per delta.
+  const DELTA_THREAD_SHELL_CACHE_TTL_MS = 500;
+  const deltaThreadShellCache = new Map<
+    ThreadId,
+    {
+      readonly detail: OrchestrationThreadWithoutActivities;
+      readonly expiresAtMs: number;
+    }
+  >();
+
   const getThreadShellDetail = Effect.fnUntraced(function* (
     threadId: ThreadId,
-  ): Effect.fn.Return<OrchestrationThread | undefined> {
+    options?: { readonly allowDeltaCache?: boolean },
+  ): Effect.fn.Return<OrchestrationThreadWithoutActivities | undefined> {
+    if (options?.allowDeltaCache) {
+      const cached = deltaThreadShellCache.get(threadId);
+      if (cached && cached.expiresAtMs > Date.now()) {
+        return cached.detail;
+      }
+      deltaThreadShellCache.delete(threadId);
+    } else {
+      deltaThreadShellCache.delete(threadId);
+    }
     const shell = Option.getOrUndefined(
       yield* projectionSnapshotQuery
         .getThreadShellById(threadId)
         .pipe(Effect.catch(() => Effect.succeed(Option.none()))),
     );
-    return shell ? threadDetailFromShell(shell) : undefined;
+    if (!shell) {
+      deltaThreadShellCache.delete(threadId);
+      return undefined;
+    }
+    const detail = threadDetailFromShell(shell);
+    if (options?.allowDeltaCache) {
+      if (deltaThreadShellCache.size >= 128) {
+        deltaThreadShellCache.clear();
+      }
+      deltaThreadShellCache.set(threadId, {
+        detail,
+        expiresAtMs: Date.now() + DELTA_THREAD_SHELL_CACHE_TTL_MS,
+      });
+    }
+    return detail;
   });
 
   const getProjectShell = Effect.fnUntraced(function* (
@@ -1281,8 +1377,14 @@ const make = Effect.gen(function* () {
     );
   });
 
+  // Reads only shell fields (project id and workspace fields), so a shell lookup
+  // replaces the full detail read this used to pay on every diff event.
   const isGitRepoForThread = Effect.fnUntraced(function* (threadId: ThreadId) {
-    const thread = yield* getThreadDetail(threadId);
+    const thread = Option.getOrUndefined(
+      yield* projectionSnapshotQuery
+        .getThreadShellById(threadId)
+        .pipe(Effect.catch(() => Effect.succeed(Option.none()))),
+    );
     if (!thread) {
       return false;
     }
@@ -1521,7 +1623,8 @@ const make = Effect.gen(function* () {
                   ),
                   threadId,
                   type: "item.completed",
-                  ...(summary.sourceEvent.provider === "claudeAgent"
+                  ...(summary.sourceEvent.provider === "claudeAgent" ||
+                  summary.sourceEvent.provider === "opencode"
                     ? { createdAt: summary.createdAt }
                     : {}),
                   payload: {
@@ -1562,7 +1665,7 @@ const make = Effect.gen(function* () {
 
   const resolveAssistantCompletionMessageId = (input: {
     event: ProviderRuntimeEvent;
-    thread: OrchestrationThread;
+    thread: OrchestrationThreadWithoutActivities;
     turnId?: TurnId;
   }) =>
     Effect.gen(function* () {
@@ -1795,6 +1898,109 @@ const make = Effect.gen(function* () {
       }
     });
 
+  // Snapshot only the completed message's actual workspace images; never rescan history.
+  const stageInlineMessageImages = (
+    threadId: ThreadId,
+    messageId: MessageId,
+    commandId: string,
+    appendedText = "",
+  ) =>
+    Effect.gen(function* () {
+      // A receipt freezes the original attachment set, including no snapshots.
+      // Re-importing a newly available file would change this command's fingerprint.
+      const receipt = yield* commandReceipts.getByCommandId({
+        commandId: CommandId.makeUnsafe(commandId),
+      });
+      if (Option.isSome(receipt) && receipt.value.status === "accepted") {
+        const sequence = receipt.value.resultSequence;
+        const committed = yield* Stream.runCollect(
+          orchestrationEngine.readEventsThrough(Math.max(0, sequence - 1), sequence, 1),
+        );
+        const event = committed[0];
+        if (
+          event?.type !== "thread.message-sent" ||
+          event.commandId !== commandId ||
+          event.payload.threadId !== threadId ||
+          event.payload.messageId !== messageId ||
+          event.payload.role !== "assistant"
+        ) {
+          return yield* new OrchestrationCommandInternalError({
+            commandId,
+            commandType: "assistant-image-finalization-replay",
+            detail: "The accepted assistant message event is unavailable.",
+          });
+        }
+        const attachments = event.payload.attachments?.filter((item) => item.type === "image");
+        return { attachments, attachmentIds: attachments?.map((item) => item.id) ?? [] };
+      }
+      return yield* Effect.gen(function* () {
+        const stored = yield* projectionThreadMessageRepository.getByThreadAndMessageId({
+          threadId,
+          messageId,
+        });
+        if (Option.isNone(stored)) return { attachments: [], attachmentIds: [] };
+        const text = `${stored.value.text}${appendedText}`;
+        if (!text.includes("![")) return { attachments: [], attachmentIds: [] };
+        const shell = yield* projectionSnapshotQuery.getThreadShellById(threadId);
+        if (Option.isNone(shell)) return { attachments: [], attachmentIds: [] };
+        const project = yield* getProjectShell(shell.value);
+        if (!project) return { attachments: [], attachmentIds: [] };
+        const cwd = resolveThreadWorkspaceCwd({ thread: shell.value, projects: [project] });
+        if (!cwd) return { attachments: [], attachmentIds: [] };
+        return yield* stageAssistantImageAttachments({
+          text,
+          threadId,
+          messageId,
+          commandId,
+          cwd,
+          sourceRoots: [cwd],
+          attachmentsDir: serverConfig.attachmentsDir,
+          additionalSourceRoots: listLocalPreviewWorktreeRoots({ cwd }).pipe(
+            Effect.provideService(GitCore, gitCore),
+          ),
+          existingAttachments: stored.value.attachments ?? [],
+          repository: managedAttachmentRepository,
+        });
+      }).pipe(
+        Effect.catchCause((cause) => {
+          if (Cause.hasInterruptsOnly(cause)) return Effect.failCause(cause);
+          return Effect.logWarning("assistant image snapshots unavailable").pipe(
+            Effect.as({ attachments: [], attachmentIds: [] }),
+          );
+        }),
+        Effect.map((prepared) => ({
+          ...prepared,
+          attachments: prepared.attachments.length ? prepared.attachments : undefined,
+        })),
+      );
+    });
+
+  const completeAssistantMessage = (input: {
+    event: ProviderRuntimeEvent;
+    threadId: ThreadId;
+    messageId: MessageId;
+    turnId?: TurnId;
+    createdAt: string;
+    commandTag: string;
+    asyncQuestions?: import("@synara/contracts").AsyncUserInputQuestions;
+  }) =>
+    Effect.gen(function* () {
+      const commandId = providerCommandId(input.event, input.commandTag, input.messageId);
+      const prepared = yield* stageInlineMessageImages(input.threadId, input.messageId, commandId);
+      // Dispatch failures can be retryable or uncertain. Keep staging for the same
+      // journal operation to reclaim; abandoned uploads expire through the normal TTL.
+      yield* orchestrationEngine.dispatch({
+        type: "thread.message.assistant.complete",
+        commandId,
+        threadId: input.threadId,
+        messageId: input.messageId,
+        ...(prepared.attachments !== undefined ? { attachments: prepared.attachments } : {}),
+        ...(input.asyncQuestions ? { asyncQuestions: input.asyncQuestions } : {}),
+        ...(input.turnId ? { turnId: input.turnId } : {}),
+        createdAt: input.createdAt,
+      });
+    });
+
   const finalizeAssistantMessage = (input: {
     event: ProviderRuntimeEvent;
     threadId: ThreadId;
@@ -1847,15 +2053,7 @@ const make = Effect.gen(function* () {
         return;
       }
 
-      yield* orchestrationEngine.dispatch({
-        type: "thread.message.assistant.complete",
-        commandId: providerCommandId(input.event, input.commandTag, input.messageId),
-        threadId: input.threadId,
-        messageId: input.messageId,
-        ...(input.asyncQuestions ? { asyncQuestions: input.asyncQuestions } : {}),
-        ...(input.turnId ? { turnId: input.turnId } : {}),
-        createdAt: input.createdAt,
-      });
+      yield* completeAssistantMessage(input);
       yield* clearAssistantMessageState(input.threadId, input.messageId);
     });
 
@@ -1915,11 +2113,11 @@ const make = Effect.gen(function* () {
       // and duplicate provider notifications from emitting redundant message-sent events.
       const shouldComplete = dispatchedDelta || !input.targetMessage || targetIsStreaming;
       if (shouldComplete) {
-        yield* orchestrationEngine.dispatch({
-          type: "thread.message.assistant.complete",
-          commandId: providerCommandId(input.event, "generated-image-complete", targetMessageId),
+        yield* completeAssistantMessage({
+          event: input.event,
           threadId: input.threadId,
           messageId: targetMessageId,
+          commandTag: "generated-image-complete",
           ...(input.turnId ? { turnId: input.turnId } : {}),
           createdAt: input.createdAt,
         });
@@ -1960,7 +2158,7 @@ const make = Effect.gen(function* () {
    */
   const flushPendingGeneratedImagesForTurn = (input: {
     event: ProviderRuntimeEvent;
-    thread: OrchestrationThread;
+    thread: OrchestrationThreadWithoutActivities;
     turnId: TurnId;
     createdAt: string;
   }) =>
@@ -2022,7 +2220,7 @@ const make = Effect.gen(function* () {
    */
   const materializeStudioGeneratedImage = (input: {
     event: ProviderRuntimeEvent;
-    thread: OrchestrationThread;
+    thread: OrchestrationThreadWithoutActivities;
     imagePath: string;
     turnId: TurnId | undefined;
     createdAt: string;
@@ -2325,9 +2523,15 @@ const make = Effect.gen(function* () {
       // shell so high-frequency streaming events don't re-decode the whole
       // transcript. See eventNeedsHeavyThreadDetail for the safety rationale.
       const needsHeavyThreadDetail = eventNeedsHeavyThreadDetail(event);
+      const allowDeltaShellCache = !needsHeavyThreadDetail && event.type === "content.delta";
+      if (!allowDeltaShellCache) {
+        deltaThreadShellCache.delete(event.threadId);
+      }
       const parentThread = needsHeavyThreadDetail
         ? yield* getThreadDetail(event.threadId)
-        : yield* getThreadShellDetail(event.threadId);
+        : yield* getThreadShellDetail(event.threadId, {
+            allowDeltaCache: allowDeltaShellCache,
+          });
       if (!parentThread) return;
 
       // A subagent launched from inside another subagent's conversation (a
@@ -2366,7 +2570,7 @@ const make = Effect.gen(function* () {
           // Mirror the parent load: only this event's heavy-detail handlers read the
           // child's message/plan/checkpoint arrays, so otherwise use the cheap shell.
           const existingThread = needsHeavyThreadDetail
-            ? yield* projectionSnapshotQuery.getThreadDetailById(childThreadId)
+            ? yield* projectionSnapshotQuery.getThreadDetailWithoutActivitiesById(childThreadId)
             : Option.map(
                 yield* projectionSnapshotQuery.getThreadShellById(childThreadId),
                 threadDetailFromShell,
@@ -2527,7 +2731,6 @@ const make = Effect.gen(function* () {
                 latestTurn: null,
                 messages: [],
                 proposedPlans: [],
-                activities: [],
                 checkpoints: [],
                 session: null,
                 createdAt: now,
@@ -2642,7 +2845,7 @@ const make = Effect.gen(function* () {
       const isTerminalTurnEvent = event.type === "turn.completed" || event.type === "turn.aborted";
       const rawEventTurnId = toTurnId(event.turnId);
       if (event.type === "turn.started" && rawEventTurnId) {
-        yield* rememberOutstandingTurn(thread.id, rawEventTurnId);
+        yield* rememberOutstandingTurn(thread.id, rawEventTurnId, event.lifecycleGeneration);
       }
       const hasAmbiguousTurns =
         isTerminalTurnEvent &&
@@ -2774,15 +2977,14 @@ const make = Effect.gen(function* () {
         event.type === "runtime.error" ||
         (event.type === "session.state.changed" &&
           (event.payload.state === "stopped" || event.payload.state === "error"));
-      if (
-        Option.isSome(computerService) &&
-        (computerSessionEnded ||
-          (isTerminalTurnEvent &&
-            (eventTurnId !== undefined || (shouldApplyThreadLifecycle && !hasAmbiguousTurns))))
-      ) {
-        const releasedTurnId = isTerminalTurnEvent
-          ? eventTurnId
-          : (rawEventTurnId ?? activeTurnId ?? undefined);
+      const shouldReleaseTurnResources =
+        computerSessionEnded ||
+        (isTerminalTurnEvent &&
+          (eventTurnId !== undefined || (shouldApplyThreadLifecycle && !hasAmbiguousTurns)));
+      const releasedTurnId = isTerminalTurnEvent
+        ? eventTurnId
+        : (rawEventTurnId ?? activeTurnId ?? undefined);
+      if (Option.isSome(computerService) && shouldReleaseTurnResources) {
         endComputerTurnTiming(thread.id, releasedTurnId);
         yield* Effect.tryPromise(() =>
           computerService.value.manager.releaseDesktopControl(thread.id, releasedTurnId),
@@ -2795,6 +2997,42 @@ const make = Effect.gen(function* () {
             }),
           ),
         );
+      }
+
+      const outstandingTurns = (yield* Ref.get(outstandingTurnIdsByThreadRef)).get(thread.id);
+      const generation = event.lifecycleGeneration;
+      // A runtime.error can end one turn while its session serves another. Only actual
+      // session teardown retires a generation. A named turn already settled in the ledger
+      // cannot authorize retiring overlapping work, even after the active projection clears.
+      const sessionEndsObservedTurns =
+        computerSessionEnded &&
+        event.type !== "runtime.error" &&
+        (rawEventTurnId === undefined ||
+          (outstandingTurns?.has(rawEventTurnId) === true &&
+            (activeTurnId === null ||
+              rawEventTurnId === activeTurnId ||
+              (generation !== undefined && outstandingTurns?.get(activeTurnId) !== generation))));
+      // Never enumerate manager leases: a newer gateway turn can precede ingestion.
+      if (Option.isSome(deviceService) && shouldReleaseTurnResources) {
+        const endedDeviceTurns = new Set<TurnId>();
+        if (
+          releasedTurnId !== undefined &&
+          (!computerSessionEnded ||
+            rawEventTurnId !== undefined ||
+            generation === undefined ||
+            outstandingTurns?.get(releasedTurnId) === generation)
+        )
+          endedDeviceTurns.add(releasedTurnId);
+        if (sessionEndsObservedTurns) {
+          for (const [turnId, heldGeneration] of outstandingTurns ?? []) {
+            if (generation === undefined || heldGeneration === generation)
+              endedDeviceTurns.add(turnId);
+          }
+        }
+        if (endedDeviceTurns.size === 0 && generation === undefined)
+          deviceService.value.manager.endAgentTurn(thread.id);
+        for (const turnId of endedDeviceTurns)
+          deviceService.value.manager.endAgentTurn(thread.id, turnId);
       }
 
       if (event.type === "session.started") {
@@ -2879,8 +3117,52 @@ const make = Effect.gen(function* () {
             );
           }
 
+          let terminalRecovery: import("@synara/contracts").UsageLimitRecovery | undefined;
+          if (
+            event.type === "turn.completed" &&
+            event.payload.state === "failed" &&
+            event.payload.usageLimit?.resetAt &&
+            eventTurnId &&
+            Option.isSome(recoverySettings)
+          ) {
+            const settings = yield* recoverySettings.value.getSettings;
+            const current = (yield* orchestrationEngine.getReadModel()).threads.find(
+              (entry) => entry.id === thread.id,
+            );
+            const source = current?.usageLimitRecoverySource;
+            if (
+              settings.autoResumeAfterUsageLimits &&
+              source?.turnId === eventTurnId &&
+              source.policyEpoch === settings.usageLimitRecoveryEpoch &&
+              source.bindingKey !== "pending"
+            ) {
+              terminalRecovery = {
+                id: `usage-limit:${event.eventId}`,
+                turnId: eventTurnId,
+                resetAt: event.payload.usageLimit.resetAt,
+                autoResume: true,
+                provider: event.provider,
+                providerInstanceId:
+                  event.providerInstanceId ??
+                  thread.session?.providerInstanceId ??
+                  readModelSelectionProviderInstanceId(thread.modelSelection) ??
+                  event.provider,
+                model: current?.modelSelection.model ?? thread.modelSelection.model,
+                bindingKey: source.bindingKey,
+                policyEpoch: source.policyEpoch,
+              };
+            }
+          }
+
+          const negotiatedSteering =
+            event.type === "turn.started" && event.provider === "antigravity"
+              ? event.payload.supportsNativeTurnSteering
+              : event.type !== "session.exited" && thread.session?.providerName === event.provider
+                ? thread.session.supportsNativeTurnSteering
+                : undefined;
           yield* orchestrationEngine.dispatch({
             type: "thread.session.set",
+            ...(terminalRecovery ? { usageLimitRecovery: terminalRecovery } : {}),
             commandId: providerCommandId(event, "thread-session-set", thread.id),
             threadId: thread.id,
             session: {
@@ -2892,12 +3174,127 @@ const make = Effect.gen(function* () {
                 thread.session?.providerInstanceId ??
                 readModelSelectionProviderInstanceId(thread.modelSelection),
               runtimeMode: thread.session?.runtimeMode ?? "full-access",
+              ...(negotiatedSteering !== undefined
+                ? { supportsNativeTurnSteering: negotiatedSteering }
+                : {}),
               activeTurnId: nextActiveTurnId,
               lastError,
               updatedAt: now,
             },
             createdAt: now,
           });
+
+          // Freeze the source identity before observing any later refusal; replay can
+          // recover an existing freeze, but cannot arm historical failures from usage UI data.
+          if (event.type === "turn.started" && eventTurnId && Option.isSome(recoverySettings)) {
+            const settings = yield* recoverySettings.value.getSettings;
+            const frozenSource = (yield* orchestrationEngine.getReadModel()).threads.find(
+              (entry) => entry.id === thread.id,
+            )?.usageLimitRecoverySource;
+            if (
+              settings.autoResumeAfterUsageLimits &&
+              event.createdAt >= recoveryLiveAfter &&
+              frozenSource?.turnId !== eventTurnId &&
+              frozenSource?.admissionSequence !== undefined &&
+              frozenSource.policyEpoch === settings.usageLimitRecoveryEpoch &&
+              orchestrationEngine.hasThreadStopAfter !== undefined &&
+              !(yield* orchestrationEngine.hasThreadStopAfter(
+                thread.id,
+                frozenSource.admissionSequence,
+                eventTurnId,
+              ))
+            ) {
+              yield* orchestrationEngine.dispatch({
+                type: "thread.usage-limit.source",
+                expectedBindingKey: frozenSource.bindingKey,
+                commandId: providerCommandId(event, "usage-limit-source-pending", thread.id),
+                threadId: thread.id,
+                source: {
+                  turnId: eventTurnId,
+                  admissionSequence: frozenSource.admissionSequence,
+                  bindingKey: "pending",
+                  policyEpoch: settings.usageLimitRecoveryEpoch,
+                },
+                createdAt: now,
+              });
+              const instanceId =
+                event.providerInstanceId ??
+                thread.session?.providerInstanceId ??
+                readModelSelectionProviderInstanceId(thread.modelSelection) ??
+                event.provider;
+              const identityProject = yield* getProjectShell(thread);
+              const workingDirectory = identityProject
+                ? resolveThreadWorkspaceCwd({ thread, projects: [identityProject] })
+                : undefined;
+              const bindingKey = yield* providerUsageRecoveryBindingKey({
+                provider: event.provider,
+                instanceId,
+                ...(workingDirectory ? { workingDirectory } : {}),
+                ...(identityProject?.workspaceRoot
+                  ? { projectRoot: identityProject.workspaceRoot }
+                  : {}),
+              }).pipe(
+                Effect.provideService(ServerSettingsService, recoverySettings.value),
+                Effect.provideService(ServerConfig, serverConfig),
+                Effect.timeoutOption("8 seconds"),
+                Effect.tap((result) =>
+                  Option.isNone(result)
+                    ? Effect.logWarning(
+                        "usage-limit recovery unavailable: provider account binding timed out",
+                        { threadId: thread.id, turnId: eventTurnId, provider: event.provider },
+                      )
+                    : Effect.void,
+                ),
+                Effect.map((result) => Option.getOrNull(result)),
+                Effect.catch(() => Effect.succeed(null)),
+              );
+              if (bindingKey)
+                yield* orchestrationEngine.dispatch({
+                  type: "thread.usage-limit.source",
+                  commandId: providerCommandId(event, "usage-limit-source", thread.id),
+                  expectedBindingKey: "pending",
+                  threadId: thread.id,
+                  source: {
+                    turnId: eventTurnId,
+                    admissionSequence: frozenSource.admissionSequence,
+                    bindingKey,
+                    policyEpoch: settings.usageLimitRecoveryEpoch,
+                  },
+                  createdAt: now,
+                });
+            }
+            const current = (yield* orchestrationEngine.getReadModel()).threads.find(
+              (entry) => entry.id === thread.id,
+            );
+            if (current?.usageLimitRecovery?.state === "resuming")
+              yield* orchestrationEngine.dispatch({
+                type: "thread.usage-limit.started",
+                commandId: providerCommandId(event, "usage-limit-started", thread.id),
+                threadId: thread.id,
+                recoveryId: current.usageLimitRecovery.id,
+                turnId: eventTurnId,
+                createdAt: now,
+              });
+          }
+          if (isTerminalTurnEvent && eventTurnId) {
+            const before = (yield* orchestrationEngine.getReadModel()).threads.find(
+              (entry) => entry.id === thread.id,
+            );
+            const priorRecovery = before?.usageLimitRecovery;
+            if (
+              priorRecovery?.state === "resuming" &&
+              priorRecovery.resumedTurnId === eventTurnId
+            ) {
+              yield* orchestrationEngine.dispatch({
+                type: "thread.usage-limit.finish",
+                commandId: providerCommandId(event, "usage-limit-finish", thread.id),
+                threadId: thread.id,
+                recoveryId: priorRecovery.id,
+                turnId: eventTurnId,
+                createdAt: now,
+              });
+            }
+          }
 
           // Recovery still settles the old turn and drains queued work, but
           // its technical cancellation must not pause an autonomous goal.
@@ -3106,23 +3503,36 @@ const make = Effect.gen(function* () {
         if (lateForFinalizedTurn) {
           // Never leave a late row streaming: no terminal event for this turn
           // is coming to complete it.
-          const known = (yield* orchestrationEngine.getReadModel()).threads
-            .find((entry) => entry.id === thread.id)
-            ?.messages.find((message) => message.id === assistantMessageId);
+          const known = yield* projectionThreadMessageRepository.getByThreadAndMessageId({
+            threadId: thread.id,
+            messageId: assistantMessageId,
+          });
+          const commandId = providerCommandId(event, "assistant-delta-late", assistantMessageId);
+          const settled =
+            Option.isSome(known) && known.value.role === "assistant" && !known.value.isStreaming;
+          const prepared = settled
+            ? yield* stageInlineMessageImages(
+                thread.id,
+                assistantMessageId,
+                commandId,
+                assistantDelta,
+              )
+            : undefined;
           yield* orchestrationEngine.dispatch({
             type: "thread.message.assistant.delta",
-            commandId: providerCommandId(event, "assistant-delta-late", assistantMessageId),
+            commandId,
             threadId: thread.id,
             messageId: assistantMessageId,
             delta: assistantDelta,
+            ...(prepared?.attachments !== undefined ? { attachments: prepared.attachments } : {}),
             ...(turnId ? { turnId } : {}),
             createdAt: now,
           });
-          // The decider already re-settles a known finalized message.
-          if (!known || known.streaming) {
-            yield* orchestrationEngine.dispatch({
-              type: "thread.message.assistant.complete",
-              commandId: providerCommandId(event, "assistant-complete-late", assistantMessageId),
+          // A settled row is re-finalized by its delta, avoiding a second Ready event.
+          if (!settled) {
+            yield* completeAssistantMessage({
+              event,
+              commandTag: "assistant-complete-late",
               threadId: thread.id,
               messageId: assistantMessageId,
               ...(turnId ? { turnId } : {}),
@@ -3389,7 +3799,9 @@ const make = Effect.gen(function* () {
       }
 
       if (event.type === "session.exited") {
-        yield* clearOutstandingTurns(thread.id);
+        if (sessionEndsObservedTurns) yield* clearOutstandingTurns(thread.id, generation);
+        else if (rawEventTurnId !== undefined)
+          yield* forgetOutstandingTurn(thread.id, rawEventTurnId);
         const exitedTurnId = eventTurnId ?? activeTurnId ?? undefined;
         if (exitedTurnId) {
           yield* markTurnFinalized(thread.id, exitedTurnId);
@@ -3523,10 +3935,44 @@ const make = Effect.gen(function* () {
         });
       }
 
-      if (event.type === "turn.diff.updated") {
+      // A native subagent's resolved model (agent definition, env or tool input)
+      // only shows up in its own messages. Child threads only: the parent's
+      // model is the user's selection.
+      if (event.type === "thread.metadata.updated" && thread.id !== parentThread.id) {
+        const resolvedModel = event.payload.metadata?.model;
+        if (
+          thread.creationSource === "provider_native" &&
+          typeof resolvedModel === "string" &&
+          resolvedModel.length > 0 &&
+          resolvedModel !== thread.modelSelection.model
+        ) {
+          yield* orchestrationEngine.dispatch({
+            type: "thread.meta.update",
+            commandId: providerCommandId(event, "subagent-thread-model-update", thread.id),
+            threadId: thread.id,
+            modelSelection: { ...thread.modelSelection, model: resolvedModel },
+          });
+        }
+      }
+
+      // A newer snapshot of this turn's cumulative diff later in the same journal
+      // page supersedes this one (see coalesceProviderRuntimeProgress): skip the
+      // patch parse and placeholder write, the survivor carries the newest files.
+      if (event.type === "turn.diff.updated" && !suppressProgressActivity) {
         const turnId = toTurnId(event.turnId);
-        if (turnId && (yield* isGitRepoForThread(thread.id))) {
-          const existingCheckpoint = thread.checkpoints.find((c) => c.turnId === turnId);
+        // This event loads only the thread shell (see eventNeedsHeavyThreadDetail):
+        // read the max checkpoint turn count and this turn's checkpoint through the
+        // narrow turn-diff context, under the same completed-checkpoint filter as
+        // the full detail. A thread that cannot be read any more is skipped, as it
+        // was when the full detail came back empty.
+        const turnDiffContext =
+          turnId && (yield* isGitRepoForThread(thread.id))
+            ? yield* projectionSnapshotQuery
+                .getThreadTurnDiffContext(thread.id, turnId)
+                .pipe(Effect.catch(() => Effect.succeed(Option.none())))
+            : Option.none();
+        if (turnId && Option.isSome(turnDiffContext)) {
+          const existingCheckpoint = turnDiffContext.value.checkpoint ?? undefined;
           const placeholderKey = providerTurnKey(thread.id, turnId);
           const trackedPlaceholder = (yield* Ref.get(providerDiffPlaceholdersRef)).get(
             placeholderKey,
@@ -3546,10 +3992,7 @@ const make = Effect.gen(function* () {
           } else {
             const canParseLiveDiffPatch = yield* supportsLiveTurnDiffPatch(event.provider);
             const livePlaceholder = trackedPlaceholder ?? existingProviderPlaceholder;
-            const maxTurnCount = thread.checkpoints.reduce(
-              (max, c) => Math.max(max, c.checkpointTurnCount),
-              0,
-            );
+            const maxTurnCount = turnDiffContext.value.maxCheckpointTurnCount;
             const files =
               (canParseLiveDiffPatch
                 ? yield* parseProviderTurnDiffFiles(event.payload.unifiedDiff)
@@ -3557,9 +4000,10 @@ const make = Effect.gen(function* () {
               trackedPlaceholder?.files ??
               existingCheckpoint?.files ??
               [];
-            const checkpointRef =
-              livePlaceholder?.checkpointRef ??
-              CheckpointRef.makeUnsafe(`provider-diff:${event.eventId}`);
+            const checkpointRef = canParseLiveDiffPatch
+              ? CheckpointRef.makeUnsafe(`provider-diff:${event.eventId}`)
+              : (livePlaceholder?.checkpointRef ??
+                CheckpointRef.makeUnsafe(`provider-diff:${event.eventId}`));
             const checkpointTurnCount = livePlaceholder?.checkpointTurnCount ?? maxTurnCount + 1;
             // Leave assistantMessageId undefined on the placeholder: the real
             // capture performed by CheckpointReactor will resolve the actual
@@ -3728,7 +4172,10 @@ const make = Effect.gen(function* () {
       const isNativeSteer =
         event.payload.dispatchMode === "steer" &&
         steerProvider !== undefined &&
-        providerSupportsNativeTurnSteering(steerProvider);
+        providerSupportsNativeTurnSteering(
+          steerProvider,
+          thread?.session?.supportsNativeTurnSteering,
+        );
       let deliveryTurnId: TurnId | undefined;
       if (isNativeSteer) {
         let activeTurnId = thread?.session?.activeTurnId ?? undefined;
@@ -4009,7 +4456,8 @@ const make = Effect.gen(function* () {
           runtimeJournalPageBlocked = false;
           const progressSurvivors = new Set(coalesceProviderRuntimeProgress(page));
           // Every row still updates process-local state and durable cursor
-          // bookkeeping; only replaceable activity snapshots are suppressed.
+          // bookkeeping; only replaceable activity snapshots and superseded
+          // turn diffs are suppressed.
           yield* Effect.forEach(page, (entry) =>
             worker.enqueue({
               source: "runtime",
@@ -4324,6 +4772,7 @@ export const ProviderRuntimeIngestionLive = Layer.effect(
       OrchestrationCommandReceiptRepositoryLive,
       ProjectionThreadSessionRepositoryLive,
       ProjectionThreadMessageRepositoryLive,
+      ManagedAttachmentRepositoryLive,
     ),
   ),
 );

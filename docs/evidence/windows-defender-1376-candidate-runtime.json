@@ -1,0 +1,273 @@
+{
+  "collectedAt": "2026-11-01",
+  "scope": "Unpublished build-only candidates, distinct from the official 1.0.9 release. Earlier attempts retain the original candidate identity; final qualifications explicitly identify the new combined candidate.",
+  "candidate": {
+    "name": "Synara-1.0.9-x64.exe",
+    "bytes": 258686811,
+    "sha256": "51167f9f9e2aea0227581fc80a99bcccbefa86e90be3a0ef992474cb002b55ca",
+    "sourceCommit": "df70c58bd713b2f67f8d5394f787782d6b13c6f6",
+    "publication": false,
+    "signing": "unsigned-build-only",
+    "buildRun": "https://github.com/Emanuele-web04/synara/actions/runs/41334567230",
+    "checkpointArtifactId": 13094893766
+  },
+  "successfulQualification": {
+    "run": "https://github.com/Emanuele-web04/synara/actions/runs/41336992485",
+    "artifact": "pinned-candidate-runtime-evidence-41336992485-1",
+    "engine": "1.1.26100.4",
+    "definitionsBefore": "1.463.33.0",
+    "definitionsAfter": "1.463.76.0",
+    "mapsExitCode": 0,
+    "scanExitCode": 0,
+    "expectedHashSurvived": true,
+    "packagedDependencySmoke": "passed",
+    "packagedStartupSmoke": "passed",
+    "mockedContractsPassedOnWindows": 14,
+    "recordedUpdateErrors": 0,
+    "liveRetryOrDirectFallbackExercised": false,
+    "evidence": [
+      "checkpoint-selection.json",
+      "artifact-win-x64.provenance.json",
+      "defender/results.json",
+      "defender/maps-connection-exit.txt",
+      "defender/before-status.json",
+      "defender/ready-status.json",
+      "guard-contracts.log",
+      "packaged-startup.log"
+    ]
+  },
+  "secondQualification": {
+    "run": "https://github.com/Emanuele-web04/synara/actions/runs/41337351655",
+    "artifact": "pinned-candidate-runtime-evidence-41337351655-1",
+    "guardVersion": "Bounded retry before direct fallback commit 2a92ea6bd.",
+    "result": "Failed before scanning; default-source attempts exhausted.",
+    "defaultUpdateErrors": [
+      "Update-MpSignature: The remote procedure call failed.",
+      "Update-MpSignature: Virus and spyware definitions update was completed with errors.",
+      "Update-MpSignature: Virus and spyware definitions update was completed with errors."
+    ],
+    "scanResults": [],
+    "mockedContractsPassedOnWindows": 14,
+    "evidence": [
+      "checkpoint-selection.json",
+      "defender/expected-installers.json",
+      "defender/results.json",
+      "defender/update-default-attempt-1-error.txt",
+      "defender/update-default-attempt-2-error.txt",
+      "defender/update-default-attempt-3-error.txt",
+      "guard-contracts.log"
+    ]
+  },
+  "thirdQualification": {
+    "run": "https://github.com/Emanuele-web04/synara/actions/runs/41338137765",
+    "artifact": "pinned-candidate-runtime-evidence-41338137765-1",
+    "result": "Failed before MMPC and scanning during the intermediate Defender state snapshot.",
+    "error": "Get-MpPreference: Operation failed with the following error: 0x800106ba",
+    "guardVersion": "Direct fallback before commit f86ed905b removed intervening state reads after exhausted default updates.",
+    "scanResults": [],
+    "stateSnapshotService": "Not running",
+    "evidence": [
+      "defender/default-update-status.json",
+      "defender/update-default-attempt-1-error.txt",
+      "defender/update-default-attempt-2-error.txt",
+      "defender/update-default-attempt-3-error.txt",
+      "defender/results.json"
+    ]
+  },
+  "fourthQualification": {
+    "run": "https://github.com/Emanuele-web04/synara/actions/runs/41338964132",
+    "artifact": "pinned-candidate-runtime-evidence-41338964132-1",
+    "result": "Final guard and packaged-runtime checks passed on the same earlier candidate.",
+    "platformBefore": "4.18.26100.4",
+    "platformAfter": "4.18.26100.4",
+    "engine": "1.1.26100.4",
+    "definitionsBefore": "1.463.33.0",
+    "definitionsAfter": "1.463.76.0",
+    "mapsExitCode": 0,
+    "scanExitCode": 0,
+    "expectedHashSurvived": true,
+    "recordedUpdateErrors": 0,
+    "liveRetryOrDirectFallbackExercised": false,
+    "mockedContractsPassedOnWindows": 19,
+    "packagedDependencySmoke": "passed",
+    "packagedStartupSmoke": "passed",
+    "offlinePackagedRuntime": {
+      "electron": "43.4.1",
+      "node": "24.18.1",
+      "piLazyApiClient": "Exact endpoint/token/model and synthetic HTTP 400 propagation; networking blocked.",
+      "codemode": "Actual worker, QuickJS WASM, host-tool round trip and worker exit.",
+      "photon": "Actual PNG decode/encode worker replied with no recorded errors.",
+      "mcp": "Stdio initialization/list/call over spaced path; child exited.",
+      "compactionCli": {
+        "beforeBytes": 16805888,
+        "afterBytes": 16384,
+        "integrityAndCleanupVerified": true
+      }
+    },
+    "evidence": [
+      "checkpoint-selection.json",
+      "artifact-win-x64.provenance.json",
+      "guard-contracts.log",
+      "defender/before-status.json",
+      "defender/after-status.json",
+      "defender/results.json",
+      "defender/maps-connection-exit.txt",
+      "packaged-startup.log",
+      "pi-and-compaction/pi-and-compaction.log"
+    ]
+  },
+  "currentGuard": {
+    "commit": "f86ed905b9568311ca39f5de7410f1925d8c277d",
+    "defaultAttempts": 3,
+    "directMmpcAttempts": 3,
+    "delayBetweenAttemptsSeconds": 5,
+    "fallbackTriggers": [
+      "Default-source attempts exhausted.",
+      "Default source returned missing or older-than-24-hour definitions."
+    ],
+    "successfulUpdateCallRequired": true,
+    "existingQualificationGatesPreserved": true,
+    "nativeDirectFallbackQualification": "passed with real failures in run 41340891133 on Windows Server 2025 and new candidate be7ceb4a1b128bafafb72f08368a34583d34d9dac49d5b833d95faa05168bc25",
+    "mockedContractsPassedOnWindows": 19,
+    "nativeHealthyQualification": "passed in run 41341037041 on Windows Server 2022 and the new combined candidate; earlier healthy qualification remains recorded in run 41338964132",
+    "stateReadsBeforeDirectFallbackAfterFailures": false,
+    "liveDirectFallbackProven": true
+  },
+  "newIntegratedBuild": {
+    "run": "https://github.com/Emanuele-web04/synara/actions/runs/41337355328",
+    "sourceCommit": "9dffe5f0581b4b27874763995b46e493334ab577",
+    "packaging": "passed",
+    "qualityChecks": "passed",
+    "serverTestShardsPassed": 3,
+    "originalGuardQualification": "Failed before scanning after three default-source errors, using the preceding guard; verified checkpoint preserved.",
+    "checkpointArtifactId": 13097261265,
+    "candidate": {
+      "name": "Synara-1.0.9-x64.exe",
+      "bytes": 258698471,
+      "sha256": "be7ceb4a1b128bafafb72f08368a34583d34d9dac49d5b833d95faa05168bc25",
+      "publication": false,
+      "signing": "unsigned-build-only"
+    },
+    "qualifiedInstallerSha256": "be7ceb4a1b128bafafb72f08368a34583d34d9dac49d5b833d95faa05168bc25"
+  },
+  "newCandidateWindows2025": {
+    "run": "https://github.com/Emanuele-web04/synara/actions/runs/41340891133",
+    "artifact": "pinned-candidate-runtime-evidence-41340891133-1",
+    "operatingSystem": "Windows Server 2025 hosted runner",
+    "candidateSha256": "be7ceb4a1b128bafafb72f08368a34583d34d9dac49d5b833d95faa05168bc25",
+    "candidateSourceCommit": "9dffe5f0581b4b27874763995b46e493334ab577",
+    "result": "Final guard and packaged-runtime checks passed after real default-source and MMPC update failures.",
+    "platformBefore": "4.18.26090.9",
+    "platformAfter": "4.18.26100.4",
+    "engine": "1.1.26100.4",
+    "definitionsBefore": "1.463.76.0",
+    "definitionsAfter": "1.463.76.0",
+    "defaultUpdateErrors": [
+      "Update-MpSignature: The remote procedure call failed.",
+      "Update-MpSignature: Virus and spyware definitions update was completed with errors.",
+      "Update-MpSignature: Virus and spyware definitions update was completed with errors."
+    ],
+    "mmpcUpdateErrors": [
+      "Update-MpSignature: Virus and spyware definitions update was completed with errors."
+    ],
+    "successfulMmpcAttempt": 2,
+    "liveRetryOrDirectFallbackExercised": true,
+    "mapsExitCode": 0,
+    "scanExitCode": 0,
+    "expectedHashSurvived": true,
+    "mockedContractsPassedOnWindows": 19,
+    "packagedDependencySmoke": "passed",
+    "packagedStartupSmoke": "passed",
+    "offlinePackagedRuntime": {
+      "electron": "43.4.1",
+      "node": "24.18.1",
+      "piLazyApiClient": "Exact endpoint/token/model and synthetic HTTP 400 propagation; networking blocked.",
+      "codemode": "Actual worker, QuickJS WASM, host-tool round trip and worker exit.",
+      "photon": "Actual PNG decode/encode worker replied with no recorded errors.",
+      "mcp": "Stdio initialization/list/call over spaced path; child exited.",
+      "compactionCli": {
+        "beforeBytes": 16805888,
+        "afterBytes": 16384,
+        "integrityAndCleanupVerified": true
+      }
+    },
+    "evidence": [
+      "checkpoint-selection.json",
+      "artifact-win-x64.provenance.json",
+      "guard-contracts.log",
+      "defender/before-status.json",
+      "defender/after-status.json",
+      "defender/results.json",
+      "defender/maps-connection-exit.txt",
+      "defender/update-default-attempt-1-error.txt",
+      "defender/update-default-attempt-2-error.txt",
+      "defender/update-default-attempt-3-error.txt",
+      "defender/update-MMPC-attempt-1-error.txt",
+      "packaged-startup.log",
+      "pi-and-compaction/pi-and-compaction.log"
+    ]
+  },
+  "newCandidateWindows2022": {
+    "run": "https://github.com/Emanuele-web04/synara/actions/runs/41341037041",
+    "artifact": "pinned-candidate-runtime-evidence-41341037041-1",
+    "operatingSystem": "Windows Server 2022 hosted production runner",
+    "candidateSha256": "be7ceb4a1b128bafafb72f08368a34583d34d9dac49d5b833d95faa05168bc25",
+    "candidateSourceCommit": "9dffe5f0581b4b27874763995b46e493334ab577",
+    "result": "Final guard and packaged-runtime checks passed; default update completed without errors.",
+    "platformBefore": "4.18.26090.9",
+    "platformAfter": "4.18.26090.9",
+    "engineBefore": "1.1.26090.9",
+    "engineAfter": "1.1.26100.4",
+    "definitionsBefore": "1.461.211.0",
+    "definitionsAfter": "1.463.76.0",
+    "readyAndFinalCloudSettings": {
+      "MAPSReporting": 2,
+      "SubmitSamplesConsent": 1,
+      "DisableBlockAtFirstSeen": false
+    },
+    "recordedUpdateErrors": 0,
+    "liveRetryOrDirectFallbackExercised": false,
+    "mapsExitCode": 0,
+    "scanExitCode": 0,
+    "expectedHashSurvived": true,
+    "mockedContractsPassedOnWindows": 19,
+    "detectionInventoryAfter": [],
+    "packagedDependencySmoke": "passed",
+    "packagedStartupSmoke": "passed",
+    "offlinePackagedRuntime": {
+      "electron": "43.4.1",
+      "node": "24.18.1",
+      "piLazyApiClient": "Exact endpoint/token/model and synthetic HTTP 400 propagation; networking blocked.",
+      "codemode": "Actual worker, QuickJS WASM, host-tool round trip and worker exit.",
+      "photon": "Actual PNG decode/encode worker replied with no recorded errors.",
+      "mcp": "Stdio initialization/list/call over spaced path; child exited.",
+      "compactionCli": {
+        "beforeBytes": 16805888,
+        "afterBytes": 16384,
+        "integrityAndCleanupVerified": true
+      }
+    },
+    "evidence": [
+      "checkpoint-selection.json",
+      "artifact-win-x64.provenance.json",
+      "guard-contracts.log",
+      "defender/before-status.json",
+      "defender/after-status.json",
+      "defender/ready-preferences.json",
+      "defender/after-preferences.json",
+      "defender/after-detections.json",
+      "defender/results.json",
+      "defender/maps-connection-exit.txt",
+      "packaged-startup.log",
+      "pi-and-compaction/pi-and-compaction.log"
+    ]
+  },
+  "limits": [
+    "No official release asset was replaced or published.",
+    "Historical earlier-candidate qualification does not qualify different bytes; the new candidate has independent verification and scan evidence.",
+    "Live fallback recovery is established on Windows Server 2025. The same new candidate independently passed on the Windows Server 2022 production runner without update failures; that run did not exercise fallback.",
+    "Packaged Pi API/client checks use a synthetic HTTP 400 with networking blocked; worker, MCP and CLI checks do not establish live provider success.",
+    "The combined candidate source predates later main changes verified separately in local integration; this is not native qualification of an artifact built from those later changes.",
+    "The third-party Virus detected report remains unreproduced and its browser, Windows version and antivirus are unknown."
+  ]
+}

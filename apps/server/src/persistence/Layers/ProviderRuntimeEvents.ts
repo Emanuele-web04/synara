@@ -270,7 +270,9 @@ const make = Effect.gen(function* () {
 
   const readThreadEvents: ProviderRuntimeEventRepositoryShape["readThreadEvents"] = (input) => {
     const beforeSequence = input.beforeSequenceExclusive ?? Number.MAX_SAFE_INTEGER;
+    const afterSequence = input.afterSequenceExclusive ?? 0;
     const turnFilter = input.turnId === undefined ? sql`` : sql`AND turn_id = ${input.turnId}`;
+    const eventFilter = input.eventId === undefined ? sql`` : sql`AND event_id = ${input.eventId}`;
     const typeFilter =
       input.eventTypes === undefined || input.eventTypes.length === 0
         ? sql``
@@ -282,8 +284,10 @@ const make = Effect.gen(function* () {
         WHERE thread_id = ${input.threadId}
           AND sequence <= ${input.throughSequenceInclusive}
           AND sequence < ${beforeSequence}
+          AND sequence > ${afterSequence}
           ${turnFilter}
           ${typeFilter}
+          ${eventFilter}
         ORDER BY sequence DESC
         LIMIT ${Math.max(1, Math.min(201, Math.floor(input.limit)))}
       `.pipe(Effect.mapError(toPersistenceSqlError("ProviderRuntimeEvent.readThreadEvents")));
@@ -353,6 +357,31 @@ const make = Effect.gen(function* () {
       });
     };
 
+  // Exclusive lower bound for the next ingestion retention sweep. After a sweep
+  // through X, every surviving row at or below `tailFloor = min(tail) - 1` is
+  // outside the diagnostic tail, so it survived only because its turn is open
+  // or the checkpoint cursor still protects it. Neither changes silently:
+  //   - a settling turn forces a full sweep (from 0) in the same transaction;
+  //   - out-of-band open-turn pruning resets the floor to 0;
+  //   - a checkpoint ACK lowers the floor to the previous checkpoint cursor,
+  //     since only rows above it can lose checkpoint protection.
+  // So a sweep may start above the floor without missing a deletable row, and
+  // the rows of a long running turn are not rescanned every interval (measured:
+  // 31 ms per sweep at 100k retained rows, all on the event loop). The one
+  // release this does not track is a turnless or already-settled file_change
+  // notification superseded by a later one; it is deleted by the next full
+  // sweep or checkpoint prune pass, which scan from the start.
+  // Process-local on purpose: a restart starts at 0 and rescans once.
+  // `sweepFloorEpoch` changes on every lowering so a sweep that was already
+  // running never raises the floor over a lowering it did not observe.
+  let sweepFloorSequence = 0;
+  let sweepFloorEpoch = 0;
+
+  const lowerSweepFloor = (sequence: number) => {
+    sweepFloorSequence = Math.min(sweepFloorSequence, Math.max(0, sequence));
+    sweepFloorEpoch += 1;
+  };
+
   // Open-turn rows keep their whole event range on the startup replay path
   // (`rebuildAcceptedOpenTurnState`, which runs before the server listens), so
   // rows that can never produce output again must not survive: settled turns,
@@ -362,7 +391,12 @@ const make = Effect.gen(function* () {
   // Pruning is one-way: once a turn's row is gone, its journal rows become
   // eligible for the retention sweep below, so every criterion here must
   // describe a turn that can no longer emit output.
-  const pruneSettledOpenTurns: ProviderRuntimeEventRepositoryShape["pruneSettledOpenTurns"] = sql`
+  const pruneSettledOpenTurns: ProviderRuntimeEventRepositoryShape["pruneSettledOpenTurns"] =
+    Effect.sync(
+      // Rows of any turn pruned here become sweepable wherever they are.
+      () => lowerSweepFloor(0),
+    ).pipe(
+      Effect.andThen(sql`
       DELETE FROM provider_runtime_open_turns
       WHERE EXISTS (
         SELECT 1
@@ -392,11 +426,11 @@ const make = Effect.gen(function* () {
             AND turn.state NOT IN ('interrupted', 'completed', 'error')
         )
       )
-    `.pipe(
-    Effect.andThen(Effect.suspend(() => pruneCheckpointAcceptedHistory)),
-    Effect.asVoid,
-    Effect.mapError(toPersistenceSqlError("ProviderRuntimeEvent.pruneSettledOpenTurns")),
-  );
+    `),
+      Effect.andThen(Effect.suspend(() => pruneCheckpointAcceptedHistory)),
+      Effect.asVoid,
+      Effect.mapError(toPersistenceSqlError("ProviderRuntimeEvent.pruneSettledOpenTurns")),
+    );
 
   const getConsumerCursor: ProviderRuntimeEventRepositoryShape["getConsumerCursor"] = (
     consumerName,
@@ -501,9 +535,13 @@ const make = Effect.gen(function* () {
   // history is bounded to a diagnostic tail. The checkpoint consumer skips a
   // file notification superseded by a newer one before turn completion, so
   // only the newest of such a burst stays protected by its cursor.
-  const sweepAcceptedHistoryThrough = (throughSequence: number) => sql`
+  const deleteAcceptedHistoryBetween = (
+    fromSequenceExclusive: number,
+    throughSequence: number,
+  ) => sql`
     DELETE FROM provider_runtime_events AS event
-    WHERE event.sequence <= ${throughSequence}
+    WHERE event.sequence > ${fromSequenceExclusive}
+      AND event.sequence <= ${throughSequence}
       AND NOT EXISTS (
         SELECT 1 FROM provider_runtime_event_consumers AS checkpoint
         WHERE checkpoint.consumer_name = ${CHECKPOINT_RUNTIME_CONSUMER}
@@ -536,6 +574,38 @@ const make = Effect.gen(function* () {
         LIMIT ${PROVIDER_RUNTIME_EVENT_RETAIN_ACCEPTED}
       )
   `;
+
+  // Runs inside the caller's transaction. A settling ACK scans from 0; any
+  // other sweep starts at the floor left by the previous committed sweep. The
+  // returned floor is only a candidate: the caller applies it after commit.
+  const sweepAcceptedHistoryThrough = (throughSequence: number, settlesOpenTurns: boolean) =>
+    Effect.gen(function* () {
+      const epoch = sweepFloorEpoch;
+      const fromSequenceExclusive = settlesOpenTurns
+        ? 0
+        : Math.min(sweepFloorSequence, throughSequence);
+      yield* deleteAcceptedHistoryBetween(fromSequenceExclusive, throughSequence);
+      const tail = yield* sql<{ readonly sequence: number | null }>`
+        SELECT MIN(sequence) AS sequence FROM (
+          SELECT sequence
+          FROM provider_runtime_events
+          WHERE sequence <= ${throughSequence}
+          ORDER BY sequence DESC
+          LIMIT ${PROVIDER_RUNTIME_EVENT_RETAIN_ACCEPTED}
+        )
+      `;
+      const tailMin = tail[0]?.sequence ?? null;
+      return { epoch, floor: tailMin === null ? 0 : tailMin - 1 };
+    });
+
+  const rememberSweepFloor = (candidate: { epoch: number; floor: number } | null) =>
+    // Only a committed sweep may raise the floor, and only when nothing lowered
+    // it meanwhile; a rolled back transaction leaves it where it was.
+    Effect.sync(() => {
+      if (candidate !== null && candidate.epoch === sweepFloorEpoch) {
+        sweepFloorSequence = candidate.floor;
+      }
+    });
 
   // Highest cursor position whose retention scan has already run. Process-local
   // on purpose: it is a "do not rescan yet" hint, never a durability record. A
@@ -621,6 +691,7 @@ const make = Effect.gen(function* () {
   ) => {
     let retentionScanSequence: number | null = null;
     let checkpointPruneSequence: number | null = null;
+    let sweepFloorCandidate: { epoch: number; floor: number } | null = null;
     return sql
       .withTransaction(
         Effect.gen(function* () {
@@ -653,6 +724,7 @@ const make = Effect.gen(function* () {
             updatedAt: input.updatedAt,
           });
           if (!advanced) return false;
+          if (input.consumerName === CHECKPOINT_RUNTIME_CONSUMER) lowerSweepFloor(cursor);
 
           if (
             input.consumerName === CHECKPOINT_RUNTIME_CONSUMER &&
@@ -677,12 +749,16 @@ const make = Effect.gen(function* () {
             return true;
           }
           retentionScanSequence = input.eventSequence;
-          yield* sweepAcceptedHistoryThrough(input.eventSequence);
+          sweepFloorCandidate = yield* sweepAcceptedHistoryThrough(
+            input.eventSequence,
+            settlesOpenTurns,
+          );
           return true;
         }),
       )
       .pipe(
         Effect.tap(() => rememberRetentionScan(retentionScanSequence)),
+        Effect.tap(() => rememberSweepFloor(sweepFloorCandidate)),
         Effect.tap(() => rememberCheckpointPrune(checkpointPruneSequence)),
         Effect.mapError(toPersistenceSqlError("ProviderRuntimeEvent.advanceConsumerCursor")),
       );
@@ -696,6 +772,7 @@ const make = Effect.gen(function* () {
     (input) => {
       let retentionScanSequence: number | null = null;
       let checkpointPruneSequence: number | null = null;
+      let sweepFloorCandidate: { epoch: number; floor: number } | null = null;
       return sql
         .withTransaction(
           Effect.gen(function* () {
@@ -717,6 +794,7 @@ const make = Effect.gen(function* () {
                 updatedAt: input.updatedAt,
               });
               if (!advanced) return false;
+              if (input.consumerName === CHECKPOINT_RUNTIME_CONSUMER) lowerSweepFloor(cursor);
               if (
                 input.consumerName === CHECKPOINT_RUNTIME_CONSUMER &&
                 input.throughSequence - lastCheckpointPruneSequence >=
@@ -765,12 +843,16 @@ const make = Effect.gen(function* () {
               return true;
             }
             retentionScanSequence = input.throughSequence;
-            yield* sweepAcceptedHistoryThrough(input.throughSequence);
+            sweepFloorCandidate = yield* sweepAcceptedHistoryThrough(
+              input.throughSequence,
+              settlesOpenTurns,
+            );
             return true;
           }),
         )
         .pipe(
           Effect.tap(() => rememberRetentionScan(retentionScanSequence)),
+          Effect.tap(() => rememberSweepFloor(sweepFloorCandidate)),
           Effect.tap(() => rememberCheckpointPrune(checkpointPruneSequence)),
           Effect.mapError(
             toPersistenceSqlError("ProviderRuntimeEvent.advanceConsumerCursorThrough"),

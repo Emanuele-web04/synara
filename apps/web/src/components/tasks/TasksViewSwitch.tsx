@@ -9,22 +9,25 @@ import { useNavigate } from "@tanstack/react-router";
 import { type TasksViewMode, useAppSettings } from "~/appSettings";
 import { FilterPillGroup } from "~/components/FilterPillGroup";
 import { useTasksSurfaceEnabled } from "~/tasksSurface";
+import { useTranslation } from "~/i18n";
 
-const VIEW_OPTIONS: ReadonlyArray<{ value: TasksViewMode; label: string }> = [
-  { value: "list", label: "List" },
-  { value: "kanban", label: "Kanban" },
+const VIEW_OPTIONS: ReadonlyArray<{ value: TasksViewMode; labelKey: string }> = [
+  { value: "list", labelKey: "workspace:list" },
+  { value: "kanban", labelKey: "workspace:view_kanban" },
 ];
 
 export function TasksViewSwitch({ current }: { current: TasksViewMode }) {
+  const { t } = useTranslation();
+
   const navigate = useNavigate();
   const { updateSettings } = useAppSettings();
   const tasksSurfaceEnabled = useTasksSurfaceEnabled();
   if (!tasksSurfaceEnabled) return null;
   return (
     <FilterPillGroup
-      ariaLabel="View"
+      ariaLabel={t("common:diff_view")}
       value={current}
-      options={VIEW_OPTIONS}
+      options={VIEW_OPTIONS.map((option) => ({ value: option.value, label: t(option.labelKey) }))}
       onChange={(view) => {
         if (view === current) return;
         updateSettings({ tasksViewMode: view });

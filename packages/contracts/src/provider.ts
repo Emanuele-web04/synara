@@ -5,6 +5,7 @@ import {
   EventId,
   IsoDateTime,
   ProviderItemId,
+  RuntimeTaskId,
   ThreadId,
   TurnId,
 } from "./baseSchemas";
@@ -44,11 +45,22 @@ export const ProviderSession = Schema.Struct({
   threadId: ThreadId,
   resumeCursor: Schema.optional(Schema.Unknown),
   activeTurnId: Schema.optional(TurnId),
+  /** Negotiated for runtimes whose steering support depends on the running version. */
+  supportsNativeTurnSteering: Schema.optional(Schema.Boolean),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   lastError: Schema.optional(TrimmedNonEmptyString),
 });
 export type ProviderSession = typeof ProviderSession.Type;
+
+export const ProviderTaskReconciliation = Schema.Struct({
+  interactionMode: Schema.optional(ProviderInteractionMode),
+  taskId: RuntimeTaskId,
+  turnId: Schema.optional(TurnId),
+  toolUseId: Schema.optional(TrimmedNonEmptyString),
+  parentAgentId: Schema.optional(TrimmedNonEmptyString),
+});
+export type ProviderTaskReconciliation = typeof ProviderTaskReconciliation.Type;
 
 export const ProviderSessionStartInput = Schema.Struct({
   threadId: ThreadId,
@@ -58,11 +70,13 @@ export const ProviderSessionStartInput = Schema.Struct({
   cwd: Schema.optional(TrimmedNonEmptyString),
   /**
    * Extra folders of a multi-folder project the session may read and write besides `cwd`.
-   * Only providers that can grant them natively (Codex, Claude) receive this.
+   * Only providers that can grant them natively (Codex, Claude, Antigravity) receive this.
    */
   additionalDirectories: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
   modelSelection: Schema.optional(ModelSelection),
   resumeCursor: Schema.optional(Schema.Unknown),
+  /** Devin tasks Synara previously stopped and must reconcile against resume replay. */
+  pendingTaskReconciliations: Schema.optional(Schema.Array(ProviderTaskReconciliation)),
   forkSourceResumeCursor: Schema.optional(Schema.Unknown),
   approvalPolicy: Schema.optional(ProviderApprovalPolicy),
   sandboxMode: Schema.optional(ProviderSandboxMode),
@@ -196,6 +210,18 @@ export const ProviderCompactThreadInput = Schema.Struct({
   threadId: ThreadId,
 });
 export type ProviderCompactThreadInput = typeof ProviderCompactThreadInput.Type;
+
+/** Start a chat's stopped provider runtime ahead of its next turn, e.g. when a client opens it. */
+export const ProviderPrewarmThreadInput = Schema.Struct({
+  threadId: ThreadId,
+});
+export type ProviderPrewarmThreadInput = typeof ProviderPrewarmThreadInput.Type;
+
+export const ProviderPrewarmThreadResult = Schema.Struct({
+  /** False when the runtime was already live or there was nothing to resume. */
+  started: Schema.Boolean,
+});
+export type ProviderPrewarmThreadResult = typeof ProviderPrewarmThreadResult.Type;
 
 export const ProviderRespondToRequestInput = Schema.Struct({
   threadId: ThreadId,

@@ -1,7 +1,7 @@
 import "../../index.css";
 
 import { page } from "vitest/browser";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
 import { SurfaceContentTabs } from "./SurfaceContentTabs";
@@ -14,6 +14,17 @@ const TITLES = [
   "Medir el uso de contexto",
   "Mover la vista previa flotante",
 ];
+
+const initialViewport = { width: window.innerWidth, height: window.innerHeight };
+
+beforeEach(async () => {
+  // Keep desktop strip fixtures and their click targets inside the browser viewport.
+  await page.viewport(1280, 800);
+});
+
+afterEach(async () => {
+  await page.viewport(initialViewport.width, initialViewport.height);
+});
 
 function mountStrip(widthPx: number, onSelect: (key: string) => void) {
   return render(
@@ -59,11 +70,57 @@ describe("SurfaceContentTabs overflow", () => {
   });
 
   it("shows no overflow menu while every tab fits", async () => {
-    const screen = await mountStrip(4000, () => {});
+    const screen = await mountStrip(1200, () => {});
     try {
       await expect.element(page.getByRole("navigation", { name: "Open threads" })).toBeVisible();
       await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
       expect(page.getByRole("button", { name: /more tabs?$/ }).elements()).toHaveLength(0);
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  // A browser's `+` rides the strip: it sits in the scroller right after the last tab (so it
+  // scrolls away with them), not pinned to the far edge of the row.
+  it("renders a trailing control inside the strip, after the last tab", async () => {
+    const onTrailingClick = vi.fn();
+    const screen = await render(
+      <div style={{ width: "1200px", display: "flex" }}>
+        <SurfaceContentTabs
+          ariaLabel="Open threads"
+          activeKey="tab-0"
+          tabs={TITLES.slice(0, 2).map((title, index) => ({
+            key: `tab-${index}`,
+            title,
+            icon: <span aria-hidden className="size-3.5" />,
+            onSelect: () => {},
+          }))}
+          trailing={
+            <button
+              type="button"
+              aria-label="New thread in this workspace"
+              onClick={onTrailingClick}
+            >
+              +
+            </button>
+          }
+        />
+      </div>,
+    );
+    try {
+      const strip = document.querySelector<HTMLElement>(".surface-content-tabs")!;
+      const trailing = strip.querySelector<HTMLElement>(
+        '[aria-label="New thread in this workspace"]',
+      );
+      expect(trailing).not.toBeNull();
+      const lastTab = Array.from(strip.querySelectorAll<HTMLElement>("[data-surface-tab]")).at(-1)!;
+      expect(
+        Boolean(lastTab.compareDocumentPosition(trailing!) & Node.DOCUMENT_POSITION_FOLLOWING),
+      ).toBe(true);
+      // The dnd context owns the strip; a click on the trailing control must still reach it
+      // instead of being eaten as a drag attempt.
+      await page.getByRole("button", { name: "New thread in this workspace" }).click();
+      expect(onTrailingClick).toHaveBeenCalledTimes(1);
     } finally {
       await screen.unmount();
     }

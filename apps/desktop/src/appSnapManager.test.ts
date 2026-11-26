@@ -482,6 +482,38 @@ describe("AppSnap shortcut availability", () => {
 });
 
 describe("AppSnap helper protocol", () => {
+  it("keeps bounded input-origin diagnostics without forwarding keystrokes or coordinates", () => {
+    const message = {
+      type: "physical-input",
+      kind: "keyboard",
+      pid: 720,
+      eventType: 12,
+      sourcePid: 0,
+      sourceStateId: 1,
+      sourceTagged: false,
+      modifierKey: false,
+      capturedAt: "2026-10-13T17:18:46.788Z",
+    };
+    expect(
+      parseAppSnapHelperMessage(
+        JSON.stringify({ ...message, keyCode: 0, text: "private", x: 100, y: 200 }),
+      ),
+    ).toEqual(message);
+    expect(
+      parseAppSnapHelperMessage(
+        JSON.stringify({
+          type: "physical-input",
+          kind: "pointer",
+          eventType: 999,
+          sourcePid: -1,
+          sourceStateId: 3,
+          sourceTagged: "private",
+          modifierKey: true,
+        }),
+      ),
+    ).toEqual({ type: "physical-input", kind: "pointer" });
+  });
+
   it("accepts typed permission and capture messages", () => {
     expect(
       parseAppSnapHelperMessage(
@@ -1420,6 +1452,16 @@ describe("AppSnap window picker requests", () => {
         return originalRename(oldPath, newPath);
       });
 
+    const originalUnlink = FS.promises.unlink;
+    let markCleanupFinished!: () => void;
+    const cleanupFinished = new Promise<void>((resolve) => {
+      markCleanupFinished = resolve;
+    });
+    const unlinkSpy = vi.spyOn(FS.promises, "unlink").mockImplementation(async (path) => {
+      await originalUnlink(path);
+      if (String(path).endsWith(".json")) markCleanupFinished();
+    });
+
     try {
       const capturing = manager.captureWindow(77);
       await flushPromises();
@@ -1442,16 +1484,20 @@ describe("AppSnap window picker requests", () => {
       await vi.advanceTimersByTimeAsync(20_000);
       await assertion;
       releaseRename();
-      for (let index = 0; index < 6; index += 1) await flushPromises();
+      // Wait for durable cleanup, not a fixed number of event-loop turns:
+      // filesystem completion can lag behind setImmediate under CI load.
+      await cleanupFinished;
 
       expect(onCaptured).not.toHaveBeenCalled();
       expect(await manager.listPendingCaptures()).toHaveLength(0);
       expect(FS.existsSync(capturePath)).toBe(false);
+      expect(FS.readdirSync(captureDirectory)).toEqual([]);
     } finally {
       releaseRename();
       renameSpy.mockRestore();
-      dispose();
+      unlinkSpy.mockRestore();
       vi.useRealTimers();
+      dispose();
     }
   });
 

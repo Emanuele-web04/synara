@@ -328,3 +328,115 @@ describe("codexUsageFetcher", () => {
     expect(tokens.refresh_token).toBe("rotated-refresh-token");
   });
 });
+
+describe("codexUsageFetcher Cloudflare edge blocks", () => {
+  it("does not refresh or ask for sign-in when Cloudflare blocks the usage request", async () => {
+    const currentJwt = makeJwt(NOW_MS + 60 * 60 * 1000);
+    const { codexHome, authPath } = makeCodexHome({
+      tokens: { access_token: currentJwt, refresh_token: "untouched-refresh-token" },
+    });
+    const fetchMock = vi.fn(async (url: string | URL | Request) => {
+      if (String(url).includes("auth.openai.com/oauth/token")) {
+        throw new Error("must not redeem the refresh token for an edge block");
+      }
+      return new Response("<html><title>Just a moment...</title></html>", {
+        status: 403,
+        headers: { "Content-Type": "text/html; charset=UTF-8", "cf-mitigated": "challenge" },
+      });
+    });
+    stubOutboundFetch(fetchMock);
+
+    const snapshot = await codexUsageFetcher.fetch(makeCtx(codexHome));
+    expect(snapshot.status).toBe("error");
+    expect(snapshot.detail).toContain("HTTP 403");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const tokens = readAuthFile(authPath).tokens as Record<string, unknown>;
+    expect(tokens.refresh_token).toBe("untouched-refresh-token");
+  });
+
+  it("keeps the refresh-then-needs-auth path for a JSON 403", async () => {
+    const currentJwt = makeJwt(NOW_MS + 60 * 60 * 1000);
+    const { codexHome } = makeCodexHome({
+      tokens: { access_token: currentJwt, refresh_token: "refresh-after-403" },
+    });
+    const freshJwt = makeJwt(NOW_MS + 8 * 24 * 60 * 60 * 1000);
+    const fetchMock = vi.fn(async (url: string | URL | Request) =>
+      String(url).includes("auth.openai.com/oauth/token")
+        ? jsonResponse({ access_token: freshJwt, refresh_token: "rotated-refresh-token" })
+        : jsonResponse({ detail: "Forbidden" }, 403),
+    );
+    stubOutboundFetch(fetchMock);
+
+    const snapshot = await codexUsageFetcher.fetch(makeCtx(codexHome));
+    expect(snapshot.status).toBe("needs-auth");
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("oauth/token"))).toBe(true);
+  });
+});
+
+describe("codexUsageFetcher durable recovery identity", () => {
+  it("retains native account identity across access and refresh token rotation", async () => {
+    const { codexHome, authPath } = makeCodexHome({
+      tokens: {
+        account_id: "native-account-a",
+        access_token: "access-before",
+        refresh_token: "refresh-before",
+      },
+    });
+    const context = makeCtx(codexHome);
+    const first = await codexUsageFetcher.recoveryIdentity!(context);
+    writeFileSync(
+      authPath,
+      JSON.stringify({
+        tokens: {
+          account_id: "native-account-a",
+          access_token: "access-after",
+          refresh_token: "refresh-after",
+        },
+      }),
+      "utf8",
+    );
+    expect(await codexUsageFetcher.recoveryIdentity!(context)).toBe(first);
+    writeFileSync(
+      authPath,
+      JSON.stringify({
+        tokens: {
+          account_id: "native-account-b",
+          access_token: "access-after",
+          refresh_token: "refresh-after",
+        },
+      }),
+      "utf8",
+    );
+    expect(await codexUsageFetcher.recoveryIdentity!(context)).not.toBe(first);
+  });
+
+  it("requires a native account id and refuses API-key overrides instead of using tokens", async () => {
+    const { codexHome, authPath } = makeCodexHome({
+      tokens: {
+        access_token: "unidentified-access",
+        refresh_token: "unidentified-refresh",
+      },
+    });
+    const context = makeCtx(codexHome);
+    expect(await codexUsageFetcher.recoveryIdentity!(context)).toBeNull();
+    writeFileSync(
+      authPath,
+      JSON.stringify({
+        tokens: {
+          account_id: "native-account-a",
+          access_token: "access",
+          refresh_token: "refresh",
+        },
+      }),
+      "utf8",
+    );
+    expect(
+      await codexUsageFetcher.recoveryIdentity!({
+        ...context,
+        env: { ...context.env, OPENAI_API_KEY: "override-key" },
+      }),
+    ).toBeNull();
+    writeFileSync(authPath, JSON.stringify({ OPENAI_API_KEY: "file-key" }), "utf8");
+    expect(await codexUsageFetcher.recoveryIdentity!(context)).toBeNull();
+  });
+});

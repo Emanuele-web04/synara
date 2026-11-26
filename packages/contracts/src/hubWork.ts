@@ -14,6 +14,11 @@ import { ChatAttachment, RuntimeMode } from "./orchestration";
 
 export const NEW_HUB_MAX_CONCURRENT_WORKERS = 3;
 
+/** Server-fixed logical task key: normalized once and frozen at first persist. */
+export const HUB_TASK_KEY_MAX_LENGTH = 128;
+export const HUB_TASK_KEY_PATTERN = /^[a-z0-9][a-z0-9._:-]*$/;
+const HubWorkTaskKey = TrimmedNonEmptyString.check(Schema.isMaxLength(HUB_TASK_KEY_MAX_LENGTH));
+
 export const HubWorkState = Schema.Literals([
   "queued",
   "starting",
@@ -53,6 +58,11 @@ export const HubWorkItem = Schema.Struct({
   revision: NonNegativeInt,
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
+  /** Server-fixed logical key of this task inside its Hub request. Absent only on
+   * records persisted before keyed routing. */
+  taskKey: Schema.optional(HubWorkTaskKey),
+  /** Short routing reason recorded when the task was decided. */
+  routingReason: Schema.optional(Schema.String.check(Schema.isMaxLength(500))),
 });
 export type HubWorkItem = typeof HubWorkItem.Type;
 
@@ -76,6 +86,15 @@ export const HubWorkRecord = Schema.Struct({
   scopeKey: TrimmedNonEmptyString,
   fingerprint: TrimmedNonEmptyString,
   taskIndex: NonNegativeInt,
+  /** Server-fixed logical key inside this scope. Absent only on records persisted
+   * before keyed routing, where {@link hubWorkLogicalTaskKey} falls back to the
+   * task's frozen position. */
+  taskKey: Schema.optional(HubWorkTaskKey),
+  /** Digest of the frozen per-task decision (its original messages and plan).
+   * Absent only on records persisted before keyed routing. */
+  taskFingerprint: Schema.optional(TrimmedNonEmptyString),
+  /** Short reason the coordinator recorded when routing this task. */
+  routingReason: Schema.optional(Schema.String.check(Schema.isMaxLength(500))),
   creationSpec: Schema.Struct({
     ...SynaraCreateThreadSpec.fields,
     // Snapshot the coordinator mode at submission, including Auto, without
@@ -109,5 +128,20 @@ export function hubWorkItem(record: HubWorkRecord): HubWorkItem {
     revision: record.revision,
     createdAt: record.createdAt,
     updatedAt: record.updatedAt,
+    ...(record.taskKey !== undefined ? { taskKey: record.taskKey } : {}),
+    ...(record.routingReason !== undefined ? { routingReason: record.routingReason } : {}),
   };
+}
+
+/** Logical key of a persisted task inside its Hub request scope. */
+export function hubWorkLogicalTaskKey(record: {
+  readonly taskKey?: string | undefined;
+  readonly taskIndex: number;
+}): string {
+  return record.taskKey ?? hubWorkPositionalTaskKey(record.taskIndex);
+}
+
+/** Positional key for tasks the coordinator left unkeyed; frozen like any key. */
+export function hubWorkPositionalTaskKey(position: number): string {
+  return `task:${position}`;
 }

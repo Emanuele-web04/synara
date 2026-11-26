@@ -29,7 +29,7 @@ import {
 } from "./composerPastedText";
 import { buildPromptThreadTitleFallback } from "@synara/shared/chatThreads";
 import { isPendingThreadWorktree } from "@synara/shared/threadEnvironment";
-import type { ProviderInstanceOption } from "../appSettings";
+import type { NewChatDefault, ProviderInstanceOption } from "../appSettings";
 import { composerDraftHasAttachments, composerDraftsMatchForCleanup } from "../composerDraftDomain";
 import {
   resolvePreferredComposerModelSelection,
@@ -64,7 +64,13 @@ import {
 } from "./terminalContext";
 import { resolveTerminalThreadCreationState } from "./threadBootstrap";
 import { promoteThreadCreate } from "./threadCreatePromotion";
-import { isRequestOutcomeUnknown } from "./requestOutcome";
+import {
+  COMPOSER_TURN_UNCERTAIN,
+  composerTurnMayHaveBeenSent,
+  dispatchOwnedComposerTurn,
+  rememberRestoredComposerTurn,
+  settlePendingComposerTurn,
+} from "./composerTurnSettlement";
 import { newCommandId, newMessageId, randomUUID } from "./utils";
 
 /** Why a draft must fall back to the canonical chat composer instead of dispatching here. */
@@ -104,7 +110,7 @@ interface DraftThreadDispatchInput {
   projectId: ProjectId;
   /** Backing summary; null for local-only draft threads not yet promoted. */
   thread: SidebarThreadSummary | null;
-  defaultProvider: ProviderKind;
+  newChatDefault: NewChatDefault;
   assistantDeliveryMode: AssistantDeliveryMode;
   providerOptions?: ProviderStartOptions | undefined;
   providerInstances?: ReadonlyArray<DraftDispatchProviderInstance> | undefined;
@@ -134,7 +140,7 @@ export function resolveDraftThreadDispatchTarget(input: {
   threadId: ThreadId;
   projectId: ProjectId;
   thread: SidebarThreadSummary | null;
-  defaultProvider: ProviderKind;
+  newChatDefault: NewChatDefault;
   providerInstances?: ReadonlyArray<DraftDispatchProviderInstance> | undefined;
 }): DraftThreadDispatchTarget {
   const composerStore = useComposerDraftStore.getState();
@@ -148,7 +154,7 @@ export function resolveDraftThreadDispatchTarget(input: {
     draft: draftComposerState,
     threadModelSelection: input.thread?.modelSelection ?? null,
     projectModelSelection: project?.defaultModelSelection ?? null,
-    defaultProvider: input.defaultProvider,
+    newChatDefault: input.newChatDefault,
     resolveProviderForInstanceId: resolveConfiguredProvider,
   });
   return {
@@ -199,6 +205,10 @@ function buildDraftPromptFileAttachment(input: {
 // pattern as threadCreatePromotion's inFlightThreadCreateById.
 const inFlightDispatchByThreadId = new Map<ThreadId, Promise<DraftThreadDispatchResult>>();
 
+export function hasActiveDraftThreadDispatch(threadId: ThreadId): boolean {
+  return inFlightDispatchByThreadId.has(threadId);
+}
+
 export function waitForDraftThreadDispatchToSettle(
   threadId: ThreadId,
 ): Promise<DraftThreadDispatchResult | null> {
@@ -238,6 +248,12 @@ async function dispatchDraftThreadOnce(
   if (!api) {
     return { kind: "unavailable" };
   }
+
+  const previous = await settlePendingComposerTurn(api, threadId);
+  if (previous.status === "unknown") {
+    return { kind: "error", message: COMPOSER_TURN_UNCERTAIN, outcomeUnknown: true };
+  }
+  if (previous.status === "accepted") return { kind: "dispatched" };
 
   // Re-read the composer at send time: edits made in an open chat must win over
   // whatever the caller last saw, and a stale prompt must never be dispatched.
@@ -376,6 +392,8 @@ async function dispatchDraftThreadOnce(
     files: filesForSend,
     assistantSelections: composerAssistantSelections,
   });
+  // Preparation may outlast a failed upload; the original promise still drives rollback.
+  void turnAttachmentsPromise.catch(() => undefined);
   // The same instant feeds both the command timestamps and onDispatchStart: a
   // server-side failure stamps the session with this createdAt, and Kanban's
   // failure check compares it against startedAtMs with >=.
@@ -392,6 +410,7 @@ async function dispatchDraftThreadOnce(
 
   let goalWarning: string | undefined;
   markPendingTurnDispatch(threadId);
+  let attemptedTurnStart = false;
   try {
     if (thread === null) {
       // Local-only draft thread: create the durable thread first, reusing the same
@@ -399,7 +418,7 @@ async function dispatchDraftThreadOnce(
       const creationState = resolveTerminalThreadCreationState({
         activeDraftThread: null,
         activeThread: null,
-        defaultProvider: input.defaultProvider,
+        newChatDefault: input.newChatDefault,
         draftComposerState,
         draftThread,
         options: undefined,
@@ -473,8 +492,9 @@ async function dispatchDraftThreadOnce(
     }
 
     const stagedTurnAttachments = await turnAttachmentsPromise;
-    await stagedTurnAttachments.runWithDispatch((turnAttachments) =>
-      api.orchestration.dispatchCommand({
+    await stagedTurnAttachments.runWithDispatch((turnAttachments) => {
+      attemptedTurnStart = true;
+      return dispatchOwnedComposerTurn(api, {
         type: "thread.turn.start",
         commandId: newCommandId(),
         threadId,
@@ -493,19 +513,29 @@ async function dispatchDraftThreadOnce(
         runtimeMode,
         interactionMode,
         createdAt,
-      }),
-    );
+      });
+    });
   } catch (error) {
     await turnAttachmentsPromise.then(
       (staged) => staged.cleanup(),
       () => undefined,
     );
     hooks?.onDispatchAbandoned?.();
-    if (!isRequestOutcomeUnknown(error)) clearPendingTurnDispatch(threadId);
+    const turnUnsettled = attemptedTurnStart && composerTurnMayHaveBeenSent(error);
+    if (!turnUnsettled) clearPendingTurnDispatch(threadId);
+    if (
+      turnUnsettled &&
+      composerDraftsMatchForCleanup(
+        useComposerDraftStore.getState().draftsByThreadId[threadId],
+        draftComposerState,
+      )
+    ) {
+      rememberRestoredComposerTurn(threadId, messageId);
+    }
     return {
       kind: "error",
       message: error instanceof Error ? error.message : "Could not send the drafted prompt.",
-      ...(isRequestOutcomeUnknown(error) ? { outcomeUnknown: true } : {}),
+      ...(turnUnsettled ? { outcomeUnknown: true } : {}),
     };
   }
 

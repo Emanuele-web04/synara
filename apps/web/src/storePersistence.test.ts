@@ -222,10 +222,10 @@ describe("storePersistence", () => {
     expect(remembered.isLegacyExpansionPayload).toBe(false);
   });
 
-  it("swallows localStorage write failures instead of breaking the caller", async () => {
+  it("retries the same projects after a localStorage write failure", async () => {
     const storage = new Map<string, string>();
     const fakeWindow = makeFakeWindow(storage);
-    fakeWindow.localStorage.setItem.mockImplementation(() => {
+    fakeWindow.localStorage.setItem.mockImplementationOnce(() => {
       throw new Error("quota exceeded");
     });
     vi.stubGlobal("window", fakeWindow);
@@ -244,5 +244,10 @@ describe("storePersistence", () => {
     };
     expect(() => persistState(state)).not.toThrow();
     expect(storage.has(PERSISTED_STATE_KEY)).toBe(false);
+    persistState(state);
+    expect(JSON.parse(storage.get(PERSISTED_STATE_KEY) ?? "{}")).toMatchObject({
+      expandedProjectCwds: ["/tmp/project-1"],
+      projectOrderCwds: ["/tmp/project-1"],
+    });
   });
 });

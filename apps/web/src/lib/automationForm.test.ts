@@ -5,7 +5,31 @@
 
 import { describe, expect, it } from "vitest";
 
-import { automationCronExpressionError, automationTimezoneError } from "./automationForm";
+import {
+  automationCronExpressionError,
+  automationTimezoneError,
+  formatDateTime,
+  weekdayLabel,
+} from "./automationForm";
+
+describe("automation date formatting", () => {
+  it("formats dates and English weekdays", () => {
+    const runAt = "2026-10-02T12:28:00Z";
+    expect(formatDateTime(runAt)).toBe(
+      new Intl.DateTimeFormat("en", {
+        month: "short",
+        day: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+      }).format(new Date(runAt)),
+    );
+    expect(weekdayLabel(1)).toBe(
+      new Intl.DateTimeFormat("en", { weekday: "short", timeZone: "UTC" }).format(
+        new Date("2026-10-05T00:00:00Z"),
+      ),
+    );
+  });
+});
 
 describe("automationCronExpressionError", () => {
   it("accepts structurally valid 5-field expressions", () => {

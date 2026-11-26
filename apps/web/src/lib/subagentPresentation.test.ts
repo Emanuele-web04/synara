@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   formatSubagentModelLabel,
+  humanizeSubagentStatus,
   normalizeSubagentStatusKind,
   resolveSubagentPresentation,
   resolveSubagentPresentationForThread,
@@ -9,6 +10,17 @@ import {
 } from "./subagentPresentation";
 
 describe("resolveSubagentPresentation", () => {
+  it("keeps placeholders, status source labels and agent identities stable", () => {
+    expect(resolveSubagentPresentation({ title: "Subagent" }).primaryLabel).toBe("Subagent");
+    expect(humanizeSubagentStatus("running")).toBe("Running");
+    expect(resolveSubagentPresentation({ nickname: "Settings", role: "Reviewer" })).toMatchObject({
+      primaryLabel: "Settings",
+      nickname: "Settings",
+      role: "reviewer",
+      fullLabel: "Settings [reviewer]",
+    });
+  });
+
   it("prefers explicit nickname and role over generic thread titles", () => {
     const presentation = resolveSubagentPresentation({
       nickname: "Halley",

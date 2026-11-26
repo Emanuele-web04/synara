@@ -98,3 +98,19 @@ describe("formatThreadModelSummaryLabel", () => {
     ).toBe("GPT-5 Codex");
   });
 });
+
+it("shows generated effort in thread summaries without changing the stored option", () => {
+  const selection = {
+    provider: "codex",
+    model: "gpt-6.1-sol",
+    options: { reasoningEffort: "medium" },
+  } as const;
+  const model: ProviderModelDescriptor = {
+    slug: "gpt-6.1-sol",
+    name: "GPT-6.1 Sol",
+    supportedReasoningEfforts: [{ value: "medium" }, { value: "high" }],
+    defaultReasoningEffort: "medium",
+  };
+  expect(resolveThreadModelSummary(selection, model)?.statusLabel).toBe("Medium");
+  expect(selection.options.reasoningEffort).toBe("medium");
+});

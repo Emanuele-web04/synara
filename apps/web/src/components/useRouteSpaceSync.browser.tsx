@@ -40,7 +40,11 @@ describe("route Space synchronization", () => {
     const screen = await render(<RouteSpaceSyncFixture />);
 
     await page.getByRole("button").click();
-    await new Promise((resolve) => window.setTimeout(resolve, 1_600));
+    // A route sync that reran on the selection would revert it in the next commit's
+    // passive effects. Nothing in this path is timer-driven, so two frames cover it.
+    for (let frame = 0; frame < 2; frame += 1) {
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    }
 
     await expect.element(page.getByRole("button")).toHaveTextContent(selectedSpaceId);
     await screen.unmount();

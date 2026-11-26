@@ -31,6 +31,7 @@ import { SetSessionConfigOptionResponse as SetSessionConfigOptionResponseCodec }
 import { buildProviderChildEnvironment } from "../../providerChildEnvironment.ts";
 import { buildProviderProcessEnv, type ProviderProcessEnvDriver } from "../providerProcessEnv.ts";
 import {
+  prepareProviderProcessTeardown,
   teardownEffectProcessTree,
   teardownProviderProcessTree,
   type SupervisedProcessTeardownResult,
@@ -91,6 +92,7 @@ export const DEFAULT_ACP_SESSION_STARTUP_TIMEOUTS: AcpSessionStartupTimeouts = {
 
 /** JSON-RPC implementation-defined server error; not produced by ACP agents. */
 export const ACP_STARTUP_TIMEOUT_ERROR_CODE = -32001;
+const ACP_WINDOWS_OBSERVER_STARTUP_MS = 8_000;
 
 export interface AcpStartupTimeoutData {
   readonly reason: "acp-startup-timeout";
@@ -371,6 +373,10 @@ export function runAcpFreshSessionSetup<A>(
 }
 
 export interface AcpSessionRuntimeOptions {
+  /** Adapter-owned identity for separating concurrent assistant streams. */
+  readonly assistantItemScope?: (
+    metadata: Record<string, unknown> | undefined,
+  ) => string | undefined;
   readonly spawn: AcpSpawnInput;
   readonly cwd: string;
   readonly resumeSessionId?: string;
@@ -433,6 +439,8 @@ export interface AcpSessionRuntimeOptions {
   readonly loadReplayPolicy?: {
     readonly quietMs?: number;
     readonly hardTimeoutMs?: number;
+    /** Forward historical tool state to an adapter that rebuilds native task ownership. */
+    readonly retainToolState?: boolean;
   };
   readonly requestLogger?: (event: AcpSessionRequestLogEvent) => Effect.Effect<void, never>;
   readonly normalizeIncomingMessage?: (message: unknown) => unknown;
@@ -553,10 +561,12 @@ export interface AcpSessionRuntimeShape {
   readonly awaitLoadReplayReady: Effect.Effect<void, AcpErrors.AcpError>;
   readonly prompt: (
     payload: Omit<Acp.PromptRequest, "sessionId">,
+    options?: { readonly continueActiveTurn?: boolean },
   ) => Effect.Effect<Acp.PromptResponse, AcpErrors.AcpError>;
   readonly cancel: Effect.Effect<void, AcpErrors.AcpError>;
   readonly setMode: (
     modeId: string,
+    options?: { readonly legacy?: boolean },
   ) => Effect.Effect<Acp.SetSessionModeResponse, AcpErrors.AcpError>;
   readonly setConfigOption: (
     configId: string,
@@ -586,6 +596,7 @@ type AcpStartState =
 interface AcpAssistantSegmentState {
   readonly nextSegmentIndex: number;
   readonly activeItemId?: string;
+  readonly activeItemScope?: string;
 }
 
 interface EnsureActiveAssistantSegmentResult {
@@ -902,6 +913,8 @@ const makeOfficialSdkClient = Effect.fnUntraced(function* (
         request(acpSdk.methods.agent.session.close, payload).pipe(
           Effect.map((response) => response ?? {}),
         ),
+      setSessionMode: (payload: Acp.SetSessionModeRequest) =>
+        request(acpSdk.methods.agent.session.setMode, payload),
       setSessionConfigOption: (payload: Acp.SetSessionConfigOptionRequest) =>
         request(acpSdk.methods.agent.session.setConfigOption, payload),
       prompt: (payload: Acp.PromptRequest) =>
@@ -1300,14 +1313,14 @@ const makeAcpSessionRuntime = (
         | Acp.LoadSessionResponse
         | Acp.NewSessionResponse
         | Acp.ResumeSessionResponse,
-      options: {
+      epochOptions: {
         readonly replay?: "all" | "bounded-only";
         readonly resetState?: boolean;
       } = {},
     ): Effect.Effect<void> =>
       Effect.gen(function* () {
-        const replay = options.replay ?? "all";
-        const resetState = options.resetState ?? false;
+        const replay = epochOptions.replay ?? "all";
+        const resetState = epochOptions.resetState ?? false;
 
         // Atomically capture and clear pending state for the new session. Notifications
         // belonging to other (e.g. discarded probe) sessions are discarded.
@@ -1356,6 +1369,8 @@ const makeAcpSessionRuntime = (
             toolCallsRef,
             assistantSegmentRef,
             runtimeInstanceId,
+            assistantItemScope: options.assistantItemScope,
+            retainReplayToolState: options.loadReplayPolicy?.retainToolState === true,
             resolveConfigOptionUpdateWaiters,
             skipTranscriptEvents: replay === "bounded-only",
             params: notification,
@@ -1442,6 +1457,8 @@ const makeAcpSessionRuntime = (
               toolCallsRef,
               assistantSegmentRef,
               runtimeInstanceId,
+              assistantItemScope: options.assistantItemScope,
+              retainReplayToolState: options.loadReplayPolicy?.retainToolState === true,
               resolveConfigOptionUpdateWaiters,
               skipTranscriptEvents: false,
               params: notification,
@@ -1488,10 +1505,35 @@ const makeAcpSessionRuntime = (
       try: () => buildAcpSpawnProcessEnv(options.spawn),
       catch: (cause) => new AcpErrors.AcpSpawnError({ command: options.spawn.command, cause }),
     });
-    const child = yield* spawnProviderProcess(spawner, options.spawn.command, options.spawn.args, {
-      ...(options.spawn.cwd ? { cwd: options.spawn.cwd } : {}),
-      env,
-    }).pipe(
+    // Warm the Windows observer while there is no provider to retire. The
+    // teardown still takes a fresh snapshot of the child and its descendants.
+    const preparedTeardown = yield* Effect.acquireRelease(
+      Effect.sync(() => prepareProviderProcessTeardown(options, ACP_WINDOWS_OBSERVER_STARTUP_MS)),
+      (prepared) => Effect.sync(() => prepared.dispose()),
+    );
+    if (preparedTeardown.waitUntilReady) {
+      const ready = yield* Effect.promise(preparedTeardown.waitUntilReady);
+      if (!ready) {
+        return yield* new AcpErrors.AcpTransportError({
+          detail:
+            "Windows could not verify process tracking for this ACP session. Try starting the session again.",
+          cause: new Error("The Windows process snapshot observer did not become ready."),
+        });
+      }
+    }
+
+    const child = yield* spawnProviderProcess(
+      {
+        // Own the native handle before interruption can leave the spawn boundary.
+        spawn: (command) =>
+          Effect.acquireRelease(spawner.spawn(command), (child) =>
+            teardownAcpChildProcess(child, preparedTeardown.teardownProcessTree),
+          ),
+      },
+      options.spawn.command,
+      options.spawn.args,
+      { ...(options.spawn.cwd ? { cwd: options.spawn.cwd } : {}), env },
+    ).pipe(
       Effect.provideService(Scope.Scope, runtimeScope),
       Effect.mapError(
         (cause) =>
@@ -1502,7 +1544,6 @@ const makeAcpSessionRuntime = (
       ),
     );
 
-    yield* Effect.addFinalizer(() => teardownAcpChildProcess(child, options.teardownProcessTree));
     // Registered after child teardown so LIFO scope closure releases any first
     // prompt/fork waiter before waiting for the child process to exit.
     yield* Effect.addFinalizer(() => loadReplayGate?.release ?? Effect.void);
@@ -1581,6 +1622,8 @@ const makeAcpSessionRuntime = (
             toolCallsRef,
             assistantSegmentRef,
             runtimeInstanceId,
+            assistantItemScope: options.assistantItemScope,
+            retainReplayToolState: options.loadReplayPolicy?.retainToolState === true,
             resolveConfigOptionUpdateWaiters,
             skipTranscriptEvents: suppress,
             params: notification,
@@ -2162,7 +2205,7 @@ const makeAcpSessionRuntime = (
       getConfigOptions,
       getAvailableCommands,
       awaitLoadReplayReady,
-      prompt: (payload) =>
+      prompt: (payload, promptOptions) =>
         getStartedState.pipe(
           Effect.flatMap((started) =>
             awaitLoadReplayReady.pipe(
@@ -2173,13 +2216,17 @@ const makeAcpSessionRuntime = (
                   sessionId: started.sessionId,
                   ...payload,
                 } satisfies Acp.PromptRequest;
-                return closeActiveAssistantSegment({
+                // A live steer is another prompt request within the current assistant stream.
+                const closeSegment = closeActiveAssistantSegment({
                   getSessionEpoch,
                   offer,
                   sessionId: started.sessionId,
                   epoch,
                   assistantSegmentRef,
-                }).pipe(
+                });
+                return (
+                  promptOptions?.continueActiveTurn === true ? Effect.void : closeSegment
+                ).pipe(
                   Effect.andThen(
                     runLoggedRequest(
                       "session/prompt",
@@ -2187,15 +2234,7 @@ const makeAcpSessionRuntime = (
                       acp.agent.prompt(requestPayload),
                     ),
                   ),
-                  Effect.tap(() =>
-                    closeActiveAssistantSegment({
-                      getSessionEpoch,
-                      offer,
-                      sessionId: started.sessionId,
-                      epoch,
-                      assistantSegmentRef,
-                    }),
-                  ),
+                  Effect.tap(() => closeSegment),
                 );
               }),
             ),
@@ -2204,11 +2243,26 @@ const makeAcpSessionRuntime = (
       cancel: getStartedState.pipe(
         Effect.flatMap((started) => acp.agent.cancel({ sessionId: started.sessionId })),
       ),
-      setMode: (modeId) =>
+      setMode: (modeId, setModeOptions) =>
         getModeState.pipe(
           Effect.flatMap((modeState) => {
             if (modeState?.currentModeId === modeId) {
               return Effect.succeed({} satisfies Acp.SetSessionModeResponse);
+            }
+            // Some restored sessions advertise only the original ACP modes API.
+            if (setModeOptions?.legacy === true) {
+              return getStartedState.pipe(
+                Effect.flatMap(({ sessionId }) => {
+                  const payload = { sessionId, modeId };
+                  return runLoggedRequest(
+                    "session/set_mode",
+                    payload,
+                    acp.agent.setSessionMode(payload),
+                  );
+                }),
+                Effect.tap(() => updateCurrentModeId(modeId)),
+                Effect.as({} satisfies Acp.SetSessionModeResponse),
+              );
             }
             return getConfigOptions.pipe(
               Effect.map((options) =>
@@ -2387,6 +2441,8 @@ const processSessionUpdate = ({
   assistantSegmentRef,
   runtimeInstanceId,
   skipTranscriptEvents,
+  retainReplayToolState,
+  assistantItemScope,
   resolveConfigOptionUpdateWaiters,
   params,
 }: {
@@ -2401,6 +2457,8 @@ const processSessionUpdate = ({
   readonly assistantSegmentRef: Ref.Ref<AcpAssistantSegmentState>;
   readonly runtimeInstanceId: string;
   readonly skipTranscriptEvents: boolean;
+  readonly retainReplayToolState: boolean;
+  readonly assistantItemScope?: AcpSessionRuntimeOptions["assistantItemScope"];
   readonly resolveConfigOptionUpdateWaiters: (
     configOptions: ReadonlyArray<Acp.SessionConfigOption>,
   ) => Effect.Effect<void>;
@@ -2435,6 +2493,11 @@ const processSessionUpdate = ({
     }
 
     if (skipTranscriptEvents) {
+      if (retainReplayToolState) {
+        for (const event of parsed.events) {
+          if (event._tag === "ToolCallUpdated") yield* offer({ ...event, replayed: true });
+        }
+      }
       return;
     }
 
@@ -2490,6 +2553,7 @@ const processSessionUpdate = ({
           epoch,
           runtimeInstanceId,
           requestedItemId: event.itemId,
+          requestedItemScope: assistantItemScope?.(event.metadata),
         });
         yield* offer({
           ...event,
@@ -2544,6 +2608,7 @@ const ensureActiveAssistantSegment = ({
   epoch,
   runtimeInstanceId,
   requestedItemId,
+  requestedItemScope,
 }: {
   readonly getSessionEpoch: () => Effect.Effect<SessionEpoch>;
   readonly offer: (event: AcpParsedSessionEvent) => Effect.Effect<void>;
@@ -2552,6 +2617,7 @@ const ensureActiveAssistantSegment = ({
   readonly epoch: SessionEpoch;
   readonly runtimeInstanceId: string;
   readonly requestedItemId?: string | undefined;
+  readonly requestedItemScope?: string | undefined;
 }) =>
   Effect.gen(function* () {
     if (!(yield* isCurrentSessionEpoch(getSessionEpoch, sessionId, epoch))) {
@@ -2560,10 +2626,18 @@ const ensureActiveAssistantSegment = ({
     return yield* Ref.modify<AcpAssistantSegmentState, EnsureActiveAssistantSegmentResult>(
       assistantSegmentRef,
       (current) => {
-        if (current.activeItemId && current.activeItemId === requestedItemId) {
+        if (
+          current.activeItemId &&
+          current.activeItemId === requestedItemId &&
+          current.activeItemScope === requestedItemScope
+        ) {
           return [{ itemId: current.activeItemId }, current] as const;
         }
-        if (current.activeItemId && requestedItemId === undefined) {
+        if (
+          current.activeItemId &&
+          requestedItemId === undefined &&
+          current.activeItemScope === requestedItemScope
+        ) {
           return [{ itemId: current.activeItemId }, current] as const;
         }
         // Cursor can provide stable message ids for chunks that resume after tool calls.
@@ -2592,6 +2666,7 @@ const ensureActiveAssistantSegment = ({
                 ? current.nextSegmentIndex + 1
                 : current.nextSegmentIndex,
             activeItemId: itemId,
+            ...(requestedItemScope !== undefined ? { activeItemScope: requestedItemScope } : {}),
           } satisfies AcpAssistantSegmentState,
         ] as const;
       },

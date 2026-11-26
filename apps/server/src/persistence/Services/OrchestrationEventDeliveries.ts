@@ -15,6 +15,48 @@ export const OrchestrationEventDeliveryState = Schema.Literals([
 ]);
 export type OrchestrationEventDeliveryState = typeof OrchestrationEventDeliveryState.Type;
 
+// One consumer's delivery of one journaled event.
+//   in progress -> inflight | retry
+//   blocked     -> dead | uncertain   (needs operator reconciliation; fences thread purge)
+//   settled     -> succeeded          (terminal)
+//
+//   (claim) ─> inflight ─markRetryable | requeueExpired─> retry ─claim─> inflight
+//              inflight ─complete─> succeeded
+//              inflight ─markTerminalFailure─> dead | uncertain
+//   dead | uncertain ─reconcile─> retry (safe_retry) | succeeded (accepted, abandon)
+//   any unsettled state ─CheckpointReactor proven-receipt settlement─> succeeded
+//
+// The SQL guards in `Layers/OrchestrationEventDeliveries.ts` enforce this table; the
+// lifecycle matrix in `OrchestrationEventDeliveries.test.ts` fails when one drifts.
+// `CheckpointReactor.ts` and `profileStatsArchive.ts` repeat these sets as SQL literals.
+export const BLOCKED_ORCHESTRATION_EVENT_DELIVERY_STATES = [
+  "dead",
+  "uncertain",
+] as const satisfies ReadonlyArray<OrchestrationEventDeliveryState>;
+export type BlockedOrchestrationEventDeliveryState =
+  (typeof BLOCKED_ORCHESTRATION_EVENT_DELIVERY_STATES)[number];
+
+/** Every state a delivery may move to from the keyed state. */
+export const ORCHESTRATION_EVENT_DELIVERY_TRANSITIONS = {
+  inflight: ["retry", "succeeded", "dead", "uncertain"],
+  retry: ["inflight", "succeeded"],
+  dead: ["retry", "succeeded"],
+  uncertain: ["retry", "succeeded"],
+  succeeded: [],
+} as const satisfies Record<
+  OrchestrationEventDeliveryState,
+  ReadonlyArray<OrchestrationEventDeliveryState>
+>;
+
+export function canTransitionOrchestrationEventDelivery(
+  from: OrchestrationEventDeliveryState,
+  to: OrchestrationEventDeliveryState,
+): boolean {
+  return (
+    ORCHESTRATION_EVENT_DELIVERY_TRANSITIONS[from] as ReadonlyArray<OrchestrationEventDeliveryState>
+  ).includes(to);
+}
+
 export const OrchestrationConsumerState = Schema.Struct({
   consumerName: Schema.String,
   lastAckedSequence: NonNegativeInt,
@@ -53,7 +95,7 @@ export const ProviderBlockingDeliveryEvidence = Schema.Struct({
   eventType: Schema.String,
   occurredAt: IsoDateTime,
   threadId: ThreadId,
-  state: Schema.Literals(["dead", "uncertain"]),
+  state: Schema.Literals(BLOCKED_ORCHESTRATION_EVENT_DELIVERY_STATES),
   attemptCount: NonNegativeInt,
   lastError: Schema.NullOr(Schema.String),
   updatedAt: IsoDateTime,
@@ -72,6 +114,12 @@ export interface OrchestrationEventDeliveryRepositoryShape {
   readonly getConsumerState: (
     consumerName: string,
   ) => Effect.Effect<Option.Option<OrchestrationConsumerState>, PersistenceSqlError>;
+  /** Journal positions for an already-admitted prefix, without reloading its payloads. */
+  readonly readEventSequencePage: (input: {
+    readonly sequenceExclusive: number;
+    readonly throughSequenceInclusive: number;
+    readonly limit: number;
+  }) => Effect.Effect<ReadonlyArray<{ readonly sequence: number }>, PersistenceSqlError>;
   /**
    * Records already-processed quarantined work after validating its journal owner.
    * One retained row per blocked thread; a journaled thread.deleted clears it.
@@ -111,7 +159,7 @@ export interface OrchestrationEventDeliveryRepositoryShape {
     readonly consumerName: string;
     readonly eventSequence: number;
     readonly expectedClaimOwner: string;
-    readonly state: "dead" | "uncertain";
+    readonly state: BlockedOrchestrationEventDeliveryState;
     readonly error: string;
     readonly updatedAt: string;
   }) => Effect.Effect<boolean, PersistenceSqlError>;
@@ -147,7 +195,7 @@ export interface OrchestrationEventDeliveryRepositoryShape {
     readonly consumerName: string;
     readonly eventSequence: number;
     readonly threadId: string;
-    readonly expectedState: "dead" | "uncertain";
+    readonly expectedState: BlockedOrchestrationEventDeliveryState;
     readonly outcome: ProviderDeliveryReconciliationOutcome;
     readonly reconciledBy: string;
     readonly note?: string | undefined;

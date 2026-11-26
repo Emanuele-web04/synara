@@ -1,4 +1,5 @@
 import {
+  PROVIDER_DISPLAY_NAMES,
   ProviderInteractionMode,
   RuntimeMode,
   ThreadId,
@@ -13,6 +14,8 @@ import { useComposerDraftStore } from "../../composerDraftStore";
 import { providerSupportsAutoRuntimeMode } from "../../lib/runtimeMode";
 import { type Thread } from "../../types";
 import {
+  accessModeModelSelectionToPersist,
+  autoWaitsForProviderHandoff,
   createRuntimeModePersistenceQueue,
   persistModelSelectionBeforeRuntimeMode,
 } from "../ChatView.logic";
@@ -49,6 +52,7 @@ export function useChatRuntimeModes({
   scheduleComposerFocus,
 }: ChatRuntimeModesInput) {
   const setComposerDraftRuntimeMode = useComposerDraftStore((state) => state.setRuntimeMode);
+  const setStickyRuntimeMode = useComposerDraftStore((state) => state.setStickyRuntimeMode);
   const setDraftThreadContext = useComposerDraftStore((state) => state.setDraftThreadContext);
   const setComposerDraftInteractionMode = useComposerDraftStore(
     (state) => state.setInteractionMode,
@@ -86,9 +90,31 @@ export function useChatRuntimeModes({
             });
             return false;
           }
+          if (
+            nextMode === "auto" &&
+            autoWaitsForProviderHandoff({ thread: serverThread, selectedModelSelection })
+          ) {
+            // The server checks Auto against the thread's current provider, which
+            // cannot run it. The switch itself happens on Send.
+            toastManager.add({
+              type: "error",
+              title: "Could not update access mode",
+              description: `Send a message to switch to ${
+                PROVIDER_DISPLAY_NAMES[selectedModelSelection.provider]
+              } first, then choose this access mode.`,
+            });
+            return false;
+          }
+          const accessModeModelSelection =
+            nextMode === "auto"
+              ? accessModeModelSelectionToPersist({
+                  thread: serverThread,
+                  selectedModelSelection,
+                })
+              : undefined;
           const persistenceInput = {
             currentModelSelection: serverThread.modelSelection,
-            ...(nextMode === "auto" ? { nextModelSelection: selectedModelSelection } : {}),
+            ...(accessModeModelSelection ? { nextModelSelection: accessModeModelSelection } : {}),
             currentRuntimeMode: currentMode,
             nextRuntimeMode: nextMode,
             persistModelSelection: (modelSelection: ModelSelection) =>
@@ -144,9 +170,12 @@ export function useChatRuntimeModes({
   );
   const handleRuntimeModeChange = useCallback(
     (mode: RuntimeMode) => {
-      void persistRuntimeModeChange(mode);
+      void persistRuntimeModeChange(mode).then((persisted) => {
+        // A new chat's pick is the access mode every client starts new chats in.
+        if (persisted && isLocalDraftThread) setStickyRuntimeMode(mode);
+      });
     },
-    [persistRuntimeModeChange],
+    [isLocalDraftThread, persistRuntimeModeChange, setStickyRuntimeMode],
   );
 
   useEffect(() => {
@@ -160,12 +189,13 @@ export function useChatRuntimeModes({
         activeProviderStatus?.supportsAutoRuntimeMode === false ||
         (selectedProvider === "claudeAgent" && selectedRuntimeModel?.supportsAutoMode === false))
     ) {
-      handleRuntimeModeChange("approval-required");
+      // A fallback, not the user's pick: the shared new-chat default keeps Auto.
+      void persistRuntimeModeChange("approval-required");
     }
   }, [
     activeProviderStatus,
     activeThread,
-    handleRuntimeModeChange,
+    persistRuntimeModeChange,
     runtimeMode,
     selectedProvider,
     selectedRuntimeModel,

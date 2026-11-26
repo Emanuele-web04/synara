@@ -5,6 +5,7 @@ import { LexicalErrorBoundary } from "@lexical/react/LexicalErrorBoundary";
 import { HistoryPlugin } from "@lexical/react/LexicalHistoryPlugin";
 import { OnChangePlugin } from "@lexical/react/LexicalOnChangePlugin";
 import { PlainTextPlugin } from "@lexical/react/LexicalPlainTextPlugin";
+import { useLexicalEditable } from "@lexical/react/useLexicalEditable";
 import {
   $createRangeSelection,
   $getSelection,
@@ -24,6 +25,7 @@ import {
   KEY_ENTER_COMMAND,
   KEY_TAB_COMMAND,
   COMMAND_PRIORITY_HIGH,
+  SKIP_DOM_SELECTION_TAG,
   KEY_BACKSPACE_COMMAND,
   PASTE_COMMAND,
   TextNode,
@@ -52,6 +54,7 @@ import {
   collapseExpandedComposerCursor,
   expandCollapsedComposerCursor,
   isCollapsedCursorAdjacentToInlineToken,
+  type ComposerCommandKey,
 } from "~/composer-logic";
 import {
   matchComposerLinkToken,
@@ -66,6 +69,7 @@ import { useStore } from "~/store";
 import { createComposerThreadMentionSourcesSelector } from "~/storeSelectors";
 import { resolveThreadDisplayProvider } from "~/lib/threadDisplayProvider";
 import { cn } from "~/lib/utils";
+import { ComposerPredictionGhost } from "./ComposerPredictionGhost";
 import {
   COMPOSER_EDITOR_CONTENT_RESET_CLASS_NAME,
   COMPOSER_EDITOR_MIN_HEIGHT_CLASS_NAME,
@@ -519,8 +523,17 @@ interface ComposerPromptEditorProps {
   mentionReferences?: ReadonlyArray<ProviderMentionReference>;
   disabled: boolean;
   placeholder: string;
+  /**
+   * A predicted next message to show instead of the placeholder while the editor is empty:
+   * dimmed ghost text followed by a Tab key chip, wrapping up to three rows (the field grows
+   * to fit them) and ending with an ellipsis past them. It never enters the Lexical document
+   * or the draft; the owner decides what Tab does with it.
+   */
+  prediction?: string | null | undefined;
   ariaLabel?: string | undefined;
   className?: string;
+  /** One-line field for the single-row composer: one line tall, placeholder truncated. */
+  singleLine?: boolean;
   onRemoveTerminalContext: (contextId: string) => void;
   /**
    * Invoked when a sufficiently large text paste should collapse into an attachment
@@ -534,10 +547,7 @@ interface ComposerPromptEditorProps {
     cursorAdjacentToMention: boolean,
     terminalContextIds: string[],
   ) => void;
-  onCommandKeyDown?: (
-    key: "ArrowDown" | "ArrowUp" | "Enter" | "Tab" | "Slash",
-    event: KeyboardEvent,
-  ) => boolean;
+  onCommandKeyDown?: (key: ComposerCommandKey, event: KeyboardEvent) => boolean;
   onPaste: ClipboardEventHandler<HTMLElement>;
 }
 
@@ -546,18 +556,12 @@ interface ComposerPromptEditorInnerProps extends ComposerPromptEditorProps {
 }
 
 function ComposerCommandKeyPlugin(props: {
-  onCommandKeyDown?: (
-    key: "ArrowDown" | "ArrowUp" | "Enter" | "Tab" | "Slash",
-    event: KeyboardEvent,
-  ) => boolean;
+  onCommandKeyDown?: (key: ComposerCommandKey, event: KeyboardEvent) => boolean;
 }) {
   const [editor] = useLexicalComposerContext();
 
   useEffect(() => {
-    const handleCommand = (
-      key: "ArrowDown" | "ArrowUp" | "Enter" | "Tab" | "Slash",
-      event: KeyboardEvent | null,
-    ): boolean => {
+    const handleCommand = (key: ComposerCommandKey, event: KeyboardEvent | null): boolean => {
       if (!props.onCommandKeyDown || !event) {
         return false;
       }
@@ -577,6 +581,13 @@ function ComposerCommandKeyPlugin(props: {
     const unregisterArrowUp = editor.registerCommand(
       KEY_ARROW_UP_COMMAND,
       (event) => handleCommand("ArrowUp", event),
+      COMMAND_PRIORITY_HIGH,
+    );
+    // Only for the owner's accept of a composer prediction, which needs an empty editor; the
+    // owner returns false otherwise, so the inline-token arrow handling still applies.
+    const unregisterArrowRight = editor.registerCommand(
+      KEY_ARROW_RIGHT_COMMAND,
+      (event) => handleCommand("ArrowRight", event),
       COMMAND_PRIORITY_HIGH,
     );
     const unregisterEnter = editor.registerCommand(
@@ -599,6 +610,7 @@ function ComposerCommandKeyPlugin(props: {
     return () => {
       unregisterArrowDown();
       unregisterArrowUp();
+      unregisterArrowRight();
       unregisterEnter();
       unregisterTab();
       unregisterSlash();
@@ -940,8 +952,10 @@ function ComposerPromptEditorInner({
   mentionReferences: mentionReferencesProp,
   disabled,
   placeholder,
+  prediction,
   ariaLabel,
   className,
+  singleLine,
   onRemoveTerminalContext,
   onCollapsePastedText,
   onChange,
@@ -951,6 +965,7 @@ function ComposerPromptEditorInner({
 }: ComposerPromptEditorInnerProps) {
   const mentionReferences = mentionReferencesProp ?? [];
   const [editor] = useLexicalComposerContext();
+  const isEditable = useLexicalEditable();
   const onChangeRef = useRef(onChange);
   const initialCursor = clampCollapsedComposerCursor(value, cursor);
   const terminalContextsSignature = terminalContextSignature(terminalContexts);
@@ -979,17 +994,27 @@ function ComposerPromptEditorInner({
     if (disabled) {
       const rootElement = editor.getRootElement();
       restoreFocusOnEnableRef.current = Boolean(
-        rootElement && document.activeElement === rootElement,
+        rootElement && document.hasFocus() && document.activeElement === rootElement,
       );
       editor.setEditable(false);
       return;
     }
     editor.setEditable(true);
-    if (restoreFocusOnEnableRef.current) {
-      restoreFocusOnEnableRef.current = false;
-      editor.getRootElement()?.focus();
-    }
   }, [disabled, editor]);
+
+  useEffect(() => {
+    // ContentEditable commits its editable state separately from setEditable().
+    // Wait for that commit, and preserve any control/window chosen in the meantime.
+    if (disabled || !isEditable || !restoreFocusOnEnableRef.current) return;
+    restoreFocusOnEnableRef.current = false;
+    const rootElement = editor.getRootElement();
+    if (
+      document.hasFocus() &&
+      (document.activeElement === document.body || document.activeElement === rootElement)
+    ) {
+      rootElement?.focus();
+    }
+  }, [disabled, editor, isEditable]);
 
   useLayoutEffect(() => {
     const normalizedCursor = clampCollapsedComposerCursor(value, cursor);
@@ -1016,22 +1041,28 @@ function ComposerPromptEditorInner({
     mentionsSignatureRef.current = mentionsSignature;
 
     const rootElement = editor.getRootElement();
-    const isFocused = Boolean(rootElement && document.activeElement === rootElement);
+    const isFocused = Boolean(
+      rootElement && document.hasFocus() && document.activeElement === rootElement,
+    );
     if (previousSnapshot.value === value && !contextsChanged && !mentionsChanged && !isFocused) {
       return;
     }
 
     isApplyingControlledUpdateRef.current = true;
-    editor.update(() => {
-      const shouldRewriteEditorState =
-        previousSnapshot.value !== value || contextsChanged || mentionsChanged;
-      if (shouldRewriteEditorState) {
-        $setComposerEditorPrompt(value, terminalContexts, mentionReferences);
-      }
-      if (shouldRewriteEditorState || isFocused) {
-        $setSelectionAtComposerOffset(normalizedCursor);
-      }
-    });
+    editor.update(
+      () => {
+        const shouldRewriteEditorState =
+          previousSnapshot.value !== value || contextsChanged || mentionsChanged;
+        if (shouldRewriteEditorState) {
+          $setComposerEditorPrompt(value, terminalContexts, mentionReferences);
+        }
+        if (shouldRewriteEditorState || isFocused) {
+          $setSelectionAtComposerOffset(normalizedCursor);
+        }
+      },
+      // Keep Lexical's draft cursor current without moving the user's DOM selection.
+      isFocused ? undefined : { tag: SKIP_DOM_SELECTION_TAG },
+    );
     queueMicrotask(() => {
       isApplyingControlledUpdateRef.current = false;
     });
@@ -1080,7 +1111,10 @@ function ComposerPromptEditorInner({
   const isEditorFocused = useCallback(() => {
     const rootElement = editor.getRootElement();
     return Boolean(
-      rootElement && typeof document !== "undefined" && document.activeElement === rootElement,
+      rootElement &&
+      typeof document !== "undefined" &&
+      document.hasFocus() &&
+      document.activeElement === rootElement,
     );
   }, [editor]);
 
@@ -1198,7 +1232,10 @@ function ComposerPromptEditorInner({
 
   return (
     <ComposerRemoveTerminalContextContext.Provider value={onRemoveTerminalContext}>
-      <div className="relative">
+      {/* With a prediction, the editor and its ghost text share one grid cell, so the field is
+          as tall as whichever is taller: the ghost's rows grow the composer instead of
+          spilling over the controls below. */}
+      <div className={cn("relative", prediction && "grid")}>
         <PlainTextPlugin
           contentEditable={
             <ContentEditable
@@ -1207,23 +1244,34 @@ function ComposerPromptEditorInner({
                 COMPOSER_EDITOR_TYPOGRAPHY_CLASS_NAME,
                 COMPOSER_EDITOR_MIN_HEIGHT_CLASS_NAME,
                 COMPOSER_EDITOR_CONTENT_RESET_CLASS_NAME,
+                singleLine && "min-h-[1lh]",
+                prediction && "col-start-1 row-start-1",
                 className,
               )}
               data-testid="composer-editor"
-              aria-placeholder={placeholder}
+              aria-placeholder={prediction || placeholder}
               aria-label={ariaLabel}
               placeholder={<span />}
               onPaste={onPaste}
             />
           }
           placeholder={
-            terminalContexts.length > 0 ? null : (
+            terminalContexts.length > 0 ? null : prediction ? (
+              <ComposerPredictionGhost
+                suggestion={prediction}
+                layoutKey={singleLine ? "row" : "block"}
+                className="col-start-1 row-start-1 self-start"
+              />
+            ) : (
               <div
                 className={cn(
                   "pointer-events-none absolute inset-0",
                   COMPOSER_PLACEHOLDER_TEXT_CLASS_NAME,
                   COMPOSER_EDITOR_TYPOGRAPHY_CLASS_NAME,
+                  singleLine && "truncate",
                 )}
+                dir="auto"
+                data-testid="composer-placeholder"
               >
                 {placeholder}
               </div>
@@ -1260,8 +1308,10 @@ export const ComposerPromptEditor = forwardRef<
     mentionReferences,
     disabled,
     placeholder,
+    prediction,
     ariaLabel,
     className,
+    singleLine,
     onRemoveTerminalContext,
     onCollapsePastedText,
     onChange,
@@ -1300,6 +1350,7 @@ export const ComposerPromptEditor = forwardRef<
         mentionReferences={normalizedMentionReferences}
         disabled={disabled}
         placeholder={placeholder}
+        prediction={prediction}
         ariaLabel={ariaLabel}
         onRemoveTerminalContext={onRemoveTerminalContext}
         onChange={onChange}
@@ -1308,6 +1359,7 @@ export const ComposerPromptEditor = forwardRef<
         {...(onCollapsePastedText ? { onCollapsePastedText } : {})}
         {...(onCommandKeyDown ? { onCommandKeyDown } : {})}
         {...(className ? { className } : {})}
+        {...(singleLine ? { singleLine } : {})}
       />
     </LexicalComposer>
   );

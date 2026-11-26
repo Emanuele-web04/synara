@@ -1,3 +1,4 @@
+import type { ChatFileReference } from "~/lib/chatReferences";
 import { useQuery } from "@tanstack/react-query";
 import { useRef, useState } from "react";
 
@@ -9,7 +10,7 @@ import { CodeDiffEditorPane } from "../codeEditor/CodeDiffEditorPane";
 import {
   INITIAL_CODE_EDIT_HISTORY_STATE,
   type CodeEditHistoryControls,
-} from "../codeEditor/pierreEdit";
+} from "../codeEditor/codeEditHistory";
 import { ChatHeaderIconButton } from "./chatHeaderControls";
 import { PanelStateMessage } from "./PanelStateMessage";
 import {
@@ -18,10 +19,12 @@ import {
   WorkspaceFileEditorHeader,
   WorkspaceFileEditorHistoryActions,
 } from "./WorkspaceFileEditorChrome";
+import { useTranslation } from "~/i18n";
 
 export interface WorkspaceFileDiffEditorPaneProps {
   workspaceRoot: string | null;
   filePath: string;
+  onReferenceInChat?: ((reference: ChatFileReference) => void) | undefined;
   /** Pre-change path for renamed files: the base revision read uses it. */
   basePath?: string | null | undefined;
   baseRev: DiffEditBaseRev;
@@ -32,6 +35,8 @@ export interface WorkspaceFileDiffEditorPaneProps {
 }
 
 export function WorkspaceFileDiffEditorPane(props: WorkspaceFileDiffEditorPaneProps) {
+  const { t } = useTranslation();
+
   const [renderSideBySide, setRenderSideBySide] = useState(true);
   const historyControlsRef = useRef<CodeEditHistoryControls | null>(null);
   const paneRef = useRef<HTMLDivElement | null>(null);
@@ -53,13 +58,6 @@ export function WorkspaceFileDiffEditorPane(props: WorkspaceFileDiffEditorPanePr
     }),
   );
   const original = originalQuery.data?.missing ? "" : (originalQuery.data?.contents ?? "");
-  const originalVersionRef = useRef({ contents: original, version: 0 });
-  if (originalVersionRef.current.contents !== original) {
-    originalVersionRef.current = {
-      contents: original,
-      version: originalVersionRef.current.version + 1,
-    };
-  }
   const originalTruncated = originalQuery.data?.truncated ?? false;
   const originalError =
     originalQuery.error instanceof Error
@@ -76,8 +74,8 @@ export function WorkspaceFileDiffEditorPane(props: WorkspaceFileDiffEditorPanePr
         filePath={props.filePath}
         title={
           originalQuery.data?.resolvedRev
-            ? `vs ${originalQuery.data.resolvedRev.slice(0, 7)}`
-            : "Diff"
+            ? t("workspace:vs", { value0: originalQuery.data.resolvedRev.slice(0, 7) })
+            : t("workspace:toolCallDetails_diffSection")
         }
         dirty={session.dirty}
         saving={session.state.saving}
@@ -96,8 +94,16 @@ export function WorkspaceFileDiffEditorPane(props: WorkspaceFileDiffEditorPanePr
             <ChatHeaderIconButton
               type="button"
               tone="plain"
-              label={renderSideBySide ? "Switch to inline diff" : "Switch to side-by-side diff"}
-              title={renderSideBySide ? "Switch to inline diff" : "Switch to side-by-side diff"}
+              label={
+                renderSideBySide
+                  ? t("workspace:switchToInlineDiff")
+                  : t("workspace:switchToSideBySideDiff")
+              }
+              title={
+                renderSideBySide
+                  ? t("workspace:switchToInlineDiff")
+                  : t("workspace:switchToSideBySideDiff")
+              }
               onClick={() => setRenderSideBySide((previous) => !previous)}
             >
               {renderSideBySide ? (
@@ -118,7 +124,7 @@ export function WorkspaceFileDiffEditorPane(props: WorkspaceFileDiffEditorPanePr
         />
       ) : originalTruncated ? (
         <div className="shrink-0 border-b border-border bg-[var(--color-background-elevated-secondary)] px-3 py-1.5 text-ui-sm text-muted-foreground">
-          The base revision of this file is too large to load in full, so this diff is read-only.
+          {t("workspace:theBaseRevisionOfThisFileIsTooLarge")}
         </div>
       ) : null}
       {(session.loadError ?? originalError) ? (
@@ -133,15 +139,16 @@ export function WorkspaceFileDiffEditorPane(props: WorkspaceFileDiffEditorPanePr
         </PanelStateMessage>
       ) : session.loading || originalQuery.isLoading || !session.canEdit ? (
         <PanelStateMessage density="compact" fill="flex">
-          <p>Loading diff...</p>
+          <p>{t("workspace:loadingDiff")}</p>
         </PanelStateMessage>
       ) : (
         <CodeDiffEditorPane
           original={original}
-          originalVersion={originalVersionRef.current.version}
           modified={session.state.value}
           modifiedVersion={session.state.version}
-          fileName={props.filePath}
+          fileName={session.relativePath ?? props.filePath}
+          workspaceRoot={props.workspaceRoot}
+          onReferenceInChat={props.onReferenceInChat}
           resolvedTheme={props.resolvedTheme}
           renderSideBySide={renderSideBySide}
           readOnly={!editable}
@@ -153,14 +160,16 @@ export function WorkspaceFileDiffEditorPane(props: WorkspaceFileDiffEditorPanePr
       )}
       <WorkspaceFileEditorDiscardDialog
         open={session.pendingDiscard !== null}
-        title="Discard unsaved changes?"
+        title={t("workspace:discardUnsavedChanges")}
         description={
           session.pendingDiscard === "reload"
-            ? "Reloading replaces the editor contents with what is currently on disk."
-            : "Closing the diff editor drops the changes you have not saved yet."
+            ? t("workspace:reloadingReplacesTheEditorContentsWithWhatIsCurrently")
+            : t("workspace:closingTheDiffEditorDropsTheChangesYouHave")
         }
         confirmLabel={
-          session.pendingDiscard === "reload" ? "Reload and discard" : "Discard changes"
+          session.pendingDiscard === "reload"
+            ? t("workspace:reloadAndDiscard")
+            : t("workspace:discardChanges")
         }
         onOpenChange={(open) => {
           if (!open) {

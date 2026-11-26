@@ -92,6 +92,7 @@ export function isWorkerAlertEvent(eventType: string): boolean {
 // earns a coordinator turn.
 export const WORKER_WAKE_EVENT_TYPES: ReadonlySet<string> = new Set([
   "thread.turn-diff-completed",
+  "worker.completed",
   "thread.turn-interrupt-requested",
   "thread.session-stop-requested",
   "approval.requested",
@@ -163,6 +164,7 @@ export function classifyWorkerSettlement(input: {
   }
   if (
     eventType === "thread.turn-diff-completed" ||
+    eventType === "worker.completed" ||
     eventType === "worker.stopped" ||
     eventType.includes("session-stop")
   ) {
@@ -185,6 +187,7 @@ export interface WorkerMonitorNotice {
 export function workerMonitorNoticeForEvent(eventType: string): WorkerMonitorNotice | null {
   switch (eventType) {
     case "thread.turn-diff-completed":
+    case "worker.completed":
       return {
         kind: "settle",
         outcome: "completed",

@@ -9,6 +9,8 @@ export const THREAD_DETAIL_EVENT_TYPES = [
   "thread.claude-cache-set",
   "thread.claude-cache-response-requested",
   "thread.session-stop-requested",
+  // Who asked to stop a turn; the transcript credits a user's Stop from it.
+  "thread.turn-interrupt-requested",
   "thread.async-user-input-answered",
   "thread.proposed-plan-upserted",
   "thread.activity-appended",

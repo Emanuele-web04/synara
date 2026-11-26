@@ -5,6 +5,7 @@ import {
   planComposerEffortChange,
   planComposerEffortCycle,
   resolveComposerEffortLadderIndex,
+  resolveComposerTraitStatusLabel,
 } from "./composerTraits";
 
 describe("planComposerEffortCycle", () => {
@@ -235,5 +236,133 @@ describe("resolveComposerEffortLadderIndex", () => {
     expect(resolveComposerEffortLadderIndex(selection)).toBe(
       selection.effortLevels.findIndex((level) => level.value === "ultrathink"),
     );
+  });
+});
+
+describe("CLI-discovered Claude effort", () => {
+  it("uses only native levels and rejects the synthetic default from a cached catalog", () => {
+    const selection = getComposerTraitSelection(
+      "claudeAgent",
+      "runtime-fixture-model",
+      "",
+      { effort: "max" },
+      {
+        slug: "runtime-fixture-model",
+        name: "Runtime fixture",
+        supportsThinkingToggle: false,
+        supportedReasoningEfforts: [
+          { value: "default", label: "Default" },
+          { value: "low" },
+          { value: "max" },
+        ],
+        defaultReasoningEffort: "default",
+      },
+    );
+    expect(selection.effortLevels.map((level) => level.value)).toEqual(["low", "max"]);
+    expect(selection.defaultEffort).toBe("low");
+    expect(selection.effort).toBe("max");
+    expect(
+      planComposerEffortChange({
+        provider: "claudeAgent",
+        selection,
+        prompt: "",
+        value: "default",
+      }),
+    ).toBeNull();
+  });
+});
+
+describe("composer trait presentation", () => {
+  it("shows generated effort labels while committing unchanged option IDs", () => {
+    const selection = getComposerTraitSelection(
+      "codex",
+      "custom-model",
+      "Keep this prompt",
+      undefined,
+      {
+        slug: "custom-model",
+        name: "Custom model",
+        supportedReasoningEfforts: [{ value: "medium" }, { value: "high" }],
+        defaultReasoningEffort: "medium",
+      },
+    );
+    expect(resolveComposerTraitStatusLabel(selection)).toBe("Medium");
+    expect(
+      planComposerEffortChange({
+        provider: "codex",
+        selection,
+        prompt: "Keep this prompt",
+        value: "high",
+      }),
+    ).toEqual({ kind: "options", patch: { reasoningEffort: "high" } });
+  });
+
+  it("preserves explicit provider effort labels and descriptions even when they resemble UI copy", () => {
+    const selection = getComposerTraitSelection("codex", "custom-model", "", undefined, {
+      slug: "custom-model",
+      name: "Custom model",
+      supportedReasoningEfforts: [
+        { value: "medium", label: "Medium", description: "Provider guidance" },
+        { value: "high", label: "chat:effortHigh" },
+      ],
+      defaultReasoningEffort: "medium",
+    });
+    expect(selection.effortLevels).toEqual([
+      { value: "medium", label: "Medium", description: "Provider guidance", isDefault: true },
+      { value: "high", label: "chat:effortHigh" },
+    ]);
+    const descriptorSelection = getComposerTraitSelection("codex", "custom-model", "", undefined, {
+      slug: "custom-model",
+      name: "Custom model",
+      optionDescriptors: [
+        {
+          id: "reasoningEffort",
+          label: "Provider effort",
+          type: "select",
+          options: [
+            { id: "medium", label: "Provider medium" },
+            { id: "high", label: "Provider high" },
+          ],
+        },
+      ],
+    });
+    expect(descriptorSelection.primarySelectDescriptor?.label).toBe("Provider effort");
+    expect(resolveComposerTraitStatusLabel(descriptorSelection)).toBe("Provider medium");
+  });
+
+  it("preserves custom overrides beside canonical labels constructed by the Claude adapter", () => {
+    const selection = getComposerTraitSelection("claudeAgent", "custom-model", "", undefined, {
+      slug: "custom-model",
+      name: "Custom model",
+      optionDescriptors: [
+        {
+          id: "effort",
+          label: "Reasoning",
+          type: "select",
+          options: [
+            { id: "medium", label: "Medium", isDefault: true },
+            { id: "high", label: "Provider deep work" },
+          ],
+        },
+      ],
+      supportedReasoningEfforts: [
+        { value: "medium", label: "Medium" },
+        { value: "high", label: "Provider deep work" },
+      ],
+    });
+    expect(selection.effortLevels.find((option) => option.value === "high")?.label).toBe(
+      "Provider deep work",
+    );
+  });
+
+  it("keeps automatic context values and prompt modes", () => {
+    const prompt = "Ultrathink:\nKeep this prompt";
+    const claude = getComposerTraitSelection("claudeAgent", "claude-opus-4-8", prompt, {
+      effort: "low",
+    });
+    expect(claude.contextWindowOptions[0]).toMatchObject({ value: "auto" });
+    expect(
+      planComposerEffortCycle({ provider: "claudeAgent", selection: claude, prompt }),
+    ).toBeNull();
   });
 });

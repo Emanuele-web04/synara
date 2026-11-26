@@ -152,6 +152,7 @@ describe("composerDraftStore persisted-state hydration", () => {
       projectDraftThreadIdByProjectId: {},
       stickyModelSelectionByProvider: {},
       stickyActiveProvider: null,
+      stickyRuntimeMode: null,
     };
 
     expect(normalizeCurrentPersistedComposerDraftStoreState(null)).toEqual(emptyState);

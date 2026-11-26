@@ -77,7 +77,10 @@ export interface ProviderSteerSubagentPayload {
 /** Local preparation controls; never serialized into provider input or persisted history. */
 export interface ProviderTurnDispatchOptions {
   readonly claudeCompactionCancellation?: Deferred.Deferred<void>;
+  readonly expectedTurnId?: TurnId;
+  readonly onSteerDeliveryFailure?: (detail: string) => Effect.Effect<void>;
 }
+
 export type ProviderConversationRollbackMode = "native" | "restart-session";
 
 export interface ProviderAdapterCapabilities {
@@ -256,6 +259,15 @@ export interface ProviderAdapterShape<TError> {
    */
   readonly renewAgentGatewayCredential?: (threadId: ThreadId) => Effect.Effect<boolean, TError>;
 
+  /**
+   * Whether the live session's tool credential was retired by a terminal turn
+   * and has not yet been replaced. The adapter that retired the bearer is the
+   * authoritative source for this state; routing consults it so recovery does
+   * not depend solely on the persisted rotation marker, which can be lost
+   * when the carrying terminal event is rejected.
+   */
+  readonly agentGatewayCredentialRetired?: (threadId: ThreadId) => Effect.Effect<boolean, TError>;
+
   /** Validate and retire before generation rotation; the returned start retains per-attempt preflight. */
   readonly prepareSessionReplacement?: (input: ProviderSessionStartInput) => Effect.Effect<
     | {
@@ -282,6 +294,13 @@ export interface ProviderAdapterShape<TError> {
    * Check whether this adapter owns an active session id.
    */
   readonly hasSession: (threadId: ThreadId) => Effect.Effect<boolean>;
+
+  /**
+   * Check whether a context still needs cleanup, including a stopped context
+   * retained after teardown failed. Cleanup callers fall back to hasSession
+   * when omitted. Routing must continue to use hasSession.
+   */
+  readonly hasRetainedSession?: (threadId: ThreadId) => Effect.Effect<boolean>;
 
   /**
    * Read a provider thread snapshot.
@@ -402,7 +421,7 @@ export interface ProviderAdapterShape<TError> {
    * List models directly from the provider runtime when supported.
    */
   readonly listModels?: (
-    input: ProviderListModelsInput,
+    input: ProviderListModelsInput & { readonly localConfigRevision?: string | undefined },
   ) => Effect.Effect<ProviderListModelsResult, TError>;
 
   /**

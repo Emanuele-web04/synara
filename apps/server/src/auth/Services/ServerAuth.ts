@@ -15,7 +15,7 @@ import type {
 import { Data, DateTime, ServiceMap } from "effect";
 import type { Effect } from "effect";
 
-import type { SessionRole } from "./SessionCredentialService";
+import type { AuthAccessOrigin, SessionRole } from "./SessionCredentialService";
 
 export interface AuthRequest {
   readonly headers: Record<string, string | undefined>;
@@ -28,6 +28,7 @@ export interface AuthenticatedSession {
   readonly subject: string;
   readonly method: ServerAuthSessionMethod;
   readonly role: SessionRole;
+  readonly accessOrigin?: AuthAccessOrigin | null;
   readonly expiresAt?: DateTime.DateTime;
 }
 
@@ -37,7 +38,7 @@ export interface AuthenticatedHttpSession extends AuthenticatedSession {
 
 export class AuthError extends Data.TaggedError("AuthError")<{
   readonly message: string;
-  readonly status?: 400 | 401 | 403 | 429 | 500;
+  readonly status?: 400 | 401 | 403 | 429 | 500 | 503;
   readonly cause?: unknown;
 }> {}
 

@@ -24,17 +24,32 @@ An explicit expired observation takes precedence over a local warm estimate. Mis
 sessions without timing evidence, and invalid clocks remain unknown.
 
 Before sending a user message, the orchestration layer obtains a bounded local observation without
-queueing the prompt. The review is off by default, as embedded Claude Code never asks; when
+queueing the prompt. The review is on by default, although embedded Claude Code alone never asks; while
 **Ask before resuming a long idle session** is on, then, as in Claude Code's resume prompt, a context
 of at least 100,000 tokens whose last response is at least 70 minutes old requires a choice, whatever
 the cache state. This applies to
-a resumed process and a long pause in the same process. Only messages a person sends are held; agent
-and automation messages and `/compact` are not. An unknown last-response time does not block
-ordinary use. There is no periodic inference to maintain or inspect the cache.
+a resumed process and a long pause in the same process. Agent and automation messages, automatic
+goal continuations, usage-limit recovery, and `/compact` proceed without a new review. An unknown
+last-response time does not block ordinary use. There is no periodic inference to maintain or inspect
+the cache.
 
 The displayed input, cache-read, and cache-write counts describe requests. They are not percentages
 of an Anthropic subscription allowance. A warm estimate does not guarantee a hit if the provider
 changes the prefix or configuration.
+
+## Automatic compaction settings
+
+Claude Code owns the `autoCompactEnabled` setting. Change it from `/config` or in the selected
+Claude profile's settings files. Claude Code defaults to automatic compaction near the context
+limit, and the manual `/compact` command remains available when automatic compaction is off.
+[Claude Code automatic compaction settings](https://code.claude.com/docs/en/settings-reference#autocompactenabled)
+
+Idle compaction is available on Claude Code's interactive surfaces. It can prepare a summary for
+the next message when the prompt cache expires. Synara uses the Agent SDK and does not schedule
+manual `/compact` requests while a thread is idle. A manual compact immediately replaces context
+with a summary and can invalidate a warm prefix.
+[Claude Code idle compaction settings](https://code.claude.com/docs/en/settings-reference#idlecompaction),
+[Claude Code prompt caching](https://code.claude.com/docs/en/prompt-caching#compacting-the-conversation)
 
 ## Durable choices
 

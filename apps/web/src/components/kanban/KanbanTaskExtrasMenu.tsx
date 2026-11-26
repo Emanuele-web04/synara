@@ -22,6 +22,7 @@ import {
 import { CentralIcon } from "~/lib/central-icons";
 import { BugIcon, ListTodoIcon, MessageCircleIcon, PlusIcon, WorktreeIcon } from "~/lib/icons";
 import type { DraftThreadEnvMode } from "../../composerDraftStore";
+import { useTranslation } from "~/i18n";
 
 interface KanbanTaskExtrasMenuProps {
   readonly interactionMode: ProviderInteractionMode;
@@ -41,6 +42,8 @@ export function KanbanTaskExtrasMenu({
   envMode,
   onEnvModeChange,
 }: KanbanTaskExtrasMenuProps) {
+  const { t } = useTranslation();
+
   return (
     <Menu>
       <MenuTrigger
@@ -49,7 +52,7 @@ export function KanbanTaskExtrasMenu({
             size="icon-sm"
             variant="chrome"
             className="shrink-0 rounded-md"
-            aria-label="Task options"
+            aria-label={t("common:taskOptions")}
           />
         }
       >
@@ -57,7 +60,7 @@ export function KanbanTaskExtrasMenu({
       </MenuTrigger>
       <ComposerPickerMenuPopup align="start">
         <MenuSub>
-          <MenuSubTrigger>Mode</MenuSubTrigger>
+          <MenuSubTrigger>{t("chat:mode_label")}</MenuSubTrigger>
           <ComposerPickerMenuSubPopup>
             <MenuRadioGroup
               value={interactionMode}
@@ -70,19 +73,19 @@ export function KanbanTaskExtrasMenu({
               <MenuRadioItem value="default">
                 <span className="inline-flex items-center gap-2">
                   <MessageCircleIcon className="size-4 shrink-0" />
-                  Default
+                  {t("settings:reasoningModes_default")}
                 </span>
               </MenuRadioItem>
               <MenuRadioItem value="plan">
                 <span className="inline-flex items-center gap-2">
                   <ListTodoIcon className="size-4 shrink-0" />
-                  Plan
+                  {t("workspace:plan_badge")}
                 </span>
               </MenuRadioItem>
               <MenuRadioItem value="debug">
                 <span className="inline-flex items-center gap-2">
                   <BugIcon className="size-4 shrink-0" />
-                  Debug
+                  {t("chat:debug")}
                 </span>
               </MenuRadioItem>
             </MenuRadioGroup>
@@ -100,13 +103,13 @@ export function KanbanTaskExtrasMenu({
           <MenuRadioItem value="local">
             <span className="inline-flex items-center gap-2">
               <CentralIcon name="macbook-air" className="size-4 shrink-0" />
-              Local
+              {t("computer:worktreeMode_local")}
             </span>
           </MenuRadioItem>
           <MenuRadioItem value="worktree">
             <span className="inline-flex items-center gap-2">
               <WorktreeIcon className="size-4 shrink-0" aria-hidden />
-              Worktree
+              {t("common:worktreeMode_worktree")}
             </span>
           </MenuRadioItem>
         </MenuRadioGroup>

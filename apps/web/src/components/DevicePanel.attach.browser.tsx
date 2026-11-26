@@ -79,14 +79,16 @@ class ControlledDecoder {
   close() {
     this.state = "closed";
   }
-  paint() {
+  paint(color = "#22c55e") {
     const surface = document.createElement("canvas");
     surface.width = 40;
     surface.height = 80;
     const context = surface.getContext("2d")!;
-    context.fillStyle = "#22c55e";
+    context.fillStyle = color;
     context.fillRect(0, 0, 40, 80);
-    this.callbacks.output(new VideoFrame(surface, { timestamp: 0 }));
+    const frame = new VideoFrame(surface, { timestamp: 0 });
+    this.callbacks.output(frame);
+    return frame;
   }
 }
 
@@ -155,24 +157,19 @@ describe("simulator attach first frame", () => {
     expect(onClosePanel).toHaveBeenCalledOnce();
   });
 
-  it.each(["connecting"] as const)(
-    "paints the first frame before %s metadata clears",
-    async (phase) => {
-      const mounted = await mount(state(SLIM_2, 1, phase));
-      prime(transport.sources[0]!);
-      // The native helper primes once; an idle screen sends no later damage frames.
-      useDeviceStateStore.getState().upsertThreadState(state(SLIM_2, 2, null));
-      await expect.poll(() => document.querySelector("canvas")?.width).toBe(40);
-      await expect
-        .element(mounted.getByText("Connecting…", { exact: true }))
-        .not.toBeInTheDocument();
-      const pixel = document
-        .querySelector("canvas")!
-        .getContext("2d")!
-        .getImageData(0, 0, 1, 1).data;
-      expect(Array.from(pixel)).toEqual([34, 197, 94, 255]);
-    },
-  );
+  it("paints the first frame before connecting metadata clears", async () => {
+    const mounted = await mount(state(SLIM_2, 1, "connecting"));
+    prime(transport.sources[0]!);
+    await expect.poll(() => document.querySelector("canvas")?.width).toBe(40);
+    await expect.element(mounted.getByText("Connecting…", { exact: true })).not.toBeInTheDocument();
+    const context = document.querySelector("canvas")!.getContext("2d")!;
+    expect(Array.from(context.getImageData(0, 0, 1, 1).data)).toEqual([34, 197, 94, 255]);
+
+    // The native helper primes once; an idle screen sends no later damage frames.
+    useDeviceStateStore.getState().upsertThreadState(state(SLIM_2, 2, null));
+    await expect.element(mounted.getByLabelText("iOS 27 Slim 2 screen")).toBeVisible();
+    expect(Array.from(context.getImageData(0, 0, 1, 1).data)).toEqual([34, 197, 94, 255]);
+  });
 
   it("switches by UDID and ignores late frames from the other booted Slim", async () => {
     await mount(state(SLIM));
@@ -192,6 +189,25 @@ describe("simulator attach first frame", () => {
     expect(document.querySelector("canvas")?.getAttribute("aria-label")).toBe(
       "iOS 27 Slim 2 screen",
     );
+  });
+
+  it("paints the latest decoded frame once when several arrive before the browser can paint", async () => {
+    await mount();
+    prime(transport.sources[0]!);
+    await expect.poll(() => document.querySelector("canvas")?.width).toBe(40);
+    const context = document.querySelector("canvas")!.getContext("2d")!;
+    const draw = vi.spyOn(context, "drawImage");
+    try {
+      const superseded = Array.from({ length: 7 }, () => decoders[0]!.paint("#ff0000"));
+      const latest = decoders[0]!.paint("#0000ff");
+      expect(superseded.every((frame) => frame.codedWidth === 0)).toBe(true);
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      expect(Array.from(context.getImageData(0, 0, 1, 1).data)).toEqual([0, 0, 255, 255]);
+      expect(draw).toHaveBeenCalledOnce();
+      expect(latest.codedWidth).toBe(0);
+    } finally {
+      draw.mockRestore();
+    }
   });
 
   it("shows decoder errors even while attach metadata still says connecting", async () => {

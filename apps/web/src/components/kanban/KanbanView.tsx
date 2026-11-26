@@ -20,6 +20,7 @@ import { useStore } from "../../store";
 import { NewTaskButton } from "../tasks/NewTaskButton";
 import { TasksViewSwitch } from "../tasks/TasksViewSwitch";
 import { RouteSurface, RouteSurfaceHeader } from "../RouteSurface";
+import { WorkspaceSurfaceComputerPicker } from "../hosts/ComputerPicker";
 import { KanbanNewTaskDialog } from "./KanbanNewTaskDialog";
 import { KanbanOverview } from "./KanbanOverview";
 import { KanbanProjectBoardView } from "./KanbanProjectBoardView";
@@ -27,13 +28,16 @@ import { useKanbanBoard } from "./useKanbanBoard";
 import { useKanbanCardContextMenu } from "./useKanbanCardContextMenu";
 import { overviewVisibleKanbanCards, type KanbanCard } from "./kanban.logic";
 import { useKanbanUiStore, type KanbanViewMode } from "../../kanbanUiStore";
+import { useTranslation } from "~/i18n";
 
-const BOARD_VIEW_OPTIONS: ReadonlyArray<{ value: KanbanViewMode; label: string }> = [
-  { value: "v2", label: "Attention" },
-  { value: "classic", label: "Classic" },
+const BOARD_VIEW_OPTIONS: ReadonlyArray<{ value: KanbanViewMode; labelKey: string }> = [
+  { value: "v2", labelKey: "common:attention" },
+  { value: "classic", labelKey: "common:classic" },
 ];
 
 export default function KanbanView({ projectId }: { projectId: string | null }) {
+  const { t } = useTranslation();
+
   const navigate = useNavigate();
   const board = useKanbanBoard();
   const threadsHydrated = useStore((state) => state.threadsHydrated);
@@ -158,28 +162,32 @@ export default function KanbanView({ projectId }: { projectId: string | null }) 
     <RouteInsetSurface>
       <RouteSurface>
         <RouteSurfaceHeader>
+          <WorkspaceSurfaceComputerPicker path="/kanban" />
           <div className="flex min-w-0 flex-1 items-center gap-2 [-webkit-app-region:no-drag]">
             {projectBoard ? (
               <Button
                 size="icon-xs"
                 variant="ghost"
                 onClick={handleBackToOverview}
-                aria-label="Back to all projects"
+                aria-label={t("common:view_backToAllProjects")}
               >
                 <ArrowLeftIcon className="size-3.5" />
               </Button>
             ) : null}
             <h2 className="max-w-[clamp(16rem,50vw,40rem)] truncate text-ui-lg font-medium text-foreground">
-              {projectBoard ? projectBoard.projectName : "Kanban"}
+              {projectBoard ? projectBoard.projectName : t("workspace:view_kanban")}
             </h2>
-            <span className="shrink-0 text-ui leading-snug text-muted-foreground/70">
-              {projectBoard ? projectBoard.totalCount : board.totalCount} tasks
+            <span className="shrink-0 text-ui leading-snug text-muted-foreground">
+              {projectBoard ? projectBoard.totalCount : board.totalCount} {t("common:view_tasks")}
             </span>
             {projectBoard ? null : <TasksViewSwitch current="kanban" />}
             <FilterPillGroup
-              ariaLabel="Board view"
+              ariaLabel={t("common:boardView")}
               value={kanbanViewMode}
-              options={BOARD_VIEW_OPTIONS}
+              options={BOARD_VIEW_OPTIONS.map((option) => ({
+                value: option.value,
+                label: t(option.labelKey),
+              }))}
               onChange={setKanbanViewMode}
             />
             <NewTaskButton

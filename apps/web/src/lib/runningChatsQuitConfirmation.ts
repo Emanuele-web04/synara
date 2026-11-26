@@ -3,6 +3,8 @@
 // Layer: UI logic helper
 // Depends on: Sidebar-equivalent "working" signals (running/connecting/live tail).
 
+import { t } from "~/i18n";
+
 export interface RunningChatQuitCandidate {
   readonly id: string;
   readonly title: string;
@@ -34,11 +36,9 @@ export interface RunningChatsQuitStoreSlice {
   readonly threadShellById?: Readonly<Record<string, { readonly title?: string } | undefined>>;
 }
 
-const UNTITLED_CHAT_TITLE = "Untitled thread";
-
 function runningChatDisplayTitle(title: string | null | undefined): string {
   const trimmed = title?.trim();
-  return trimmed && trimmed.length > 0 ? trimmed : UNTITLED_CHAT_TITLE;
+  return trimmed && trimmed.length > 0 ? trimmed : t("workspace:searchPalette_untitledThread");
 }
 
 export function isRunningChatForQuit(thread: {
@@ -90,21 +90,20 @@ export function listRunningChatsFromDesktopStore(
 export function runningChatsQuitCopy(
   chats: ReadonlyArray<RunningChatQuitSummary>,
   appName = "Synara",
+  translate: typeof t = t,
 ): RunningChatsQuitCopy {
   return {
     title:
       chats.length === 0
-        ? `Quit ${appName}?`
-        : chats.length === 1
-          ? "A chat is still running"
-          : "Chats are still running",
+        ? translate("workspace:quit_idleTitle", { appName })
+        : translate("workspace:quit_runningTitle", { count: chats.length }),
     description:
       chats.length === 0
-        ? "Are you sure you want to quit?"
-        : `Work in progress will stop when ${appName} is closed.`,
-    resumeLabel: chats.length === 1 ? "Resume chat automatically" : "Resume chats automatically",
-    stayLabel: "Cancel",
-    quitLabel: "Quit",
+        ? translate("workspace:quit_idleDescription")
+        : translate("workspace:quit_runningDescription", { appName }),
+    resumeLabel: translate("workspace:quit_resume", { count: chats.length }),
+    stayLabel: translate("common:form_cancel"),
+    quitLabel: translate("workspace:quit_action"),
   };
 }
 

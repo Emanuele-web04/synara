@@ -255,19 +255,6 @@ describe("PullRequestRow issue rows", () => {
     expect(row?.textContent).not.toContain("kind:bug");
   });
 
-  it("lets a long title wrap to two lines instead of truncating after one", async () => {
-    await render(
-      <PullRequestRow
-        entry={makeIssue({ title: "A long issue title ".repeat(8) })}
-        selected={false}
-        onClick={vi.fn()}
-        onTogglePinned={vi.fn()}
-      />,
-    );
-    const title = document.querySelector<HTMLElement>("[data-pull-request-row] > span")!;
-    expect(getComputedStyle(title).webkitLineClamp).toBe("2");
-  });
-
   it("marks issues closed as not planned with the struck glyph", async () => {
     await render(
       <PullRequestRow

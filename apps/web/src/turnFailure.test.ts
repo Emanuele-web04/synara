@@ -168,6 +168,30 @@ describe("durable turn failure feedback", () => {
     );
   });
 
+  it.each([
+    ["claudeAgent", "rate_limit"],
+    ["codex", "usageLimitExceeded"],
+    ["codex", "rateLimitExceeded"],
+  ])("marks a %s %s refusal as a usage-limit pause", (provider, errorCode) => {
+    const limited = {
+      ...completed,
+      payload: { state: "failed", provider, errorCode, errorMessage: "Limit reached." },
+    };
+    expect(deriveWorkLogEntries([limited], turnId)[0]?.turnFailure).toMatchObject({
+      provider,
+      errorCode,
+      usageLimit: true,
+    });
+  });
+
+  it("keeps other provider failures as interruptions", () => {
+    const overloaded = {
+      ...completed,
+      payload: { state: "failed", errorCode: "server_overloaded" },
+    };
+    expect(deriveWorkLogEntries([overloaded], turnId)[0]?.turnFailure?.usageLimit).toBeUndefined();
+  });
+
   it("keeps an idle connection error as runtime feedback without claiming task failure", () => {
     const idleError = { ...failure, turnId: null, payload: { message: "Connection lost" } };
     const entries = deriveWorkLogEntries([idleError], undefined);

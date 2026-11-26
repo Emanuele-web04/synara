@@ -148,7 +148,9 @@ export const PROVIDER_DESCRIPTOR_BY_KIND = Object.fromEntries(
 
 // Accepts plain strings so projection-sourced provider names can be checked
 // without casts; unknown providers are simply not steerable.
-export const providerSupportsNativeTurnSteering = (kind: string): boolean =>
-  PROVIDER_DESCRIPTORS.some(
-    (descriptor) => descriptor.kind === kind && descriptor.supportsNativeTurnSteering,
-  );
+export const providerSupportsNativeTurnSteering = (kind: string, negotiated?: boolean): boolean =>
+  kind === "antigravity"
+    ? negotiated === true
+    : PROVIDER_DESCRIPTORS.some(
+        (descriptor) => descriptor.kind === kind && descriptor.supportsNativeTurnSteering,
+      );

@@ -15,23 +15,35 @@ import {
   collapsibleHiddenRowCount,
   computeMessageDurationStart,
   computeStableMessagesTimelineRows,
+  collectInlineVisuals,
   deriveMessagesTimelineRows,
+  deriveContinuedAssistantMessageIds,
   deriveTerminalAssistantMessageIds,
   deriveTurnTimingByTurnId,
-  findLastLiveWorkGroupId,
+  findLiveToolCallTarget,
   formatTurnHeaderLabel,
+  isWorkRowYieldedToLiveToolCall,
+  withoutLiveToolCallRun,
+  formatTurnResumedBy,
+  isPinnedSubagentRunEntry,
   normalizeCompactToolLabel,
+  pickLiveToolCallDisplay,
   summarizeTurnFailureReason,
   planWorkEntryRenderChunks,
-  resolveWorkEntryChunkFold,
   resolveAssistantMessageCopyState,
   resolveAssistantMessageDisplayText,
+  resolveLiveTailClaim,
   resolveThreadFindJumpTarget,
   type CollapsedTurnItem,
   type MessagesTimelineRow,
   type StableMessagesTimelineRowsState,
 } from "./MessagesTimeline.logic";
-import type { TimelineEntry, WorkLogEntry } from "../../session-logic";
+import {
+  deriveTimelineEntries,
+  deriveWorkLogEntries,
+  type TimelineEntry,
+  type WorkLogEntry,
+} from "../../session-logic";
 import type { ChatMessage, TurnDiffSummary, WorktreeSetupSnapshot } from "../../types";
 
 describe("canSubmitUserMessageEdit", () => {
@@ -39,6 +51,65 @@ describe("canSubmitUserMessageEdit", () => {
     expect(canSubmitUserMessageEdit({ draft: "", allowEmpty: true, disabled: false })).toBe(true);
     expect(canSubmitUserMessageEdit({ draft: "", allowEmpty: false, disabled: false })).toBe(false);
     expect(canSubmitUserMessageEdit({ draft: "", allowEmpty: true, disabled: true })).toBe(false);
+  });
+});
+
+describe("turn header copy", () => {
+  it("builds labels while preserving timing and provider text", () => {
+    // Catalog-shaped provider text is data, even when it names a real UI message.
+    const resumedBy = [{ description: "settings:accessibility", outcome: "finished" }] as const;
+    const header = {
+      elapsed: "20s",
+      outcome: "completed",
+      reason: null,
+      resumedBy: null,
+    } as const;
+    const outcomes = ["finished", "failed", "stopped", "updated"] as const;
+    expect([
+      formatTurnHeaderLabel(header),
+      formatTurnHeaderLabel({ ...header, elapsed: null }),
+      formatTurnHeaderLabel({ ...header, outcome: "stopped" }),
+      formatTurnHeaderLabel({ ...header, outcome: "stopped", elapsed: null }),
+      formatTurnHeaderLabel({
+        ...header,
+        outcome: "interrupted",
+        reason: "chat:taskInterrupted",
+      }),
+      formatTurnHeaderLabel({ ...header, outcome: "interrupted", elapsed: null }),
+      formatTurnHeaderLabel({ ...header, resumedBy }),
+      formatTurnHeaderLabel({ ...header, resumedBy, elapsed: null }),
+      ...outcomes.map((outcome) => formatTurnResumedBy([{ ...resumedBy[0], outcome }])),
+      ...outcomes.map((outcome) =>
+        formatTurnResumedBy([
+          { ...resumedBy[0], outcome },
+          { ...resumedBy[0], outcome },
+        ]),
+      ),
+      formatTurnResumedBy([{ description: null, outcome: "finished" }]),
+      formatTurnResumedBy([
+        { ...resumedBy[0], outcome: "finished" },
+        { ...resumedBy[0], outcome: "failed" },
+      ]),
+    ]).toEqual([
+      "Worked for 20s",
+      "Details",
+      "Stopped by you after 20s",
+      "Stopped by you",
+      "Interrupted after 20s · chat:taskInterrupted",
+      "Interrupted",
+      "Resumed: “settings:accessibility” finished · 20s",
+      "Resumed: “settings:accessibility” finished",
+      "“settings:accessibility” finished",
+      "“settings:accessibility” failed",
+      "“settings:accessibility” stopped",
+      "“settings:accessibility” updated",
+      "2 background tasks finished",
+      "2 background tasks failed",
+      "2 background tasks stopped",
+      "2 background tasks updated",
+      "“Background task” finished",
+      "2 background tasks ended",
+    ]);
   });
 });
 
@@ -229,99 +300,71 @@ describe("computeStableMessagesTimelineRows", () => {
     },
   );
 
-  it("replaces work rows when later tool metadata adds visible details", () => {
-    const firstRows: MessagesTimelineRow[] = [
+  const runningLiveActivity = {
+    state: "running_tool" as const,
+    label: "Bash",
+    startedAt: "2026-05-09T10:00:00.000Z",
+    lastActivityAt: "2026-05-09T10:00:01.000Z",
+    detail: "Running",
+    progress: 0.5,
+    elapsedSeconds: 1,
+  };
+  it.each([
+    [
+      "later tool metadata adds visible details",
+      { label: "Read", tone: "tool", itemType: "dynamic_tool_call", toolTitle: "Read" },
       {
-        kind: "work",
-        id: "work-group-1",
-        createdAt: "2026-05-09T10:00:00.000Z",
-        groupedEntries: [
-          {
-            id: "activity-read",
-            createdAt: "2026-05-09T10:00:00.000Z",
-            label: "Read",
-            tone: "tool",
-            itemType: "dynamic_tool_call",
-            toolTitle: "Read",
-          },
-        ],
+        detail: "apps/server/src/orchestration/Layers/ProviderRuntimeIngestion.ts:12",
+        changedFiles: ["apps/server/src/orchestration/Layers/ProviderRuntimeIngestion.ts"],
       },
-    ];
-    const first = computeStableMessagesTimelineRows(firstRows, emptyStableRows());
-
-    const enrichedRows: MessagesTimelineRow[] = [
+    ],
+    [
+      "live activity settles without a final tool event",
       {
-        kind: "work",
-        id: "work-group-1",
-        createdAt: "2026-05-09T10:00:00.000Z",
-        groupedEntries: [
-          {
-            id: "activity-read",
-            createdAt: "2026-05-09T10:00:00.000Z",
-            label: "Read",
-            tone: "tool",
-            itemType: "dynamic_tool_call",
-            toolTitle: "Read",
-            detail: "apps/server/src/orchestration/Layers/ProviderRuntimeIngestion.ts:12",
-            changedFiles: ["apps/server/src/orchestration/Layers/ProviderRuntimeIngestion.ts"],
-          },
-        ],
+        label: "Bash",
+        tone: "tool",
+        itemType: "command_execution",
+        liveActivity: runningLiveActivity,
       },
-    ];
-
-    const second = computeStableMessagesTimelineRows(enrichedRows, first);
-
-    expect(second).not.toBe(first);
-    expect(second.result[0]).toBe(enrichedRows[0]);
-  });
-
-  it("replaces work rows when live activity settles without a final tool event", () => {
-    const firstRow: WorkTimelineRow = {
+      {
+        liveActivity: {
+          state: "completed",
+          label: "Bash completed",
+          startedAt: "2026-05-09T10:00:00.000Z",
+          lastActivityAt: "2026-05-09T10:00:05.000Z",
+          detail: "Done",
+          progress: 1,
+          elapsedSeconds: 5,
+        },
+      },
+    ],
+    [
+      "the activity kind changes",
+      { label: "Needs input", tone: "info" },
+      { activityKind: "user-input.requested" },
+    ],
+    [
+      "automation card fields are added",
+      { label: "Created automation", tone: "info" },
+      { automation: { id: "automation-7", name: "Watch Synara PR 231", cadenceLabel: "Every 5m" } },
+    ],
+  ] as const)("replaces work rows when %s", (_case, base, patch) => {
+    const firstRow = {
       kind: "work",
-      id: "work-group-live-activity",
+      id: "work-group-1",
       createdAt: "2026-05-09T10:00:00.000Z",
-      groupedEntries: [
-        {
-          id: "activity-command",
-          createdAt: "2026-05-09T10:00:00.000Z",
-          label: "Bash",
-          tone: "tool",
-          itemType: "command_execution",
-          liveActivity: {
-            state: "running_tool",
-            label: "Bash",
-            startedAt: "2026-05-09T10:00:00.000Z",
-            lastActivityAt: "2026-05-09T10:00:01.000Z",
-            detail: "Running",
-            progress: 0.5,
-            elapsedSeconds: 1,
-          },
-        },
-      ],
-    };
+      groupedEntries: [{ id: "activity-1", createdAt: "2026-05-09T10:00:00.000Z", ...base }],
+    } as WorkTimelineRow;
     const first = computeStableMessagesTimelineRows([firstRow], emptyStableRows());
-    const settledRow: WorkTimelineRow = {
+    const enrichedRow = {
       ...firstRow,
-      groupedEntries: [
-        {
-          ...firstRow.groupedEntries[0]!,
-          liveActivity: {
-            state: "completed",
-            label: "Bash completed",
-            startedAt: "2026-05-09T10:00:00.000Z",
-            lastActivityAt: "2026-05-09T10:00:05.000Z",
-            detail: "Done",
-            progress: 1,
-            elapsedSeconds: 5,
-          },
-        },
-      ],
-    };
+      groupedEntries: [{ ...firstRow.groupedEntries[0]!, ...patch }],
+    } as WorkTimelineRow;
 
-    const second = computeStableMessagesTimelineRows([settledRow], first);
+    const second = computeStableMessagesTimelineRows([enrichedRow], first);
 
     expect(second).not.toBe(first);
-    expect(second.result[0]).toBe(settledRow);
+    expect(second.result[0]).toBe(enrichedRow);
   });
 
   it("reuses worktree-setup rows until a step status or open state changes", () => {
@@ -346,86 +389,6 @@ describe("computeStableMessagesTimelineRows", () => {
     const openChanged = computeStableMessagesTimelineRows([makeRow("done", false)], statusChanged);
     expect(openChanged).not.toBe(statusChanged);
     expect(openChanged.result[0]).not.toBe(statusChanged.result[0]);
-  });
-
-  it("replaces work rows when the activity kind changes", () => {
-    const firstRow: WorkTimelineRow = {
-      kind: "work",
-      id: "work-group-user-input",
-      createdAt: "2026-05-09T10:00:00.000Z",
-      groupedEntries: [
-        {
-          id: "activity-user-input",
-          createdAt: "2026-05-09T10:00:00.000Z",
-          label: "Needs input",
-          tone: "info",
-        },
-      ],
-    };
-    const firstRows: MessagesTimelineRow[] = [firstRow];
-    const first = computeStableMessagesTimelineRows(firstRows, emptyStableRows());
-
-    const enrichedRows: MessagesTimelineRow[] = [
-      {
-        ...firstRow,
-        groupedEntries: [
-          {
-            ...firstRow.groupedEntries[0]!,
-            activityKind: "user-input.requested",
-          },
-        ],
-      },
-    ];
-
-    const second = computeStableMessagesTimelineRows(enrichedRows, first);
-
-    expect(second).not.toBe(first);
-    expect(second.result[0]).toBe(enrichedRows[0]);
-  });
-
-  it("replaces work rows when automation card fields are added", () => {
-    const firstRows: MessagesTimelineRow[] = [
-      {
-        kind: "work",
-        id: "work-group-automation",
-        createdAt: "2026-05-09T10:00:00.000Z",
-        groupedEntries: [
-          {
-            id: "automation-created",
-            createdAt: "2026-05-09T10:00:00.000Z",
-            label: "Created automation",
-            tone: "info",
-          },
-        ],
-      },
-    ];
-    const first = computeStableMessagesTimelineRows(firstRows, emptyStableRows());
-
-    const enrichedRows: MessagesTimelineRow[] = [
-      {
-        kind: "work",
-        id: "work-group-automation",
-        createdAt: "2026-05-09T10:00:00.000Z",
-        groupedEntries: [
-          {
-            id: "automation-created",
-            createdAt: "2026-05-09T10:00:00.000Z",
-            label: "Created automation",
-            tone: "info",
-            automation: {
-              id: "automation-7",
-              name: "Watch Synara PR 231",
-              cadenceLabel: "Every 5m",
-            },
-          },
-        ],
-      },
-    ];
-
-    const second = computeStableMessagesTimelineRows(enrichedRows, first);
-
-    expect(second).not.toBe(first);
-    expect(second.result[0]).toBe(enrichedRows[0]);
   });
 
   it("replaces assistant rows when inline tool metadata becomes richer", () => {
@@ -497,6 +460,27 @@ describe("deriveTerminalAssistantMessageIds", () => {
         { id: "a3", role: "assistant", createdAt: "2026-01-01T00:00:04Z" },
       ]),
     ).toEqual(new Set(["a2", "a3"]));
+  });
+});
+
+describe("deriveContinuedAssistantMessageIds", () => {
+  it("marks answers a wake carried on, but not ones a user message ended", () => {
+    const messages = [
+      { id: "u1", role: "user" as const, createdAt: "2026-01-01T00:00:00Z" },
+      { id: "a1", role: "assistant" as const, createdAt: "2026-01-01T00:00:01Z" },
+      { id: "wake", role: "user" as const, createdAt: "2026-01-01T00:00:02Z" },
+      { id: "a2", role: "assistant" as const, createdAt: "2026-01-01T00:00:03Z" },
+      { id: "u2", role: "user" as const, createdAt: "2026-01-01T00:00:04Z" },
+      { id: "a3", role: "assistant" as const, createdAt: "2026-01-01T00:00:05Z" },
+    ];
+
+    expect(
+      deriveContinuedAssistantMessageIds(
+        messages,
+        deriveTerminalAssistantMessageIds(messages),
+        new Set(["wake"]),
+      ),
+    ).toEqual(new Set(["a1"]));
   });
 });
 
@@ -693,34 +677,24 @@ describe("buildTurnDiffSummaryByAssistantMessageId", () => {
 });
 
 describe("resolveAssistantMessageCopyState", () => {
-  it("shows copy only for non-empty settled assistant text", () => {
-    expect(
-      resolveAssistantMessageCopyState({
-        text: "Hello",
-        showCopyButton: true,
-        streaming: false,
-      }),
-    ).toEqual({ text: "Hello", visible: true });
-  });
-
-  it("hides copy while the active assistant response is still streaming", () => {
-    expect(
-      resolveAssistantMessageCopyState({
-        text: "Hello",
-        showCopyButton: true,
-        streaming: true,
-      }),
-    ).toEqual({ text: "Hello", visible: false });
-  });
-
-  it("hides copy for empty responses", () => {
-    expect(
-      resolveAssistantMessageCopyState({
-        text: "   ",
-        showCopyButton: true,
-        streaming: false,
-      }),
-    ).toEqual({ text: null, visible: false });
+  it.each([
+    [
+      "shows copy for non-empty settled assistant text",
+      "Hello",
+      false,
+      { text: "Hello", visible: true },
+    ],
+    [
+      "hides copy while the active assistant response is still streaming",
+      "Hello",
+      true,
+      { text: "Hello", visible: false },
+    ],
+    ["hides copy for empty responses", "   ", false, { text: null, visible: false }],
+  ])("%s", (_case, text, streaming, expected) => {
+    expect(resolveAssistantMessageCopyState({ text, showCopyButton: true, streaming })).toEqual(
+      expected,
+    );
   });
 });
 
@@ -880,7 +854,72 @@ describe("deriveMessagesTimelineRows", () => {
   const collapsedSignature = (row: MessageTimelineRow): string[] =>
     (row.collapsedTurnItems ?? []).map((item) => `${item.kind}:${String(item.id)}`);
 
-  it("keeps adjacent child groups visible after parent completion without crossing narration", () => {
+  it("treats an untagged reply after the last request as part of the live turn", () => {
+    const entries = [
+      userEntry("u1", "2026-01-01T00:00:00Z", "t1"),
+      assistantEntry("earlier", "2026-01-01T00:00:01Z", { completedAt: "2026-01-01T00:00:01Z" }),
+      userEntry("u2", "2026-01-01T00:00:02Z", "t2"),
+      assistantEntry("untagged", "2026-01-01T00:00:03Z", {}),
+      assistantEntry("other-turn", "2026-01-01T00:00:04Z", { turnId: "t1" }),
+    ];
+    const live = deriveMessagesTimelineRows({
+      ...baseInput,
+      isWorking: true,
+      activeTurnInProgress: true,
+      activeTurnId: TurnId.makeUnsafe("t2"),
+      timelineEntries: entries,
+    });
+    expect(messageRow(live, "untagged")).toMatchObject({
+      assistantTurnInProgress: true,
+      assistantCopyStreaming: true,
+    });
+    // Before the last request, or tagged with another turn: settled chrome.
+    expect(messageRow(live, "earlier")?.assistantTurnInProgress).toBe(false);
+    expect(messageRow(live, "other-turn")?.assistantTurnInProgress).toBe(false);
+
+    // Without a turn id yet (revert, reconnect, a follow-up before its turn
+    // exists) nothing changes.
+    const noTurnId = deriveMessagesTimelineRows({
+      ...baseInput,
+      isWorking: true,
+      activeTurnInProgress: true,
+      activeTurnId: null,
+      timelineEntries: entries,
+    });
+    expect(messageRow(noTurnId, "untagged")?.assistantTurnInProgress).toBe(false);
+    const idle = deriveMessagesTimelineRows({
+      ...baseInput,
+      activeTurnInProgress: false,
+      activeTurnId: TurnId.makeUnsafe("t2"),
+      collapseFinishedTurns: false,
+      timelineEntries: entries,
+    });
+    expect(messageRow(idle, "untagged")?.assistantTurnInProgress).toBe(false);
+  });
+
+  it("keeps an untagged live reply as the terminal answer of its unfolded turn", () => {
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      isWorking: true,
+      activeTurnInProgress: true,
+      activeTurnId: TurnId.makeUnsafe("t1"),
+      timelineEntries: [
+        userEntry("u1", "2026-01-01T00:00:00Z", "t1"),
+        workEntry("w1", "2026-01-01T00:00:01Z", "tool w1"),
+        assistantEntry("untagged", "2026-01-01T00:00:02Z", {
+          completedAt: "2026-01-01T00:00:02Z",
+        }),
+      ],
+    });
+    const row = messageRow(rows, "untagged");
+    // Terminal, so it owns the turn's chrome once the turn ends, but it does not
+    // fold or show that chrome while the turn is still live.
+    expect(row?.showAssistantCopyButton).toBe(true);
+    expect(row?.assistantTurnInProgress).toBe(true);
+    expect(row?.collapsedTurnItems).toBeUndefined();
+  });
+
+  it("folds adjacent child groups into the settled turn without crossing narration", () => {
     const launch = (id: string, child: string, time: string): TimelineEntry => ({
       kind: "work",
       id,
@@ -921,11 +960,36 @@ describe("deriveMessagesTimelineRows", () => {
         }),
       ],
     });
+    // The Environment panel and Subagents dock list them; the transcript keeps
+    // them inside "Worked for", still one row per launch group.
+    expect(rows.filter((row) => row.kind === "work")).toEqual([]);
+    const done = messageRow(rows, "done")!;
+    expect(collapsedSignature(done)).toEqual(["work:a", "narration:narration", "work:c"]);
     expect(
-      rows
-        .filter((row) => row.kind === "work")
-        .map((row) => row.groupedEntries.map((entry) => entry.id)),
+      (done.collapsedTurnItems ?? []).flatMap((item) =>
+        item.kind === "work" ? [item.entry.subagentRun?.entryIds ?? [item.entry.id]] : [],
+      ),
     ).toEqual([["a", "b"], ["c"]]);
+  });
+
+  it("pins only subagent rows that still have a child at work", () => {
+    const entry = (id: string, entryIds?: string[]) => ({
+      id,
+      createdAt: "2026-01-01T00:00:00Z",
+      label: "Subagents",
+      tone: "info" as const,
+      subagentRun: { members: [], ...(entryIds ? { entryIds } : {}) },
+    });
+    expect(isPinnedSubagentRunEntry(entry("a"), new Set(["a"]))).toBe(true);
+    expect(isPinnedSubagentRunEntry(entry("a", ["a", "b"]), new Set(["b"]))).toBe(true);
+    expect(isPinnedSubagentRunEntry(entry("a"), new Set(["b"]))).toBe(false);
+    expect(isPinnedSubagentRunEntry(entry("a"), undefined)).toBe(false);
+    expect(
+      isPinnedSubagentRunEntry(
+        { id: "w", createdAt: "2026-01-01T00:00:00Z", label: "Read", tone: "tool" },
+        new Set(["w"]),
+      ),
+    ).toBe(false);
   });
 
   it("keeps async question cards visible after their originating turn settles", () => {
@@ -1000,7 +1064,7 @@ describe("deriveMessagesTimelineRows", () => {
     }),
   ];
 
-  it("folds each response woken by a background task on its own and names the task in its header", () => {
+  it("folds each settled woken response on its own, names the task in its header, and ends the reply once", () => {
     const rows = deriveMessagesTimelineRows({
       ...baseInput,
       timelineEntries: wokenResponseEntries({ lastStreaming: false }),
@@ -1010,8 +1074,14 @@ describe("deriveMessagesTimelineRows", () => {
       "narration:plan",
       "work:launch",
     ]);
-    expect(collapsedSignature(messageRow(rows, "report-1")!)).toEqual(["work:check-1"]);
-    expect(collapsedSignature(messageRow(rows, "report-2")!)).toEqual(["work:check-2"]);
+    expect(collapsedSignature(messageRow(rows, "report-1")!)).toEqual([
+      "work:done-1",
+      "work:check-1",
+    ]);
+    expect(collapsedSignature(messageRow(rows, "report-2")!)).toEqual([
+      "work:done-2",
+      "work:check-2",
+    ]);
     // The completion line is gone: the woken turn's header says what woke it.
     expect(rows.some((row) => row.kind === "work")).toBe(false);
     expect(messageRow(rows, "launched")?.turnHeader?.resumedBy).toBeNull();
@@ -1024,6 +1094,19 @@ describe("deriveMessagesTimelineRows", () => {
     // A woken response's clock starts when the subagent finished, not when the
     // previous reply did.
     expect(messageRow(rows, "report-1")?.durationStart).toBe("2026-01-01T00:01:00Z");
+
+    // A reply the background tasks carried on ends only once, on its last answer.
+    expect(messageRow(rows, "launched")?.assistantResponseContinues).toBe(true);
+    expect(messageRow(rows, "report-1")?.assistantResponseContinues).toBe(true);
+    expect(messageRow(rows, "report-2")?.assistantResponseContinues).toBeUndefined();
+    // Each response still owns its terminal answer (turn header, changed files).
+    expect(messageRow(rows, "launched")?.showAssistantCopyButton).toBe(true);
+    expect(messageRow(rows, "report-2")?.showAssistantCopyButton).toBe(true);
+    // Copy takes the whole reply from its last answer.
+    expect(messageRow(rows, "report-2")?.assistantReplyCopyText).toBe(
+      "Launched 2 subagents.\n\nReport 1\n\nReport 2",
+    );
+    expect(messageRow(rows, "launched")?.assistantReplyCopyText).toBeUndefined();
   });
 
   it.each(["task", "monitor"])(
@@ -1079,8 +1162,23 @@ describe("deriveMessagesTimelineRows", () => {
       "narration:plan",
       "work:launch",
     ]);
-    expect(collapsedSignature(messageRow(rows, "report-1")!)).toEqual(["work:check-1"]);
+    expect(collapsedSignature(messageRow(rows, "report-1")!)).toEqual([
+      "work:done-1",
+      "work:check-1",
+    ]);
     expect(messageRow(rows, "report-2")?.collapsedTurnItems).toBeUndefined();
+  });
+
+  it("keeps the previous footer until the woken response writes an answer", () => {
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      isWorking: true,
+      activeTurnInProgress: true,
+      activeTurnId: TurnId.makeUnsafe("turn-3"),
+      timelineEntries: wokenResponseEntries({ lastStreaming: false }).slice(0, -1),
+    });
+
+    expect(messageRow(rows, "report-1")?.assistantResponseContinues).toBeUndefined();
   });
 
   it("keeps the previous response folded before the woken response writes anything", () => {
@@ -1092,7 +1190,245 @@ describe("deriveMessagesTimelineRows", () => {
       timelineEntries: wokenResponseEntries({ lastStreaming: false }).slice(0, -2),
     });
 
-    expect(collapsedSignature(messageRow(rows, "report-1")!)).toEqual(["work:check-1"]);
+    expect(collapsedSignature(messageRow(rows, "report-1")!)).toEqual([
+      "work:done-1",
+      "work:check-1",
+    ]);
+  });
+
+  it("keeps one response when a Monitor event arrives mid-turn", () => {
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      timelineEntries: [
+        userEntry("u1", "2026-01-01T00:00:00Z"),
+        assistantEntry("watching", "2026-01-01T00:00:01Z", {
+          turnId: "t1",
+          text: "Watching CI",
+          completedAt: "2026-01-01T00:00:02Z",
+        }),
+        {
+          id: "entry-ci",
+          kind: "work",
+          createdAt: "2026-01-01T00:00:03Z",
+          entry: {
+            id: "ci",
+            createdAt: "2026-01-01T00:00:03Z",
+            label: "Monitor · CI updated",
+            tone: "info",
+            monitorNotification: {
+              taskId: "ci",
+              name: "CI",
+              output: "build passed",
+              outcome: "updated",
+              midTurn: true,
+            },
+          },
+        },
+        workEntry("read", "2026-01-01T00:00:04Z", "Read file"),
+        assistantEntry("done", "2026-01-01T00:00:05Z", {
+          turnId: "t1",
+          text: "CI is green.",
+          completedAt: "2026-01-01T00:00:06Z",
+        }),
+      ],
+    });
+
+    expect(collapsedSignature(messageRow(rows, "done")!)).toEqual([
+      "narration:watching",
+      "work:ci",
+      "work:read",
+    ]);
+    expect(messageRow(rows, "watching")).toBeUndefined();
+    expect(messageRow(rows, "done")?.turnHeader?.resumedBy).toBeNull();
+  });
+
+  const outlivingTaskEntries = (
+    options: {
+      status?: "running" | "finished" | "failed" | "stopped";
+      streaming?: boolean;
+      reuseLaunchTurn?: boolean;
+      completionId?: string;
+      completionAt?: string;
+      completionEventId?: string;
+      completionType?: string;
+      completionTurnId?: string;
+      userBoundary?: boolean;
+      omitWake?: boolean;
+    } = {},
+  ): TimelineEntry[] => {
+    const startedAt = "2026-01-01T00:00:01Z";
+    const completedAt = "2026-01-01T00:01:00Z";
+    const status = options.status ?? "finished";
+    const launch = workEntry("launch", startedAt, "Build app");
+    if (launch.kind !== "work") throw new Error("Expected work entry");
+    launch.entry.turnId = TurnId.makeUnsafe("launch-turn");
+    launch.entry.backgroundTask = {
+      taskId: "task",
+      taskType: "local_bash",
+      description: "Build app",
+      command: "bun run build",
+      startedAt,
+      completedAt: status === "running" ? null : completedAt,
+      status,
+      completionActivityId: "task",
+      exitCode: status === "finished" ? 0 : null,
+    };
+    const completion = backgroundCompletionEntry(
+      options.completionId ?? "task",
+      options.completionAt ?? completedAt,
+      "Build app",
+    );
+    if (completion.kind !== "work" || !completion.entry.backgroundTaskCompletion)
+      throw new Error("Expected completion");
+    completion.entry.id = options.completionEventId ?? completion.entry.id;
+    completion.entry.turnId = TurnId.makeUnsafe(options.completionTurnId ?? "launch-turn");
+    completion.entry.backgroundTaskCompletion.taskType = options.completionType ?? "local_bash";
+    completion.entry.backgroundTaskCompletion.outcome = status === "running" ? "finished" : status;
+    return [
+      userEntry("u1", "2026-01-01T00:00:00Z"),
+      launch,
+      assistantEntry("launched", "2026-01-01T00:00:02Z", {
+        turnId: "launch-turn",
+        text: "Build launched",
+        completedAt: "2026-01-01T00:00:03Z",
+      }),
+      ...(options.omitWake ? [] : [completion]),
+      ...(options.userBoundary ? [userEntry("u2", "2026-01-01T00:01:00.500Z")] : []),
+      workEntry("check", "2026-01-01T00:01:01Z", "Check output"),
+      assistantEntry("report", "2026-01-01T00:01:02Z", {
+        turnId: options.reuseLaunchTurn ? "launch-turn" : "followup-turn",
+        text: "App ready",
+        streaming: options.streaming ?? false,
+        ...(options.streaming ? {} : { completedAt: "2026-01-01T00:01:03Z" }),
+      }),
+    ];
+  };
+
+  it("times consecutive native task wakes from the first without accepting a stale turn end", () => {
+    const at = (seconds: number) => new Date(Date.UTC(2026, 0, 1, 0, 0, seconds)).toISOString();
+    const turnId = TurnId.makeUnsafe("same-turn");
+    const activity = (
+      id: string,
+      kind: string,
+      payload: OrchestrationThreadActivity["payload"],
+      seconds: number,
+    ): OrchestrationThreadActivity => ({
+      id: EventId.makeUnsafe(id),
+      kind,
+      payload,
+      turnId,
+      createdAt: at(seconds),
+      summary: id,
+      tone: "info",
+    });
+    const work = deriveWorkLogEntries(
+      [
+        activity(
+          "moved",
+          "runtime.warning",
+          {
+            nativeEventType: "background_tasks_changed",
+            data: {
+              tasks: ["a", "b"].map((id) => ({
+                task_id: id,
+                task_type: "local_bash",
+                description: `Build ${id}`,
+              })),
+            },
+          },
+          1,
+        ),
+        activity("launch-end", "turn.completed", { state: "completed" }, 5),
+        activity("done-a", "task.completed", { taskId: "a", status: "completed" }, 10),
+        activity("done-b", "task.completed", { taskId: "b", status: "completed" }, 20),
+      ],
+      undefined,
+    );
+    const messages = [
+      userEntry("request", at(0), "same-turn"),
+      assistantEntry("launch", at(4), { turnId: "same-turn", completedAt: at(5) }),
+      assistantEntry("report", at(30), { turnId: "same-turn", completedAt: at(30) }),
+    ].flatMap((entry) => (entry.kind === "message" ? [entry.message] : []));
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      timelineEntries: deriveTimelineEntries(messages, [], work),
+      turnTimingByTurnId: new Map([
+        [turnId, { startedAt: at(0), completedAt: at(15), interrupted: false }],
+      ]),
+    });
+
+    const liveRows = deriveMessagesTimelineRows({
+      ...baseInput,
+      isWorking: true,
+      activeTurnInProgress: true,
+      activeTurnId: turnId,
+      activeTurnStartedAt: at(10),
+      timelineEntries: deriveTimelineEntries(
+        messages.map((message) =>
+          message.id === MessageId.makeUnsafe("report")
+            ? { ...message, streaming: true, completedAt: undefined }
+            : message,
+        ),
+        [],
+        work,
+      ),
+    });
+    expect(liveRows.find((row) => row.kind === "working-header")?.createdAt).toBe(at(10));
+
+    // The stale end lies between the two wakes: validate against the latest
+    // wake first, then extend only the start to include both completed tasks.
+    expect(messageRow(rows, "report")?.turnHeader).toMatchObject({
+      elapsed: "20s",
+      endedAt: at(30),
+      outcome: "completed",
+      resumedBy: [
+        { description: "Build a", outcome: "finished" },
+        { description: "Build b", outcome: "finished" },
+      ],
+    });
+    expect(
+      rows.filter((row) => row.kind === "message" && row.message.role === "assistant"),
+    ).toHaveLength(2);
+  });
+
+  it("keeps the launch row when its task's wake settles the follow-up", () => {
+    const entries = outlivingTaskEntries({ streaming: true });
+    const first = computeStableMessagesTimelineRows(
+      deriveMessagesTimelineRows({
+        ...baseInput,
+        timelineEntries: entries,
+        activeTurnInProgress: true,
+        isWorking: true,
+        activeTurnId: TurnId.makeUnsafe("followup-turn"),
+      }),
+      { result: [], byId: new Map() },
+    );
+    const settledEntries = [...entries.slice(0, -1), ...outlivingTaskEntries().slice(-1)];
+    const second = computeStableMessagesTimelineRows(
+      deriveMessagesTimelineRows({
+        ...baseInput,
+        timelineEntries: settledEntries,
+      }),
+      first,
+    );
+    const firstLaunch = messageRow(first.result, "launched")!;
+    const secondLaunch = messageRow(second.result, "launched")!;
+    expect(secondLaunch).toBe(firstLaunch);
+    expect(collapsedSignature(secondLaunch)).toEqual(["work:launch"]);
+    expect(collapsedSignature(messageRow(second.result, "report")!)).toEqual([
+      "work:task",
+      "work:check",
+    ]);
+    expect(messageRow(second.result, "report")?.turnHeader?.elapsed).toBe("3.0s");
+    expect(messageRow(second.result, "u1")).toBe(messageRow(first.result, "u1"));
+    const unchanged = computeStableMessagesTimelineRows(
+      deriveMessagesTimelineRows({
+        ...baseInput,
+        timelineEntries: settledEntries,
+      }),
+      second,
+    );
+    expect(unchanged).toBe(second);
   });
 
   it("folds a settled turn's narration and work into one collapsed group on the terminal message", () => {
@@ -1392,6 +1728,65 @@ describe("deriveMessagesTimelineRows", () => {
     const work = rows.filter((row) => row.kind === "work");
     expect(work).toHaveLength(1);
     expect(work[0]).toMatchObject({
+      turnEndMarker: { elapsed: "16s", outcome: "interrupted", reason: null },
+    });
+  });
+
+  it("ends a turn stopped after publishing a visual below that visual", () => {
+    const turnId = TurnId.makeUnsafe("t1");
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      timelineEntries: [
+        userEntry("u1", "2026-01-01T00:00:00Z"),
+        {
+          id: "entry-tool",
+          kind: "work",
+          createdAt: "2026-01-01T00:00:01Z",
+          entry: {
+            id: "tool",
+            createdAt: "2026-01-01T00:00:01Z",
+            label: "Agent",
+            tone: "tool",
+            turnId,
+          },
+        },
+        {
+          id: "entry-visual",
+          kind: "work",
+          createdAt: "2026-01-01T00:00:02Z",
+          entry: {
+            id: "visual",
+            createdAt: "2026-01-01T00:00:02Z",
+            label: "Visual: Budget",
+            tone: "info",
+            activityKind: "visual.shown",
+            turnId,
+            inlineVisual: {
+              visualId: `vis_${"c".repeat(32)}`,
+              title: "Budget",
+              height: 200,
+              byteLength: 100,
+              sha256: "d".repeat(64),
+            },
+          },
+        },
+      ],
+      turnTimingByTurnId: deriveTurnTimingByTurnId({
+        turnDiffSummaries: [],
+        latestTurn: {
+          turnId,
+          state: "interrupted",
+          startedAt: "2026-01-01T00:00:00.500Z",
+          completedAt: "2026-01-01T00:00:16.500Z",
+        },
+        activities: [],
+      }),
+    });
+
+    // The stop line closes the turn after everything it showed.
+    expect(rows.map((row) => row.kind)).toEqual(["message", "work", "inline-visual"]);
+    expect(rows[1]).not.toHaveProperty("turnEndMarker");
+    expect(rows[2]).toMatchObject({
       turnEndMarker: { elapsed: "16s", outcome: "interrupted", reason: null },
     });
   });
@@ -1991,10 +2386,11 @@ describe("deriveMessagesTimelineRows", () => {
     expect(streamingNarration?.inlineWorkGroupId).toBe("entry-w2");
   });
 
-  it("keeps a settled turn expanded while background subagents are still running", () => {
+  it("folds a settled turn while background subagents are still running", () => {
+    // SYN-143: an idle parent with live background subagents used to stay
+    // half-folded, leaving a "Used N tools" summary above its answer.
     const rows = deriveMessagesTimelineRows({
       ...baseInput,
-      subagentsRunning: true,
       activeTurnId: TurnId.makeUnsafe("t1"),
       timelineEntries: [
         userEntry("u1", "2026-01-01T00:00:00Z"),
@@ -2015,8 +2411,12 @@ describe("deriveMessagesTimelineRows", () => {
     const visibleMessageIds = rows
       .filter((row): row is MessageTimelineRow => row.kind === "message")
       .map((row) => String(row.message.id));
-    expect(visibleMessageIds).toEqual(["u1", "a1", "a2"]);
-    expect(messageRow(rows, "a2")!.collapsedTurnItems).toBeUndefined();
+    expect(visibleMessageIds).toEqual(["u1", "a2"]);
+    expect(rows.some((row) => row.kind === "work")).toBe(false);
+    expect(messageRow(rows, "a2")!.collapsedTurnItems?.map((item) => item.id)).toEqual([
+      "a1",
+      "w1",
+    ]);
   });
 
   it("keeps finished turns expanded when folding is turned off", () => {
@@ -2166,6 +2566,314 @@ describe("deriveMessagesTimelineRows", () => {
     expect(collapsedSignature(messageRow(rows, "a2")!)).toEqual(["narration:a1", "work:w1"]);
   });
 
+  it.each([true, false])(
+    "puts MCP proposals in the answer recap with collapseFinishedTurns=%s",
+    (collapseFinishedTurns) => {
+      const createdAt = "2026-01-01T00:00:02Z";
+      const proposal: TimelineEntry = {
+        id: "entry-mcp",
+        kind: "work",
+        createdAt,
+        entry: {
+          id: "mcp",
+          createdAt,
+          label: "Connect Paper",
+          tone: "info",
+          connectorProposalId: "paper",
+        },
+      };
+      const rows = deriveMessagesTimelineRows({
+        ...baseInput,
+        collapseFinishedTurns,
+        timelineEntries: [
+          userEntry("u1", "2026-01-01T00:00:00Z"),
+          workEntry("w1", "2026-01-01T00:00:01Z", "List connectors"),
+          proposal,
+          workEntry("w2", "2026-01-01T00:00:03Z", "Read connector docs"),
+          assistantEntry("a1", "2026-01-01T00:00:04Z", {
+            turnId: "t1",
+            text: "Review the connection to continue.",
+            completedAt: "2026-01-01T00:00:05Z",
+          }),
+        ],
+      });
+
+      const answer = messageRow(rows, "a1")!;
+      expect(answer.connectorProposalIds).toEqual(["paper"]);
+      expect(rows.some((row) => row.id === proposal.id)).toBe(false);
+      expect(collapsedSignature(answer)).toEqual(
+        collapseFinishedTurns ? ["work:w1", "work:w2"] : [],
+      );
+    },
+  );
+
+  it("keeps a published visual visible while the rest of its turn collapses", () => {
+    const visualPayload = {
+      visualId: `vis_${"1".repeat(32)}`,
+      title: "Build time by package",
+      height: 360,
+      byteLength: 2048,
+      sha256: "a".repeat(64),
+    };
+    const visualActivity = (
+      id: string,
+      createdAt: string,
+      payload: unknown,
+    ): OrchestrationThreadActivity => ({
+      id: EventId.makeUnsafe(id),
+      tone: "info",
+      kind: "visual.shown",
+      summary: "Visual: Build time by package",
+      payload: payload as OrchestrationThreadActivity["payload"],
+      turnId: TurnId.makeUnsafe("t1"),
+      createdAt,
+    });
+    // From the persisted activities, as the transcript receives them: the
+    // provider's own record of the tool call while its arguments still stream
+    // in, the server's record once the visual is stored, and a record whose
+    // payload no client could render (a path, not a visual id).
+    const streamingCall: OrchestrationThreadActivity = {
+      id: EventId.makeUnsafe("tool-call"),
+      tone: "tool",
+      kind: "tool.started",
+      summary: "synara_show_visual started",
+      payload: {
+        itemType: "mcp_tool_call",
+        title: "synara_show_visual",
+        data: { toolName: "synara_show_visual", input: { title: "Build", html: "<svg><rect" } },
+      },
+      turnId: TurnId.makeUnsafe("t1"),
+      createdAt: "2026-01-01T00:00:02.500Z",
+    };
+    const derived = deriveWorkLogEntries(
+      [
+        streamingCall,
+        visualActivity("visual-1", "2026-01-01T00:00:03Z", visualPayload),
+        visualActivity("visual-bad", "2026-01-01T00:00:03.500Z", {
+          ...visualPayload,
+          visualId: "../../etc/passwd",
+        }),
+      ],
+      TurnId.makeUnsafe("t1"),
+    );
+    // Partial input never renders; only the stored visual does.
+    expect(derived.map((entry) => [entry.id, entry.inlineVisual !== undefined])).toEqual([
+      ["tool-call", false],
+      ["visual-1", true],
+    ]);
+    const visualEntry = derived.find((entry) => entry.inlineVisual !== undefined)!;
+
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      timelineEntries: [
+        userEntry("u1", "2026-01-01T00:00:00Z"),
+        workEntry("w1", "2026-01-01T00:00:01Z", "tool 1"),
+        assistantEntry("a0", "2026-01-01T00:00:02Z", {
+          turnId: "t1",
+          text: "Measuring",
+          completedAt: "2026-01-01T00:00:02Z",
+        }),
+        {
+          id: "entry-visual-1",
+          kind: "work",
+          createdAt: "2026-01-01T00:00:03Z",
+          entry: visualEntry,
+        },
+        workEntry("w2", "2026-01-01T00:00:04Z", "tool 2"),
+        assistantEntry("a1", "2026-01-01T00:00:05Z", {
+          turnId: "t1",
+          text: "Webpack dominates.",
+          completedAt: "2026-01-01T00:00:06Z",
+        }),
+      ],
+    });
+
+    expect(rows.map((row) => row.kind)).toEqual(["message", "inline-visual", "message"]);
+    expect(rows[1]).toMatchObject({ kind: "inline-visual", visual: visualPayload });
+    // Narration and work on both sides of the visual still fold into the header.
+    expect(collapsedSignature(messageRow(rows, "a1")!)).toEqual([
+      "work:w1",
+      "narration:a0",
+      "work:w2",
+    ]);
+  });
+
+  it("opens each settled response with its header above the visuals it kept", () => {
+    const visualEntry = (id: string, createdAt: string, turnId: string): TimelineEntry => ({
+      id: `entry-${id}`,
+      kind: "work",
+      createdAt,
+      entry: {
+        id,
+        createdAt,
+        label: `Visual: ${id}`,
+        tone: "info",
+        activityKind: "visual.shown",
+        turnId: TurnId.makeUnsafe(turnId),
+        inlineVisual: {
+          visualId: `vis_${id.padEnd(32, "0").slice(0, 32)}`,
+          title: id,
+          height: 200,
+          byteLength: 100,
+          sha256: "b".repeat(64),
+        },
+      },
+    });
+    const settled = [
+      userEntry("u1", "2026-01-01T00:00:00Z", "t1"),
+      workEntry("w1", "2026-01-01T00:00:01Z", "tool 1"),
+      assistantEntry("a0", "2026-01-01T00:00:01.500Z", {
+        turnId: "t1",
+        text: "Measuring",
+        completedAt: "2026-01-01T00:00:01.500Z",
+      }),
+      visualEntry("chart", "2026-01-01T00:00:02Z", "t1"),
+      visualEntry("table", "2026-01-01T00:00:03Z", "t1"),
+      assistantEntry("a1", "2026-01-01T00:00:04Z", {
+        turnId: "t1",
+        text: "Web dominates.",
+        completedAt: "2026-01-01T00:00:05Z",
+      }),
+      userEntry("u2", "2026-01-01T00:01:00Z", "t2"),
+      workEntry("w2", "2026-01-01T00:01:01Z", "tool 2"),
+      visualEntry("trend", "2026-01-01T00:01:02Z", "t2"),
+      assistantEntry("a2", "2026-01-01T00:01:03Z", {
+        turnId: "t2",
+        text: "It got faster.",
+        completedAt: "2026-01-01T00:01:04Z",
+      }),
+      userEntry("u3", "2026-01-01T00:02:00Z", "turn-3"),
+      workEntry("w3", "2026-01-01T00:02:01Z", "tool 3"),
+      assistantEntry("a3", "2026-01-01T00:02:02Z", {
+        turnId: "turn-3",
+        text: "Text only.",
+        completedAt: "2026-01-01T00:02:03Z",
+      }),
+    ];
+    const rows = deriveMessagesTimelineRows({ ...baseInput, timelineEntries: settled });
+
+    // Chronology holds: each turn's visuals, then its answer, then the next request.
+    expect(rows.map((row) => (row.kind === "message" ? String(row.message.id) : row.id))).toEqual([
+      "u1",
+      "entry-chart",
+      "entry-table",
+      "a1",
+      "u2",
+      "entry-trend",
+      "a2",
+      "u3",
+      "a3",
+    ]);
+    const visualRow = (id: string) =>
+      rows.find(
+        (row): row is Extract<MessagesTimelineRow, { kind: "inline-visual" }> =>
+          row.kind === "inline-visual" && row.id === `entry-${id}`,
+      )!;
+    // The first visual of each turn renders that turn's header; later visuals
+    // and the answer follow it, and the answer no longer renders it.
+    expect(visualRow("chart").turnHeaderSource?.message.id).toBe(MessageId.makeUnsafe("a1"));
+    expect(visualRow("table").turnHeaderSource).toBeUndefined();
+    expect(messageRow(rows, "a1")).toMatchObject({ turnHeaderRowId: "entry-chart" });
+    expect(visualRow("trend").turnHeaderSource?.message.id).toBe(MessageId.makeUnsafe("a2"));
+    expect(messageRow(rows, "a2")).toMatchObject({ turnHeaderRowId: "entry-trend" });
+    // Tool details stay in the header's disclosure.
+    expect(collapsedSignature(messageRow(rows, "a1")!)).toEqual(["work:w1", "narration:a0"]);
+    // A text-only turn keeps its header on its answer.
+    expect(messageRow(rows, "a3")!.turnHeaderRowId).toBeUndefined();
+    expect(messageRow(rows, "a3")!.turnHeader?.elapsed).toBeTruthy();
+    expect(collapsedSignature(messageRow(rows, "a3")!)).toEqual(["work:w3"]);
+    // Find opens folded narration on the row that renders the disclosure.
+    expect(resolveThreadFindJumpTarget(rows, { messageId: MessageId.makeUnsafe("a0") })).toEqual({
+      rowIndex: rows.indexOf(visualRow("chart")),
+      visibleMessageId: MessageId.makeUnsafe("a1"),
+      expandCollapsedWorkMessageId: MessageId.makeUnsafe("a1"),
+      collapsedNarrationMessageId: MessageId.makeUnsafe("a0"),
+    });
+
+    // While a turn runs, a visual its reply has not placed yet waits for that
+    // reply instead of showing above it and then moving into the text.
+    const live = deriveMessagesTimelineRows({
+      ...baseInput,
+      isWorking: true,
+      activeTurnInProgress: true,
+      activeTurnId: TurnId.makeUnsafe("t4"),
+      activeTurnStartedAt: "2026-01-01T00:03:00Z",
+      timelineEntries: [
+        ...settled,
+        userEntry("u4", "2026-01-01T00:03:00Z", "t4"),
+        visualEntry("live", "2026-01-01T00:03:01Z", "t4"),
+        assistantEntry("a4", "2026-01-01T00:03:02Z", { turnId: "t4", streaming: true }),
+      ],
+    });
+    expect(live.find((row) => row.id === "entry-live")).toBeUndefined();
+    expect(messageRow(live, "a4")!.turnHeaderRowId).toBeUndefined();
+  });
+
+  it("draws a visual inside the reply that places it, with no row of its own", () => {
+    const visualId = `vis_${"d".repeat(32)}`;
+    const placed: TimelineEntry = {
+      id: "entry-placed",
+      kind: "work",
+      createdAt: "2026-01-01T00:00:02Z",
+      entry: {
+        id: "placed",
+        createdAt: "2026-01-01T00:00:02Z",
+        label: "Visual: placed",
+        tone: "info",
+        activityKind: "visual.shown",
+        turnId: TurnId.makeUnsafe("t1"),
+        inlineVisual: {
+          visualId,
+          format: "components",
+          title: "placed",
+          height: 200,
+          byteLength: 100,
+          sha256: "b".repeat(64),
+        },
+      },
+    };
+    const entries = [
+      userEntry("u1", "2026-01-01T00:00:00Z", "t1"),
+      workEntry("w1", "2026-01-01T00:00:01Z", "tool 1"),
+      placed,
+      assistantEntry("a1", "2026-01-01T00:00:03Z", {
+        turnId: "t1",
+        text: `Before.\n\n\`\`\`synara-visual\n${visualId}\n\`\`\`\n\nAfter.`,
+        completedAt: "2026-01-01T00:00:04Z",
+      }),
+    ];
+    const rows = deriveMessagesTimelineRows({ ...baseInput, timelineEntries: entries });
+
+    expect(rows.find((row) => row.kind === "inline-visual")).toBeUndefined();
+    // The answer keeps its own turn header, as a text-only turn does.
+    expect(messageRow(rows, "a1")!.turnHeaderRowId).toBeUndefined();
+    expect(messageRow(rows, "a1")!.turnHeader?.elapsed).toBeTruthy();
+    expect(collectInlineVisuals(entries).get(visualId)?.title).toBe("placed");
+    // A quotation in another turn cannot move or suppress the original figure.
+    const quoted = deriveMessagesTimelineRows({
+      ...baseInput,
+      timelineEntries: [
+        ...entries.slice(0, -1),
+        assistantEntry("a1", "2026-01-01T00:00:03Z", { turnId: "t1", text: "Original answer." }),
+        userEntry("u2", "2026-01-01T00:01:00Z", "t2"),
+        assistantEntry("a2", "2026-01-01T00:01:01Z", {
+          turnId: "t2",
+          text: `\`\`\`synara-visual\n${visualId}\n\`\`\``,
+        }),
+      ],
+    });
+    expect(quoted.find((row) => row.kind === "inline-visual")?.id).toBe("entry-placed");
+    // An intermediate narration that will be folded cannot own the visible placement.
+    const narrated = deriveMessagesTimelineRows({
+      ...baseInput,
+      timelineEntries: [
+        ...entries,
+        assistantEntry("a-final", "2026-01-01T00:00:05Z", { turnId: "t1", text: "Finished." }),
+      ],
+    });
+    expect(narrated.find((row) => row.kind === "inline-visual")?.id).toBe("entry-placed");
+  });
+
   it("keeps an answered question visible while the rest of the turn collapses", () => {
     const answered: TimelineEntry = {
       id: "entry-answered",
@@ -2226,6 +2934,47 @@ describe("deriveMessagesTimelineRows", () => {
       },
     },
   });
+
+  it.each(["before", "after"] as const)(
+    "keeps a thread warning visible %s a settled reply",
+    (position) => {
+      const warning: TimelineEntry = {
+        id: "thread-warning",
+        kind: "work",
+        createdAt: "2026-01-01T00:00:02Z",
+        entry: {
+          id: "thread-warning",
+          createdAt: "2026-01-01T00:00:02Z",
+          label: "Runtime warning",
+          detail: "Approval review is unavailable.",
+          tone: "info",
+          activityKind: "runtime.warning",
+          nativeEventType: "codex.guardianWarning",
+        },
+      };
+      const assistant = assistantEntry("a1", "2026-01-01T00:00:03Z", {
+        turnId: "t1",
+        text: "Finished.",
+        completedAt: "2026-01-01T00:00:04Z",
+      });
+      const rows = deriveMessagesTimelineRows({
+        ...baseInput,
+        conversationOnly: true,
+        collapseFinishedTurns: true,
+        timelineEntries: [
+          userEntry("u1", "2026-01-01T00:00:00Z"),
+          ...(position === "before" ? [warning, assistant] : [assistant, warning]),
+        ],
+      });
+      expect(
+        rows.some(
+          (row) =>
+            row.kind === "work" &&
+            row.groupedEntries.some((entry) => entry.id === "thread-warning"),
+        ),
+      ).toBe(true);
+    },
+  );
 
   it("keeps a worker-monitor row standalone before an assistant message", () => {
     const rows = deriveMessagesTimelineRows({
@@ -2324,9 +3073,7 @@ const chunkSignature = (items: ReadonlyArray<CollapsedTurnItem>): string[] =>
   chunkCollapsedTurnItems(items).map((chunk) =>
     chunk.kind === "tool-group"
       ? `group:${chunk.id}:${chunk.entries.map((entry) => entry.id).join("+")}`
-      : chunk.kind === "background-group"
-        ? `background:${chunk.entries.map((entry) => entry.id).join("+")}`
-        : `item:${chunk.item.kind}:${String(chunk.item.id)}`,
+      : `item:${chunk.item.kind}:${String(chunk.item.id)}`,
   );
 
 describe("chunkCollapsedTurnItems", () => {
@@ -2355,7 +3102,7 @@ describe("chunkCollapsedTurnItems", () => {
     ).toEqual(["group:w1:w1+w2", "item:work:err", "group:w3:w3+w4"]);
   });
 
-  it("folds three or more background task rows in a row into one group", () => {
+  it("folds background task launches into the surrounding tool run", () => {
     const background = (id: string, status: "running" | "finished" | "stopped") =>
       toolItem(id, {
         backgroundTask: {
@@ -2371,50 +3118,45 @@ describe("chunkCollapsedTurnItems", () => {
       });
     expect(
       chunkSignature([
+        toolItem("w1"),
         background("b1", "finished"),
-        background("b2", "finished"),
-        background("b3", "finished"),
-        background("b4", "stopped"),
+        background("b2", "stopped"),
         narrationItem("a1"),
-        background("b5", "running"),
-        background("b6", "running"),
+        background("b3", "running"),
+        toolItem("w2"),
       ]),
-    ).toEqual(["background:b1+b2+b3+b4", "item:narration:a1", "item:work:b5", "item:work:b6"]);
+    ).toEqual(["group:w1:w1+b1+b2", "item:narration:a1", "group:b3:b3+w2"]);
   });
 });
 
-const planSignature = (
-  entries: ReadonlyArray<WorkLogEntry>,
-  options: { tailIsLive: boolean },
-): string[] =>
-  planWorkEntryRenderChunks(entries, options).map((chunk) => {
+const planSignature = (entries: ReadonlyArray<WorkLogEntry>): string[] =>
+  planWorkEntryRenderChunks(entries).map((chunk) => {
     const ids = chunk.entries.map((entry) => entry.id).join("+");
-    if (chunk.liveEntry) return `live(${chunk.liveEntry.id}):${ids}`;
     return chunk.summary === null ? `open:${ids}` : `collapsed:${ids}`;
   });
 
 describe("planWorkEntryRenderChunks", () => {
-  it("never collapses a run that still has running work", () => {
-    expect(
-      planSignature(
-        [
-          toolItem("w1", { toolStatus: "running" }).entry,
-          toolItem("w2").entry,
-          toolItem("think", { tone: "thinking" }).entry,
-          toolItem("w3").entry,
-          toolItem("w4").entry,
-        ],
-        { tailIsLive: false },
-      ),
-    ).toEqual(["live(w2):w1+w2", "open:think", "collapsed:w3+w4"]);
+  it("folds a run with running work behind a summary that counts it", () => {
+    const entries = [
+      toolItem("w1", { toolStatus: "running" }).entry,
+      toolItem("w2").entry,
+      toolItem("think", { tone: "thinking" }).entry,
+      toolItem("w3").entry,
+      toolItem("w4").entry,
+    ];
+    expect(planSignature(entries)).toEqual(["collapsed:w1+w2", "open:think", "collapsed:w3+w4"]);
+    const [runningRun, , settledRun] = planWorkEntryRenderChunks(entries);
+    expect(runningRun?.summary).toMatchObject({ runningCount: 1, runningLabel: "1 running" });
+    expect(settledRun?.summary).toMatchObject({ runningCount: 0, runningLabel: null });
   });
 
-  it("keeps singleton runs open: nothing to summarize", () => {
+  it("keeps singleton runs open, a running one too: nothing to summarize", () => {
     expect(
-      planSignature(
-        [toolItem("w1").entry, toolItem("think", { tone: "thinking" }).entry, toolItem("w2").entry],
-        { tailIsLive: false },
-      ),
+      planSignature([
+        toolItem("w1", { toolStatus: "running" }).entry,
+        toolItem("think", { tone: "thinking" }).entry,
+        toolItem("w2").entry,
+      ]),
     ).toEqual(["open:w1", "open:think", "open:w2"]);
   });
 });
@@ -2432,15 +3174,12 @@ describe("capOpenWorkEntryRenderChunks", () => {
   ];
 
   it("preserves collapsed summaries and uncapped boundaries while limiting open entries", () => {
-    const result = capOpenWorkEntryRenderChunks(
-      planWorkEntryRenderChunks(singletonRuns, { tailIsLive: false }),
-      {
-        expanded: false,
-        maxVisibleEntries: 0,
-        keep: "last",
-        shouldCapEntry: (entry) => entry.tone === "tool",
-      },
-    );
+    const result = capOpenWorkEntryRenderChunks(planWorkEntryRenderChunks(singletonRuns), {
+      expanded: false,
+      maxVisibleEntries: 0,
+      keep: "last",
+      shouldCapEntry: (entry) => entry.tone === "tool",
+    });
 
     expect(result.chunks.map((chunk) => chunk.entries.map((entry) => entry.id))).toEqual([
       ["w1", "w2"],
@@ -2457,15 +3196,12 @@ describe("capOpenWorkEntryRenderChunks", () => {
 
   it("never hides one or two rows behind a Show more toggle", () => {
     for (const maxVisibleEntries of [1, 2]) {
-      const result = capOpenWorkEntryRenderChunks(
-        planWorkEntryRenderChunks(singletonRuns, { tailIsLive: false }),
-        {
-          expanded: false,
-          maxVisibleEntries,
-          keep: "last",
-          shouldCapEntry: (entry) => entry.tone === "tool",
-        },
-      );
+      const result = capOpenWorkEntryRenderChunks(planWorkEntryRenderChunks(singletonRuns), {
+        expanded: false,
+        maxVisibleEntries,
+        keep: "last",
+        shouldCapEntry: (entry) => entry.tone === "tool",
+      });
       expect(result.hasOverflow).toBe(false);
       expect(result.hiddenEntryCount).toBe(0);
       expect(result.chunks.flatMap((chunk) => chunk.entries.map((entry) => entry.id))).toEqual(
@@ -2481,11 +3217,12 @@ describe("capOpenWorkEntryRenderChunks", () => {
     expect(collapsibleHiddenRowCount(4, 6)).toBe(0);
   });
 
-  it("never caps a live run: it already renders as one line", () => {
-    const chunks = planWorkEntryRenderChunks(
-      [toolItem("w1").entry, toolItem("w2").entry, toolItem("w3").entry],
-      { tailIsLive: true },
-    );
+  it("never caps a folded run: it already renders as one line", () => {
+    const chunks = planWorkEntryRenderChunks([
+      toolItem("w1").entry,
+      toolItem("w2").entry,
+      toolItem("w3").entry,
+    ]);
 
     const result = capOpenWorkEntryRenderChunks(chunks, {
       expanded: false,
@@ -2498,10 +3235,11 @@ describe("capOpenWorkEntryRenderChunks", () => {
   });
 
   it("restores every open entry when expanded while retaining overflow state", () => {
-    const result = capOpenWorkEntryRenderChunks(
-      planWorkEntryRenderChunks(singletonRuns, { tailIsLive: false }),
-      { expanded: true, maxVisibleEntries: 0, keep: "last" },
-    );
+    const result = capOpenWorkEntryRenderChunks(planWorkEntryRenderChunks(singletonRuns), {
+      expanded: true,
+      maxVisibleEntries: 0,
+      keep: "last",
+    });
 
     expect(result.chunks.flatMap((chunk) => chunk.entries.map((entry) => entry.id))).toEqual(
       singletonRuns.map((entry) => entry.id),
@@ -2518,59 +3256,18 @@ describe("multi-file edit folding", () => {
   }).entry;
 
   it("folds a lone patch that would list a column of edited-file rows", () => {
-    const [settled] = planWorkEntryRenderChunks([patch], { tailIsLive: false });
+    const [settled] = planWorkEntryRenderChunks([patch]);
 
     expect(settled?.summary?.label).toBe("Edited 3 files");
-    expect(resolveWorkEntryChunkFold(settled!)?.entries).toEqual([patch]);
-  });
-
-  it("keeps the patch's file rows behind its live line", () => {
-    const [live] = planWorkEntryRenderChunks([patch], { tailIsLive: true });
-
-    expect(live?.liveEntry).toBe(patch);
-    expect(resolveWorkEntryChunkFold(live!)?.entries).toEqual([patch]);
+    expect(settled?.entries).toEqual([patch]);
   });
 
   it("leaves a single-file edit as a plain row", () => {
     const edit = toolItem("edit", { itemType: "file_change", changedFiles: ["a.swift"] }).entry;
-    const [chunk] = planWorkEntryRenderChunks([edit], { tailIsLive: false });
+    const [chunk] = planWorkEntryRenderChunks([edit]);
 
-    expect(resolveWorkEntryChunkFold(chunk!)).toBeNull();
+    expect(chunk?.summary).toBeNull();
   });
-});
-
-describe("resolveWorkEntryChunkFold", () => {
-  it("reveals only the calls before the one a live line wears", () => {
-    const [chunk] = planWorkEntryRenderChunks(
-      [toolItem("w1").entry, toolItem("w2").entry, toolItem("w3").entry],
-      { tailIsLive: true },
-    );
-    const fold = resolveWorkEntryChunkFold(chunk!);
-
-    expect(fold?.entries.map((entry) => entry.id)).toEqual(["w1", "w2"]);
-    expect(fold?.keySuffix).toBe(":live");
-  });
-
-  it("reveals every call of a settled summary and leaves singletons unfolded", () => {
-    const [settled] = planWorkEntryRenderChunks([toolItem("w1").entry, toolItem("w2").entry], {
-      tailIsLive: false,
-    });
-    const [singleton] = planWorkEntryRenderChunks([toolItem("w1").entry], { tailIsLive: true });
-
-    expect(resolveWorkEntryChunkFold(settled!)?.entries.map((entry) => entry.id)).toEqual([
-      "w1",
-      "w2",
-    ]);
-    expect(resolveWorkEntryChunkFold(settled!)?.keySuffix).toBe("");
-    expect(resolveWorkEntryChunkFold(singleton!)).toBeNull();
-  });
-});
-
-const workRow = (id: string): MessagesTimelineRow => ({
-  kind: "work",
-  id,
-  createdAt: "2026-01-01T00:00:00Z",
-  groupedEntries: [{ id, createdAt: "2026-01-01T00:00:00Z", label: "tool", tone: "tool" }],
 });
 
 const messageRowOf = (
@@ -2600,43 +3297,284 @@ const workingRow: MessagesTimelineRow = {
   createdAt: null,
 };
 
-describe("findLastLiveWorkGroupId", () => {
-  it("returns the trailing standalone work row", () => {
+describe("findLiveToolCallTarget", () => {
+  const tool = (id: string, overrides: Partial<WorkLogEntry> = {}) => toolItem(id, overrides).entry;
+  const running = { toolStatus: "running" } as const;
+  const groupRow = (id: string, entries: WorkLogEntry[]): MessagesTimelineRow => ({
+    kind: "work",
+    id,
+    createdAt: "2026-01-01T00:00:00Z",
+    groupedEntries: entries,
+  });
+  const target = (rows: MessagesTimelineRow[]) => {
+    const found = findLiveToolCallTarget(rows);
+    return found
+      ? {
+          groupId: found.groupId,
+          chunkId: found.chunkId,
+          entryOnly: found.entryOnly === true,
+          entry: found.display?.entry.id ?? null,
+          tone: found.display?.tone ?? null,
+        }
+      : null;
+  };
+
+  it("wears only the running call and leaves the rest of its run in history", () => {
     expect(
-      findLastLiveWorkGroupId([
+      target([
         messageRowOf("u1", "user"),
-        messageRowOf("a1", "assistant", { inlineWorkGroupId: "g1" }),
-        workRow("g2"),
+        groupRow("g1", [
+          tool("w1"),
+          tool("think", { tone: "thinking" }),
+          tool("w2"),
+          tool("w3", running),
+        ]),
         workingRow,
       ]),
-    ).toBe("g2");
+    ).toEqual({ groupId: "g1", chunkId: "w3", entryOnly: true, entry: "w3", tone: "running" });
   });
 
-  it("prefers a message's inline group over its leading group", () => {
+  it("prefers a running earlier call over a finished later one", () => {
     expect(
-      findLastLiveWorkGroupId([
+      target([groupRow("g1", [tool("w1", running), tool("w2", running), tool("w3")]), workingRow]),
+    ).toEqual({ groupId: "g1", chunkId: "w2", entryOnly: true, entry: "w2", tone: "running" });
+  });
+
+  it("leaves the whole run in history once every call finished", () => {
+    expect(target([groupRow("g1", [tool("w1"), tool("w2")]), workingRow])).toBeNull();
+    expect(
+      target([groupRow("g1", [tool("w1", { toolStatus: "completed" })]), workingRow]),
+    ).toBeNull();
+  });
+
+  it("wears the newest call when it failed, until another call runs", () => {
+    const failed = tool("w2", {
+      tone: "error",
+      toolStatus: "failed",
+      activityKind: "tool.completed",
+    });
+    expect(target([groupRow("g1", [tool("w1"), failed]), workingRow])).toEqual({
+      groupId: "g1",
+      chunkId: "w2",
+      entryOnly: true,
+      entry: "w2",
+      tone: "failed",
+    });
+    expect(
+      target([groupRow("g1", [tool("w1"), failed, tool("w3", running)]), workingRow]),
+    ).toMatchObject({ chunkId: "w3", entry: "w3", tone: "running" });
+    // A failure older than the newest finished call no longer speaks.
+    expect(target([groupRow("g1", [failed, tool("w3")]), workingRow])).toBeNull();
+  });
+
+  it("shows a Codex status only while it is the newest entry", () => {
+    const status = tool("status", { itemType: "command_execution", label: "Command execution" });
+    expect(target([groupRow("g1", [tool("w1"), status]), workingRow])).toMatchObject({
+      chunkId: "status",
+      entry: "status",
+      tone: "status",
+    });
+    expect(target([groupRow("g1", [status, tool("w2")]), workingRow])).toBeNull();
+    expect(target([groupRow("g1", [status, tool("w2", running)]), workingRow])).toMatchObject({
+      chunkId: "w2",
+      entry: "w2",
+      tone: "running",
+    });
+  });
+
+  it("claims a lone call that would render as a plain row", () => {
+    expect(
+      target([
         messageRowOf("u1", "user"),
-        messageRowOf("a1", "assistant", { leadingWorkGroupId: "g1", inlineWorkGroupId: "g2" }),
+        groupRow("g1", [tool("think", { tone: "thinking" }), tool("w1", running)]),
+        workingRow,
       ]),
-    ).toBe("g2");
+    ).toEqual({ groupId: "g1", chunkId: "w1", entryOnly: true, entry: "w1", tone: "running" });
   });
 
-  it("falls back to the leading group when no inline group exists", () => {
-    expect(
-      findLastLiveWorkGroupId([
-        messageRowOf("u1", "user"),
-        messageRowOf("a1", "assistant", { leadingWorkGroupId: "g1" }),
-      ]),
-    ).toBe("g1");
+  it("claims an assistant message's inline run, never its leading one", () => {
+    const withInline: MessagesTimelineRow = {
+      ...messageRowOf("a1", "assistant", { inlineWorkGroupId: "g1" }),
+      inlineWorkEntries: [tool("w1"), tool("w2", running)],
+    } as MessagesTimelineRow;
+    const withLeading: MessagesTimelineRow = {
+      ...messageRowOf("a1", "assistant", { leadingWorkGroupId: "g1" }),
+      leadingWorkEntries: [tool("w1"), tool("w2", running)],
+    } as MessagesTimelineRow;
+
+    expect(target([withInline, workingRow])).toEqual({
+      groupId: "g1",
+      chunkId: "w2",
+      entryOnly: true,
+      entry: "w2",
+      tone: "running",
+    });
+    expect(target([withLeading, workingRow])).toBeNull();
   });
 
-  it("stops at a trailing user message: the next turn has no live group yet", () => {
+  it("returns null once assistant text follows the run", () => {
     expect(
-      findLastLiveWorkGroupId([
-        messageRowOf("a1", "assistant", { inlineWorkGroupId: "g1" }),
-        messageRowOf("u2", "user"),
+      target([
+        groupRow("g1", [tool("w1"), tool("w2", running)]),
+        messageRowOf("a1", "assistant"),
         workingRow,
       ]),
     ).toBeNull();
+  });
+
+  it("returns null without a working row", () => {
+    expect(target([groupRow("g1", [tool("w1"), tool("w2", running)])])).toBeNull();
+  });
+
+  it("returns null when narration or a rich card closes the group", () => {
+    expect(
+      target([groupRow("g1", [tool("w1"), tool("think", { tone: "thinking" })]), workingRow]),
+    ).toBeNull();
+    expect(
+      target([
+        groupRow("g1", [tool("w1"), tool("sub", { subagents: [{ threadId: "thread-1" }] })]),
+        workingRow,
+      ]),
+    ).toBeNull();
+    expect(
+      target([groupRow("g1", [tool("w1"), tool("err", { tone: "error" })]), workingRow]),
+    ).toBeNull();
+  });
+
+  it("is attached to the derived working row only while the indicator shows", () => {
+    const workTimelineEntry = (id: string, createdAt: string): TimelineEntry => ({
+      id: `entry-${id}`,
+      kind: "work",
+      createdAt,
+      entry: { id, createdAt, label: `tool ${id}`, tone: "tool", toolStatus: "running" },
+    });
+    const input = {
+      timelineEntries: [
+        {
+          id: "entry-u1",
+          kind: "message",
+          createdAt: "2026-01-01T00:00:00Z",
+          message: {
+            id: MessageId.makeUnsafe("u1"),
+            role: "user",
+            text: "ask",
+            createdAt: "2026-01-01T00:00:00Z",
+            streaming: false,
+            turnId: TurnId.makeUnsafe("turn-1"),
+          },
+        } satisfies TimelineEntry,
+        workTimelineEntry("w1", "2026-01-01T00:00:01Z"),
+        workTimelineEntry("w2", "2026-01-01T00:00:02Z"),
+      ],
+      worktreeSetup: null,
+      worktreeSetupOpen: false,
+      activeTurnStartedAt: null,
+      activeTurnInProgress: true,
+      activeTurnId: TurnId.makeUnsafe("turn-1"),
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      revertTurnCountByUserMessageId: new Map(),
+    };
+    const live = deriveMessagesTimelineRows({ ...input, isWorking: true });
+    const idle = deriveMessagesTimelineRows({ ...input, isWorking: false });
+    const workingRowOf = (rows: MessagesTimelineRow[]) =>
+      rows.find((row) => row.kind === "working");
+
+    expect(workingRowOf(live)).toMatchObject({
+      liveToolCall: {
+        chunkId: "w2",
+        entryOnly: true,
+        display: { tone: "running", entry: { id: "w2" } },
+      },
+    });
+    expect(workingRowOf(idle)).toBeUndefined();
+    expect(findLiveToolCallTarget(idle)).toBeNull();
+  });
+});
+
+describe("pickLiveToolCallDisplay", () => {
+  const tool = (id: string, overrides: Partial<WorkLogEntry> = {}) => toolItem(id, overrides).entry;
+
+  it("reads Thinking for an empty or finished run", () => {
+    expect(pickLiveToolCallDisplay([])).toBeNull();
+    expect(
+      pickLiveToolCallDisplay([tool("w1"), tool("w2", { toolStatus: "completed" })]),
+    ).toBeNull();
+  });
+
+  it("treats a failed tool-tone call like a failed error-tone one", () => {
+    expect(pickLiveToolCallDisplay([tool("w1", { toolStatus: "failed" })])).toMatchObject({
+      tone: "failed",
+    });
+  });
+});
+
+describe("live tail claim", () => {
+  const tool = (id: string, overrides: Partial<WorkLogEntry> = {}) => toolItem(id, overrides).entry;
+  const claim = { groupId: "g1", chunkId: "w1", display: null };
+  const claimingWorkingRow: MessagesTimelineRow = { ...workingRow, liveToolCall: claim };
+
+  it("removes the claimed entry, or the whole run when asked", () => {
+    const entries = [tool("w1"), tool("think", { tone: "thinking" }), tool("w2"), tool("w3")];
+    expect(withoutLiveToolCallRun(entries, "w2").map((entry) => entry.id)).toEqual(["w1", "think"]);
+    expect(withoutLiveToolCallRun(entries, "w2", true).map((entry) => entry.id)).toEqual([
+      "w1",
+      "think",
+      "w3",
+    ]);
+    expect(withoutLiveToolCallRun(entries, null)).toBe(entries);
+    expect(withoutLiveToolCallRun(entries, "missing")).toBe(entries);
+  });
+
+  it("marks a work row emptied by the claim so it leaves no gap", () => {
+    const row: MessagesTimelineRow = {
+      kind: "work",
+      id: "g1",
+      createdAt: "2026-01-01T00:00:00Z",
+      groupedEntries: [tool("w1"), tool("w2")],
+    };
+    expect(isWorkRowYieldedToLiveToolCall(row, { groupId: "g1", chunkId: "w1" })).toBe(true);
+    expect(
+      isWorkRowYieldedToLiveToolCall(row, { groupId: "g1", chunkId: "w1", entryOnly: true }),
+    ).toBe(false);
+    expect(isWorkRowYieldedToLiveToolCall(row, { groupId: "g1", chunkId: "w2" })).toBe(false);
+    expect(isWorkRowYieldedToLiveToolCall(row, { groupId: "g2", chunkId: "w1" })).toBe(false);
+    expect(isWorkRowYieldedToLiveToolCall(row, null)).toBe(false);
+  });
+
+  it("is the working row's claim, only while the indicator reads Thinking", () => {
+    const rows = [messageRowOf("u1", "user"), claimingWorkingRow];
+    expect(resolveLiveTailClaim(rows, true)).toBe(claim);
+    // Loading, startup, delivery checks and waiting labels claim nothing: the
+    // run renders settled in history.
+    expect(resolveLiveTailClaim(rows, false)).toBeNull();
+    // No working row (turn over, or worktree setup replacing it): nothing is live.
+    expect(resolveLiveTailClaim([messageRowOf("u1", "user")], true)).toBeNull();
+    expect(resolveLiveTailClaim([claimingWorkingRow, messageRowOf("u1", "user")], true)).toBeNull();
+  });
+
+  it("re-renders the working row when its line changes, not when it only re-flushes", () => {
+    const entry = tool("w1", { toolStatus: "running" });
+    const prev: MessagesTimelineRow = {
+      ...workingRow,
+      liveToolCall: { groupId: "g1", chunkId: "w1", display: { entry, tone: "running" } },
+    };
+    const sameContent: MessagesTimelineRow = {
+      ...workingRow,
+      liveToolCall: {
+        groupId: "g1",
+        chunkId: "w1",
+        display: { entry: { ...entry }, tone: "running" },
+      },
+    };
+    const finished: MessagesTimelineRow = {
+      ...workingRow,
+      liveToolCall: { groupId: "g1", chunkId: "w1", display: null },
+    };
+    const stable = computeStableMessagesTimelineRows([prev], {
+      byId: new Map([[prev.id, prev]]),
+      result: [prev],
+    });
+    expect(computeStableMessagesTimelineRows([sameContent], stable).result[0]).toBe(prev);
+    expect(computeStableMessagesTimelineRows([finished], stable).result[0]).toBe(finished);
   });
 });

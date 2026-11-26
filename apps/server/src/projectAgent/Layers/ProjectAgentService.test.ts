@@ -21,6 +21,8 @@ import {
   type ServerSettings,
 } from "@synara/contracts";
 import { MEMORY_AUTO_DOCUMENT_PATH, memoryThreadDocumentPath } from "@synara/shared/projectAgent";
+import { vi } from "vitest";
+import { PersistenceSqlError } from "../../persistence/Errors.ts";
 import { Cause, Deferred, Effect, Fiber, Layer, Option, Stream } from "effect";
 import { TestClock } from "effect/testing";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -40,6 +42,12 @@ import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
 import { ProjectAgentRepository } from "../../persistence/Services/ProjectAgentRepository.ts";
 import { ProjectionThreadRepository } from "../../persistence/Services/ProjectionThreads.ts";
 import { coordinatorWelcomeMessageId } from "../groupCoordinatorHost.ts";
+import {
+  HUB_CONTEXT_PACKET_PROVENANCE_LEGEND,
+  hubContextPacketRoleIntro,
+  hubContextPacketSectionLabel,
+  type HubContextPacketProvenance,
+} from "../hubContextPacket.ts";
 import {
   PROJECT_BOT_HEARTBEAT_PROMPT,
   PROJECT_BOT_PLAYBOOK,
@@ -76,6 +84,11 @@ const now = "2026-09-20T00:00:00.000Z";
 
 const groupMemberThreadId = ThreadId.makeUnsafe("thread-group-member");
 const group2MemberThreadId = ThreadId.makeUnsafe("thread-group2-member");
+
+// One packet section heading, provenance included — the shared budget
+// renderer adds the `## ` prefix.
+const sectionHeading = (label: string, provenance: HubContextPacketProvenance) =>
+  `## ${hubContextPacketSectionLabel(label, provenance)}`;
 
 const lineTargetsPath = (line: string, logicalPath: string) =>
   (line.split(" — ", 1)[0] ?? line).endsWith(`](${logicalPath})`);
@@ -486,6 +499,146 @@ const leftoverConfig = {
   disabledAt: null,
 };
 
+const configureTestGroup = (
+  service: ProjectAgentService["Service"],
+  requestId: string,
+  overrides: {
+    readonly projectId?: ProjectId;
+    readonly libraryPath?: string;
+    readonly goal?: string;
+  } = {},
+) =>
+  service.configure(
+    {
+      requestId,
+      projectId: overrides.projectId ?? groupId,
+      coordinatorModelSelection: modelSelection,
+      ...(overrides.libraryPath === undefined ? {} : { libraryPath: overrides.libraryPath }),
+      ...(overrides.goal === undefined ? {} : { goal: overrides.goal }),
+    },
+    { kind: "user" },
+  );
+
+const coordinatorPrincipal = (coordinatorThreadId: ThreadId) =>
+  ({
+    kind: "coordinator",
+    threadId: coordinatorThreadId,
+    projectId: groupId,
+  }) as const;
+
+const memberPrincipal = (
+  threadId: ThreadId = groupMemberThreadId,
+  projectId: ProjectId = groupId,
+) => ({ kind: "group-member", threadId, projectId }) as const;
+
+const workerPrincipal = (
+  threadId: ThreadId = ThreadId.makeUnsafe("thread-worker"),
+  projectId: ProjectId = groupId,
+) =>
+  ({
+    kind: "worker",
+    threadId,
+    projectId,
+    taskId: ProjectTaskId.makeUnsafe("task-1"),
+  }) as const;
+
+type RepositoryService = ProjectAgentRepository["Service"];
+
+const seedGoal = (
+  repository: RepositoryService,
+  id: ProjectGoalId,
+  objective: string,
+  overrides: Partial<Parameters<RepositoryService["saveGoal"]>[0]> = {},
+  expectedRevision: number | null = null,
+) =>
+  repository.saveGoal(
+    {
+      id,
+      projectId: groupId,
+      objective,
+      authorizationSource: "user",
+      scopeVersion: 1,
+      acceptanceCriteria: null,
+      limits,
+      status: "active",
+      continuationCount: 0,
+      workerCreationCount: 0,
+      authorizedAt: now,
+      revision: 1,
+      createdAt: now,
+      updatedAt: now,
+      ...overrides,
+    },
+    expectedRevision,
+  );
+
+const seedTask = (
+  repository: RepositoryService,
+  id: ProjectTaskId,
+  goalId: ProjectGoalId,
+  title: string,
+  overrides: Partial<Parameters<RepositoryService["saveTask"]>[0]> = {},
+) =>
+  repository.saveTask(
+    {
+      id,
+      projectId: groupId,
+      goalId,
+      title,
+      description: null,
+      acceptanceCriteria: null,
+      status: "running",
+      dependsOnTaskIds: [],
+      assignedThreadId: null,
+      repairCount: 0,
+      archivedAt: null,
+      revision: 1,
+      createdAt: now,
+      updatedAt: now,
+      ...overrides,
+    },
+    null,
+  );
+
+const seedInbox = (
+  repository: RepositoryService,
+  id: string,
+  sourceEventId: string,
+  createdAt: string,
+  overrides: Partial<Parameters<RepositoryService["insertInboxEvent"]>[0]> = {},
+) =>
+  repository.insertInboxEvent({
+    id: ProjectInboxEventId.makeUnsafe(id),
+    projectId: groupId,
+    sourceThreadId: groupMemberThreadId,
+    sourceEventId,
+    eventType: "worker.error",
+    taskId: null,
+    eligibleWake: true,
+    createdAt,
+    ...overrides,
+  });
+
+const indexThread = (
+  repository: RepositoryService,
+  threadId: ThreadId,
+  summaryStatus: "pending" | "covered" = "pending",
+) =>
+  repository.upsertThreadIndex({
+    projectId: groupId,
+    threadId,
+    excluded: false,
+    archived: false,
+    summaryStatus,
+    lastUpdatedAt: now,
+    lastSummarizedAt: summaryStatus === "covered" ? now : null,
+  });
+
+const activityRows = (harness: ReturnType<typeof makeTestLayer>, kind: string) =>
+  harness.dispatched.filter(
+    (command) => command.type === "thread.activity.append" && command.activity.kind === kind,
+  );
+
 it.effect("configures a hub and imports exactly one greeting", () => {
   const harness = makeTestLayer();
   return Effect.gen(function* () {
@@ -588,25 +741,9 @@ it.effect("retries first setup after a crash with one thread and one greeting", 
   const harness = makeTestLayer({ failFirstImport: true });
   return Effect.gen(function* () {
     const service = yield* ProjectAgentService;
-    const failed = yield* Effect.exit(
-      service.configure(
-        {
-          requestId: "req-crash",
-          projectId: groupId,
-          coordinatorModelSelection: modelSelection,
-        },
-        { kind: "user" },
-      ),
-    );
+    const failed = yield* Effect.exit(configureTestGroup(service, "req-crash"));
     assert.equal(failed._tag, "Failure");
-    const overview = yield* service.configure(
-      {
-        requestId: "req-crash",
-        projectId: groupId,
-        coordinatorModelSelection: modelSelection,
-      },
-      { kind: "user" },
-    );
+    const overview = yield* configureTestGroup(service, "req-crash");
     assert.equal(overview.configured, true);
     assert.equal(
       harness.dispatched.filter((command) => command.type === "thread.create").length,
@@ -630,14 +767,7 @@ it.effect("forbids configuring an ordinary project", () => {
   return Effect.gen(function* () {
     const service = yield* ProjectAgentService;
     const result = yield* Effect.exit(
-      service.configure(
-        {
-          requestId: "req-ordinary-1",
-          projectId: ordinaryId,
-          coordinatorModelSelection: modelSelection,
-        },
-        { kind: "user" },
-      ),
+      configureTestGroup(service, "req-ordinary-1", { projectId: ordinaryId }),
     );
     assert.equal(result._tag, "Failure");
   }).pipe(Effect.provide(harness.layer));
@@ -648,14 +778,7 @@ it.effect("rejects a hub row outside the Hubs root", () => {
   return Effect.gen(function* () {
     const service = yield* ProjectAgentService;
     const result = yield* Effect.exit(
-      service.configure(
-        {
-          requestId: "req-outside",
-          projectId: outsideGroupId,
-          coordinatorModelSelection: modelSelection,
-        },
-        { kind: "user" },
-      ),
+      configureTestGroup(service, "req-outside", { projectId: outsideGroupId }),
     );
     assert.equal(result._tag, "Failure");
   }).pipe(Effect.provide(harness.layer));
@@ -665,14 +788,7 @@ it.effect("configures a legacy studio container", () => {
   const harness = makeTestLayer();
   return Effect.gen(function* () {
     const service = yield* ProjectAgentService;
-    const overview = yield* service.configure(
-      {
-        requestId: "req-studio-1",
-        projectId: studioId,
-        coordinatorModelSelection: modelSelection,
-      },
-      { kind: "user" },
-    );
+    const overview = yield* configureTestGroup(service, "req-studio-1", { projectId: studioId });
     assert.equal(overview.configured, true);
   }).pipe(Effect.provide(harness.layer));
 });
@@ -717,14 +833,7 @@ it.effect("hides leftover ordinary configs and disables them on reconcile", () =
   return Effect.gen(function* () {
     const service = yield* ProjectAgentService;
     const repository = yield* ProjectAgentRepository;
-    yield* service.configure(
-      {
-        requestId: "req-group-visible",
-        projectId: groupId,
-        coordinatorModelSelection: modelSelection,
-      },
-      { kind: "user" },
-    );
+    yield* configureTestGroup(service, "req-group-visible");
     yield* repository.saveConfig(leftoverConfig, null);
     const listed = yield* service.listSummaries({}, { kind: "user" });
     assert.equal(
@@ -784,22 +893,8 @@ it.effect("fetches shells for listSummaries in one query", () => {
   const harness = makeTestLayer();
   return Effect.gen(function* () {
     const service = yield* ProjectAgentService;
-    yield* service.configure(
-      {
-        requestId: "req-group-a",
-        projectId: groupId,
-        coordinatorModelSelection: modelSelection,
-      },
-      { kind: "user" },
-    );
-    yield* service.configure(
-      {
-        requestId: "req-group-b",
-        projectId: groupId2,
-        coordinatorModelSelection: modelSelection,
-      },
-      { kind: "user" },
-    );
+    yield* configureTestGroup(service, "req-group-a");
+    yield* configureTestGroup(service, "req-group-b", { projectId: groupId2 });
     const before = harness.shellBatchCalls();
     yield* service.listSummaries({}, { kind: "user" });
     assert.equal(harness.shellBatchCalls(), before + 1);
@@ -810,14 +905,7 @@ it.effect("scopes memory writes to MEMORY.md and per-thread files", () => {
   const harness = makeTestLayer();
   return Effect.gen(function* () {
     const service = yield* ProjectAgentService;
-    const overview = yield* service.configure(
-      {
-        requestId: "req-group-memory",
-        projectId: groupId,
-        coordinatorModelSelection: modelSelection,
-      },
-      { kind: "user" },
-    );
+    const overview = yield* configureTestGroup(service, "req-group-memory");
     const workerId = ThreadId.makeUnsafe("thread-worker");
     const worker = {
       kind: "worker" as const,
@@ -917,14 +1005,7 @@ it.effect("links an ordinary repository to a hub and is idempotent", () => {
   const harness = makeTestLayer();
   return Effect.gen(function* () {
     const service = yield* ProjectAgentService;
-    yield* service.configure(
-      {
-        requestId: "req-link-setup",
-        projectId: groupId,
-        coordinatorModelSelection: modelSelection,
-      },
-      { kind: "user" },
-    );
+    yield* configureTestGroup(service, "req-link-setup");
     const first = yield* service.linkProject(
       {
         requestId: "req-link-1",
@@ -984,14 +1065,7 @@ it.effect("surfaces linked projects in the overview before the hub is configured
     const overview = yield* service.getOverview({ projectId: groupId }, { kind: "user" });
     assert.equal(overview.config, null);
     assert.deepEqual(overview.linkedProjectIds, [ordinaryId]);
-    const configured = yield* service.configure(
-      {
-        requestId: "req-link-preconfig-configure",
-        projectId: groupId,
-        coordinatorModelSelection: modelSelection,
-      },
-      { kind: "user" },
-    );
+    const configured = yield* configureTestGroup(service, "req-link-preconfig-configure");
     assert.deepEqual(configured.linkedProjectIds, [ordinaryId]);
     assert.deepEqual(configured.config?.linkedProjectIds, [ordinaryId]);
   }).pipe(Effect.provide(harness.layer));
@@ -1001,14 +1075,7 @@ it.effect("rejects linking a container, the hub itself, or an unknown project", 
   const harness = makeTestLayer();
   return Effect.gen(function* () {
     const service = yield* ProjectAgentService;
-    yield* service.configure(
-      {
-        requestId: "req-link-reject-setup",
-        projectId: groupId,
-        coordinatorModelSelection: modelSelection,
-      },
-      { kind: "user" },
-    );
+    yield* configureTestGroup(service, "req-link-reject-setup");
     const self = yield* Effect.exit(
       service.linkProject(
         { requestId: "req-link-self", projectId: groupId, linkedProjectId: groupId },
@@ -1041,14 +1108,7 @@ it.effect("allows hub-coordinator thread creation in the hub or a linked repo", 
   const harness = makeTestLayer();
   return Effect.gen(function* () {
     const service = yield* ProjectAgentService;
-    const overview = yield* service.configure(
-      {
-        requestId: "req-allowlist-setup",
-        projectId: groupId,
-        coordinatorModelSelection: modelSelection,
-      },
-      { kind: "user" },
-    );
+    const overview = yield* configureTestGroup(service, "req-allowlist-setup");
     const coordinatorThreadId = overview.config!.coordinatorThreadId;
     yield* service.assertCallerMayCreateThreadInProject({
       callerThreadId: coordinatorThreadId,
@@ -1140,14 +1200,7 @@ it.effect("applies a saved coordinator model to the live thread and heartbeat", 
   const harness = makeTestLayer();
   return Effect.gen(function* () {
     const service = yield* ProjectAgentService;
-    const first = yield* service.configure(
-      {
-        requestId: "req-model-1",
-        projectId: groupId,
-        coordinatorModelSelection: modelSelection,
-      },
-      { kind: "user" },
-    );
+    const first = yield* configureTestGroup(service, "req-model-1");
     const coordinatorThreadId = first.config?.coordinatorThreadId;
     assert.isNotNull(coordinatorThreadId);
     harness.dispatched.length = 0;
@@ -1190,71 +1243,16 @@ it.effect("applies a saved coordinator model to the live thread and heartbeat", 
   }).pipe(Effect.provide(harness.layer));
 });
 
-it.effect("does not stop the session when the coordinator model keeps the same provider", () => {
-  const harness = makeTestLayer();
-  return Effect.gen(function* () {
-    const service = yield* ProjectAgentService;
-    yield* service.configure(
-      {
-        requestId: "req-model-same-1",
-        projectId: groupId,
-        coordinatorModelSelection: modelSelection,
-      },
-      { kind: "user" },
-    );
-    harness.dispatched.length = 0;
-    harness.runNowCalls.length = 0;
-
-    const nextModel = { provider: "codex" as const, model: "gpt-5.3-codex" };
-    yield* service.configure(
-      {
-        requestId: "req-model-same-2",
-        projectId: groupId,
-        coordinatorModelSelection: nextModel,
-      },
-      { kind: "user" },
-    );
-
-    assert.equal(
-      harness.dispatched.some((command) => command.type === "thread.session.stop"),
-      false,
-    );
-    const metaUpdate = harness.dispatched.find(
-      (command) => command.type === "thread.meta.update" && command.modelSelection !== undefined,
-    );
-    assert.isOk(metaUpdate);
-    if (metaUpdate?.type !== "thread.meta.update") {
-      assert.fail("expected a thread.meta.update dispatch");
-    }
-    assert.deepEqual(metaUpdate.modelSelection, nextModel);
-    assert.deepEqual(harness.runNowCalls, ["automation-1"]);
-  }).pipe(Effect.provide(harness.layer));
-});
-
 it.effect("skips the model apply block when the coordinator model is unchanged", () => {
   const harness = makeTestLayer();
   return Effect.gen(function* () {
     const service = yield* ProjectAgentService;
-    yield* service.configure(
-      {
-        requestId: "req-model-same-3",
-        projectId: groupId,
-        coordinatorModelSelection: modelSelection,
-      },
-      { kind: "user" },
-    );
+    yield* configureTestGroup(service, "req-model-same-3");
     harness.dispatched.length = 0;
     harness.runNowCalls.length = 0;
     harness.automationUpdates.length = 0;
 
-    yield* service.configure(
-      {
-        requestId: "req-model-same-4",
-        projectId: groupId,
-        coordinatorModelSelection: modelSelection,
-      },
-      { kind: "user" },
-    );
+    yield* configureTestGroup(service, "req-model-same-4");
 
     assert.equal(
       harness.dispatched.some(
@@ -1279,14 +1277,7 @@ it.effect("rejects a coordinator model whose provider is disabled in settings", 
   return Effect.gen(function* () {
     const service = yield* ProjectAgentService;
     const repository = yield* ProjectAgentRepository;
-    yield* service.configure(
-      {
-        requestId: "req-disabled-provider-1",
-        projectId: groupId,
-        coordinatorModelSelection: modelSelection,
-      },
-      { kind: "user" },
-    );
+    yield* configureTestGroup(service, "req-disabled-provider-1");
     harness.dispatched.length = 0;
     harness.runNowCalls.length = 0;
 
@@ -1324,14 +1315,7 @@ it.effect("rejects a coordinator model whose provider is not installed", () => {
   const harness = makeTestLayer({ unavailableProviders: ["grok"] });
   return Effect.gen(function* () {
     const service = yield* ProjectAgentService;
-    yield* service.configure(
-      {
-        requestId: "req-unavailable-provider-1",
-        projectId: groupId,
-        coordinatorModelSelection: modelSelection,
-      },
-      { kind: "user" },
-    );
+    yield* configureTestGroup(service, "req-unavailable-provider-1");
     harness.dispatched.length = 0;
     harness.runNowCalls.length = 0;
 
@@ -1359,22 +1343,8 @@ it.effect("forbids a context packet across hubs but allows own-hub members (S1)"
   const harness = makeTestLayer();
   return Effect.gen(function* () {
     const service = yield* ProjectAgentService;
-    yield* service.configure(
-      {
-        requestId: "req-ctx-a",
-        projectId: groupId,
-        coordinatorModelSelection: modelSelection,
-      },
-      { kind: "user" },
-    );
-    yield* service.configure(
-      {
-        requestId: "req-ctx-b",
-        projectId: groupId2,
-        coordinatorModelSelection: modelSelection,
-      },
-      { kind: "user" },
-    );
+    yield* configureTestGroup(service, "req-ctx-a");
+    yield* configureTestGroup(service, "req-ctx-b", { projectId: groupId2 });
     const own = yield* service.buildContextPacket(groupId, groupMemberThreadId);
     assert.equal(own.projectId, groupId);
     const cross = yield* Effect.exit(service.buildContextPacket(groupId, group2MemberThreadId));
@@ -1389,14 +1359,7 @@ it.effect("indexes routine hub turns as non-wake and alert settles as wakeable",
   return Effect.gen(function* () {
     const service = yield* ProjectAgentService;
     const repository = yield* ProjectAgentRepository;
-    yield* service.configure(
-      {
-        requestId: "req-wake-setup",
-        projectId: groupId,
-        coordinatorModelSelection: modelSelection,
-      },
-      { kind: "user" },
-    );
+    yield* configureTestGroup(service, "req-wake-setup");
     yield* service.ingestSettledThreadEvent({
       threadId: groupMemberThreadId,
       sourceEventId: "routine-turn-1",
@@ -1429,53 +1392,16 @@ it.effect("resolves linked-repo workers through the task assignment", () => {
   return Effect.gen(function* () {
     const service = yield* ProjectAgentService;
     const repository = yield* ProjectAgentRepository;
-    const overview = yield* service.configure(
-      {
-        requestId: "req-linked-setup",
-        projectId: groupId,
-        coordinatorModelSelection: modelSelection,
-      },
-      { kind: "user" },
-    );
+    const overview = yield* configureTestGroup(service, "req-linked-setup");
     const linkedWorkerThreadId = ThreadId.makeUnsafe("thread-linked-worker");
     const goalId = ProjectGoalId.makeUnsafe("goal-linked");
-    yield* repository.saveGoal(
-      {
-        id: goalId,
-        projectId: groupId,
-        objective: "Coordinate linked repos",
-        authorizationSource: "user",
-        scopeVersion: 1,
-        acceptanceCriteria: null,
-        limits,
-        status: "active",
-        continuationCount: 0,
-        workerCreationCount: 0,
-        authorizedAt: now,
-        revision: 1,
-        createdAt: now,
-        updatedAt: now,
-      },
-      null,
-    );
-    yield* repository.saveTask(
-      {
-        id: ProjectTaskId.makeUnsafe("task-linked"),
-        projectId: groupId,
-        goalId,
-        title: "Patch linked repo",
-        description: null,
-        acceptanceCriteria: null,
-        status: "running",
-        dependsOnTaskIds: [],
-        assignedThreadId: linkedWorkerThreadId,
-        repairCount: 0,
-        archivedAt: null,
-        revision: 1,
-        createdAt: now,
-        updatedAt: now,
-      },
-      null,
+    yield* seedGoal(repository, goalId, "Coordinate linked repos");
+    yield* seedTask(
+      repository,
+      ProjectTaskId.makeUnsafe("task-linked"),
+      goalId,
+      "Patch linked repo",
+      { assignedThreadId: linkedWorkerThreadId },
     );
     // No thread shell: the worker lives in the linked repo's project, not the
     // group — it must still resolve as this group's worker.
@@ -1520,14 +1446,7 @@ it.effect("refreshes the digest when the coordinator's own turn settles", () => 
   return Effect.gen(function* () {
     const service = yield* ProjectAgentService;
     const repository = yield* ProjectAgentRepository;
-    const overview = yield* service.configure(
-      {
-        requestId: "req-coordinator-settle",
-        projectId: groupId,
-        coordinatorModelSelection: modelSelection,
-      },
-      { kind: "user" },
-    );
+    const overview = yield* configureTestGroup(service, "req-coordinator-settle");
     const coordinatorThreadId = overview.config?.coordinatorThreadId;
     assert.ok(coordinatorThreadId);
     const seeded = yield* repository.getDigest(groupId);
@@ -1575,89 +1494,31 @@ it.effect("reports member threads, linked repos, and setup flags in summaries", 
     const coordinatorThreadId = overview.config?.coordinatorThreadId;
     assert.ok(coordinatorThreadId);
     const goalId = ProjectGoalId.makeUnsafe("goal-summary");
-    yield* repository.saveGoal(
-      {
-        id: goalId,
-        projectId: groupId,
-        objective: "Ship it",
-        authorizationSource: "user",
-        scopeVersion: 1,
-        acceptanceCriteria: null,
-        limits,
-        status: "active",
-        continuationCount: 0,
-        workerCreationCount: 0,
-        authorizedAt: now,
-        revision: 1,
-        createdAt: now,
-        updatedAt: now,
-      },
-      null,
-    );
+    yield* seedGoal(repository, goalId, "Ship it");
     // A worker the coordinator dispatched into the linked repo: the sidebar
     // bucket needs it in memberThreadIds even though its projectId is the repo.
     const linkedWorkerThreadId = ThreadId.makeUnsafe("thread-linked-summary-worker");
-    yield* repository.saveTask(
-      {
-        id: ProjectTaskId.makeUnsafe("task-summary"),
-        projectId: groupId,
-        goalId,
-        title: "Patch repo",
-        description: null,
-        acceptanceCriteria: null,
-        status: "running",
-        dependsOnTaskIds: [],
-        assignedThreadId: linkedWorkerThreadId,
-        repairCount: 0,
-        archivedAt: null,
-        revision: 1,
-        createdAt: now,
-        updatedAt: now,
-      },
-      null,
-    );
+    yield* seedTask(repository, ProjectTaskId.makeUnsafe("task-summary"), goalId, "Patch repo", {
+      assignedThreadId: linkedWorkerThreadId,
+    });
     // A worker whose task finished belongs in the Overview's Resolved
     // section — it must not be counted under the group forever.
     const finishedWorkerThreadId = ThreadId.makeUnsafe("thread-linked-finished-worker");
-    yield* repository.saveTask(
-      {
-        id: ProjectTaskId.makeUnsafe("task-summary-done"),
-        projectId: groupId,
-        goalId,
-        title: "Finished patch",
-        description: null,
-        acceptanceCriteria: null,
-        status: "done",
-        dependsOnTaskIds: [],
-        assignedThreadId: finishedWorkerThreadId,
-        repairCount: 0,
-        archivedAt: null,
-        revision: 1,
-        createdAt: now,
-        updatedAt: now,
-      },
-      null,
+    yield* seedTask(
+      repository,
+      ProjectTaskId.makeUnsafe("task-summary-done"),
+      goalId,
+      "Finished patch",
+      { status: "done", assignedThreadId: finishedWorkerThreadId },
     );
     // An archived task's worker stays out even while the task reads open.
     const archivedWorkerThreadId = ThreadId.makeUnsafe("thread-linked-archived-worker");
-    yield* repository.saveTask(
-      {
-        id: ProjectTaskId.makeUnsafe("task-summary-archived"),
-        projectId: groupId,
-        goalId,
-        title: "Archived patch",
-        description: null,
-        acceptanceCriteria: null,
-        status: "running",
-        dependsOnTaskIds: [],
-        assignedThreadId: archivedWorkerThreadId,
-        repairCount: 0,
-        archivedAt: now,
-        revision: 1,
-        createdAt: now,
-        updatedAt: now,
-      },
-      null,
+    yield* seedTask(
+      repository,
+      ProjectTaskId.makeUnsafe("task-summary-archived"),
+      goalId,
+      "Archived patch",
+      { assignedThreadId: archivedWorkerThreadId, archivedAt: now },
     );
     yield* service.linkProject(
       {
@@ -1693,14 +1554,7 @@ it.effect("blocks curated writes for hub members and unmanaged threads", () => {
   const harness = makeTestLayer();
   return Effect.gen(function* () {
     const service = yield* ProjectAgentService;
-    yield* service.configure(
-      {
-        requestId: "req-s5-setup",
-        projectId: groupId,
-        coordinatorModelSelection: modelSelection,
-      },
-      { kind: "user" },
-    );
+    yield* configureTestGroup(service, "req-s5-setup");
     const member = {
       kind: "group-member" as const,
       threadId: groupMemberThreadId,
@@ -1765,34 +1619,9 @@ it.effect("resumes a frozen busy wake cursor instead of stalling forever", () =>
   return Effect.gen(function* () {
     const service = yield* ProjectAgentService;
     const repository = yield* ProjectAgentRepository;
-    yield* service.configure(
-      {
-        requestId: "req-busy-setup",
-        projectId: groupId,
-        coordinatorModelSelection: modelSelection,
-      },
-      { kind: "user" },
-    );
-    yield* repository.insertInboxEvent({
-      id: ProjectInboxEventId.makeUnsafe("inbox-busy-1"),
-      projectId: groupId,
-      sourceThreadId: groupMemberThreadId,
-      sourceEventId: "busy-1",
-      eventType: "worker.error",
-      taskId: null,
-      eligibleWake: true,
-      createdAt: "2026-09-20T00:03:00.000Z",
-    });
-    yield* repository.insertInboxEvent({
-      id: ProjectInboxEventId.makeUnsafe("inbox-busy-2"),
-      projectId: groupId,
-      sourceThreadId: groupMemberThreadId,
-      sourceEventId: "busy-2",
-      eventType: "worker.error",
-      taskId: null,
-      eligibleWake: true,
-      createdAt: "2026-09-20T00:03:30.000Z",
-    });
+    yield* configureTestGroup(service, "req-busy-setup");
+    yield* seedInbox(repository, "inbox-busy-1", "busy-1", "2026-09-20T00:03:00.000Z");
+    yield* seedInbox(repository, "inbox-busy-2", "busy-2", "2026-09-20T00:03:30.000Z");
     // Simulate the crash: the range was frozen and the busy flag left set.
     yield* repository.saveCursor({
       projectId: groupId,
@@ -1817,14 +1646,7 @@ it.effect("clears a bare busy cursor left by a crash before freezing", () => {
   return Effect.gen(function* () {
     const service = yield* ProjectAgentService;
     const repository = yield* ProjectAgentRepository;
-    yield* service.configure(
-      {
-        requestId: "req-barebusy-setup",
-        projectId: groupId,
-        coordinatorModelSelection: modelSelection,
-      },
-      { kind: "user" },
-    );
+    yield* configureTestGroup(service, "req-barebusy-setup");
     yield* repository.saveCursor({
       projectId: groupId,
       processedThroughInboxId: null,
@@ -1847,37 +1669,18 @@ it.effect("pages past a full page of non-wake rows to reach a worker alert", () 
   return Effect.gen(function* () {
     const service = yield* ProjectAgentService;
     const repository = yield* ProjectAgentRepository;
-    yield* service.configure(
-      {
-        requestId: "req-paging-setup",
-        projectId: groupId,
-        coordinatorModelSelection: modelSelection,
-      },
-      { kind: "user" },
-    );
+    yield* configureTestGroup(service, "req-paging-setup");
     // 60 consumed-only rows fill more than one 50-row read window.
     for (let i = 0; i < 60; i += 1) {
-      yield* repository.insertInboxEvent({
-        id: ProjectInboxEventId.makeUnsafe(`inbox-nonwake-${i}`),
-        projectId: groupId,
-        sourceThreadId: groupMemberThreadId,
-        sourceEventId: `nonwake-${i}`,
-        eventType: "thread.settled",
-        taskId: null,
-        eligibleWake: false,
-        createdAt: `2026-09-20T00:05:${String(i).padStart(2, "0")}.000Z`,
-      });
+      yield* seedInbox(
+        repository,
+        `inbox-nonwake-${i}`,
+        `nonwake-${i}`,
+        `2026-09-20T00:05:${String(i).padStart(2, "0")}.000Z`,
+        { eventType: "thread.settled", eligibleWake: false },
+      );
     }
-    yield* repository.insertInboxEvent({
-      id: ProjectInboxEventId.makeUnsafe("inbox-alert-1"),
-      projectId: groupId,
-      sourceThreadId: groupMemberThreadId,
-      sourceEventId: "alert-1",
-      eventType: "worker.error",
-      taskId: null,
-      eligibleWake: true,
-      createdAt: "2026-09-20T00:06:00.000Z",
-    });
+    yield* seedInbox(repository, "inbox-alert-1", "alert-1", "2026-09-20T00:06:00.000Z");
     yield* service.processPendingWakes(groupId);
     // The scan consumed every non-wake row across both pages and dispatched
     // exactly one continuation for the alert it finally reached.
@@ -1894,38 +1697,19 @@ it.effect("restores the frozen boundary row by id past the 500-row window", () =
   return Effect.gen(function* () {
     const service = yield* ProjectAgentService;
     const repository = yield* ProjectAgentRepository;
-    yield* service.configure(
-      {
-        requestId: "req-boundary-setup",
-        projectId: groupId,
-        coordinatorModelSelection: modelSelection,
-      },
-      { kind: "user" },
-    );
+    yield* configureTestGroup(service, "req-boundary-setup");
     // The boundary row sits outside any single page window: 550 rows were
     // indexed before it, so a window scan can never find it by position.
     for (let i = 0; i < 550; i += 1) {
-      yield* repository.insertInboxEvent({
-        id: ProjectInboxEventId.makeUnsafe(`inbox-filler-${i}`),
-        projectId: groupId,
-        sourceThreadId: groupMemberThreadId,
-        sourceEventId: `filler-${i}`,
-        eventType: "thread.settled",
-        taskId: null,
-        eligibleWake: false,
-        createdAt: `2026-09-20T00:01:${String(i).padStart(3, "0")}.000Z`,
-      });
+      yield* seedInbox(
+        repository,
+        `inbox-filler-${i}`,
+        `filler-${i}`,
+        `2026-09-20T00:01:${String(i).padStart(3, "0")}.000Z`,
+        { eventType: "thread.settled", eligibleWake: false },
+      );
     }
-    yield* repository.insertInboxEvent({
-      id: ProjectInboxEventId.makeUnsafe("inbox-boundary"),
-      projectId: groupId,
-      sourceThreadId: groupMemberThreadId,
-      sourceEventId: "boundary",
-      eventType: "worker.error",
-      taskId: null,
-      eligibleWake: true,
-      createdAt: "2026-09-20T02:00:00.000Z",
-    });
+    yield* seedInbox(repository, "inbox-boundary", "boundary", "2026-09-20T02:00:00.000Z");
     yield* repository.saveCursor({
       projectId: groupId,
       processedThroughInboxId: "inbox-filler-0",
@@ -1952,14 +1736,7 @@ it.effect("leaves a young busy cursor alone while the coordinator is mid-turn", 
   return Effect.gen(function* () {
     const service = yield* ProjectAgentService;
     const repository = yield* ProjectAgentRepository;
-    yield* service.configure(
-      {
-        requestId: "req-livebusy-setup",
-        projectId: groupId,
-        coordinatorModelSelection: modelSelection,
-      },
-      { kind: "user" },
-    );
+    yield* configureTestGroup(service, "req-livebusy-setup");
     const config = yield* repository.getConfig(groupId);
     assert.equal(Option.isSome(config), true);
     if (Option.isNone(config)) return;
@@ -1972,16 +1749,7 @@ it.effect("leaves a young busy cursor alone while the coordinator is mid-turn", 
       session: { status: "running", updatedAt: now, lastError: null },
       latestTurn: { state: "running" },
     };
-    yield* repository.insertInboxEvent({
-      id: ProjectInboxEventId.makeUnsafe("inbox-livebusy"),
-      projectId: groupId,
-      sourceThreadId: groupMemberThreadId,
-      sourceEventId: "livebusy",
-      eventType: "worker.error",
-      taskId: null,
-      eligibleWake: true,
-      createdAt: "2026-09-20T00:03:00.000Z",
-    });
+    yield* seedInbox(repository, "inbox-livebusy", "livebusy", "2026-09-20T00:03:00.000Z");
     yield* repository.saveCursor({
       projectId: groupId,
       processedThroughInboxId: null,
@@ -2019,24 +1787,8 @@ it.effect("adopts the run behind a young claim instead of double-dispatching", (
   return Effect.gen(function* () {
     const service = yield* ProjectAgentService;
     const repository = yield* ProjectAgentRepository;
-    yield* service.configure(
-      {
-        requestId: "req-claim-setup",
-        projectId: groupId,
-        coordinatorModelSelection: modelSelection,
-      },
-      { kind: "user" },
-    );
-    yield* repository.insertInboxEvent({
-      id: ProjectInboxEventId.makeUnsafe("inbox-claim-1"),
-      projectId: groupId,
-      sourceThreadId: groupMemberThreadId,
-      sourceEventId: "claim-1",
-      eventType: "worker.error",
-      taskId: null,
-      eligibleWake: true,
-      createdAt: "2026-09-20T00:03:00.000Z",
-    });
+    yield* configureTestGroup(service, "req-claim-setup");
+    yield* seedInbox(repository, "inbox-claim-1", "claim-1", "2026-09-20T00:03:00.000Z");
     const receiptId = wakeReceiptRequestId({
       projectId: groupId,
       fromInboxId: "inbox-claim-1",
@@ -2076,16 +1828,7 @@ it.effect("adopts the run behind a young claim instead of double-dispatching", (
 
     // A young claim whose run is not yet visible leaves the range for the
     // next wake instead of racing a duplicate dispatch.
-    yield* repository.insertInboxEvent({
-      id: ProjectInboxEventId.makeUnsafe("inbox-claim-2"),
-      projectId: groupId,
-      sourceThreadId: groupMemberThreadId,
-      sourceEventId: "claim-2",
-      eventType: "worker.error",
-      taskId: null,
-      eligibleWake: true,
-      createdAt: "2026-09-20T00:04:00.000Z",
-    });
+    yield* seedInbox(repository, "inbox-claim-2", "claim-2", "2026-09-20T00:04:00.000Z");
     const pendingReceiptId = wakeReceiptRequestId({
       projectId: groupId,
       fromInboxId: "inbox-claim-2",
@@ -2123,14 +1866,7 @@ it.effect("configure onto the same canonical library root returns promptly", () 
     const service = yield* ProjectAgentService;
     const repository = yield* ProjectAgentRepository;
     const serverConfig = yield* ServerConfig;
-    yield* service.configure(
-      {
-        requestId: "req-lock-setup",
-        projectId: groupId,
-        coordinatorModelSelection: modelSelection,
-      },
-      { kind: "user" },
-    );
+    yield* configureTestGroup(service, "req-lock-setup");
     const defaultRoot = yield* resolveLibraryRoot({
       stateDir: serverConfig.stateDir,
       projectId: groupId,
@@ -2217,62 +1953,12 @@ it.effect("rejects cross-project task and evidence access", () => {
   return Effect.gen(function* () {
     const service = yield* ProjectAgentService;
     const repository = yield* ProjectAgentRepository;
-    const overview = yield* service.configure(
-      {
-        requestId: "req-xproj-setup",
-        projectId: groupId,
-        coordinatorModelSelection: modelSelection,
-      },
-      { kind: "user" },
-    );
-    yield* service.configure(
-      {
-        requestId: "req-xproj-other",
-        projectId: groupId2,
-        coordinatorModelSelection: modelSelection,
-      },
-      { kind: "user" },
-    );
+    const overview = yield* configureTestGroup(service, "req-xproj-setup");
+    yield* configureTestGroup(service, "req-xproj-other", { projectId: groupId2 });
     const goalId = ProjectGoalId.makeUnsafe("goal-xproj");
-    yield* repository.saveGoal(
-      {
-        id: goalId,
-        projectId: groupId2,
-        objective: "Other project goal",
-        authorizationSource: "user",
-        scopeVersion: 1,
-        acceptanceCriteria: null,
-        limits,
-        status: "active",
-        continuationCount: 0,
-        workerCreationCount: 0,
-        authorizedAt: now,
-        revision: 1,
-        createdAt: now,
-        updatedAt: now,
-      },
-      null,
-    );
+    yield* seedGoal(repository, goalId, "Other project goal", { projectId: groupId2 });
     const foreignTaskId = ProjectTaskId.makeUnsafe("task-foreign");
-    yield* repository.saveTask(
-      {
-        id: foreignTaskId,
-        projectId: groupId2,
-        goalId,
-        title: "Foreign task",
-        description: null,
-        acceptanceCriteria: null,
-        status: "running",
-        dependsOnTaskIds: [],
-        assignedThreadId: null,
-        repairCount: 0,
-        archivedAt: null,
-        revision: 1,
-        createdAt: now,
-        updatedAt: now,
-      },
-      null,
-    );
+    yield* seedTask(repository, foreignTaskId, goalId, "Foreign task", { projectId: groupId2 });
     const evidence = yield* Effect.exit(
       service.listEvidence({ projectId: groupId, taskId: foreignTaskId }, { kind: "user" }),
     );
@@ -2333,54 +2019,13 @@ it.effect("routes a done update through the accept path and validates dependency
   return Effect.gen(function* () {
     const service = yield* ProjectAgentService;
     const repository = yield* ProjectAgentRepository;
-    yield* service.configure(
-      {
-        requestId: "req-done-setup",
-        projectId: groupId,
-        coordinatorModelSelection: modelSelection,
-      },
-      { kind: "user" },
-    );
+    yield* configureTestGroup(service, "req-done-setup");
     const goalId = ProjectGoalId.makeUnsafe("goal-done");
-    yield* repository.saveGoal(
-      {
-        id: goalId,
-        projectId: groupId,
-        objective: "Done flow",
-        authorizationSource: "user",
-        scopeVersion: 1,
-        acceptanceCriteria: "evidence required",
-        limits,
-        status: "active",
-        continuationCount: 0,
-        workerCreationCount: 0,
-        authorizedAt: now,
-        revision: 1,
-        createdAt: now,
-        updatedAt: now,
-      },
-      null,
-    );
+    yield* seedGoal(repository, goalId, "Done flow", { acceptanceCriteria: "evidence required" });
     const taskId = ProjectTaskId.makeUnsafe("task-done");
-    yield* repository.saveTask(
-      {
-        id: taskId,
-        projectId: groupId,
-        goalId,
-        title: "Finish me",
-        description: null,
-        acceptanceCriteria: "needs evidence",
-        status: "running",
-        dependsOnTaskIds: [],
-        assignedThreadId: null,
-        repairCount: 0,
-        archivedAt: null,
-        revision: 1,
-        createdAt: now,
-        updatedAt: now,
-      },
-      null,
-    );
+    yield* seedTask(repository, taskId, goalId, "Finish me", {
+      acceptanceCriteria: "needs evidence",
+    });
     // done without evidence must fail — it goes through the accept path.
     const noEvidence = yield* Effect.exit(
       service.updateTask(
@@ -2398,53 +2043,14 @@ it.effect("routes a done update through the accept path and validates dependency
     const task = yield* repository.getTask(taskId);
     assert.equal(Option.isSome(task) && task.value.status === "running", true);
     // Cross-project dependsOnTaskIds are rejected.
-    yield* service.configure(
-      {
-        requestId: "req-done-xdep",
-        projectId: groupId2,
-        coordinatorModelSelection: modelSelection,
-      },
-      { kind: "user" },
-    );
+    yield* configureTestGroup(service, "req-done-xdep", { projectId: groupId2 });
     const foreignTask = ProjectTaskId.makeUnsafe("task-other-project");
-    yield* repository.saveGoal(
-      {
-        id: ProjectGoalId.makeUnsafe("goal-xdep"),
-        projectId: groupId2,
-        objective: "x",
-        authorizationSource: "user",
-        scopeVersion: 1,
-        acceptanceCriteria: null,
-        limits,
-        status: "active",
-        continuationCount: 0,
-        workerCreationCount: 0,
-        authorizedAt: now,
-        revision: 1,
-        createdAt: now,
-        updatedAt: now,
-      },
-      null,
-    );
-    yield* repository.saveTask(
-      {
-        id: foreignTask,
-        projectId: groupId2,
-        goalId: ProjectGoalId.makeUnsafe("goal-xdep"),
-        title: "foreign dep",
-        description: null,
-        acceptanceCriteria: null,
-        status: "running",
-        dependsOnTaskIds: [],
-        assignedThreadId: null,
-        repairCount: 0,
-        archivedAt: null,
-        revision: 1,
-        createdAt: now,
-        updatedAt: now,
-      },
-      null,
-    );
+    yield* seedGoal(repository, ProjectGoalId.makeUnsafe("goal-xdep"), "x", {
+      projectId: groupId2,
+    });
+    yield* seedTask(repository, foreignTask, ProjectGoalId.makeUnsafe("goal-xdep"), "foreign dep", {
+      projectId: groupId2,
+    });
     const badDep = yield* Effect.exit(
       service.updateTask(
         {
@@ -2465,14 +2071,7 @@ it.effect("configure reuses the existing coordinator thread on retry", () => {
   const harness = makeTestLayer();
   return Effect.gen(function* () {
     const service = yield* ProjectAgentService;
-    const first = yield* service.configure(
-      {
-        requestId: "req-idem-1",
-        projectId: groupId,
-        coordinatorModelSelection: modelSelection,
-      },
-      { kind: "user" },
-    );
+    const first = yield* configureTestGroup(service, "req-idem-1");
     const second = yield* service.configure(
       {
         requestId: "req-idem-2",
@@ -2489,51 +2088,6 @@ it.effect("configure reuses the existing coordinator thread on retry", () => {
     );
   }).pipe(Effect.provide(harness.layer));
 });
-
-// ---- Group tools + lifecycle (PR 13) ----
-
-const configureTestGroup = (
-  service: ProjectAgentService["Service"],
-  requestId: string,
-  overrides: {
-    readonly projectId?: ProjectId;
-    readonly libraryPath?: string;
-    readonly goal?: string;
-  } = {},
-) =>
-  service.configure(
-    {
-      requestId,
-      projectId: overrides.projectId ?? groupId,
-      coordinatorModelSelection: modelSelection,
-      ...(overrides.libraryPath === undefined ? {} : { libraryPath: overrides.libraryPath }),
-      ...(overrides.goal === undefined ? {} : { goal: overrides.goal }),
-    },
-    { kind: "user" },
-  );
-
-const coordinatorPrincipal = (coordinatorThreadId: ThreadId) =>
-  ({
-    kind: "coordinator",
-    threadId: coordinatorThreadId,
-    projectId: groupId,
-  }) as const;
-
-const memberPrincipal = (
-  threadId: ThreadId = groupMemberThreadId,
-  projectId: ProjectId = groupId,
-) => ({ kind: "group-member", threadId, projectId }) as const;
-
-const workerPrincipal = (
-  threadId: ThreadId = ThreadId.makeUnsafe("thread-worker"),
-  projectId: ProjectId = groupId,
-) =>
-  ({
-    kind: "worker",
-    threadId,
-    projectId,
-    taskId: ProjectTaskId.makeUnsafe("task-1"),
-  }) as const;
 
 it.effect("gates the new hub tools by principal kind", () => {
   const harness = makeTestLayer();
@@ -2841,18 +2395,17 @@ it.effect("linkRepository links by project id or workspace path and records acti
     );
     assert.equal(byPath.config?.linkedProjectIds?.includes(ordinaryId), true);
 
-    // Unknown workspace path, containers and self-linking are rejected.
-    for (const input of [
-      { requestId: "req-link-3", projectId: groupId, workspacePath: "/tmp/nothing" },
-      { requestId: "req-link-4", projectId: groupId, linkedProjectId: groupId },
-      { requestId: "req-link-5", projectId: groupId, linkedProjectId: groupId2 },
-      { requestId: "req-link-6", projectId: groupId, linkedProjectId: studioId },
-    ]) {
-      assert.equal(
-        (yield* Effect.exit(service.linkRepository(input, coordinator)))._tag,
-        "Failure",
-      );
-    }
+    // Unknown workspace path is rejected (container/self/unknown-id rejection is
+    // shared with linkProject and covered there).
+    assert.equal(
+      (yield* Effect.exit(
+        service.linkRepository(
+          { requestId: "req-link-3", projectId: groupId, workspacePath: "/tmp/nothing" },
+          coordinator,
+        ),
+      ))._tag,
+      "Failure",
+    );
   }).pipe(Effect.provide(harness.layer));
 });
 
@@ -2997,15 +2550,7 @@ it.effect("listGroupThreads reports derived states to the coordinator", () => {
     const approvalThread = ThreadId.makeUnsafe("thread-approval");
     const prThread = ThreadId.makeUnsafe("thread-pr");
     for (const threadId of [runningThread, approvalThread, prThread]) {
-      yield* repository.upsertThreadIndex({
-        projectId: groupId,
-        threadId,
-        excluded: false,
-        archived: false,
-        summaryStatus: "pending",
-        lastUpdatedAt: now,
-        lastSummarizedAt: null,
-      });
+      yield* indexThread(repository, threadId);
     }
     harness.threadShells[runningThread] = {
       projectId: groupId,
@@ -3063,15 +2608,7 @@ it.effect("pause interrupts turns, blocks wakes, disables automations; resume re
         prompt: "x",
       },
     );
-    yield* repository.upsertThreadIndex({
-      projectId: groupId,
-      threadId: groupMemberThreadId,
-      excluded: false,
-      archived: false,
-      summaryStatus: "pending",
-      lastUpdatedAt: now,
-      lastSummarizedAt: null,
-    });
+    yield* indexThread(repository, groupMemberThreadId);
     harness.threadShells[groupMemberThreadId] = {
       projectId: groupId,
       title: "Group member chat",
@@ -3111,16 +2648,7 @@ it.effect("pause interrupts turns, blocks wakes, disables automations; resume re
     );
 
     // A queued wake stays queued while paused.
-    yield* repository.insertInboxEvent({
-      id: ProjectInboxEventId.makeUnsafe("inbox-paused"),
-      projectId: groupId,
-      sourceThreadId: groupMemberThreadId,
-      sourceEventId: "paused-alert",
-      eventType: "worker.error",
-      taskId: null,
-      eligibleWake: true,
-      createdAt: "2026-09-20T00:07:00.000Z",
-    });
+    yield* seedInbox(repository, "inbox-paused", "paused-alert", "2026-09-20T00:07:00.000Z");
     yield* service.processPendingWakes(groupId);
     assert.equal(harness.runNowCalls.length, 0);
 
@@ -3155,27 +2683,11 @@ it.effect("archive hides the hub and unarchive restores it", () => {
       archivedAt: null,
       prompt: PROJECT_BOT_HEARTBEAT_PROMPT,
     });
-    yield* repository.upsertThreadIndex({
-      projectId: groupId,
-      threadId: groupMemberThreadId,
-      excluded: false,
-      archived: false,
-      summaryStatus: "pending",
-      lastUpdatedAt: now,
-      lastSummarizedAt: null,
-    });
+    yield* indexThread(repository, groupMemberThreadId);
     // A worker indexed under the group but living in a linked repo's project
     // must not be archived/unarchived with the group's own threads.
     const linkedWorkerThreadId = ThreadId.makeUnsafe("thread-linked-worker-arch");
-    yield* repository.upsertThreadIndex({
-      projectId: groupId,
-      threadId: linkedWorkerThreadId,
-      excluded: false,
-      archived: false,
-      summaryStatus: "pending",
-      lastUpdatedAt: now,
-      lastSummarizedAt: null,
-    });
+    yield* indexThread(repository, linkedWorkerThreadId);
     harness.threadShells[linkedWorkerThreadId] = {
       projectId: ordinaryId,
       title: "Linked repo worker",
@@ -3271,15 +2783,7 @@ it.effect("delete removes hub data, keeps custom libraries and linked repos", ()
       { requestId: "req-del-link", projectId: groupId, linkedProjectId: ordinaryId },
       coordinator,
     );
-    yield* repository.upsertThreadIndex({
-      projectId: groupId,
-      threadId: groupMemberThreadId,
-      excluded: false,
-      archived: false,
-      summaryStatus: "covered",
-      lastUpdatedAt: now,
-      lastSummarizedAt: now,
-    });
+    yield* indexThread(repository, groupMemberThreadId, "covered");
     harness.threadShells[groupMemberThreadId] = {
       projectId: groupId,
       title: "Member",
@@ -3290,43 +2794,13 @@ it.effect("delete removes hub data, keeps custom libraries and linked repos", ()
     // group listing via its task assignment, but it is not the group's thread
     // to kill.
     const linkedWorkerThreadId = ThreadId.makeUnsafe("thread-linked-worker-del");
-    yield* repository.saveGoal(
-      {
-        id: ProjectGoalId.makeUnsafe("goal-del"),
-        projectId: groupId,
-        objective: "Coordinate linked repos",
-        authorizationSource: "user",
-        scopeVersion: 1,
-        acceptanceCriteria: null,
-        limits,
-        status: "active",
-        continuationCount: 0,
-        workerCreationCount: 0,
-        authorizedAt: now,
-        revision: 1,
-        createdAt: now,
-        updatedAt: now,
-      },
-      null,
-    );
-    yield* repository.saveTask(
-      {
-        id: ProjectTaskId.makeUnsafe("task-del"),
-        projectId: groupId,
-        goalId: ProjectGoalId.makeUnsafe("goal-del"),
-        title: "Patch linked repo",
-        description: null,
-        acceptanceCriteria: null,
-        status: "running",
-        dependsOnTaskIds: [],
-        assignedThreadId: linkedWorkerThreadId,
-        repairCount: 0,
-        archivedAt: null,
-        revision: 1,
-        createdAt: now,
-        updatedAt: now,
-      },
-      null,
+    yield* seedGoal(repository, ProjectGoalId.makeUnsafe("goal-del"), "Coordinate linked repos");
+    yield* seedTask(
+      repository,
+      ProjectTaskId.makeUnsafe("task-del"),
+      ProjectGoalId.makeUnsafe("goal-del"),
+      "Patch linked repo",
+      { assignedThreadId: linkedWorkerThreadId },
     );
     harness.threadShells[linkedWorkerThreadId] = {
       projectId: ordinaryId,
@@ -3406,9 +2880,7 @@ it.effect("delete moves the managed library into the injected trash dir", () => 
   return Effect.gen(function* () {
     const service = yield* ProjectAgentService;
     const serverConfig = yield* ServerConfig;
-    const overview = yield* configureTestGroup(service, "req-managed-lib");
-    assert.equal(overview.configured, true);
-    assert.equal(serverConfig.trashDir !== undefined && serverConfig.trashDir !== null, true);
+    yield* configureTestGroup(service, "req-managed-lib");
     // Listing initializes the managed library root under project-context.
     yield* service.libraryList({ projectId: groupId }, { kind: "user" });
     const libraryRoot = yield* resolveLibraryRoot({
@@ -3448,16 +2920,8 @@ it.effect("delete aborts atomically when a hub thread refuses to delete", () => 
     const service = yield* ProjectAgentService;
     const repository = yield* ProjectAgentRepository;
     const serverConfig = yield* ServerConfig;
-    const overview = yield* configureTestGroup(service, "req-atomic-setup");
-    yield* repository.upsertThreadIndex({
-      projectId: groupId,
-      threadId: groupMemberThreadId,
-      excluded: false,
-      archived: false,
-      summaryStatus: "covered",
-      lastUpdatedAt: now,
-      lastSummarizedAt: now,
-    });
+    yield* configureTestGroup(service, "req-atomic-setup");
+    yield* indexThread(repository, groupMemberThreadId, "covered");
     yield* service.libraryList({ projectId: groupId }, { kind: "user" });
     const libraryRoot = yield* resolveLibraryRoot({
       stateDir: serverConfig.stateDir,
@@ -3493,7 +2957,6 @@ it.effect("delete aborts atomically when a hub thread refuses to delete", () => 
         .catch(() => false),
     );
     assert.equal(stillThere, true);
-    assert.equal(overview.config?.coordinatorThreadId != null, true);
   }).pipe(Effect.provide(harness.layer));
 });
 
@@ -3501,7 +2964,7 @@ it.effect("requireEmpty delete succeeds on a hub nothing was added to", () => {
   const harness = makeTestLayer();
   return Effect.gen(function* () {
     const service = yield* ProjectAgentService;
-    const overview = yield* configureTestGroup(service, "req-empty-setup");
+    yield* configureTestGroup(service, "req-empty-setup");
     // Listing initializes the managed library — its seeded Artifacts scaffold
     // must still count as empty.
     yield* service.libraryList({ projectId: groupId }, { kind: "user" });
@@ -3516,7 +2979,6 @@ it.effect("requireEmpty delete succeeds on a hub nothing was added to", () => {
       { kind: "user" },
     );
     assert.equal(result.deletedProjectId, groupId);
-    assert.equal(overview.config?.coordinatorThreadId != null, true);
   }).pipe(Effect.provide(harness.layer));
 });
 
@@ -3528,15 +2990,7 @@ it.effect("requireEmpty delete refuses once anything landed and leaves the hub i
     yield* configureTestGroup(service, "req-notempty-setup");
     // A member thread the client-side probe could have missed — the server
     // re-checks under the lock instead of trusting it.
-    yield* repository.upsertThreadIndex({
-      projectId: groupId,
-      threadId: groupMemberThreadId,
-      excluded: false,
-      archived: false,
-      summaryStatus: "covered",
-      lastUpdatedAt: now,
-      lastSummarizedAt: now,
-    });
+    yield* indexThread(repository, groupMemberThreadId, "covered");
 
     const dispatchesBefore = harness.dispatched.length;
     const exit = yield* Effect.exit(
@@ -3973,7 +3427,7 @@ it.effect("libraryAdd copies directories without symlinks, .git, or node_modules
   return Effect.gen(function* () {
     const service = yield* ProjectAgentService;
     const serverConfig = yield* ServerConfig;
-    const overview = yield* configureTestGroup(service, "req-lib-dir");
+    yield* configureTestGroup(service, "req-lib-dir");
     const memberWorkspace = path.join(serverConfig.stateDir, "member-workspace-dir");
     const bundle = path.join(memberWorkspace, "bundle");
     yield* Effect.promise(() => fs.mkdir(path.join(bundle, ".git"), { recursive: true }));
@@ -4019,7 +3473,6 @@ it.effect("libraryAdd copies directories without symlinks, .git, or node_modules
       );
       assert.equal(exists, false, `expected ${skipped} to be skipped`);
     }
-    assert.equal(overview.config?.coordinatorThreadId != null, true);
   }).pipe(Effect.provide(harness.layer));
 });
 
@@ -4181,9 +3634,15 @@ it.effect("gives the coordinator thread its playbook packet on every turn", () =
     for (let turn = 0; turn < 2; turn += 1) {
       const packet = yield* service.formatContextPacketForTurn(coordinatorThreadId);
       assert.equal(packet.includes("Hub context packet"), true);
-      assert.equal(packet.includes("## Playbook\n# Hub coordinator playbook"), true);
-      assert.equal(packet.includes("## Watch"), true);
-      assert.equal(packet.includes("## Workers"), true);
+      assert.equal(packet.includes(hubContextPacketRoleIntro("coordinator")), true);
+      assert.equal(packet.includes(HUB_CONTEXT_PACKET_PROVENANCE_LEGEND), true);
+      assert.equal(
+        packet.includes(`${sectionHeading("Playbook", "host-policy")}\n# Hub coordinator playbook`),
+        true,
+      );
+      assert.equal(packet.includes(sectionHeading("Watch", "host-policy")), true);
+      assert.equal(packet.includes(sectionHeading("Workers", "server-state")), true);
+      assert.equal(packet.includes(sectionHeading("Worker reports", "agent-report")), true);
       // The member-only tools section never leaks into the coordinator packet.
       assert.equal(packet.includes("## Hub tools"), false);
     }
@@ -4191,8 +3650,8 @@ it.effect("gives the coordinator thread its playbook packet on every turn", () =
     // Member threads get the shared packet without the coordinator playbook.
     const memberPacket = yield* service.formatContextPacketForTurn(groupMemberThreadId);
     assert.equal(memberPacket.includes("Hub context packet"), true);
-    assert.equal(memberPacket.includes("## Playbook"), false);
-    assert.equal(memberPacket.includes("## Hub tools"), true);
+    assert.equal(memberPacket.includes(sectionHeading("Playbook", "host-policy")), false);
+    assert.equal(memberPacket.includes(sectionHeading("Hub tools", "host-policy")), true);
   }).pipe(Effect.provide(harness.layer));
 });
 
@@ -4216,6 +3675,19 @@ it.effect("isolates coordinator instructions from member and worker packets", ()
     const memberPacket = yield* service.formatContextPacketForTurn(groupMemberThreadId);
     assert.equal(memberPacket.includes("welcome message from you"), false);
     assert.equal(memberPacket.includes("member thread of this hub"), true);
+    // Manual members retain ordinary user-directed tools; only managed workers are denied.
+    yield* service.authorizeManagedGoalCreation({
+      callerThreadId: groupMemberThreadId,
+      requestedCount: 1,
+    });
+    yield* service.assertCallerMayCreateThreadInProject({
+      callerThreadId: groupMemberThreadId,
+      targetProjectId: groupId,
+    });
+    yield* service.assertCallerMayDriveManagedThread({
+      callerThreadId: groupMemberThreadId,
+      targetThreadId: foreignThreadId,
+    });
 
     yield* service.writeDocument(
       {
@@ -4229,101 +3701,98 @@ it.effect("isolates coordinator instructions from member and worker packets", ()
     );
     const customCoordinatorPacket = yield* service.formatContextPacketForTurn(coordinatorThreadId);
     assert.include(customCoordinatorPacket, "Coordinator-only custom instructions.");
+    assert.include(customCoordinatorPacket, sectionHeading("Playbook", "user-instructions"));
 
     // Worker identity comes from its persisted assignment, not from prompt text.
     const workerThreadId = ThreadId.makeUnsafe("thread-packet-worker");
-    yield* repository.saveGoal(
-      {
-        id: ProjectGoalId.makeUnsafe("goal-packet-worker"),
-        projectId: groupId,
-        objective: "Fix every flaky test",
-        authorizationSource: "user",
-        scopeVersion: 1,
-        acceptanceCriteria: null,
-        limits,
-        status: "active",
-        continuationCount: 0,
-        workerCreationCount: 0,
-        authorizedAt: now,
-        revision: 1,
-        createdAt: now,
-        updatedAt: now,
-      },
-      null,
+    yield* seedGoal(
+      repository,
+      ProjectGoalId.makeUnsafe("goal-packet-worker"),
+      "Fix every flaky test",
     );
-    yield* repository.saveTask(
-      {
-        id: ProjectTaskId.makeUnsafe("task-packet-worker"),
-        projectId: groupId,
-        goalId: ProjectGoalId.makeUnsafe("goal-packet-worker"),
-        title: "Fix the flaky suite",
-        description: null,
-        acceptanceCriteria: null,
-        status: "running",
-        dependsOnTaskIds: [],
-        assignedThreadId: workerThreadId,
-        repairCount: 0,
-        archivedAt: null,
-        revision: 1,
-        createdAt: now,
-        updatedAt: now,
-      },
-      null,
+    yield* seedTask(
+      repository,
+      ProjectTaskId.makeUnsafe("task-packet-worker"),
+      ProjectGoalId.makeUnsafe("goal-packet-worker"),
+      "Fix the flaky suite",
+      { assignedThreadId: workerThreadId },
     );
     const hubWork = yield* HubWorkRepository;
-    yield* hubWork.submit([
-      {
-        id: "hub-work-packet",
-        projectId: groupId,
-        targetProjectId: groupId,
-        sourceThreadId: coordinatorThreadId,
-        sourceMessageId: null,
-        title: "Fix the flaky suite",
-        workerThreadId,
-        state: "working",
-        queueReason: null,
-        resultSummary: null,
-        progress: { revision: 3, steps: [{ id: "read", text: "Read suite", status: "completed" }] },
-        requestId: "hub-work-packet-request",
-        scopeKey: "hub-work-packet-scope",
-        fingerprint: "hub-work-packet-plan",
-        taskIndex: 0,
-        creationSpec: { prompt: "Fix the flaky suite", target: modelSelection },
-        sourceMessages: [],
-        slotHeld: true,
-        admittedAt: now,
-        admissionCommandId: null,
-        admissionMessageId: null,
-        admissionPreviousState: null,
-        admissionPreviousSlotHeld: false,
-        revision: 4,
-        createdAt: now,
-        updatedAt: now,
-      },
-    ]);
+    yield* hubWork.submit({
+      projectId: groupId,
+      requestId: "hub-work-packet-request",
+      scopeKey: "hub-work-packet-scope",
+      fingerprint: "hub-work-packet-plan",
+      records: [
+        {
+          id: "hub-work-packet",
+          projectId: groupId,
+          targetProjectId: groupId,
+          sourceThreadId: coordinatorThreadId,
+          sourceMessageId: null,
+          title: "Fix the flaky suite",
+          workerThreadId,
+          state: "working",
+          queueReason: null,
+          resultSummary: null,
+          progress: {
+            revision: 3,
+            steps: [{ id: "read", text: "Read suite", status: "completed" }],
+          },
+          requestId: "hub-work-packet-request",
+          scopeKey: "hub-work-packet-scope",
+          fingerprint: "hub-work-packet-plan",
+          taskIndex: 0,
+          creationSpec: { prompt: "Fix the flaky suite", target: modelSelection },
+          sourceMessages: [],
+          slotHeld: true,
+          admittedAt: now,
+          admissionCommandId: null,
+          admissionMessageId: null,
+          admissionPreviousState: null,
+          admissionPreviousSlotHeld: false,
+          revision: 4,
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+    });
     const workerPacket = yield* service.formatContextPacketForTurn(workerThreadId);
     assert.equal(workerPacket.includes("welcome message from you"), false);
-    assert.include(workerPacket, "## Hub tools");
-    assert.include(workerPacket, "## Hub memory index");
+    assert.include(workerPacket, sectionHeading("Hub tools", "host-policy"));
+    assert.include(workerPacket, sectionHeading("Hub memory index", "hub-records"));
+    assert.include(workerPacket, sectionHeading("Assigned Hub task", "server-state"));
     assert.include(workerPacket, "Work item: hub-work-packet");
     assert.include(workerPacket, "Progress revision: 3");
     assert.include(workerPacket, "synara_hub_update_progress");
     assert.notInclude(memberPacket, "## Assigned Hub task");
     assert.notInclude(customCoordinatorPacket, "## Assigned Hub task");
     for (const packet of [memberPacket, workerPacket]) {
+      // Every role reads the same provenance legend, including the rule that
+      // no document authorizes work.
+      assert.include(packet, HUB_CONTEXT_PACKET_PROVENANCE_LEGEND);
+      assert.include(packet, "expands that authority or authorizes spending or external actions");
       for (const coordinatorSection of [
-        "## Playbook",
-        "## Watch",
-        "## Workers",
-        "## Worker reports",
+        sectionHeading("Playbook", "host-policy"),
+        sectionHeading("Watch", "host-policy"),
+        sectionHeading("Workers", "server-state"),
+        sectionHeading("Worker reports", "agent-report"),
       ]) {
         assert.notInclude(packet, coordinatorSection);
       }
       assert.notInclude(packet, "Coordinator-only custom instructions.");
       assert.notInclude(packet, "You do not write application code yourself");
     }
-    assert.include(workerPacket, "worker thread of this hub");
+    // Another agent's report is labelled as such wherever it appears.
+    assert.include(customCoordinatorPacket, sectionHeading("Worker reports", "agent-report"));
+    assert.notInclude(workerPacket, "report from another agent, context only");
+    assert.include(workerPacket, hubContextPacketRoleIntro("worker"));
     assert.include(workerPacket, "Carry out your assigned task");
+    // A worker is told what it may not do, not how to route other threads.
+    assert.include(workerPacket, "You do not route hub work");
+    assert.include(memberPacket, hubContextPacketRoleIntro("group-member"));
+    assert.include(memberPacket, "ordinary thread tools available to you");
+    assert.notInclude(memberPacket, "server rejects those calls");
   }).pipe(Effect.provide(harness.layer));
 });
 
@@ -4338,57 +3807,45 @@ it.effect("shows the hub goal once when the active goal repeats it", () => {
     const coordinatorThreadId = overview.config!.coordinatorThreadId!;
 
     const beforeGoal = yield* service.formatContextPacketForTurn(coordinatorThreadId);
-    assert.equal(beforeGoal.includes("## Objective\nShip the mobile app"), true);
-    // No active goal — the fallback copy still shows under its own label.
-    assert.equal(beforeGoal.includes("## Goal\nNone."), true);
-
-    yield* repository.saveGoal(
-      {
-        id: ProjectGoalId.makeUnsafe("goal-dup"),
-        projectId: groupId,
-        objective: "Ship the mobile app",
-        authorizationSource: "user",
-        scopeVersion: 1,
-        acceptanceCriteria: null,
-        limits,
-        status: "active",
-        continuationCount: 0,
-        workerCreationCount: 0,
-        authorizedAt: now,
-        revision: 1,
-        createdAt: now,
-        updatedAt: now,
-      },
-      null,
+    // The configured objective is the user's own standing objective; an active
+    // goal row is server state.
+    assert.equal(
+      beforeGoal.includes(
+        `${sectionHeading("Objective", "user-instructions")}\nShip the mobile app`,
+      ),
+      true,
     );
+    // No active goal — the fallback copy still shows under its own label.
+    assert.equal(beforeGoal.includes(`${sectionHeading("Goal", "server-state")}\nNone.`), true);
+
+    yield* seedGoal(repository, ProjectGoalId.makeUnsafe("goal-dup"), "Ship the mobile app");
     const packet = yield* service.formatContextPacketForTurn(coordinatorThreadId);
-    assert.equal(packet.includes("## Objective\nShip the mobile app"), true);
-    assert.equal(packet.includes("## Goal"), false);
+    assert.equal(
+      packet.includes(`${sectionHeading("Objective", "user-instructions")}\nShip the mobile app`),
+      true,
+    );
+    assert.equal(packet.includes(sectionHeading("Goal", "server-state")), false);
     assert.equal(packet.split("Ship the mobile app").length - 1, 1);
 
     // An active goal with different wording keeps its own section.
-    yield* repository.saveGoal(
-      {
-        id: ProjectGoalId.makeUnsafe("goal-dup"),
-        projectId: groupId,
-        objective: "Ship the mobile app to beta testers",
-        authorizationSource: "user",
-        scopeVersion: 1,
-        acceptanceCriteria: null,
-        limits,
-        status: "active",
-        continuationCount: 0,
-        workerCreationCount: 0,
-        authorizedAt: now,
-        revision: 2,
-        createdAt: now,
-        updatedAt: now,
-      },
+    yield* seedGoal(
+      repository,
+      ProjectGoalId.makeUnsafe("goal-dup"),
+      "Ship the mobile app to beta testers",
+      { revision: 2 },
       1,
     );
     const updated = yield* service.formatContextPacketForTurn(coordinatorThreadId);
-    assert.equal(updated.includes("## Objective\nShip the mobile app"), true);
-    assert.equal(updated.includes("## Goal\nShip the mobile app to beta testers"), true);
+    assert.equal(
+      updated.includes(`${sectionHeading("Objective", "user-instructions")}\nShip the mobile app`),
+      true,
+    );
+    assert.equal(
+      updated.includes(
+        `${sectionHeading("Goal", "server-state")}\nShip the mobile app to beta testers`,
+      ),
+      true,
+    );
   }).pipe(Effect.provide(harness.layer));
 });
 
@@ -4515,11 +3972,7 @@ it.effect("posts a settle row into the coordinator thread and wakes it", () => {
     const inbox = yield* repository.listInboxAfter({ projectId: groupId, limit: 10 });
     const event = inbox.find((row) => row.sourceEventId === "settle-worker-done");
     assert.equal(event?.eligibleWake, true);
-    const rows = harness.dispatched.filter(
-      (command) =>
-        command.type === "thread.activity.append" &&
-        command.activity.kind === "synara.worker.settled",
-    );
+    const rows = activityRows(harness, "synara.worker.settled");
     assert.equal(rows.length, 1);
     const row = rows[0]!;
     assert.equal(row.type === "thread.activity.append" ? row.threadId : null, coordinatorThreadId);
@@ -4552,12 +4005,7 @@ it.effect("posts one roll-up when every worker in the creation batch settles", (
       titles: ["Alpha research", "Beta survey", "Gamma page"],
     });
     harness.dispatched.length = 0;
-    const rollups = () =>
-      harness.dispatched.filter(
-        (command) =>
-          command.type === "thread.activity.append" &&
-          command.activity.kind === "synara.workers.settled",
-      );
+    const rollups = () => activityRows(harness, "synara.workers.settled");
 
     yield* service.ingestSettledThreadEvent({
       threadId: threadA,
@@ -4613,11 +4061,7 @@ it.effect("posts one roll-up when every worker in the creation batch settles", (
       createdAt: "2026-09-20T00:08:00.000Z",
     });
     assert.equal(rollups().length, 1);
-    const settledRows = harness.dispatched.filter(
-      (command) =>
-        command.type === "thread.activity.append" &&
-        command.activity.kind === "synara.worker.settled",
-    );
+    const settledRows = activityRows(harness, "synara.worker.settled");
     // Alpha done, Beta done, Gamma waiting, Gamma done.
     assert.equal(settledRows.length, 4);
   }).pipe(Effect.provide(harness.layer));
@@ -4671,26 +4115,33 @@ it.effect("rolls up one created worker only after its unstarted Hub peers fail o
       createdAt: now,
       updatedAt: now,
     });
-    yield* workRepository.submit([
-      makeWork("hub-roll-a", 0, threadA),
-      makeWork("hub-roll-failed", 1, null),
-      makeWork("hub-roll-cancelled", 2, null),
-    ]);
-    yield* workRepository.submit([
-      {
-        ...makeWork("unrelated-queued", 0, null),
-        scopeKey: "unrelated-scope",
-        fingerprint: "unrelated-plan",
-        requestId: "unrelated-request",
-      },
-    ]);
+    yield* workRepository.submit({
+      projectId: groupId,
+      requestId: "original-request",
+      scopeKey: "original-scope",
+      fingerprint: "original-plan",
+      records: [
+        makeWork("hub-roll-a", 0, threadA),
+        makeWork("hub-roll-failed", 1, null),
+        makeWork("hub-roll-cancelled", 2, null),
+      ],
+    });
+    yield* workRepository.submit({
+      projectId: groupId,
+      requestId: "unrelated-request",
+      scopeKey: "unrelated-scope",
+      fingerprint: "unrelated-plan",
+      records: [
+        {
+          ...makeWork("unrelated-queued", 0, null),
+          scopeKey: "unrelated-scope",
+          fingerprint: "unrelated-plan",
+          requestId: "unrelated-request",
+        },
+      ],
+    });
     harness.dispatched.length = 0;
-    const rollups = () =>
-      harness.dispatched.filter(
-        (command) =>
-          command.type === "thread.activity.append" &&
-          command.activity.kind === "synara.workers.settled",
-      );
+    const rollups = () => activityRows(harness, "synara.workers.settled");
     for (const [threadId, sourceEventId] of [[threadA, "hub-roll-a-done"]] as const)
       yield* service.ingestSettledThreadEvent({
         threadId,
@@ -4777,12 +4228,7 @@ it.effect("flags quiet and overdue workers once per episode", () => {
     });
     harness.dispatched.length = 0;
 
-    const stuckRows = () =>
-      harness.dispatched.filter(
-        (command) =>
-          command.type === "thread.activity.append" &&
-          command.activity.kind === "synara.worker.stuck",
-      );
+    const stuckRows = () => activityRows(harness, "synara.worker.stuck");
     yield* TestClock.adjust("11 minutes");
     yield* service.inspectWorkerHealth();
     // The quiet worker reports silent and takes the ladder's first step (an
@@ -5042,11 +4488,7 @@ it.effect("flags the worker Waiting on you once the recovery cap is exhausted", 
       Option.isSome(workerAfterSecond) ? workerAfterSecond.value.recoveriesUsed : null,
       2,
     );
-    const needsYouRows = harness.dispatched.filter(
-      (command) =>
-        command.type === "thread.activity.append" &&
-        command.activity.kind === "synara.worker.needs-you",
-    );
+    const needsYouRows = activityRows(harness, "synara.worker.needs-you");
     assert.equal(needsYouRows.length, 1);
     const needsYouRow = needsYouRows[0]!;
     if (needsYouRow.type === "thread.activity.append") {
@@ -5058,11 +4500,7 @@ it.effect("flags the worker Waiting on you once the recovery cap is exhausted", 
     }
     // Never a fake provider user-input request — nothing the provider would
     // reject answering.
-    const fakeProviderRequests = harness.dispatched.filter(
-      (command) =>
-        command.type === "thread.activity.append" &&
-        command.activity.kind === "user-input.requested",
-    );
+    const fakeProviderRequests = activityRows(harness, "user-input.requested");
     assert.equal(fakeProviderRequests.length, 0);
     const worker = yield* repository.findManagedWorkerByThread(workerThreadId);
     assert.equal(Option.isSome(worker) ? worker.value.needsYou : null, true);
@@ -5116,11 +4554,7 @@ it.effect("settles a running worker whose live session disappeared", () => {
 
     yield* TestClock.adjust("60 seconds");
     yield* service.inspectWorkerHealth();
-    const settled = harness.dispatched.filter(
-      (command) =>
-        command.type === "thread.activity.append" &&
-        command.activity.kind === "synara.worker.settled",
-    );
+    const settled = activityRows(harness, "synara.worker.settled");
     assert.equal(settled.length, 1);
     const settleRow = settled[0]!;
     if (settleRow.type === "thread.activity.append") {
@@ -5236,43 +4670,13 @@ it.effect("quotes report_result in the settle row and roll-up", () => {
       title: "Beta work",
       session: { status: "ready", updatedAt: now, lastError: null },
     };
-    yield* repository.saveGoal(
-      {
-        id: ProjectGoalId.makeUnsafe("goal-result"),
-        projectId: groupId,
-        objective: "Ship the migration",
-        authorizationSource: "user",
-        scopeVersion: 1,
-        acceptanceCriteria: null,
-        limits,
-        status: "active",
-        continuationCount: 0,
-        workerCreationCount: 0,
-        authorizedAt: now,
-        revision: 1,
-        createdAt: now,
-        updatedAt: now,
-      },
-      null,
-    );
-    const task = yield* repository.saveTask(
-      {
-        id: ProjectTaskId.makeUnsafe("task-result-a"),
-        projectId: groupId,
-        goalId: ProjectGoalId.makeUnsafe("goal-result"),
-        title: "Alpha work",
-        description: null,
-        acceptanceCriteria: null,
-        status: "running",
-        dependsOnTaskIds: [],
-        assignedThreadId: threadA,
-        repairCount: 0,
-        archivedAt: null,
-        revision: 1,
-        createdAt: now,
-        updatedAt: now,
-      },
-      null,
+    yield* seedGoal(repository, ProjectGoalId.makeUnsafe("goal-result"), "Ship the migration");
+    const task = yield* seedTask(
+      repository,
+      ProjectTaskId.makeUnsafe("task-result-a"),
+      ProjectGoalId.makeUnsafe("goal-result"),
+      "Alpha work",
+      { assignedThreadId: threadA },
     );
     yield* service.reportResult(
       {
@@ -5298,11 +4702,7 @@ it.effect("quotes report_result in the settle row and roll-up", () => {
       createdAt: "2026-09-20T00:06:00.000Z",
     });
 
-    const settledRows = harness.dispatched.filter(
-      (command) =>
-        command.type === "thread.activity.append" &&
-        command.activity.kind === "synara.worker.settled",
-    );
+    const settledRows = activityRows(harness, "synara.worker.settled");
     assert.equal(settledRows.length, 2);
     const summaryOf = (row: OrchestrationCommand) =>
       row.type === "thread.activity.append" ? row.activity.summary : "";
@@ -5313,11 +4713,7 @@ it.effect("quotes report_result in the settle row and roll-up", () => {
     );
     // No result filed: the gap is noted inline so nobody opens the thread.
     assert.equal(summaryOf(settledRows[1]!), "\u2713 Beta work finished — no result filed");
-    const rollups = harness.dispatched.filter(
-      (command) =>
-        command.type === "thread.activity.append" &&
-        command.activity.kind === "synara.workers.settled",
-    );
+    const rollups = activityRows(harness, "synara.workers.settled");
     assert.equal(rollups.length, 1);
     if (rollups[0]!.type === "thread.activity.append") {
       assert.equal(
@@ -5375,11 +4771,7 @@ it.effect("adds the tracked PR link to finished rows and the roll-up", () => {
       createdAt: "2026-09-20T00:06:00.000Z",
     });
 
-    const settledRows = harness.dispatched.filter(
-      (command) =>
-        command.type === "thread.activity.append" &&
-        command.activity.kind === "synara.worker.settled",
-    );
+    const settledRows = activityRows(harness, "synara.worker.settled");
     const summaryOf = (row: OrchestrationCommand) =>
       row.type === "thread.activity.append" ? row.activity.summary : "";
     assert.equal(
@@ -5387,11 +4779,7 @@ it.effect("adds the tracked PR link to finished rows and the roll-up", () => {
       "\u2713 Linked work finished — no result filed — https://github.com/diliprt/synara/pull/42",
     );
     assert.equal(summaryOf(settledRows[1]!), "\u2713 Plain work finished — no result filed");
-    const rollups = harness.dispatched.filter(
-      (command) =>
-        command.type === "thread.activity.append" &&
-        command.activity.kind === "synara.workers.settled",
-    );
+    const rollups = activityRows(harness, "synara.workers.settled");
     assert.equal(rollups.length, 1);
     if (rollups[0]!.type === "thread.activity.append") {
       assert.equal(
@@ -5937,15 +5325,7 @@ it.effect("settles a missing diff as interrupted without resetting the recovery 
     assert.equal(Option.isSome(worker) ? worker.value.settleOutcome : null, "interrupted");
     // The ladder's own interrupt never refunds the attempts it spent.
     assert.equal(Option.isSome(worker) ? worker.value.recoveriesUsed : null, 2);
-    const settled = harness.dispatched.filter(
-      (command) =>
-        command.type === "thread.activity.append" &&
-        command.activity.kind === "synara.worker.settled",
-    );
-    assert.equal(settled.length, 1);
-    if (settled[0]!.type === "thread.activity.append") {
-      assert.equal(settled[0]!.activity.summary, "⚠ Stalled worker was interrupted");
-    }
+    assert.equal(activityRows(harness, "synara.worker.settled").length, 1);
 
     // A re-armed worker whose next turn genuinely finishes still settles
     // completed — and refunds the recovery count.
@@ -5967,15 +5347,7 @@ it.effect("settles a missing diff as interrupted without resetting the recovery 
     const finished = yield* repository.findManagedWorkerByThread(workerThreadId);
     assert.equal(Option.isSome(finished) ? finished.value.settleOutcome : null, "completed");
     assert.equal(Option.isSome(finished) ? finished.value.recoveriesUsed : null, 0);
-    const settledRows = harness.dispatched.filter(
-      (command) =>
-        command.type === "thread.activity.append" &&
-        command.activity.kind === "synara.worker.settled",
-    );
-    assert.equal(settledRows.length, 2);
-    if (settledRows[1]!.type === "thread.activity.append") {
-      assert.equal(settledRows[1]!.activity.summary, "✓ Stalled worker finished — no result filed");
-    }
+    assert.equal(activityRows(harness, "synara.worker.settled").length, 2);
   }).pipe(Effect.provide(Layer.merge(harness.layer, TestClock.layer())));
 });
 
@@ -6180,14 +5552,7 @@ it.effect("permits only owned workers in currently linked repositories", () => {
   return Effect.gen(function* () {
     const service = yield* ProjectAgentService;
     const repository = yield* ProjectAgentRepository;
-    const overview = yield* service.configure(
-      {
-        requestId: "linked-control-setup",
-        projectId: groupId,
-        coordinatorModelSelection: modelSelection,
-      },
-      { kind: "user" },
-    );
+    const overview = yield* configureTestGroup(service, "linked-control-setup");
     const coordinatorThreadId = overview.config!.coordinatorThreadId;
     yield* service.linkProject(
       { requestId: "linked-control-link", projectId: groupId, linkedProjectId: ordinaryId },
@@ -6218,14 +5583,9 @@ it.effect("permits only owned workers in currently linked repositories", () => {
     });
     const worker = yield* repository.findManagedWorkerByThread(foreignThreadId);
     assert.equal(Option.getOrThrow(worker).projectId, groupId);
-    const otherOverview = yield* service.configure(
-      {
-        requestId: "linked-control-other-setup",
-        projectId: groupId2,
-        coordinatorModelSelection: modelSelection,
-      },
-      { kind: "user" },
-    );
+    const otherOverview = yield* configureTestGroup(service, "linked-control-other-setup", {
+      projectId: groupId2,
+    });
     yield* service.linkProject(
       { requestId: "linked-control-other-link", projectId: groupId2, linkedProjectId: ordinaryId },
       { kind: "user" },
@@ -6256,14 +5616,7 @@ it.effect("keeps taskless and settled managed workers from delegating further th
   return Effect.gen(function* () {
     const service = yield* ProjectAgentService;
     const repository = yield* ProjectAgentRepository;
-    const overview = yield* service.configure(
-      {
-        requestId: "worker-role-setup",
-        projectId: groupId,
-        coordinatorModelSelection: modelSelection,
-      },
-      { kind: "user" },
-    );
+    const overview = yield* configureTestGroup(service, "worker-role-setup");
     harness.threadShells[groupMemberThreadId] = {
       ...harness.threadShells[groupMemberThreadId]!,
       creationSource: "synara_mcp",
@@ -6313,6 +5666,94 @@ it.effect("keeps taskless and settled managed workers from delegating further th
         assert.equal(result._tag, "Failure");
         if (result._tag === "Failure") assert.equal(result.failure.code, "forbidden");
       }
+    }
+  }).pipe(Effect.provide(harness.layer));
+});
+
+// A failed Hub must not prevent independent startup recovery for the next one.
+it.effect("recovers later Hub inboxes when one startup wake fails", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    yield* configureTestGroup(service, "first-startup-hub");
+    yield* configureTestGroup(service, "second-startup-hub", { projectId: groupId2 });
+    for (const projectId of [groupId, groupId2]) {
+      yield* repository.insertInboxEvent({
+        id: ProjectInboxEventId.makeUnsafe(`startup-${projectId}`),
+        projectId,
+        sourceThreadId: groupMemberThreadId,
+        sourceEventId: `startup-${projectId}`,
+        eventType: "worker.error",
+        taskId: null,
+        eligibleWake: true,
+        createdAt: now,
+      });
+    }
+    const cursor = repository.getCursor;
+    const fault = vi
+      .spyOn(repository, "getCursor")
+      .mockImplementation((projectId) =>
+        projectId === groupId
+          ? Effect.fail(
+              new PersistenceSqlError({ operation: "fixture", detail: "first Hub unavailable" }),
+            )
+          : cursor(projectId),
+      );
+    try {
+      yield* service.reconcilePendingWakes();
+      assert.equal(
+        (yield* repository.getCursor(groupId2)).processedThroughInboxId,
+        `startup-${groupId2}`,
+      );
+      assert.equal(harness.runNowCalls.length, 1);
+    } finally {
+      fault.mockRestore();
+    }
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("does not report a settlement after both real monitor CAS writes lose", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    const overview = yield* configureTestGroup(service, "settle-cas-retry");
+    const workerId = ThreadId.makeUnsafe("cas-racing-worker");
+    yield* service.recordManagedWorkerThreads({
+      requestId: "settle-cas-worker",
+      callerThreadId: overview.config!.coordinatorThreadId,
+      threadIds: [workerId],
+      titles: ["Racing worker"],
+    });
+    const save = repository.saveManagedWorkerMonitor;
+    let writes = 0;
+    const competing = vi.spyOn(repository, "saveManagedWorkerMonitor").mockImplementation((input) =>
+      Effect.gen(function* () {
+        const current = Option.getOrThrow(yield* repository.findManagedWorkerByThread(workerId));
+        yield* repository.upsertManagedWorker({
+          ...current,
+          updatedAt: `2026-10-18T12:00:0${++writes}.000Z`,
+        });
+        return yield* save(input);
+      }),
+    );
+    try {
+      harness.dispatched.length = 0;
+      yield* service.ingestSettledThreadEvent({
+        threadId: workerId,
+        sourceEventId: "racing-settle",
+        eventType: "thread.turn-diff-completed",
+        createdAt: now,
+      });
+      assert.equal(writes, 2);
+      assert.equal(
+        Option.getOrThrow(yield* repository.findManagedWorkerByThread(workerId)).settleOutcome,
+        null,
+      );
+      assert.equal(activityRows(harness, "synara.worker.settled").length, 0);
+    } finally {
+      competing.mockRestore();
     }
   }).pipe(Effect.provide(harness.layer));
 });

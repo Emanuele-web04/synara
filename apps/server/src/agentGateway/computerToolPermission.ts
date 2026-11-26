@@ -194,6 +194,10 @@ const SYNARA_GATEWAY_OWNED_TOOL_NAMES = [
   "synara_create_todo",
   "synara_list_todos",
   "synara_update_todo",
+  // Inline visuals (inlineVisualTools.ts; available in Stable and Beta)
+  "synara_show_visual",
+  // Turn plan (turnPlanTools.ts; Claude sessions only)
+  "synara_update_plan",
   // Thread write tools (Layers/AgentGateway.ts)
   "synara_create_threads",
   "synara_create_thread",
@@ -201,6 +205,7 @@ const SYNARA_GATEWAY_OWNED_TOOL_NAMES = [
   "synara_interrupt_thread",
   "synara_set_thread_title",
   "synara_set_thread_pull_request",
+  "synara_unlink_thread_pull_request",
   "synara_set_thread_archived",
   "synara_set_thread_goal",
   // Thread diagnostics (threadDiagnosticTools.ts)
@@ -233,10 +238,12 @@ const SYNARA_GATEWAY_OWNED_TOOL_NAMES = [
   "synara_e2e_review",
   // Capability-gated device tools (deviceTools.ts — not in contracts)
   "device_boot",
+  "device_configure",
   "device_describe_ui",
   "device_install",
   "device_launch",
   "device_list",
+  "device_logs",
   "device_open_url",
   "device_press_button",
   "device_screenshot",
@@ -244,6 +251,7 @@ const SYNARA_GATEWAY_OWNED_TOOL_NAMES = [
   "device_swipe",
   "device_tap",
   "device_type",
+  "device_wait",
 ] as const;
 
 /** Every tool name the agent gateway serves, from the shared catalogs. */

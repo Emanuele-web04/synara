@@ -311,6 +311,39 @@ describe("TerminalManager", () => {
     }
   });
 
+  it("uses embedded terminal capabilities for authentication without changing the account home", async () => {
+    const { manager, ptyAdapter } = makeManager(5000, {
+      providerAuthResolver: async () => ({
+        command: process.execPath,
+        args: ["login"],
+        cwd: process.cwd(),
+        env: {
+          HOME: "/isolated/account",
+          XDG_DATA_HOME: "/isolated/account/.local/share",
+          TERM: "dumb",
+          TERM_PROGRAM: "ghostty",
+          TERMINFO: "/host/terminfo",
+          NO_COLOR: "1",
+          FORCE_COLOR: "0",
+          COLORTERM: "",
+        },
+      }),
+    });
+    try {
+      await manager.open(openInput({ providerAuthInstanceId: "opencode_work" }));
+      expect(ptyAdapter.spawnInputs[0]?.env).toMatchObject({
+        HOME: "/isolated/account",
+        XDG_DATA_HOME: "/isolated/account/.local/share",
+        TERM: process.platform === "win32" ? "xterm-color" : "xterm-256color",
+        COLORTERM: "truecolor",
+      });
+      for (const key of ["TERM_PROGRAM", "TERMINFO", "NO_COLOR", "FORCE_COLOR"])
+        expect(ptyAdapter.spawnInputs[0]?.env[key]).toBeUndefined();
+    } finally {
+      await manager.dispose();
+    }
+  });
+
   it("does not restart failed authentication or switch its account during reattach", async () => {
     const resolver = vi.fn(async () => {
       throw new Error("Account CLI missing");
@@ -1213,6 +1246,31 @@ describe("TerminalManager", () => {
 
       busy = false;
       await manager.close(input);
+      expect(ptyAdapter.processes[0]?.killed).toBe(true);
+    } finally {
+      manager.dispose();
+    }
+  });
+
+  it("keeps newly submitted input while the shell has not spawned a child yet", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+    const { manager, ptyAdapter } = makeManager(5, {
+      subprocessChecker: async () => false,
+      subprocessPollIntervalMs: 60_000,
+    });
+    try {
+      await manager.open(openInput());
+      await manager.write({ threadId: "thread-1", terminalId: "default", data: "sleep 120\r" });
+      vi.setSystemTime(new Date("2026-01-01T00:00:00.200Z"));
+      const close = { threadId: "thread-1", terminalId: "default", onlyIfIdle: true };
+      await expect(manager.close(close)).rejects.toThrow(/busy/i);
+      expect(ptyAdapter.processes[0]?.killed).toBe(false);
+      expect(ptyAdapter.processes[0]?.writes).toEqual(["sleep 120\r"]);
+
+      // Once input has settled, a fresh empty snapshot still permits normal reuse.
+      vi.setSystemTime(new Date("2026-01-01T00:00:02Z"));
+      await manager.close(close);
       expect(ptyAdapter.processes[0]?.killed).toBe(true);
     } finally {
       manager.dispose();

@@ -105,12 +105,16 @@ function makeGit(input: {
   readonly dirtyPaths?: ReadonlySet<string>;
 }) {
   return {
-    execute: ({ cwd }: { cwd: string }) =>
-      Effect.succeed({
-        code: 0,
-        stdout: `worktree /repo/project\nHEAD abc\nbranch refs/heads/main\n\nworktree ${cwd}\nHEAD abc\ndetached\n`,
-        stderr: "",
-      }),
+    execute: ({ cwd, args }: { cwd: string; args: ReadonlyArray<string> }) =>
+      Effect.succeed(
+        args[0] === "ls-files"
+          ? { code: 0, stdout: "", stderr: "" }
+          : {
+              code: 0,
+              stdout: `worktree /repo/project\nHEAD abc\nbranch refs/heads/main\n\nworktree ${cwd}\nHEAD abc\ndetached\n`,
+              stderr: "",
+            },
+      ),
     withMutation: (_cwd: string, effect: Effect.Effect<unknown, unknown, unknown>) => effect,
     snapshotWorktree: ({ outputPath }: { outputPath: string }) =>
       Effect.sync(() => {
@@ -319,6 +323,7 @@ describe("managed worktrees", () => {
           associatedWorktreePath: worktreePath,
           archivedAt: new Date(Date.UTC(2026, 0, index + 1)).toISOString(),
           deletedAt: null,
+          busy: false,
         }) as unknown as OrchestrationThread,
     );
     const snapshotsDir = path.join(root, "snapshots");
@@ -361,6 +366,7 @@ describe("managed worktrees", () => {
           ),
           archivedAt: new Date(Date.UTC(2026, 0, index + 1)).toISOString(),
           deletedAt: null,
+          busy: false,
         }) as unknown as OrchestrationThread,
     );
 
@@ -394,6 +400,7 @@ describe("managed worktrees", () => {
             deletedAt: index === 0 ? new Date(Date.UTC(2026, 0, index + 2)).toISOString() : null,
             worktreePath,
             associatedWorktreePath: worktreePath,
+            busy: false,
           })),
         ),
       getSnapshot: () => Effect.die(new Error("getSnapshot must not be used by worktree prune")),
@@ -425,6 +432,7 @@ describe("managed worktrees", () => {
         associatedWorktreePath: paths[0],
         archivedAt: null,
         deletedAt: null,
+        busy: false,
       },
       {
         id: "thread-deleted",
@@ -432,6 +440,7 @@ describe("managed worktrees", () => {
         associatedWorktreePath: paths[1],
         archivedAt: null,
         deletedAt: "2026-08-01T00:00:00.000Z",
+        busy: false,
       },
     ] as unknown as OrchestrationThread[];
 
@@ -467,6 +476,7 @@ describe("managed worktrees", () => {
         associatedWorktreePath: paths[0],
         archivedAt: null,
         deletedAt: null,
+        busy: false,
       },
       {
         id: "thread-deleted",
@@ -474,6 +484,7 @@ describe("managed worktrees", () => {
         associatedWorktreePath: paths[1],
         archivedAt: null,
         deletedAt: "2026-08-01T00:00:00.000Z",
+        busy: false,
       },
     ] as unknown as OrchestrationThread[];
 
@@ -507,6 +518,7 @@ describe("managed worktrees", () => {
         associatedWorktreePath: paths[0],
         archivedAt: null,
         deletedAt: "2026-08-01T00:00:00.000Z",
+        busy: false,
       },
     ] as unknown as OrchestrationThread[];
 
@@ -535,6 +547,7 @@ describe("managed worktrees", () => {
         associatedWorktreePath: paths[0],
         archivedAt: null,
         deletedAt: null,
+        busy: false,
       },
     ] as unknown as OrchestrationThread[];
 
@@ -600,24 +613,28 @@ describe("managed worktrees", () => {
           worktreePath: "/wt/active",
           archivedAt: null,
           deletedAt: null,
+          busy: false,
         },
         {
           id: "deleted",
           worktreePath: "/wt/deleted",
           archivedAt: null,
           deletedAt: "2026-08-01T00:00:00.000Z",
+          busy: false,
         },
         {
           id: "archived-old",
           worktreePath: "/wt/archived-old",
           archivedAt: "2026-01-01T00:00:00.000Z",
           deletedAt: null,
+          busy: false,
         },
         {
           id: "archived-new",
           worktreePath: "/wt/archived-new",
           archivedAt: "2026-02-01T00:00:00.000Z",
           deletedAt: null,
+          busy: false,
         },
       ],
     });

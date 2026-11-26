@@ -14,7 +14,7 @@ import { ServiceMap } from "effect";
 import type { Effect } from "effect";
 
 import type { CheckpointStoreError } from "../Errors.ts";
-import { CheckpointRef } from "@synara/contracts";
+import { CheckpointRef, type ThreadId } from "@synara/contracts";
 
 export interface CaptureCheckpointInput {
   readonly cwd: string;
@@ -47,6 +47,8 @@ export interface DiffCheckpointsInput {
   readonly toCheckpointRef: CheckpointRef;
   readonly fallbackFromToHead?: boolean;
   readonly ignoreWhitespace: boolean;
+  /** Exact immutable provider patch; reconstruct only from fromCheckpointRef in a private index. */
+  readonly providerPatch?: string;
   readonly maxOutputBytes?: number;
 }
 
@@ -60,6 +62,8 @@ export interface ReverseCheckpointDiffInput {
 export interface DeleteCheckpointRefsInput {
   readonly cwd: string;
   readonly checkpointRefs: ReadonlyArray<CheckpointRef>;
+  /** Purge all revision refs owned by this thread, including crash-orphaned captures. */
+  readonly liveThreadId?: ThreadId;
 }
 
 /**
@@ -108,6 +112,10 @@ export interface CheckpointStoreShape {
   /**
    * Compute patch diff between two checkpoint refs.
    *
+   * Paths whose change only comes from HEAD moving onto history that existed
+   * before the "from" checkpoint (merge, pull, rebase, checkout, reset) are left
+   * out; edits, conflict resolutions and commits made in range stay.
+   *
    * Can optionally treat missing "from" ref as `HEAD`.
    */
   readonly diffCheckpoints: (
@@ -116,6 +124,9 @@ export interface CheckpointStoreShape {
 
   /**
    * Reverse only the changes between two checkpoints onto the current workspace.
+   *
+   * Uses the same history filtering as `diffCheckpoints`, so Undo never reverts
+   * a merged or checked-out branch it did not show.
    */
   readonly reverseCheckpointDiff: (
     input: ReverseCheckpointDiffInput,

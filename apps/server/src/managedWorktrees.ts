@@ -84,16 +84,12 @@ export function archivedWorktreeHasNoOtherOwners(input: {
 }
 
 /**
- * The only thread state managed-worktree retention reads. Structural on purpose so
- * both the narrow projection row and a full `OrchestrationThread` satisfy it, and so
- * the prune path never pulls a whole read model into memory just to look at five
- * columns.
+ * The only thread state managed-worktree retention reads. Kept structural so the
+ * narrow projection row and a full `OrchestrationThread` both fit, but every
+ * removal path requires an explicit `busy: false`: a missing value fails closed.
  */
 export interface ManagedWorktreeThreadRef {
   readonly id: string;
-  // Widened with `| undefined` so both the narrow reader's normalized rows and a
-  // full `OrchestrationThread` (whose optional columns are `?: T | null` under
-  // `exactOptionalPropertyTypes`) structurally satisfy this ref.
   readonly archivedAt?: string | null | undefined;
   readonly deletedAt?: string | null | undefined;
   readonly worktreePath?: string | null | undefined;
@@ -131,7 +127,9 @@ function mergedWorktreeCandidate(input: {
       liveOwners.length === 0 ||
       liveOwners.some(
         (thread) =>
-          !isArchivedOnlyManagedWorktreeThread(thread) || thread.busy || !thread.lastKnownPr,
+          !isArchivedOnlyManagedWorktreeThread(thread) ||
+          thread.busy !== false ||
+          !thread.lastKnownPr,
       )
     )
       return null;
@@ -359,6 +357,8 @@ export function classifyManagedWorktreeRemovalCandidates(input: {
   const seenDeletedPaths = new Set<string>();
   for (const thread of input.threads) {
     if (!isDeletedManagedWorktreeThread(thread)) continue;
+    // A deleted thread can still have a settling delivery; keep its checkout until idle.
+    if (thread.busy !== false) continue;
     const worktreePath = canonicalThreadPath(thread);
     if (
       worktreePath === null ||
@@ -397,13 +397,17 @@ export function classifyManagedWorktreeRemovalCandidates(input: {
       return true;
     });
 
-  const archivedRetentionCandidates = archivedKeepers.slice(MANAGED_WORKTREE_RETENTION_COUNT).map(
-    ({ thread, entry }): ManagedWorktreeRemovalCandidate => ({
-      entry,
-      thread,
-      reason: "archived-retention",
-    }),
-  );
+  const archivedRetentionCandidates = archivedKeepers
+    .slice(MANAGED_WORKTREE_RETENTION_COUNT)
+    // Busy archived threads still occupy a keeper slot, but their checkout stays.
+    .filter(({ thread }) => thread.busy === false)
+    .map(
+      ({ thread, entry }): ManagedWorktreeRemovalCandidate => ({
+        entry,
+        thread,
+        reason: "archived-retention",
+      }),
+    );
 
   return [...deletedCandidates, ...archivedRetentionCandidates];
 }
@@ -412,6 +416,56 @@ const ensureSnapshotsDir = (snapshotsDir: string) =>
   Effect.tryPromise({
     try: () => fs.mkdir(snapshotsDir, { recursive: true, mode: 0o700 }),
     catch: (cause) => (cause instanceof Error ? cause : new Error(String(cause))),
+  });
+
+function parseNullSeparatedPaths(stdout: string): string[] {
+  return stdout.split("\0").filter((entry) => entry.length > 0);
+}
+
+/**
+ * Ignored files are not part of `snapshotWorktree` unless `.worktreeinclude`
+ * opts them in, and `git worktree remove` still deletes them. Return null when
+ * the list cannot be read safely, so the caller keeps the checkout.
+ */
+const listUnpreservedIgnoredPaths = (input: { readonly git: GitCoreShape; readonly cwd: string }) =>
+  Effect.gen(function* () {
+    const ignored = yield* input.git.execute({
+      operation: "ManagedWorktrees.ignoredPaths",
+      cwd: input.cwd,
+      args: ["ls-files", "--others", "--ignored", "--exclude-standard", "-z"],
+      timeoutMs: 10_000,
+      maxOutputBytes: 4 * 1024 * 1024,
+      outputMode: "truncate",
+    });
+    if (ignored.stdoutTruncated) return null;
+    const all = parseNullSeparatedPaths(ignored.stdout);
+    if (all.length === 0) return [];
+
+    const includePath = path.join(input.cwd, ".worktreeinclude");
+    const hasInclude = yield* Effect.tryPromise({
+      try: () =>
+        fs
+          .stat(includePath)
+          .then((entry) => entry.isFile())
+          .catch((cause: unknown) => {
+            if (isMissingPathError(cause)) return false;
+            throw cause;
+          }),
+      catch: (cause) => (cause instanceof Error ? cause : new Error(String(cause))),
+    });
+    if (!hasInclude) return all;
+
+    const included = yield* input.git.execute({
+      operation: "ManagedWorktrees.includedIgnoredPaths",
+      cwd: input.cwd,
+      args: ["ls-files", "--others", "--ignored", "--exclude-from=.worktreeinclude", "-z"],
+      timeoutMs: 10_000,
+      maxOutputBytes: 4 * 1024 * 1024,
+      outputMode: "truncate",
+    });
+    if (included.stdoutTruncated) return null;
+    const includedPaths = new Set(parseNullSeparatedPaths(included.stdout));
+    return all.filter((entry) => !includedPaths.has(entry));
   });
 
 const snapshotExists = (snapshotPath: string) =>
@@ -450,6 +504,22 @@ function removeManagedWorktreeSafely(input: {
       entry.workspaceRoot,
       Effect.gen(function* () {
         if (input.revalidate && !(yield* input.revalidate(input.candidate))) return false;
+        const ignoredPaths = yield* listUnpreservedIgnoredPaths({
+          git: input.git,
+          cwd: entry.path,
+        });
+        if (ignoredPaths === null || ignoredPaths.length > 0) {
+          yield* Effect.logWarning(
+            "managed worktree cleanup kept ignored local files outside the snapshot",
+            {
+              threadId: thread.id,
+              worktreePath: entry.path,
+              reason,
+              ignoredPathCount: ignoredPaths?.length ?? null,
+            },
+          );
+          return false;
+        }
         const alreadySnapshotted = yield* snapshotExists(snapshotPath);
         if (!alreadySnapshotted) {
           yield* input.git.snapshotWorktree({ cwd: entry.path, outputPath: snapshotPath });
@@ -481,6 +551,22 @@ function removeManagedWorktreeSafely(input: {
           }
 
           if (input.revalidate && !(yield* input.revalidate(input.candidate))) return false;
+          const ignoredPaths = yield* listUnpreservedIgnoredPaths({
+            git: input.git,
+            cwd: entry.path,
+          });
+          if (ignoredPaths === null || ignoredPaths.length > 0) {
+            yield* Effect.logWarning(
+              "managed worktree cleanup kept ignored local files outside the snapshot",
+              {
+                threadId: thread.id,
+                worktreePath: entry.path,
+                reason,
+                ignoredPathCount: ignoredPaths?.length ?? null,
+              },
+            );
+            return false;
+          }
           yield* input.git.removeWorktree({
             cwd: entry.workspaceRoot,
             path: entry.path,
@@ -571,35 +657,89 @@ export function pruneArchivedManagedWorktrees(input: {
         if (candidate) removalCandidates.push(candidate);
       }
     }
+    const guardedCandidates: ManagedWorktreeRemovalCandidate[] = [];
+    for (const candidate of removalCandidates) {
+      if (candidate.thread.busy !== false) continue;
+      if (mergeCleanup && candidate.reason !== "deleted") {
+        const protectedThread = yield* mergeCleanup.isProtected(candidate.thread.id).pipe(
+          Effect.catch((error) =>
+            Effect.logWarning("managed worktree cleanup could not verify protection", {
+              threadId: candidate.thread.id,
+              error: error instanceof Error ? error.message : String(error),
+            }).pipe(Effect.as(true)),
+          ),
+        );
+        if (protectedThread) continue;
+      }
+      guardedCandidates.push(candidate);
+    }
+    const revalidateRemoval = (candidate: ManagedWorktreeRemovalCandidate) =>
+      Effect.gen(function* () {
+        const threads = input.readThreads ? yield* input.readThreads() : input.threads;
+        const canonical = yield* canonicalizeThreadWorktreePaths(threads);
+        const ownersByPath = indexWorktreeOwners(threads, canonical);
+        const owners = ownersByPath.get(candidate.entry.path) ?? [];
+        if (owners.some(isActiveManagedWorktreeThread)) return false;
+        const owner = threads.find((thread) => thread.id === candidate.thread.id);
+        if (!owner) return false;
+        const ownerPath = threadManagedWorktreePath(owner);
+        const canonicalOwnerPath = ownerPath ? (canonical.get(ownerPath) ?? null) : null;
+        if (canonicalOwnerPath !== candidate.entry.path) return false;
+        if (owner.busy !== false) return false;
+        if (candidate.reason === "deleted") {
+          if (!isDeletedManagedWorktreeThread(owner)) return false;
+          if (
+            owners.some((other) => other.id !== owner.id && !isDeletedManagedWorktreeThread(other))
+          )
+            return false;
+        } else {
+          if (!isArchivedOnlyManagedWorktreeThread(owner)) return false;
+          if (
+            owners.some((other) => !isDeletedManagedWorktreeThread(other) && other.busy !== false)
+          )
+            return false;
+        }
+        if (mergeCleanup) {
+          for (const other of owners) {
+            if (isDeletedManagedWorktreeThread(other)) continue;
+            const protectedOwner = yield* mergeCleanup.isProtected(other.id).pipe(
+              Effect.catch((error) =>
+                Effect.logWarning("managed worktree cleanup could not verify protection", {
+                  threadId: other.id,
+                  error: error instanceof Error ? error.message : String(error),
+                }).pipe(Effect.as(true)),
+              ),
+            );
+            if (protectedOwner) return false;
+          }
+        }
+        if (candidate.reason === "merged" && mergeCleanup) {
+          if (!(yield* mergeCleanup.enabled)) return false;
+          const fresh = yield* mergedWorktreeCandidate({
+            entry: candidate.entry,
+            ownersByPath,
+            git: input.git,
+            policy: mergeCleanup,
+          });
+          return fresh !== null && fresh.expectedHead === candidate.expectedHead;
+        }
+        return true;
+      });
     const removedPaths = new Set<string>();
-    if (removalCandidates.length > 0) {
+    if (guardedCandidates.length > 0) {
       yield* ensureSnapshotsDir(input.snapshotsDir);
       yield* Effect.forEach(
-        removalCandidates,
+        guardedCandidates,
         (candidate) =>
           removeManagedWorktreeSafely({
             worktreesDir: input.worktreesDir,
             snapshotsDir: input.snapshotsDir,
             candidate,
             git: input.git,
-            ...(candidate.reason === "merged" && mergeCleanup
+            ...(mergeCleanup
               ? {
                   withOwnership: mergeCleanup.withOwnership,
-                  revalidate: () =>
-                    Effect.gen(function* () {
-                      if (!(yield* mergeCleanup!.enabled)) return false;
-                      const threads = input.readThreads
-                        ? yield* input.readThreads()
-                        : input.threads;
-                      const canonical = yield* canonicalizeThreadWorktreePaths(threads);
-                      const fresh = yield* mergedWorktreeCandidate({
-                        entry: candidate.entry,
-                        ownersByPath: indexWorktreeOwners(threads, canonical),
-                        git: input.git,
-                        policy: mergeCleanup!,
-                      });
-                      return fresh !== null && fresh.expectedHead === candidate.expectedHead;
-                    }),
+                  revalidate: revalidateRemoval,
                 }
               : {}),
           }).pipe(

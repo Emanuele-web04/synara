@@ -22,6 +22,44 @@ describe("createDesktopStaticProtocolResolver", () => {
     expect(resolveRequest("synara://app/assets/app.js")).toEqual({ path: assetPath });
   });
 
+  it("keeps HEAD navigation and paths with API-like names in the SPA", () => {
+    const resolveRequest = resolverWithExistingPaths([rootIndex]);
+
+    expect(resolveRequest("synara://app/thread/missing", "HEAD")).toEqual({ path: rootIndex });
+    expect(resolveRequest("synara://app/api-reference")).toEqual({ path: rootIndex });
+  });
+
+  it.each(["POST", "OPTIONS"])(
+    "refuses %s instead of serving a successful static response",
+    (method) => {
+      const assetPath = Path.join(staticRoot, "assets", "app.js");
+      const resolveRequest = resolverWithExistingPaths([rootIndex, assetPath]);
+
+      expect(resolveRequest("synara://app/api/attachments/upload?name=photo.png", method)).toEqual({
+        error: -6,
+      });
+      expect(resolveRequest("synara://app/assets/app.js", method)).toEqual({ error: -6 });
+    },
+  );
+
+  it.each([
+    "/api",
+    "/api/attachments/upload?name=photo.png",
+    "/api/remote/resource/host",
+    "/attachments/att_v2_example.png",
+    "/ws",
+    "/v2/resource",
+    "/%61pi/attachments/upload",
+    "/api%2Fattachments%2Fupload",
+    "/folder%2F..%2Fapi/attachments/upload",
+    "/api%5Cattachments%5Cupload",
+    "/api/%E0%A4%A",
+  ])("refuses backend resource %s before any SPA fallback", (resourcePath) => {
+    const resolveRequest = resolverWithExistingPaths([rootIndex]);
+
+    expect(resolveRequest(`synara://app${resourcePath}`)).toEqual({ error: -6 });
+  });
+
   it("returns Electron file-not-found for a missing asset", () => {
     const resolveRequest = resolverWithExistingPaths([rootIndex]);
 

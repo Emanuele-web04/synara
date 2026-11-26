@@ -48,6 +48,81 @@ describe("ComposerImageIntakeQueue", () => {
     expect(queue.pendingCount()).toBe(0);
   });
 
+  it.each(["rejected result", "thrown read"] as const)(
+    "does not admit a send waiting on a %s, then allows a valid intake",
+    async (failure) => {
+      const queue = new ComposerImageIntakeQueue();
+      const errors: Array<string | null> = [];
+      let finish!: () => void;
+      const prepareFiles = () =>
+        new Promise<{ images: ComposerImageAttachment[]; error: string | null }>(
+          (resolve, reject) => {
+            finish = () =>
+              failure === "thrown read"
+                ? reject(new Error("Photo could not be read"))
+                : resolve({ images: [], error: "Photo could not be prepared" });
+          },
+        );
+      const job = queue.enqueue({
+        files: [new File(["image"], "image.png", { type: "image/png" })],
+        existingAttachmentCount: () => 0,
+        commitImages: () => 0,
+        onError: (error) => errors.push(error),
+        prepareFiles,
+      });
+      const waitingSend = queue.waitForPending();
+      await Promise.resolve();
+      await Promise.resolve();
+      finish();
+      await job;
+      expect(await waitingSend).toBe(false);
+      expect(errors.at(-1)).toMatch(/Photo could not be/);
+      const valid = queue.enqueue({
+        files: [new File(["valid"], "ready.png", { type: "image/png" })],
+        existingAttachmentCount: () => 0,
+        commitImages: () => 1,
+        onError: (error) => errors.push(error),
+        prepareFiles: async () => ({ images: [preparedImage("ready")], error: null }),
+      });
+      const nextSend = queue.waitForPending();
+      await valid;
+      expect(await nextSend).toBe(true);
+      expect(errors.at(-1)).toBeNull();
+    },
+  );
+
+  it("does not let a retired wait acknowledge a replacement draft's failed photo", async () => {
+    const queue = new ComposerImageIntakeQueue();
+    let finishOld!: (value: { images: ComposerImageAttachment[]; error: null }) => void;
+    const retiredJob = queue.enqueue({
+      files: [new File(["old"], "old.png", { type: "image/png" })],
+      existingAttachmentCount: () => 0,
+      commitImages: () => 1,
+      onError: () => {},
+      prepareFiles: () =>
+        new Promise((resolve) => {
+          finishOld = resolve;
+        }),
+    });
+    const retiredSend = queue.waitForPending();
+    await Promise.resolve();
+    await Promise.resolve();
+    queue.dispose();
+    queue.activate();
+    await queue.enqueue({
+      files: [new File(["new"], "new.png", { type: "image/png" })],
+      existingAttachmentCount: () => 0,
+      commitImages: () => 0,
+      onError: () => {},
+      prepareFiles: async () => ({ images: [], error: "New photo could not be read" }),
+    });
+    finishOld({ images: [preparedImage("retired")], error: null });
+    await retiredJob;
+    expect(await retiredSend).toBe(false);
+    expect(await queue.waitForPending()).toBe(false);
+    expect(await queue.waitForPending()).toBe(true);
+  });
+
   it("revokes prepared previews and skips commit after disposal", async () => {
     const queue = new ComposerImageIntakeQueue();
     const originalRevokeObjectUrl = URL.revokeObjectURL;

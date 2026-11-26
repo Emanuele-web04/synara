@@ -20,6 +20,7 @@ import { useSpacesUiStore } from "~/spacesUiStore";
 import { useStore } from "~/store";
 import { useVoidSpace } from "~/voidSpaceStore";
 import { SpaceIcon } from "./SpaceIcon";
+import { useTranslation } from "~/i18n";
 
 export interface ProjectMenuPickerOption {
   readonly id: ProjectId;
@@ -88,6 +89,8 @@ function ProjectMenuPickerList(props: {
   noneOption?: ProjectMenuPickerNoneOption | undefined;
   closeOnSelect: boolean;
 }) {
+  const { t } = useTranslation();
+
   const [query, setQuery] = useState("");
   const projects = useStore((state) => state.projects);
   const spaces = useStore((state) => state.spaces);
@@ -110,7 +113,7 @@ function ProjectMenuPickerList(props: {
           ...option,
           resolvedSpaceId,
           resolvedSpaceName:
-            option.spaceName ?? spaceDisplayName(resolvedSpaceId, spaces, voidSpace),
+            option.spaceName ?? spaceDisplayName(resolvedSpaceId, spaces, voidSpace, t),
         };
       })
       .filter(
@@ -120,18 +123,21 @@ function ProjectMenuPickerList(props: {
           option.resolvedSpaceName.toLocaleLowerCase().includes(normalizedQuery),
       );
 
-    return groupItemsBySpace({
-      items: resolved,
-      spaces,
-      activeSpaceId,
-      spaceIdOf: (option) => option.resolvedSpaceId,
-      voidSpace,
-    });
-  }, [activeSpaceId, projects, props.projectOptions, query, spaces, voidSpace]);
+    return groupItemsBySpace(
+      {
+        items: resolved,
+        spaces,
+        activeSpaceId,
+        spaceIdOf: (option) => option.resolvedSpaceId,
+        voidSpace,
+      },
+      t,
+    );
+  }, [activeSpaceId, projects, props.projectOptions, query, spaces, voidSpace, t]);
 
   return (
     <PickerPanelShell
-      searchPlaceholder="Search projects"
+      searchPlaceholder={t("workspace:projectPicker_searchProjects")}
       query={query}
       onQueryChange={setQuery}
       // Lets Arrow/Enter fall through to the menu so the search field and the
@@ -185,7 +191,9 @@ function ProjectMenuPickerList(props: {
       {/* Shown under the "none" row too, so an empty search still says why. */}
       {groupedOptions.length === 0 ? (
         <p className="px-3 py-6 text-center text-ui-sm text-muted-foreground/60">
-          {props.projectOptions.length === 0 ? "No projects yet" : "No matching projects"}
+          {props.projectOptions.length === 0
+            ? t("common:emptyStates_noProjects")
+            : t("workspace:noMatchingProjects")}
         </p>
       ) : null}
     </PickerPanelShell>

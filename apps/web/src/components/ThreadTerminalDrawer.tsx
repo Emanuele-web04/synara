@@ -7,6 +7,7 @@ import { readNativeApi } from "~/nativeApi";
 import { useTerminalStateStore } from "~/terminalStateStore";
 import { disposeAndCloseTerminalSession } from "./terminal/terminalSession";
 import TerminalViewport from "./terminal/TerminalViewport";
+import { useTranslation } from "~/i18n";
 
 interface ThreadTerminalDrawerProps {
   threadId: ThreadId;
@@ -31,6 +32,8 @@ interface ThreadTerminalDrawerProps {
 }
 
 export default function ThreadTerminalDrawer(props: ThreadTerminalDrawerProps) {
+  const { t } = useTranslation();
+
   const { threadId, activeTerminalId } = props;
   const retiring = useRef(new Set<string>());
   const retiredTerminalIds = useTerminalStateStore(
@@ -64,7 +67,7 @@ export default function ThreadTerminalDrawer(props: ThreadTerminalDrawerProps) {
 
   return (
     <aside
-      aria-label="Terminal"
+      aria-label={t("workspace:viewportPane_terminal")}
       className="thread-terminal-drawer relative flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden app-content-surface"
     >
       <TerminalViewport

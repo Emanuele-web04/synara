@@ -27,6 +27,9 @@ import {
   type ProviderKind,
   type ProviderWithDefaultModel,
 } from "@synara/contracts";
+import { humanizeModelSlug } from "./modelName";
+
+export { humanizeModelSlug, normalizeModelDisplayName } from "./modelName";
 
 const MODEL_SLUG_SET_BY_PROVIDER: Record<ProviderKind, ReadonlySet<ModelSlug>> = {
   claudeAgent: new Set(MODEL_OPTIONS_BY_PROVIDER.claudeAgent.map((option) => option.slug)),
@@ -90,120 +93,6 @@ const MODEL_NAME_BY_SLUG = new Map(
     .flat()
     .map((option) => [option.slug.toLowerCase(), option.name] as const),
 );
-
-const MODEL_TOKEN_DISPLAY_NAMES: Readonly<Record<string, string>> = {
-  deepseek: "DeepSeek",
-  glm: "GLM",
-  gpt: "GPT",
-  minimax: "MiniMax",
-  openai: "OpenAI",
-  opencode: "OpenCode",
-  swe: "SWE",
-  xai: "xAI",
-  xhigh: "XHigh",
-};
-
-// First tokens that mark a provider-supplied label as a model-family name
-// worth normalizing: the brand tokens plus families whose casing is already
-// title-case. Anything else (custom names like "MyModel", "K2P6") keeps its
-// original casing untouched.
-const MODEL_FAMILY_TOKENS: ReadonlySet<string> = new Set([
-  ...Object.keys(MODEL_TOKEN_DISPLAY_NAMES),
-  "adaptive",
-  "auto",
-  "claude",
-  "codex",
-  "composer",
-  "cursor",
-  "devin",
-  "gemini",
-  "grok",
-  "inkling",
-  "kimi",
-  "nemotron",
-]);
-
-function humanizeModelToken(token: string): string {
-  const key = token.toLowerCase();
-  const displayName = Object.prototype.hasOwnProperty.call(MODEL_TOKEN_DISPLAY_NAMES, key)
-    ? MODEL_TOKEN_DISPLAY_NAMES[key]
-    : undefined;
-  return displayName ?? token.charAt(0).toUpperCase() + token.slice(1);
-}
-
-const MODEL_DATE_OR_BUILD_TOKEN_PATTERN = /^\d{8}$/u;
-
-// Rejoins version fragments split on "-"/"_": a pure-digit token merges onto a
-// preceding token that already ends in a digit, so "swe-1-6" reads as 1.6,
-// "claude-opus-4-8" as 4.8, and "kimi-k2-6" as K2.6. Zero-prefixed tokens and
-// eight-digit provider date/build stamps stay separate, never version minors.
-function joinModelVersionTokens(tokens: string[]): string[] {
-  const merged: string[] = [];
-  for (const token of tokens) {
-    const previous = merged[merged.length - 1];
-    if (
-      /^\d+$/u.test(token) &&
-      (token === "0" || !token.startsWith("0")) &&
-      !MODEL_DATE_OR_BUILD_TOKEN_PATTERN.test(token) &&
-      previous !== undefined &&
-      /\d$/u.test(previous)
-    ) {
-      merged[merged.length - 1] = `${previous}.${token}`;
-    } else {
-      merged.push(token);
-    }
-  }
-  return merged;
-}
-
-// Canonical brand shapes that differ from plain space-joined words.
-function restoreModelNameSeparators(name: string): string {
-  return name.replace(/\bGPT (\d)/gu, "GPT-$1");
-}
-
-// Turns a raw model slug into a readable label when no built-in name exists.
-// Provider-scoped custom ids ("vendor/model") stay verbatim; everything else is
-// tokenized on -/_, version fragments rejoined with ".", known model-family
-// brands restored to their canonical casing, and GPT versions rehyphenated.
-export function humanizeModelSlug(slug: string): string {
-  if (slug.includes("/")) {
-    return slug;
-  }
-  const tokens = joinModelVersionTokens(slug.split(/[-_]+/g)).map(humanizeModelToken);
-  return restoreModelNameSeparators(tokens.join(" "));
-}
-
-/**
- * Normalizes a provider-supplied display name to Synara's canonical casing:
- * known brand tokens are re-cased ("Swe" → "SWE", "Deepseek" → "DeepSeek"),
- * slug separators become spaces ("GLM-5.3-Flash" → "GLM 5.3 Flash"), digit
- * fragments rejoin as versions, and GPT versions keep their hyphen. Gated on a
- * known family first token so freeform names keep their casing; non-brand
- * tokens and a parenthesized tail pass through unchanged.
- */
-export function normalizeModelDisplayName(name: string): string {
-  const trimmed = name.trim();
-  const parenIndex = trimmed.indexOf("(");
-  const head = parenIndex >= 0 ? trimmed.slice(0, parenIndex).trimEnd() : trimmed;
-  const tail = parenIndex >= 0 ? trimmed.slice(parenIndex) : "";
-  const tokens = head.split(/[-_\s]+/u).filter(Boolean);
-  const [firstToken] = tokens;
-  if (firstToken === undefined || !MODEL_FAMILY_TOKENS.has(firstToken.toLowerCase())) {
-    return trimmed;
-  }
-  const normalized = joinModelVersionTokens(tokens)
-    .map((token) => {
-      const displayName = Object.prototype.hasOwnProperty.call(
-        MODEL_TOKEN_DISPLAY_NAMES,
-        token.toLowerCase(),
-      )
-        ? MODEL_TOKEN_DISPLAY_NAMES[token.toLowerCase()]
-        : undefined;
-      return displayName ?? token;
-    })
-    .join(" ");
-  return `${restoreModelNameSeparators(normalized)}${tail ? ` ${tail}` : ""}`;
-}
 
 export function formatModelDisplayName(model: string | null | undefined): string | undefined {
   const normalized = trimOrNull(model);
@@ -564,12 +453,26 @@ export function getProviderOptionDescriptors(input: {
   const descriptors =
     input.caps.optionDescriptors?.map(cloneProviderOptionDescriptor) ??
     legacyCapabilityDescriptors(input.provider, input.caps);
-  return descriptors.map((descriptor) =>
-    withProviderOptionCurrentValue(
-      descriptor,
+  return descriptors.map((descriptor) => {
+    let resolvedDescriptor = descriptor;
+    // Remove the synthetic default also from catalogs cached by the old Claude adapter.
+    if (
+      input.provider === "claudeAgent" &&
+      descriptor.type === "select" &&
+      descriptor.id === "effort"
+    ) {
+      const { currentValue, ...rest } = descriptor;
+      resolvedDescriptor = {
+        ...rest,
+        options: descriptor.options.filter((option) => option.id !== "default"),
+        ...(currentValue && currentValue !== "default" ? { currentValue } : {}),
+      };
+    }
+    return withProviderOptionCurrentValue(
+      resolvedDescriptor,
       providerOptionSelectionValue(input.selections, descriptor.id),
-    ),
-  );
+    );
+  });
 }
 
 export function getProviderOptionCurrentValue(
@@ -679,25 +582,31 @@ export function resolveNewestKnownClaudeFamilyModel(
 
 export function resolveGrokEffortFamily(model: string): "build" | "4.5" | "4.6" {
   const slug = model.trim().toLowerCase();
+  const version = /grok-(\d+)\.(\d+)/u.exec(slug);
+  const major = version ? Number(version[1]) : null;
+  const minor = version ? Number(version[2]) : null;
+  // grok-4.7-build-fast is the fast tier of Grok 4.7, not the retired
+  // grok-build product. A Grok 4.5+ id keeps that generation's ladder even
+  // when the slug also contains "build" or "code-fast".
+  const versionedGeneration =
+    major !== null && minor !== null && (major > 4 || (major === 4 && minor >= 5));
   if (
-    slug.includes("build") ||
-    slug.includes("code-fast") ||
-    slug === "grok-4" ||
-    slug === "grok-4.3" ||
-    slug.startsWith("grok-4.3-")
+    !versionedGeneration &&
+    (slug.includes("build") ||
+      slug.includes("code-fast") ||
+      slug === "grok-4" ||
+      slug === "grok-4.3" ||
+      slug.startsWith("grok-4.3-"))
   ) {
     return "build";
   }
 
-  const version = /grok-(\d+)\.(\d+)/u.exec(slug);
-  if (!version) {
+  if (major === null || minor === null) {
     // Preserve the legacy Grok Build ladder for custom or future aliases we
     // cannot classify. Discovery can still opt known versioned models into
     // the newer ladders without silently changing persisted custom models.
     return "build";
   }
-  const major = Number(version[1]);
-  const minor = Number(version[2]);
   if (major < 4 || (major === 4 && minor <= 3)) {
     return "build";
   }
@@ -847,8 +756,8 @@ export function trimOrNull<T extends string>(value: T | null | undefined): T | n
 export function normalizeClaudeModelOptions(
   model: string | null | undefined,
   modelOptions: ClaudeModelOptions | null | undefined,
+  caps: ModelCapabilities = getModelCapabilities("claudeAgent", model),
 ): ClaudeModelOptions | undefined {
-  const caps = getModelCapabilities("claudeAgent", model);
   const defaultReasoningEffort = getDefaultEffort(caps);
   const defaultAutoCompactWindow = getDefaultAutoCompactWindow(caps);
   const resolvedEffort = trimOrNull(modelOptions?.effort);
@@ -914,12 +823,10 @@ interface ClaudeSpawnProfile {
 // Claude's live flag settings do not refresh the runtime auto-compaction window.
 // Keep this profile aligned with the adapter's normalized spawn settings.
 function claudeSpawnProfile(selection: Extract<ModelSelection, { provider: "claudeAgent" }>) {
-  const caps = getModelCapabilities("claudeAgent", selection.model);
+  // Max is spawn-fixed even for models first discovered by a newer CLI.
+  // The adapter/CLI validates support; the static catalog must not hide a restart.
   const requestedEffort = trimOrNull(selection.options?.effort ?? null);
-  const effort =
-    requestedEffort && isClaudeCodeEffort(requestedEffort) && hasEffortLevel(caps, requestedEffort)
-      ? requestedEffort
-      : null;
+  const effort = requestedEffort && isClaudeCodeEffort(requestedEffort) ? requestedEffort : null;
   return {
     maxEffort: getEffectiveClaudeCodeEffort(effort) === "max",
     autoCompactWindow: normalizeClaudeModelOptions(selection.model, selection.options)

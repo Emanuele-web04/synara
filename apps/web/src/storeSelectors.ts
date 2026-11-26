@@ -7,7 +7,7 @@ import { isAutomationRunThread } from "@synara/shared/automationMode";
 import { isSidechatThread, sidechatContextMatchesGitHubItem } from "@synara/shared/sidechatThread";
 import { collectSubagentDescendants } from "@synara/shared/threadHierarchy";
 
-import type { AppState } from "./storeState";
+import { EMPTY_THREAD_IDS, type AppState } from "./storeState";
 import { ACCOUNT_RATE_LIMIT_ACTIVITY_KINDS } from "./lib/rateLimits";
 import { resolveThreadDisplayProvider } from "./lib/threadDisplayProvider";
 import { collectByIds, getThreadFromState, getThreadsFromState } from "./threadDerivation";
@@ -113,6 +113,62 @@ export function createAllThreadsSelector(): (state: AppState) => readonly Thread
     previousProposedPlanByThreadId = state.proposedPlanByThreadId;
     previousTurnDiffIdsByThreadId = state.turnDiffIdsByThreadId;
     previousTurnDiffSummaryByThreadId = state.turnDiffSummaryByThreadId;
+    previousThreads = getThreadsFromState(state);
+    return previousThreads;
+  };
+}
+
+// Shell fields read by the completion and attention collectors. Streaming timestamps
+// and other shell changes leave notification candidates untouched.
+function notificationShellsEqual(left: ThreadShell | undefined, right: ThreadShell | undefined) {
+  return (
+    left === right ||
+    (left !== undefined &&
+      right !== undefined &&
+      left.title === right.title &&
+      left.projectId === right.projectId &&
+      left.snoozedUntil === right.snoozedUntil &&
+      left.parentThreadId === right.parentThreadId &&
+      left.pendingBackgroundTaskCount === right.pendingBackgroundTaskCount &&
+      left.pendingInteractions === right.pendingInteractions &&
+      left.hasPendingApprovals === right.hasPendingApprovals &&
+      left.hasPendingUserInput === right.hasPendingUserInput)
+  );
+}
+
+/** Retains the notification projection until an input that can change a candidate does. */
+export function createNotificationThreadsSelector(): (state: AppState) => readonly Thread[] {
+  let previousThreadIds: readonly ThreadId[] | undefined;
+  let previousThreadShellById = {} as AppState["threadShellById"];
+  let previousThreadSessionById = {} as AppState["threadSessionById"];
+  let previousThreadTurnStateById = {} as AppState["threadTurnStateById"];
+  let previousActivityIdsByThreadId = {} as AppState["activityIdsByThreadId"];
+  let previousActivityByThreadId = {} as AppState["activityByThreadId"];
+  let previousThreads: readonly Thread[] = [];
+
+  return (state) => {
+    const shellInputsUnchanged =
+      previousThreadIds === state.threadIds &&
+      (previousThreadShellById === state.threadShellById ||
+        (state.threadIds ?? EMPTY_THREAD_IDS).every((id) =>
+          notificationShellsEqual(previousThreadShellById?.[id], state.threadShellById?.[id]),
+        ));
+    previousThreadShellById = state.threadShellById;
+    if (
+      shellInputsUnchanged &&
+      previousThreadSessionById === state.threadSessionById &&
+      previousThreadTurnStateById === state.threadTurnStateById &&
+      previousActivityIdsByThreadId === state.activityIdsByThreadId &&
+      previousActivityByThreadId === state.activityByThreadId
+    ) {
+      return previousThreads;
+    }
+
+    previousThreadIds = state.threadIds;
+    previousThreadSessionById = state.threadSessionById;
+    previousThreadTurnStateById = state.threadTurnStateById;
+    previousActivityIdsByThreadId = state.activityIdsByThreadId;
+    previousActivityByThreadId = state.activityByThreadId;
     previousThreads = getThreadsFromState(state);
     return previousThreads;
   };
@@ -542,6 +598,8 @@ export interface SidebarThreadVisibilityOptions {
   readonly hideAutomationRunThreads?: boolean;
   /** Explicit access for Snoozed sections and user-initiated search. */
   readonly includeSnoozed?: boolean;
+  /** Status aggregation includes hidden children, navigation does not. */
+  readonly includeSubagents?: boolean;
 }
 
 /** A snoozed task also hides its subagent subtree, including pinned children. */
@@ -569,6 +627,7 @@ export function isSidebarThreadVisible(
 ): boolean {
   // Sidechats live in their host's dock (a thread's, or the inbox's for standalone ones).
   if (isSidechatThread(thread)) return false;
+  if (thread.parentThreadId && !options?.includeSubagents) return false;
   if (thread.snoozedUntil != null && !options?.includeSnoozed) return false;
   if (!options?.hideAutomationRunThreads) return true;
   if (thread.isPinned) return true;
@@ -605,37 +664,6 @@ function createSortedSidechatSummariesSelector(
   };
 }
 
-const EMPTY_SUBAGENT_SIBLINGS: readonly SidebarThreadSummary[] = [];
-
-/**
- * Child threads of one parent, so an unnamed subagent can read "Subagent N"
- * instead of a provider id. A null parent selects nothing (named rows skip it).
- */
-export function createSubagentSiblingSummariesSelector(
-  parentThreadId: ThreadId | null,
-): (state: AppState) => readonly SidebarThreadSummary[] {
-  if (parentThreadId === null) {
-    return () => EMPTY_SUBAGENT_SIBLINGS;
-  }
-  const selectSidebarSummaries = createSidebarThreadSummariesSelector();
-  let previousSummaries: readonly SidebarThreadSummary[] | undefined;
-  let previousSiblings: readonly SidebarThreadSummary[] = EMPTY_SUBAGENT_SIBLINGS;
-  return (state) => {
-    const summaries = selectSidebarSummaries(state);
-    if (summaries === previousSummaries) return previousSiblings;
-    previousSummaries = summaries;
-    const nextSiblings = summaries.filter((thread) => thread.parentThreadId === parentThreadId);
-    if (
-      nextSiblings.length === previousSiblings.length &&
-      nextSiblings.every((thread, index) => thread === previousSiblings[index])
-    ) {
-      return previousSiblings;
-    }
-    previousSiblings = nextSiblings;
-    return previousSiblings;
-  };
-}
-
 export function createSidechatSummariesForSourceSelector(
   sourceThreadId: ThreadId,
 ): (state: AppState) => readonly SidebarThreadSummary[] {
@@ -657,6 +685,8 @@ export function createSidechatSummariesForGitHubItemSelector(item: {
   );
 }
 
+// Sidebar lists show top-level threads only. Subagent threads live in the
+// Environment panel, the Subagents dock and their parent's transcript.
 export function createSidebarDisplayThreadsSelector(
   options?: SidebarThreadVisibilityOptions,
 ): (state: AppState) => readonly SidebarThreadSummary[] {
@@ -678,37 +708,6 @@ export function createSidebarDisplayThreadsSelector(
         isSidebarThreadVisible(thread, options),
     );
     return previousDisplaySummaries;
-  };
-}
-
-// Sidebar tree source: unlike the flat display selector above, this keeps
-// child (subagent) threads so buildProjectThreadTree can nest them under
-// their parent row behind the "N subagents" expand toggle. Flat consumers
-// (pinned rows, search palette) should keep using the display selector.
-export function createSidebarTreeThreadsSelector(
-  options?: SidebarThreadVisibilityOptions,
-): (state: AppState) => readonly SidebarThreadSummary[] {
-  const selectSidebarSummaries = createSidebarThreadSummariesSelector();
-  let previousSummaries: readonly SidebarThreadSummary[] | undefined;
-  let previousTreeSummaries: readonly SidebarThreadSummary[] = [];
-
-  return (state) => {
-    const sidebarSummaries = selectSidebarSummaries(state);
-    if (sidebarSummaries === previousSummaries) {
-      return previousTreeSummaries;
-    }
-
-    previousSummaries = sidebarSummaries;
-    const snoozedThreadIds = options?.includeSnoozed
-      ? null
-      : collectSnoozedThreadIds(sidebarSummaries);
-    previousTreeSummaries = sidebarSummaries.filter(
-      (thread) =>
-        thread.archivedAt == null &&
-        !snoozedThreadIds?.has(thread.id) &&
-        isSidebarThreadVisible(thread, options),
-    );
-    return previousTreeSummaries;
   };
 }
 

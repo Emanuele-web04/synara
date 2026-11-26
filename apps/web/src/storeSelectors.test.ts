@@ -9,12 +9,11 @@ import {
   createAllThreadsMessagelessSelector,
   createComposerThreadMentionSourcesSelector,
   createLastActivityTimestampSelector,
+  createNotificationThreadsSelector,
   createProjectLastActivityAtSelector,
   createSidebarDisplayThreadsSelector,
   createSidechatSummariesForGitHubItemSelector,
   createSidechatSummariesForSourceSelector,
-  createSubagentSiblingSummariesSelector,
-  createSidebarTreeThreadsSelector,
   createThreadExistsSelector,
   createThreadGitActionsMetadataSelector,
   createThreadProjectIdSelector,
@@ -109,6 +108,33 @@ describe("createThreadShellsSelector", () => {
     expect(after).not.toBe(before);
     expect(after[0]?.title).toBe("renamed");
   });
+});
+
+it("keeps notification threads stable during streaming and observes settled background work", () => {
+  const selectThreads = createNotificationThreadsSelector();
+  const initialShell = { ...shellA, pendingBackgroundTaskCount: 1 };
+  const initial = makeState({
+    threadIds: [threadIdA],
+    threadShellById: { [threadIdA]: initialShell },
+  });
+  const before = selectThreads(initial);
+  const streamedShell = {
+    ...initialShell,
+    updatedAt: "2026-01-01T00:00:05.000Z",
+  };
+  expect(
+    selectThreads({
+      ...initial,
+      threadShellById: { [threadIdA]: streamedShell },
+    }),
+  ).toBe(before);
+
+  expect(
+    selectThreads({
+      ...initial,
+      threadShellById: { [threadIdA]: { ...streamedShell, pendingBackgroundTaskCount: 0 } },
+    })[0]?.pendingBackgroundTaskCount,
+  ).toBe(0);
 });
 
 describe("createThreadShellSettingsSelector", () => {
@@ -275,12 +301,38 @@ describe("sidebar thread visibility", () => {
     expect(isSidebarThreadVisible(sidechatSummary, { hideAutomationRunThreads: true })).toBe(false);
   });
 
-  it("filters run threads out of the display and tree selectors", () => {
+  it("filters run threads out of the display selector", () => {
     const selectDisplay = createSidebarDisplayThreadsSelector({ hideAutomationRunThreads: true });
-    const selectTree = createSidebarTreeThreadsSelector({ hideAutomationRunThreads: true });
 
     expect(selectDisplay(state).map((thread) => thread.id)).toEqual([threadIdB, threadIdC]);
-    expect(selectTree(state).map((thread) => thread.id)).toEqual([threadIdB, threadIdC]);
+  });
+
+  it("keeps child chats out of navigation candidates as well as rendered rows", () => {
+    const child = { ...summaryA, parentThreadId: threadIdB } as SidebarThreadSummary;
+    expect(isSidebarThreadVisible(child)).toBe(false);
+    expect(isSidebarThreadVisible(child, { includeSnoozed: true })).toBe(false);
+  });
+
+  it("keeps subagent threads out of the sidebar, even pinned or snoozed-included", () => {
+    const parentThreadId = "thread-parent" as ThreadId;
+    const parent = { ...summaryA, id: parentThreadId } as SidebarThreadSummary;
+    const child = {
+      ...summaryA,
+      id: "thread-child" as ThreadId,
+      parentThreadId,
+      isPinned: true,
+    } as SidebarThreadSummary;
+    const subagentState = makeState({
+      threadIds: [parent.id, child.id],
+      sidebarThreadSummaryById: { [parent.id]: parent, [child.id]: child },
+    });
+
+    for (const select of [
+      createSidebarDisplayThreadsSelector(),
+      createSidebarDisplayThreadsSelector({ includeSnoozed: true }),
+    ]) {
+      expect(select(subagentState).map((thread) => thread.id)).toEqual([parentThreadId]);
+    }
   });
 
   it("keeps run threads in the selectors when the option is unset", () => {
@@ -290,47 +342,6 @@ describe("sidebar thread visibility", () => {
       threadIdB,
       threadIdC,
     ]);
-  });
-});
-
-describe("createSubagentSiblingSummariesSelector", () => {
-  it("selects a parent's child threads and keeps the reference while they are unchanged", () => {
-    const parentThreadId = "thread-parent" as ThreadId;
-    const childA = {
-      ...summaryA,
-      id: "subagent:thread-parent:a" as ThreadId,
-      parentThreadId,
-    } as SidebarThreadSummary;
-    const childB = {
-      ...summaryA,
-      id: "subagent:thread-parent:b" as ThreadId,
-      parentThreadId,
-    } as SidebarThreadSummary;
-    const unrelated = { ...summaryA, id: "thread-unrelated" as ThreadId } as SidebarThreadSummary;
-    const select = createSubagentSiblingSummariesSelector(parentThreadId);
-    const state = makeState({
-      threadIds: [childA.id, unrelated.id, childB.id],
-      sidebarThreadSummaryById: {
-        [childA.id]: childA,
-        [unrelated.id]: unrelated,
-        [childB.id]: childB,
-      },
-    });
-    const first = select(state);
-    expect(first.map((thread) => thread.id)).toEqual([childA.id, childB.id]);
-    expect(
-      select(
-        makeState({
-          threadIds: [childA.id, unrelated.id, childB.id],
-          sidebarThreadSummaryById: {
-            [childA.id]: childA,
-            [unrelated.id]: { ...unrelated, title: "Renamed" },
-            [childB.id]: childB,
-          },
-        }),
-      ),
-    ).toBe(first);
-    expect(createSubagentSiblingSummariesSelector(null)(state)).toEqual([]);
   });
 });
 

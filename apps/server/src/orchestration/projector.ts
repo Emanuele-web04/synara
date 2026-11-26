@@ -11,6 +11,7 @@ import {
 import { clearRemovedAsyncUserInputResponses } from "@synara/shared/asyncUserInput";
 import { isGroupContainerKind } from "@synara/shared/projectContainers";
 import { isSidechatThread } from "@synara/shared/sidechatThread";
+import { pullRequestLinksFromEventPayload } from "@synara/shared/threadPullRequestLinks";
 import {
   addPinnedMessage,
   removePinnedMessage,
@@ -168,6 +169,17 @@ function findMessageIndexFromEnd(
   return -1;
 }
 
+const cachedSyncDecoders = new WeakMap<object, (value: unknown) => unknown>();
+
+function getSyncDecoder<A>(schema: Schema.Schema<A>): (value: unknown) => A {
+  let decoder = cachedSyncDecoders.get(schema as object);
+  if (decoder === undefined) {
+    decoder = Schema.decodeUnknownSync(schema as any);
+    cachedSyncDecoders.set(schema as object, decoder);
+  }
+  return decoder as (value: unknown) => A;
+}
+
 function decodeForEvent<A>(
   schema: Schema.Schema<A>,
   value: unknown,
@@ -175,7 +187,7 @@ function decodeForEvent<A>(
   field: string,
 ): Effect.Effect<A, OrchestrationProjectorDecodeError> {
   return Effect.try({
-    try: () => Schema.decodeUnknownSync(schema as any)(value),
+    try: () => getSyncDecoder(schema)(value),
     catch: (error) => toProjectorDecodeError(`${eventType}:${field}`)(error as Schema.SchemaError),
   });
 }
@@ -395,6 +407,16 @@ function deriveNextMessageTextSegments(
   return undefined;
 }
 
+/** PR links written by a `thread.meta-updated` payload; legacy payloads carry only `lastKnownPr`. */
+function pullRequestLinksPatch(payload: {
+  readonly pullRequests?: Parameters<typeof pullRequestLinksFromEventPayload>[0]["pullRequests"];
+  readonly lastKnownPr?: Parameters<typeof pullRequestLinksFromEventPayload>[0]["lastKnownPr"];
+  readonly updatedAt: string;
+}) {
+  const pullRequests = pullRequestLinksFromEventPayload(payload, payload.updatedAt);
+  return pullRequests === undefined ? {} : { pullRequests };
+}
+
 export function projectEvent(
   model: OrchestrationReadModel,
   event: OrchestrationEvent,
@@ -536,6 +558,9 @@ export function projectEvent(
                   ...(payload.scripts !== undefined ? { scripts: payload.scripts } : {}),
                   ...(payload.isPinned !== undefined ? { isPinned: payload.isPinned } : {}),
                   ...(payload.spaceId !== undefined ? { spaceId: payload.spaceId } : {}),
+                  ...(payload.additionalFolders !== undefined
+                    ? { additionalFolders: payload.additionalFolders }
+                    : {}),
                   updatedAt: payload.updatedAt,
                 }
               : project,
@@ -552,6 +577,8 @@ export function projectEvent(
               ? {
                   ...project,
                   deletedAt: payload.deletedAt,
+                  usageLimitRecovery: null,
+                  usageLimitRecoverySource: null,
                   updatedAt: payload.deletedAt,
                 }
               : project,
@@ -608,6 +635,7 @@ export function projectEvent(
             sidechatLastActivityAt: payload.sidechatLastActivityAt,
             sidechatExpiredAt: payload.sidechatExpiredAt,
             lastKnownPr: payload.lastKnownPr ?? null,
+            pullRequests: pullRequestLinksFromEventPayload(payload, payload.createdAt) ?? [],
             latestTurn: null,
             createdAt: payload.createdAt,
             updatedAt: payload.updatedAt,
@@ -672,6 +700,8 @@ export function projectEvent(
           ...nextBase,
           threads: updateThread(nextBase.threads, payload.threadId, {
             deletedAt: payload.deletedAt,
+            usageLimitRecovery: null,
+            usageLimitRecoverySource: null,
             snoozedUntil: null,
             snoozeReminderAt: null,
             updatedAt: payload.deletedAt,
@@ -687,6 +717,8 @@ export function projectEvent(
             ...nextBase,
             threads: updateThread(nextBase.threads, payload.threadId, {
               archivedAt,
+              usageLimitRecovery: null,
+              usageLimitRecoverySource: null,
               snoozedUntil: null,
               snoozeReminderAt: null,
               updatedAt: payload.updatedAt ?? archivedAt,
@@ -778,6 +810,21 @@ export function projectEvent(
                 : {}),
               ...(payload.isPinned !== undefined ? { isPinned: payload.isPinned } : {}),
               ...(payload.settledAt !== undefined ? { settledAt: payload.settledAt } : {}),
+              ...(payload.usageLimitRecoverySource !== undefined
+                ? { usageLimitRecoverySource: payload.usageLimitRecoverySource }
+                : {}),
+              ...(payload.usageLimitRecovery !== undefined
+                ? { usageLimitRecovery: payload.usageLimitRecovery }
+                : {}),
+              ...(payload.usageLimitRecoveryCancelledAt !== undefined
+                ? { usageLimitRecoveryCancelledAt: payload.usageLimitRecoveryCancelledAt }
+                : {}),
+              ...(payload.usageLimitRecoveryCancelledTurnId !== undefined
+                ? { usageLimitRecoveryCancelledTurnId: payload.usageLimitRecoveryCancelledTurnId }
+                : {}),
+              ...(payload.usageLimitRecoveryLastResetAt !== undefined
+                ? { usageLimitRecoveryLastResetAt: payload.usageLimitRecoveryLastResetAt }
+                : {}),
               ...(payload.snoozedUntil !== undefined ? { snoozedUntil: payload.snoozedUntil } : {}),
               ...(payload.snoozeReminderAt !== undefined
                 ? { snoozeReminderAt: payload.snoozeReminderAt }
@@ -793,6 +840,7 @@ export function projectEvent(
                 : {}),
               ...(payload.subagentRole !== undefined ? { subagentRole: payload.subagentRole } : {}),
               ...(payload.lastKnownPr !== undefined ? { lastKnownPr: payload.lastKnownPr } : {}),
+              ...pullRequestLinksPatch(payload),
               ...(payload.handoff !== undefined ? { handoff: payload.handoff } : {}),
               ...(payload.pinnedMessages !== undefined
                 ? { pinnedMessages: payload.pinnedMessages }
@@ -1026,43 +1074,78 @@ export function projectEvent(
 
     case "thread.message-sent":
       return Effect.gen(function* () {
-        const payload = yield* decodeForEvent(
-          MessageSentPayloadSchema,
-          event.payload,
-          event.type,
-          "payload",
-        );
+        const rawPayload = event.payload;
+        // Fast path for validated streaming assistant deltas without optional
+        // rich metadata (the 99.9% hot path during token streaming): avoids two
+        // Effect Schema decodes and V8 dictionary-mode `delete` per token.
+        const isFastStreamingDelta =
+          rawPayload !== null &&
+          typeof rawPayload === "object" &&
+          rawPayload.streaming === true &&
+          rawPayload.role === "assistant" &&
+          typeof rawPayload.threadId === "string" &&
+          typeof rawPayload.messageId === "string" &&
+          typeof rawPayload.text === "string" &&
+          typeof rawPayload.createdAt === "string" &&
+          typeof rawPayload.updatedAt === "string" &&
+          rawPayload.attachments === undefined &&
+          rawPayload.skills === undefined &&
+          rawPayload.mentions === undefined &&
+          rawPayload.asyncUserInput === undefined &&
+          rawPayload.dispatchMode === undefined &&
+          rawPayload.dispatchOrigin === undefined &&
+          rawPayload.startsNewTurn === undefined;
+
+        const payload = isFastStreamingDelta
+          ? {
+              ...rawPayload,
+              source: rawPayload.source ?? ("native" as const),
+            }
+          : yield* decodeForEvent(MessageSentPayloadSchema, rawPayload, event.type, "payload");
         const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
         if (!thread) {
           return nextBase;
         }
 
-        const message: OrchestrationMessage = yield* decodeForEvent(
-          OrchestrationMessage,
-          {
-            id: payload.messageId,
-            role: payload.role,
-            text: payload.text,
-            ...(payload.asyncUserInput ? { asyncUserInput: payload.asyncUserInput } : {}),
-            ...(payload.attachments !== undefined ? { attachments: payload.attachments } : {}),
-            ...(payload.skills !== undefined ? { skills: payload.skills } : {}),
-            ...(payload.mentions !== undefined ? { mentions: payload.mentions } : {}),
-            ...(payload.dispatchMode !== undefined ? { dispatchMode: payload.dispatchMode } : {}),
-            ...(payload.dispatchOrigin !== undefined
-              ? { dispatchOrigin: payload.dispatchOrigin }
-              : {}),
-            ...(payload.startsNewTurn !== undefined
-              ? { startsNewTurn: payload.startsNewTurn }
-              : {}),
-            turnId: payload.turnId,
-            streaming: payload.streaming,
-            source: payload.source,
-            createdAt: payload.createdAt,
-            updatedAt: payload.updatedAt,
-          },
-          event.type,
-          "message",
-        );
+        const message: OrchestrationMessage = isFastStreamingDelta
+          ? {
+              id: payload.messageId,
+              role: payload.role,
+              text: payload.text,
+              turnId: payload.turnId,
+              streaming: payload.streaming,
+              source: payload.source,
+              createdAt: payload.createdAt,
+              updatedAt: payload.updatedAt,
+            }
+          : yield* decodeForEvent(
+              OrchestrationMessage,
+              {
+                id: payload.messageId,
+                role: payload.role,
+                text: payload.text,
+                ...(payload.asyncUserInput ? { asyncUserInput: payload.asyncUserInput } : {}),
+                ...(payload.attachments !== undefined ? { attachments: payload.attachments } : {}),
+                ...(payload.skills !== undefined ? { skills: payload.skills } : {}),
+                ...(payload.mentions !== undefined ? { mentions: payload.mentions } : {}),
+                ...(payload.dispatchMode !== undefined
+                  ? { dispatchMode: payload.dispatchMode }
+                  : {}),
+                ...(payload.dispatchOrigin !== undefined
+                  ? { dispatchOrigin: payload.dispatchOrigin }
+                  : {}),
+                ...(payload.startsNewTurn !== undefined
+                  ? { startsNewTurn: payload.startsNewTurn }
+                  : {}),
+                turnId: payload.turnId,
+                streaming: payload.streaming,
+                source: payload.source,
+                createdAt: payload.createdAt,
+                updatedAt: payload.updatedAt,
+              },
+              event.type,
+              "message",
+            );
 
         // Hot path: one streamed delta must not cost a full copy-and-rebuild of
         // the transcript. Update the one affected slot in a single shallow copy
@@ -1090,8 +1173,7 @@ export function projectEvent(
                 })
               : undefined;
           const nextMessages = thread.messages.slice();
-          const entryWithoutTextSegments = { ...entry };
-          delete entryWithoutTextSegments.textSegments;
+          const { textSegments: _discardedSegments, ...entryWithoutTextSegments } = entry;
           nextMessages[existingIndex] = {
             ...entryWithoutTextSegments,
             ...(message.asyncUserInput ? { asyncUserInput: message.asyncUserInput } : {}),
@@ -1464,17 +1546,33 @@ export function projectEvent(
         }),
       );
 
+    case "thread.session-stop-requested":
     case "thread.turn-interrupt-requested": {
       const thread = nextBase.threads.find((entry) => entry.id === event.payload.threadId);
       if (!thread) return Effect.succeed(nextBase);
-      const activity = deriveTurnStopActivity(event, thread.session?.activeTurnId ?? null);
+      const activity =
+        event.type === "thread.turn-interrupt-requested"
+          ? deriveTurnStopActivity(event, thread.session?.activeTurnId ?? null)
+          : null;
+      const hasFence = event.payload.usageLimitRecoveryCancelledAt !== undefined;
       return Effect.succeed(
-        activity
+        activity || hasFence
           ? {
               ...nextBase,
               threads: updateThread(nextBase.threads, thread.id, {
-                activities: upsertThreadActivity(thread.activities, activity),
-                updatedAt: event.occurredAt,
+                ...(hasFence
+                  ? {
+                      usageLimitRecoveryCancelledAt: event.payload.usageLimitRecoveryCancelledAt,
+                      usageLimitRecoveryCancelledTurnId:
+                        event.payload.usageLimitRecoveryCancelledTurnId ?? null,
+                    }
+                  : {}),
+                ...(activity
+                  ? {
+                      activities: upsertThreadActivity(thread.activities, activity),
+                      updatedAt: event.occurredAt,
+                    }
+                  : {}),
               }),
             }
           : nextBase,

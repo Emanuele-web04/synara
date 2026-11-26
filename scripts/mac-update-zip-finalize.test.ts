@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
+import { createRequire } from "node:module";
+import os from "node:os";
 import {
   existsSync,
   lstatSync,
@@ -13,13 +15,17 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { createDesktopPlatformBuildConfig } from "./lib/desktop-platform-build-config.ts";
 
 import { finalizeMacUpdateZip } from "./lib/mac-update-zip-finalize.ts";
 import { parseMacUpdateManifest } from "./merge-mac-update-manifests.ts";
 
 const roots: string[] = [];
 afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
@@ -45,7 +51,10 @@ function createDmgStage(productName: string, version: string, arch: string, upda
     JSON.stringify({
       productName,
       version,
-      build: { mac: { target: ["dmg"] }, publish: updater ? [{ provider: "github" }] : null },
+      build: {
+        mac: createDesktopPlatformBuildConfig({ platform: "mac", target: "dmg" }).mac,
+        publish: updater ? [{ provider: "github" }] : null,
+      },
     }),
   );
   const artifactStem = `${productName.replaceAll(" ", "-")}-${version}-${arch}`;
@@ -108,6 +117,59 @@ describe.runIf(process.platform === "darwin")("macOS update ZIP finalization", (
     },
   );
 
+  it.each([false, true])(
+    "keeps incompatible Macs from installing a macOS13 update (retained manifest: %s)",
+    async (retainedManifest) => {
+      const fixture = createDmgStage("Synara", "1.0.2", "arm64", true);
+      const manifestPath = join(fixture.dist, "latest-mac.yml");
+      if (retainedManifest) {
+        execFileSync("ditto", [
+          "-c",
+          "-k",
+          "--sequesterRsrc",
+          "--keepParent",
+          join(fixture.dist, "mac", fixture.appName),
+          join(fixture.dist, `${fixture.artifactStem}.zip`),
+        ]);
+        writeFileSync(
+          manifestPath,
+          `version: 1.0.2
+files:
+  - url: ${fixture.artifactStem}.zip
+    sha512: stale
+    size: 1
+minimumSystemVersion: '21.0.0'
+releaseDate: '2026-10-25T00:00:00.000Z'
+`,
+        );
+      }
+      await finalizeMacUpdateZip({ stageDistDir: fixture.dist, signed: false });
+      const manifest = parseMacUpdateManifest(readFileSync(manifestPath, "utf8"), manifestPath);
+      expect(manifest.extras.minimumSystemVersion).toBe("22.0.0");
+
+      // Exercise the installed updater's real compatibility gate: it compares Darwin releases.
+      const require = createRequire(new URL("../apps/desktop/package.json", import.meta.url));
+      const { AppUpdater } = require("electron-updater/out/AppUpdater.js") as {
+        AppUpdater: {
+          prototype: {
+            checkIfUpdateSupported(updateInfo: { minimumSystemVersion: string }): boolean;
+          };
+        };
+      };
+      const release = vi.spyOn(os, "release");
+      const logger = { info: () => undefined, warn: () => undefined };
+      const updateInfo = { minimumSystemVersion: String(manifest.extras.minimumSystemVersion) };
+      release.mockReturnValue("21.6.0");
+      expect(
+        AppUpdater.prototype.checkIfUpdateSupported.call({ _logger: logger }, updateInfo),
+      ).toBe(false);
+      release.mockReturnValue("22.0.0");
+      expect(
+        AppUpdater.prototype.checkIfUpdateSupported.call({ _logger: logger }, updateInfo),
+      ).toBe(true);
+    },
+  );
+
   it.each([true, false])(
     "recovers an interrupted ZIP before its manifest only for a DMG-only stage (%s)",
     async (dmgOnly) => {
@@ -147,6 +209,33 @@ describe.runIf(process.platform === "darwin")("macOS update ZIP finalization", (
       ]);
     },
   );
+
+  it("packs the ZIP without blocking the event loop that awaits DMG notarization", async () => {
+    const fixture = createDmgStage("Synara", "1.0.2", "arm64", true);
+    const bin = join(fixture.root, "bin");
+    const marker = join(fixture.root, "event-loop-ran");
+    mkdirSync(bin);
+    // The real ditto runs only after this process's timer fires. A blocking
+    // subprocess call would starve that timer until the bounded wait fails.
+    writeFileSync(
+      join(bin, "ditto"),
+      `#!/bin/sh
+for _ in $(seq 1 100); do
+  if [ -f "${marker}" ]; then exec /usr/bin/ditto "$@"; fi
+  sleep 0.05
+done
+echo "event loop was blocked" >&2
+exit 1
+`,
+      { mode: 0o755 },
+    );
+    vi.stubEnv("PATH", `${bin}:${process.env.PATH}`);
+    const finalization = finalizeMacUpdateZip({ stageDistDir: fixture.dist, signed: false });
+    setTimeout(() => writeFileSync(marker, ""), 50);
+    const result = await finalization;
+    expect(result.zipFileName).toBe(`${fixture.artifactStem}.zip`);
+    expect(existsSync(result.zipPath)).toBe(true);
+  });
 
   it("requires the app signature before creating a signed update ZIP", async () => {
     const fixture = createDmgStage("Synara", "1.0.2", "arm64", true);

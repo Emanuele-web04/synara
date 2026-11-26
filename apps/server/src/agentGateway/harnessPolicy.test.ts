@@ -44,12 +44,14 @@ describe("Synara harness policy", () => {
     const policy = renderSynaraHarnessPolicy({ gatewayControlAvailable: true });
     assert.include(policy, SYNARA_HARNESS_POLICY_MARKER);
     assert.include(policy, "Synara is the host and harness");
-    assert.include(policy, "one exact synara_create_threads plan");
-    assert.include(policy, "before returning an operationId");
+    assert.include(policy, "Use synara_create_threads for each exact batch");
+    assert.include(policy, "new requestId per phase");
+    assert.include(policy, "After a timeout, retry the exact request");
     assert.include(policy, "synara_wait_for_threads");
     assert.include(policy, "synara_set_thread_pull_request");
-    assert.include(policy, "current thread's own deliverable");
-    assert.include(policy, "only reviews, references, or discusses");
+    assert.include(policy, "for this thread's work");
+    assert.include(policy, "links add up");
+    assert.include(policy, "only read, review, or mention");
     assert.include(policy, "use browser_* autonomously");
     assert.include(policy, "canonical, complete control surface");
     assert.include(policy, "never substitute Chrome");
@@ -92,7 +94,7 @@ describe("Synara harness policy", () => {
   it("never advertises gateway mutation to providers without scoped MCP", () => {
     const policy = renderSynaraHarnessPolicy({ gatewayControlAvailable: false });
     assert.include(policy, "Synara MCP control is unavailable");
-    assert.notInclude(policy, "one exact synara_create_threads plan");
+    assert.notInclude(policy, "Use synara_create_threads for each exact batch");
   });
 
   it("delivers a private host-context block once per provider session", () => {
@@ -122,7 +124,7 @@ describe("Synara harness policy", () => {
         ) ?? "";
       assert.include(text, SYNARA_HARNESS_POLICY_MARKER, provider);
       assert.include(text, "Synara MCP control is unavailable", provider);
-      assert.notInclude(text, "one exact synara_create_threads plan", provider);
+      assert.notInclude(text, "Use synara_create_threads for each exact batch", provider);
     }
   });
 
@@ -137,8 +139,43 @@ describe("Synara harness policy", () => {
     assert.notInclude(policy, "com.apple.Preferences");
   });
 
+  it("keeps hub roles out of reach of a worker without loosening normal conversations", () => {
+    // Sessions with gateway control get the hub role line; sessions without it
+    // are told nothing about hub routing they cannot perform anyway.
+    const policy = renderSynaraHarnessPolicy({ gatewayControlAvailable: true });
+    assert.include(policy, "Hub roles come from the server");
+    assert.include(policy, "the coordinator routes assigned hub work and owns hub automations");
+    assert.include(
+      policy,
+      "workers do their assigned work and cannot create threads or message other threads",
+    );
+    assert.include(policy, "Other conversations retain ordinary thread tools.");
+    assert.notInclude(
+      renderSynaraHarnessPolicy({ gatewayControlAvailable: false }),
+      "Hub roles come from the server",
+    );
+  });
+
   it("keeps the gateway policy below its prompt budget", () => {
-    assert.isAtMost(renderSynaraHarnessPolicy({ gatewayControlAvailable: true }).length, 6_030);
+    // Role guidance adds one line; keep the optional visual guidance in its own budget.
+    assert.isAtMost(renderSynaraHarnessPolicy({ gatewayControlAvailable: true }).length, 6_250);
+    assert.isAtMost(
+      renderSynaraHarnessPolicy({ gatewayControlAvailable: true, inlineVisuals: true }).length,
+      6_380,
+    );
+  });
+
+  it("points to synara_show_visual only when the session can call it", () => {
+    const visualLine = "call synara_show_visual and place its block in your reply";
+    assert.include(
+      renderSynaraHarnessPolicy({ gatewayControlAvailable: true, inlineVisuals: true }),
+      visualLine,
+    );
+    assert.notInclude(renderSynaraHarnessPolicy({ gatewayControlAvailable: true }), visualLine);
+    assert.notInclude(
+      renderSynaraHarnessPolicy({ gatewayControlAvailable: false, inlineVisuals: true }),
+      visualLine,
+    );
   });
 
   it("withholds device guidance from sessions with no gateway control", () => {

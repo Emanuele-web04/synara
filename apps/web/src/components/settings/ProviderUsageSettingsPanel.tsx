@@ -1,3 +1,4 @@
+import { localizedProviderUsageNeedsAuthDetail } from "~/lib/providerUsageDisplay";
 // FILE: ProviderUsageSettingsPanel.tsx
 // Purpose: Settings → Usage panel. One card per supported provider account showing live remaining
 // quota/credits with linear progress meters, the provider brand icon, and plan/status pills.
@@ -7,7 +8,6 @@ import { DEFAULT_SERVER_SETTINGS_VIEW, type ServerProviderUsageSnapshot } from "
 import { deriveProviderInstances } from "@synara/shared/providerInstances";
 import {
   providerUsageDisplayName,
-  providerUsageNeedsAuthDetail,
   selectVisibleProviderUsageSnapshots,
 } from "@synara/shared/providerUsage";
 import { useMemo } from "react";
@@ -35,20 +35,22 @@ import { SettingsSegmentedControl } from "~/components/settings/SettingControls"
 import { Button } from "~/components/ui/button";
 import { Switch } from "~/components/ui/switch";
 import { useProviderUsageSummary } from "~/hooks/useProviderUsageSummary";
+import { readWorkspaceFrame } from "~/lib/hosts/workspaceFrame";
 import { RotateCcwIcon, TriangleAlertIcon } from "~/lib/icons";
 import { deriveProviderUsageDisplayRows } from "~/lib/providerUsageDisplay";
 import {
   fetchAllProviderUsage,
   serverAllProviderUsageQueryOptions,
-  serverQueryKeys,
   serverSettingsQueryOptions,
+  setProviderUsageQueryData,
 } from "~/lib/serverReactQuery";
 import { cn } from "~/lib/utils";
+import { t, useTranslation } from "~/i18n";
 
 const RAIL_USAGE_WINDOW_OPTIONS = [
-  { value: "both", label: "Both" },
-  { value: "fiveHour", label: "5h" },
-  { value: "weekly", label: "Weekly" },
+  { value: "both", label: "settings:both" },
+  { value: "fiveHour", label: "common:5h" },
+  { value: "weekly", label: "common:schedule_weekly" },
 ] as const satisfies ReadonlyArray<{ value: RailUsageWindow; label: string }>;
 
 const PILL_CLASS_NAME = "shrink-0 rounded-full px-2 py-1 text-ui-sm font-medium leading-none";
@@ -62,25 +64,55 @@ function statusPill(status: ServerProviderUsageSnapshot["status"]): StatusPill |
   switch (status) {
     case "needs-auth":
       return {
-        label: "Not signed in",
+        label: t("settings:providerUsage_needsAuth"),
         className: "bg-amber-500/12 text-amber-600 dark:text-amber-400",
       };
     case "unsupported":
-      return { label: "Unsupported", className: "bg-muted text-muted-foreground" };
+      return {
+        label: t("chat:providerUsage_unsupported"),
+        className: "bg-muted text-muted-foreground",
+      };
     case "error":
-      return { label: "Unavailable", className: "bg-red-500/12 text-red-600 dark:text-red-400" };
+      return {
+        label: t("chat:providerModelPicker_unavailable"),
+        className: "bg-red-500/12 text-red-600 dark:text-red-400",
+      };
     default:
       return null;
   }
 }
 
-function ProviderUsageCard({
+/**
+ * The account a usage card names under the agent: another account by its name; the
+ * default account only by a name the user gave it, else "Default account" once the
+ * snapshot names its instance. Shared by the Usage page and an account's detail view.
+ */
+export function providerUsageAccountLabel(
+  snapshot: Pick<ServerProviderUsageSnapshot, "provider" | "instanceId">,
+  account: {
+    /** The account's resolved name. */
+    readonly label: string | undefined;
+    /** The name the user saved for it, if any. */
+    readonly customName: string | undefined;
+  },
+  translate: typeof t = t,
+): string | null {
+  const instanceId = snapshot.instanceId ?? snapshot.provider;
+  if (instanceId !== snapshot.provider) return account.label ?? instanceId;
+  return (
+    account.customName?.trim() || (snapshot.instanceId ? translate("common:defaultAccount") : null)
+  );
+}
+
+export function ProviderUsageCard({
   snapshot,
   accountLabel,
 }: {
   snapshot: ServerProviderUsageSnapshot;
   accountLabel: string | null;
 }) {
+  const { t } = useTranslation();
+
   const provider = snapshot.provider;
   const status = snapshot.status ?? "ok";
   const usageSummary = useProviderUsageSummary({
@@ -88,7 +120,7 @@ function ProviderUsageCard({
     instanceId: snapshot.instanceId ?? provider,
     providerSnapshot: snapshot,
   });
-  const meterRows = deriveProviderUsageDisplayRows(usageSummary.rateLimits);
+  const meterRows = deriveProviderUsageDisplayRows(usageSummary.rateLimits, t);
   const usageLines = usageSummary.usageLines;
   const resetCredits = provider === "codex" ? snapshot.resetCredits : undefined;
   const hasResetCredits = Boolean(resetCredits && resetCredits.availableCount > 0);
@@ -151,8 +183,8 @@ function ProviderUsageCard({
         ) : (
           <p className="text-ui leading-relaxed text-muted-foreground">
             {status === "ok"
-              ? "No usage data reported yet."
-              : (snapshot.detail ?? providerUsageNeedsAuthDetail(provider))}
+              ? t("settings:noUsageDataReportedYet")
+              : (snapshot.detail ?? localizedProviderUsageNeedsAuthDetail(provider, t))}
           </p>
         )}
       </div>
@@ -161,6 +193,8 @@ function ProviderUsageCard({
 }
 
 export function ProviderUsageSettingsPanel() {
+  const { t } = useTranslation();
+
   const queryClient = useQueryClient();
   const { settings, updateSettings } = useAppSettings();
   const serverSettingsQuery = useQuery(serverSettingsQueryOptions());
@@ -176,6 +210,7 @@ export function ProviderUsageSettingsPanel() {
   const railUsageAccounts = getRailUsageAccounts(
     [...providerInstances.values()],
     settings.disabledProviders,
+    t,
   );
   // Disabled accounts keep their saved choice; only deleted accounts are discarded.
   const savedRailUsageInstanceIds = (
@@ -192,10 +227,7 @@ export function ProviderUsageSettingsPanel() {
     onSuccess: (data) => {
       // The batch owns account membership. Keeping omitted previous snapshots
       // would restore accounts that were removed or disabled since the last fetch.
-      queryClient.setQueryData<readonly ServerProviderUsageSnapshot[]>(
-        serverQueryKeys.allProviderUsage(),
-        data,
-      );
+      setProviderUsageQueryData(queryClient, data);
     },
   });
 
@@ -217,9 +249,12 @@ export function ProviderUsageSettingsPanel() {
 
   const isRefreshing = usageQuery.isFetching || refreshMutation.isPending;
 
-  return (
+  const appUsageSettings = (
     <>
-      <SettingsSection title={`Sidebar · up to ${MAX_RAIL_USAGE_ACCOUNTS} accounts`}>
+      <SettingsSection
+        translateTitle={false}
+        title={t("settings:sidebarUsageAccountLimit", { count: MAX_RAIL_USAGE_ACCOUNTS })}
+      >
         {railUsageAccounts.map(({ instance, label }) => {
           const checked = railUsageInstanceIds.includes(instance.instanceId);
           return (
@@ -249,68 +284,80 @@ export function ProviderUsageSettingsPanel() {
                       ),
                     })
                   }
-                  aria-label={`Show ${label} usage at the bottom of the sidebar`}
+                  aria-label={t("settings:showUsageAtTheBottomOfTheSidebar", {
+                    value0: label,
+                  })}
                 />
               }
             />
           );
         })}
         <SettingsListRow
-          title="Ring"
-          description="Show both limits as two rings, or a single ring for one of them."
+          title={t("settings:ring")}
+          description={t("settings:showBothLimitsAsTwoRingsOrASingle")}
           actions={
             <SettingsSegmentedControl
               value={settings.railUsageWindow}
               onValueChange={(value) => updateSettings({ railUsageWindow: value })}
-              ariaLabel="Sidebar usage ring"
-              options={RAIL_USAGE_WINDOW_OPTIONS}
+              ariaLabel={t("settings:sidebarUsageRing")}
+              options={RAIL_USAGE_WINDOW_OPTIONS.map((option) => ({
+                value: option.value,
+                label: t(option.label),
+              }))}
             />
           }
         />
       </SettingsSection>
-      <SettingsSection title="Usage popovers">
+      <SettingsSection title="settings:usagePopovers">
         <SettingsListRow
-          title="Show details by default"
-          description="Open the details below the limits. When off, they stay behind the Details toggle; your last toggle also updates this preference."
+          title={t("settings:showDetailsByDefault")}
+          description={t("settings:openTheDetailsBelowTheLimitsWhenOffThey")}
           actions={
             <Switch
               checked={settings.usageDetailsDefaultOpen}
               onCheckedChange={(next) => updateSettings({ usageDetailsDefaultOpen: Boolean(next) })}
-              aria-label="Show usage details by default in usage popovers"
+              aria-label={t("settings:showUsageDetailsByDefaultInUsagePopovers")}
             />
           }
         />
         {!settings.disabledProviders.includes("codex") ? (
           <SettingsListRow
-            title="Banked resets"
-            description="Include Codex banked resets in the details."
+            title={t("common:bankedResets")}
+            description={t("settings:includeCodexBankedResetsInTheDetails")}
             actions={
               <Switch
                 checked={settings.usagePopoverShowResetCredits}
                 onCheckedChange={(next) =>
                   updateSettings({ usagePopoverShowResetCredits: Boolean(next) })
                 }
-                aria-label="Show banked resets in usage popovers"
+                aria-label={t("settings:showBankedResetsInUsagePopovers")}
               />
             }
           />
         ) : null}
         <SettingsListRow
-          title="Credits and token totals"
-          description="Include credit balances and recent token totals (24h, 7d, 30d) in the details."
+          title={t("settings:creditsAndTokenTotals")}
+          description={t("settings:includeCreditBalancesAndRecentTokenTotals24h7d")}
           actions={
             <Switch
               checked={settings.usagePopoverShowUsageLines}
               onCheckedChange={(next) =>
                 updateSettings({ usagePopoverShowUsageLines: Boolean(next) })
               }
-              aria-label="Show credits and token totals in usage popovers"
+              aria-label={t("settings:showCreditsAndTokenTotalsInUsagePopovers")}
             />
           }
         />
       </SettingsSection>
+    </>
+  );
+
+  return (
+    <>
+      {/* Presentation preferences belong to the controlling app, not the selected host. */}
+      {!readWorkspaceFrame() ? appUsageSettings : null}
       <SettingsSectionShell
-        title="Provider usage"
+        title="settings:providerUsage"
         action={
           <Button
             size="xs"
@@ -320,14 +367,14 @@ export function ProviderUsageSettingsPanel() {
             onClick={() => refreshMutation.mutate()}
           >
             <RotateCcwIcon className={cn("size-3.5", isRefreshing && "animate-spin")} />
-            Refresh
+            {t("chat:list_refreshAriaLabel")}
           </Button>
         }
       >
         {showInitialLoading ? (
           <SettingsCard>
             <div className="px-4 py-3.5 text-ui leading-snug text-muted-foreground">
-              Loading provider usage…
+              {t("settings:loadingProviderUsage")}
             </div>
           </SettingsCard>
         ) : (
@@ -335,11 +382,11 @@ export function ProviderUsageSettingsPanel() {
             {cards.map((snapshot) => {
               const instanceId = snapshot.instanceId ?? snapshot.provider;
               const instance = providerInstances.get(instanceId);
-              const accountLabel =
-                instanceId !== snapshot.provider
-                  ? (instance?.displayName ?? instanceId)
-                  : instance?.raw.displayName?.trim() ||
-                    (snapshot.instanceId ? "Default account" : null);
+              const accountLabel = providerUsageAccountLabel(
+                snapshot,
+                { label: instance?.displayName, customName: instance?.raw.displayName },
+                t,
+              );
               return (
                 <ProviderUsageCard
                   key={instanceId}
@@ -352,10 +399,7 @@ export function ProviderUsageSettingsPanel() {
         )}
 
         <p className="px-2 text-ui-sm leading-relaxed text-muted-foreground">
-          Usage is read locally from each provider CLI&apos;s stored credentials and fetched
-          directly from the provider. The list follows whatever you are signed into; unsigned
-          providers stay visible until any account is connected, then drop away. Short-lived tokens
-          are refreshed through the provider&apos;s own CLI or official token endpoint.
+          {t("settings:usageIsReadLocallyFromEachProviderCLIS")}
         </p>
       </SettingsSectionShell>
     </>

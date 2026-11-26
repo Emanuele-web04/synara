@@ -1,13 +1,29 @@
+import { resolveActivityDayStartMs } from "@synara/shared/inboxDay";
+export { resolveActivityDayStartMs } from "@synara/shared/inboxDay";
 // FILE: SidebarActivityView.logic.ts
 // Purpose: Pure grouping/sorting model for the sidebar Activity view (threads as tasks).
-// Exports: eligibility, stable ordering, settle helpers, and the view-model builder.
+// Exports: eligibility, stable ordering, settle helpers, the view-model builder, and the
+//          Priority ranking behind the section, the bell's dot, and "next needing attention".
 
-import type { ProjectId, ThreadId } from "@synara/contracts";
+import type {
+  OrchestrationThreadPullRequest,
+  OrchestrationThreadPullRequestLink,
+  ProjectId,
+  ThreadId,
+} from "@synara/contracts";
+import {
+  compareLinkedPullRequests,
+  pullRequestLinkKey,
+  visiblePullRequestLinks,
+} from "@synara/shared/threadPullRequestLinks";
 import type { SidebarThreadSummary } from "../types";
 import {
+  groupSidebarThreadFamilies,
   hasUnseenCompletion,
   hasUnseenSnoozeReturn,
   isThreadActivelyWorking,
+  nestAgentCreatedThreadEntries,
+  type ThreadStatusPill,
 } from "./Sidebar.logic";
 
 export function isThreadRunningForActivity(
@@ -21,10 +37,11 @@ export function isThreadRunningForActivity(
  * at least once, or explicitly snoozed/reminded. Ordinary drafts stay out,
  * but a thread whose very first turn is starting up already counts as work.
  */
-export function isActivityThread(thread: SidebarThreadSummary): boolean {
+export function isActivityThread(thread: SidebarThreadSummary, preparingWorktree = false): boolean {
   if (thread.archivedAt != null) return false;
   if (thread.parentThreadId) return false;
   return (
+    preparingWorktree ||
     thread.snoozedUntil != null ||
     thread.snoozeReminderAt != null ||
     thread.latestTurn !== null ||
@@ -123,6 +140,8 @@ export function buildActivityViewModel(input: {
   threads: readonly SidebarThreadSummary[];
   pinnedThreadIdSet: ReadonlySet<ThreadId>;
   draftThreadIdSet?: ReadonlySet<ThreadId>;
+  /** First sends preparing a worktree have no provider session or turn yet. */
+  preparingThreadIdSet?: ReadonlySet<ThreadId>;
   /** The open thread: its draft is being typed, so it never moves to Drafts. */
   activeThreadId?: ThreadId | null;
   settledOverrideByThreadId?: ReadonlyMap<ThreadId, boolean>;
@@ -134,7 +153,8 @@ export function buildActivityViewModel(input: {
     draftThreadIdSet: input.draftThreadIdSet ?? null,
     activeThreadId: input.activeThreadId ?? null,
   };
-  const isDraft = (thread: SidebarThreadSummary) => isParkedActivityDraft(thread, draftOptions);
+  const isDraft = (thread: SidebarThreadSummary) =>
+    !input.preparingThreadIdSet?.has(thread.id) && isParkedActivityDraft(thread, draftOptions);
   const pinned: SidebarThreadSummary[] = [];
   const drafts: SidebarThreadSummary[] = [];
   const active: SidebarThreadSummary[] = [];
@@ -142,7 +162,7 @@ export function buildActivityViewModel(input: {
   const snoozed: SidebarThreadSummary[] = [];
 
   for (const thread of input.threads) {
-    if (!isActivityThread(thread)) continue;
+    if (!isActivityThread(thread, input.preparingThreadIdSet?.has(thread.id))) continue;
     if (projectFilterIds !== null && !projectFilterIds.has(thread.projectId)) continue;
     // The server clears snooze on expiry. Client clocks must not surface a thread
     // before that durable update, and pins cannot bypass the user's snooze.
@@ -305,10 +325,11 @@ export type ActivityScopeOption =
 export function collectActivityScopeOptions(
   threads: readonly SidebarThreadSummary[],
   isRealProject: (projectId: ProjectId) => boolean,
+  preparingThreadIdSet?: ReadonlySet<ThreadId>,
 ): ActivityScopeOption[] {
   const countByProjectId = new Map<ProjectId, number>();
   for (const thread of threads) {
-    if (!isActivityThread(thread)) continue;
+    if (!isActivityThread(thread, preparingThreadIdSet?.has(thread.id))) continue;
     countByProjectId.set(thread.projectId, (countByProjectId.get(thread.projectId) ?? 0) + 1);
   }
 
@@ -355,47 +376,351 @@ export function resolveActivityScope(
   return { scope: scopeSelection, projectFilterIds: new Set([scopeSelection]) };
 }
 
-export const ACTIVITY_RECENT_LIMIT = 5;
-
 /**
- * Recent turns over at 4am, not midnight: a session that runs past midnight is
- * still the same working day, and resetting the section out from under a live
- * session is worse than carrying it a few hours longer.
+ * Why a thread is in Priority, most urgent first: it waits on an answer from the
+ * user, it has work the user has not seen (a failed turn shows as a completion), or
+ * it is still working.
  */
-export const ACTIVITY_DAY_START_HOUR = 4;
+export type ActivityPriorityTier = "waiting" | "unread" | "working";
 
-/** Start of the working day `nowMs` belongs to, in local time. */
-export function resolveActivityDayStartMs(nowMs: number): number {
-  const dayStart = new Date(nowMs);
-  dayStart.setHours(ACTIVITY_DAY_START_HOUR, 0, 0, 0);
-  if (dayStart.getTime() > nowMs) dayStart.setDate(dayStart.getDate() - 1);
-  return dayStart.getTime();
+// Read off the row's own status pill, so a row's tier and its glyph never disagree
+// and a dismissed pill leaves Priority the same way it leaves the row.
+const ACTIVITY_PRIORITY_TIER_BY_STATUS: Record<ThreadStatusPill["label"], ActivityPriorityTier> = {
+  "Pending Approval": "waiting",
+  "Awaiting Input": "waiting",
+  "Plan Ready": "waiting",
+  Completed: "unread",
+  Reminder: "unread",
+  Working: "working",
+  Connecting: "working",
+  "Preparing worktree": "working",
+  "In Background": "working",
+};
+
+const ACTIVITY_PRIORITY_TIER_RANK: Record<ActivityPriorityTier, number> = {
+  waiting: 0,
+  unread: 1,
+  working: 2,
+};
+
+export function resolveActivityPriorityTier(
+  status: Pick<ThreadStatusPill, "label"> | null,
+): ActivityPriorityTier | null {
+  return status === null ? null : ACTIVITY_PRIORITY_TIER_BY_STATUS[status.label];
 }
 
-/** The five most recent human sends or reminders in the current working day. */
-export function splitRecentActivityThreads(
-  active: readonly SidebarThreadSummary[],
-  options: { nowMs: number; limit?: number },
-): { recent: SidebarThreadSummary[]; rest: SidebarThreadSummary[] } {
-  const limit = options.limit ?? ACTIVITY_RECENT_LIMIT;
-  const dayStartMs = resolveActivityDayStartMs(options.nowMs);
-  const recent = active
-    .filter(
-      (thread) =>
-        resolveActivityRecencyMs(thread) >= dayStartMs &&
-        (thread.latestHumanMessageAt != null || thread.snoozeReminderAt != null),
-    )
-    .toSorted(
-      (left, right) =>
-        resolveActivityRecencyMs(right) - resolveActivityRecencyMs(left) ||
-        compareThreadIds(left, right),
-    )
-    .slice(0, limit);
-  const recentThreadIds = new Set(recent.map((thread) => thread.id));
+type ActivityPriorityTierResolver = (thread: SidebarThreadSummary) => ActivityPriorityTier | null;
+
+/** The more urgent of two tiers (waiting, then unread, then working); null means no tier. */
+export function mostUrgentActivityPriorityTier(
+  left: ActivityPriorityTier | null,
+  right: ActivityPriorityTier | null,
+): ActivityPriorityTier | null {
+  if (left === null) return right;
+  if (right === null) return left;
+  return ACTIVITY_PRIORITY_TIER_RANK[right] < ACTIVITY_PRIORITY_TIER_RANK[left] ? right : left;
+}
+
+/** Most urgent tier among a parent's agent-created children. */
+export function resolveChildThreadsTier(
+  children: readonly SidebarThreadSummary[],
+  resolveTier: ActivityPriorityTierResolver,
+): ActivityPriorityTier | null {
+  let tier: ActivityPriorityTier | null = null;
+  for (const child of children) {
+    tier = mostUrgentActivityPriorityTier(tier, resolveTier(child));
+    if (tier === "waiting") break;
+  }
+  return tier;
+}
+
+/** A folded parent's chip tint: a child waits on the user, a child has news, or all quiet. */
+export type ChildThreadsTone = "waiting" | "active" | "quiet";
+
+export function resolveChildThreadsTone(tier: ActivityPriorityTier | null): ChildThreadsTone {
+  if (tier === "waiting") return "waiting";
+  return tier === null ? "quiet" : "active";
+}
+
+/**
+ * The pull requests an Activity row stands for. First the one the row resolves today (the
+ * thread's current PR: an open link before a settled one, the latest linked among equals, with
+ * its live state), which also decides the glyph and color; then the thread's other visible
+ * links, open first and most recently linked first. A row whose PR was ruled out (a moved
+ * checkout) shows none, so no stale link comes back through this list.
+ */
+export function resolveActivityRowPullRequests(
+  rowPullRequest: OrchestrationThreadPullRequest | null,
+  links: ReadonlyArray<OrchestrationThreadPullRequestLink> | null | undefined,
+): OrchestrationThreadPullRequest[] {
+  if (rowPullRequest === null) return [];
+  const rowKey = pullRequestLinkKey(rowPullRequest.url);
+  const others = visiblePullRequestLinks(links)
+    .filter((link) => pullRequestLinkKey(link.pullRequest.url) !== rowKey)
+    .toSorted(compareLinkedPullRequests)
+    .map((link) => link.pullRequest);
+  return [rowPullRequest, ...others];
+}
+
+/**
+ * How loudly an Activity row reads. Its title turns medium while the thread waits on the user
+ * or holds news they have not seen, and its reply preview steps back once nothing is new or
+ * running. `status` is what the row shows, so the open thread's resolved unread dot counts as seen.
+ */
+export function resolveActivityRowEmphasis(status: Pick<ThreadStatusPill, "label"> | null): {
+  titleEmphasized: boolean;
+  replySeen: boolean;
+} {
+  const tier = resolveActivityPriorityTier(status);
+  return { titleEmphasized: tier === "waiting" || tier === "unread", replySeen: tier === null };
+}
+
+export interface ActivityChildFamilies {
+  /** The feed without agent-created threads whose creator is also in the feed. */
+  roots: SidebarThreadSummary[];
+  /** Each root's agent-created descendants, depth-first in creation order. */
+  childrenByRootId: ReadonlyMap<ThreadId, readonly SidebarThreadSummary[]>;
+}
+
+const NO_THREAD_IDS: ReadonlySet<ThreadId> = new Set();
+
+/**
+ * Folds agent-created threads under the top-most creator present in `threads`, the same tree
+ * the project list nests. A detached thread (pinned) keeps its own row and its children.
+ */
+export function groupActivityChildFamilies(
+  threads: readonly SidebarThreadSummary[],
+  detachedIds: ReadonlySet<ThreadId> = NO_THREAD_IDS,
+): ActivityChildFamilies {
+  // Snooze belongs to one chat. Keep it in Snoozed and let its active children remain visible.
+  const snoozedIds = new Set(
+    threads.filter((thread) => thread.snoozedUntil != null).map((thread) => thread.id),
+  );
+  const familyDetachedIds = new Set([...detachedIds, ...snoozedIds]);
+  for (const thread of threads) {
+    if (thread.sourceThreadId && snoozedIds.has(thread.sourceThreadId)) {
+      familyDetachedIds.add(thread.id);
+    }
+  }
+  const families = groupSidebarThreadFamilies(
+    nestAgentCreatedThreadEntries(threads, NO_THREAD_IDS, familyDetachedIds),
+  );
+  const roots: SidebarThreadSummary[] = [];
+  const childrenByRootId = new Map<ThreadId, readonly SidebarThreadSummary[]>();
+  for (const [root, ...descendants] of families) {
+    if (!root) continue;
+    roots.push(root.thread);
+    if (descendants.length > 0) {
+      childrenByRootId.set(
+        root.rowId,
+        descendants.map((entry) => entry.thread),
+      );
+    }
+  }
+  return { roots, childrenByRootId };
+}
+
+/**
+ * An unfolded family's rows: children with news (waiting, unread, working) always show, as
+ * does the open one; quiet children wait behind a "+N done" row until `showQuiet`.
+ */
+export function splitActivityFamilyChildren(
+  children: readonly SidebarThreadSummary[],
+  input: {
+    resolveTier: ActivityPriorityTierResolver;
+    activeThreadId: ThreadId | null;
+    showQuiet: boolean;
+  },
+): { visible: SidebarThreadSummary[]; quietCount: number } {
+  if (input.showQuiet) return { visible: [...children], quietCount: 0 };
+  const visible: SidebarThreadSummary[] = [];
+  let quietCount = 0;
+  for (const child of children) {
+    if (input.resolveTier(child) !== null || child.id === input.activeThreadId) {
+      visible.push(child);
+    } else {
+      quietCount += 1;
+    }
+  }
+  return { visible, quietCount };
+}
+
+/** Feed order for keyboard jumps: each root followed by its visible children. */
+export function expandActivityFamilyThreadIds(
+  threadIds: readonly ThreadId[],
+  visibleChildIdsByRootId: ReadonlyMap<ThreadId, readonly ThreadId[]>,
+): ThreadId[] {
+  if (visibleChildIdsByRootId.size === 0) return [...threadIds];
+  return threadIds.flatMap((id) => [id, ...(visibleChildIdsByRootId.get(id) ?? [])]);
+}
+
+function compareActivityPriority(
+  left: SidebarThreadSummary,
+  right: SidebarThreadSummary,
+  tierById: ReadonlyMap<ThreadId, ActivityPriorityTier>,
+): number {
+  return (
+    ACTIVITY_PRIORITY_TIER_RANK[tierById.get(left.id)!] -
+      ACTIVITY_PRIORITY_TIER_RANK[tierById.get(right.id)!] ||
+    resolveActivityRecencyMs(right) - resolveActivityRecencyMs(left) ||
+    compareThreadIds(left, right)
+  );
+}
+
+/** Priority's rows, carried between renders while the view stays mounted. */
+export interface ActivityPriorityState {
+  /** Row order as of the last render, including listed rows that are not candidates now. */
+  readonly threadIds: readonly ThreadId[];
+  /** When the rows were last sorted from scratch; threads created later lead the list. */
+  readonly sortedAtMs: number;
+}
+
+/**
+ * The Priority section, uncapped. A fresh sort (no previous state) ranks waiting, then
+ * unread, then working, newest human send first within each. After that the list holds
+ * still while the user works through it: rows keep their place and stay listed after
+ * they are read or finish, until the next fresh sort ("Clear read", a scope or grouping
+ * change, or reopening Activity). New entries never reshuffle it: threads created since
+ * the sort lead the list, others join at the end. A row only leaves early when it stops
+ * being a candidate (Done, snoozed, archived), and it shows in that section instead.
+ */
+export function resolveActivityPriority(input: {
+  /** Threads Priority may hold: the feed's scoped pinned, draft, and active rows. */
+  candidates: readonly SidebarThreadSummary[];
+  resolveTier: ActivityPriorityTierResolver;
+  previous: ActivityPriorityState | null;
+  nowMs: number;
+}): { threads: SidebarThreadSummary[]; state: ActivityPriorityState } {
+  const candidateById = new Map(input.candidates.map((thread) => [thread.id, thread]));
+  const tierById = new Map<ThreadId, ActivityPriorityTier>();
+  for (const thread of input.candidates) {
+    const tier = input.resolveTier(thread);
+    if (tier !== null) tierById.set(thread.id, tier);
+  }
+  const byPriority = (left: SidebarThreadSummary, right: SidebarThreadSummary) =>
+    compareActivityPriority(left, right, tierById);
+
+  const previous = input.previous;
+  if (previous === null) {
+    const threads = input.candidates
+      .filter((thread) => tierById.has(thread.id))
+      .toSorted(byPriority);
+    return {
+      threads,
+      state: { threadIds: threads.map((thread) => thread.id), sortedAtMs: input.nowMs },
+    };
+  }
+
+  const listedIds = new Set(previous.threadIds);
+  const createdSinceSort: SidebarThreadSummary[] = [];
+  const joinedSinceSort: SidebarThreadSummary[] = [];
+  for (const thread of input.candidates) {
+    if (listedIds.has(thread.id) || !tierById.has(thread.id)) continue;
+    if (parseTimestampMs(thread.createdAt) > previous.sortedAtMs) createdSinceSort.push(thread);
+    else joinedSinceSort.push(thread);
+  }
+  const created = createdSinceSort.toSorted(
+    (left, right) =>
+      parseTimestampMs(right.createdAt) - parseTimestampMs(left.createdAt) ||
+      compareThreadIds(left, right),
+  );
+  const joined = joinedSinceSort.toSorted(byPriority);
+  const threads = [...created];
+  for (const threadId of previous.threadIds) {
+    const thread = candidateById.get(threadId);
+    if (thread) threads.push(thread);
+  }
+  threads.push(...joined);
+  // A row that is briefly not a candidate (Done then undone, a reconnect that drops it
+  // for a moment) keeps its slot, so it comes back where it was instead of at the end.
   return {
-    recent,
-    rest: active.filter((thread) => !recentThreadIds.has(thread.id)),
+    threads,
+    state: {
+      threadIds: [
+        ...created.map((thread) => thread.id),
+        ...previous.threadIds,
+        ...joined.map((thread) => thread.id),
+      ],
+      sortedAtMs: previous.sortedAtMs,
+    },
   };
+}
+
+/**
+ * Each thread shows once: a Priority row leaves Pinned, Drafts, and the day groups. Done
+ * and Snoozed never feed Priority, so they pass through untouched.
+ */
+export function excludeActivityPriorityThreads(
+  model: Pick<ActivityViewModel, "pinned" | "drafts" | "active">,
+  priority: readonly SidebarThreadSummary[],
+): Pick<ActivityViewModel, "pinned" | "drafts" | "active"> {
+  if (priority.length === 0) {
+    return { pinned: model.pinned, drafts: model.drafts, active: model.active };
+  }
+  const priorityIds = new Set(priority.map((thread) => thread.id));
+  const notInPriority = (thread: SidebarThreadSummary) => !priorityIds.has(thread.id);
+  return {
+    pinned: model.pinned.filter(notInPriority),
+    drafts: model.drafts.filter(notInPriority),
+    active: model.active.filter(notInPriority),
+  };
+}
+
+export function activityPriorityStatesEqual(
+  left: ActivityPriorityState | null,
+  right: ActivityPriorityState | null,
+): boolean {
+  if (left === right) return true;
+  if (left === null || right === null) return false;
+  return (
+    left.sortedAtMs === right.sortedAtMs &&
+    left.threadIds.length === right.threadIds.length &&
+    left.threadIds.every((threadId, index) => threadId === right.threadIds[index])
+  );
+}
+
+/** Threads the user owes a look, other than the open one, most urgent first. */
+function collectThreadsNeedingAttention(
+  threads: readonly SidebarThreadSummary[],
+  activeThreadId: ThreadId | null,
+  resolveTier: ActivityPriorityTierResolver,
+): { threads: SidebarThreadSummary[]; tierById: Map<ThreadId, ActivityPriorityTier> } {
+  const tierById = new Map<ThreadId, ActivityPriorityTier>();
+  const needing: SidebarThreadSummary[] = [];
+  for (const thread of threads) {
+    if (thread.id === activeThreadId || thread.snoozedUntil != null) continue;
+    if (!isActivityThread(thread)) continue;
+    const tier = resolveTier(thread);
+    if (tier !== "waiting" && tier !== "unread") continue;
+    tierById.set(thread.id, tier);
+    needing.push(thread);
+  }
+  return { threads: needing, tierById };
+}
+
+/** Drives the Activity bell's dot: another thread waits on the user or has unseen work. */
+export function hasActivityNeedingAttention(
+  threads: readonly SidebarThreadSummary[],
+  activeThreadId: ThreadId | null,
+  resolveTier: ActivityPriorityTierResolver,
+): boolean {
+  return collectThreadsNeedingAttention(threads, activeThreadId, resolveTier).threads.length > 0;
+}
+
+/** Cycle through current urgency order, wrapping only after the last actionable chat. */
+export function findNextThreadNeedingAttention(
+  threads: readonly SidebarThreadSummary[],
+  activeThreadId: ThreadId | null,
+  resolveTier: ActivityPriorityTierResolver,
+): ThreadId | null {
+  const needing = collectThreadsNeedingAttention(threads, null, resolveTier);
+  const ordered = needing.threads.toSorted((left, right) =>
+    compareActivityPriority(left, right, needing.tierById),
+  );
+  if (ordered.length === 0) return null;
+  const currentIndex = ordered.findIndex((thread) => thread.id === activeThreadId);
+  const next = ordered[(currentIndex + 1) % ordered.length];
+  return next && next.id !== activeThreadId ? next.id : null;
 }
 
 /**
@@ -433,8 +758,8 @@ export function collectVisibleActivityThreadIds(input: {
   groupMode: ActivityGroupMode;
   pinnedOpen: boolean;
   pinned: readonly SidebarThreadSummary[];
+  priority: readonly SidebarThreadSummary[];
   drafts: readonly SidebarThreadSummary[];
-  recent: readonly SidebarThreadSummary[];
   today: readonly SidebarThreadSummary[];
   yesterday: readonly SidebarThreadSummary[];
   earlierOpen: boolean;
@@ -455,7 +780,7 @@ export function collectVisibleActivityThreadIds(input: {
   if (input.groupMode === "project") {
     for (const group of input.projectGroups) visible.push(...group);
   } else {
-    visible.push(...input.drafts, ...input.recent, ...input.today, ...input.yesterday);
+    visible.push(...input.priority, ...input.drafts, ...input.today, ...input.yesterday);
     if (input.earlierOpen) visible.push(...input.earlier);
     if (input.revealed) visible.push(...input.revealed.earlier);
   }
@@ -488,12 +813,4 @@ export function resolveActivityThreadReadAt(thread: SidebarThreadSummary): strin
   return completedAt !== undefined && Date.parse(completedAt) > Date.parse(reminderAt)
     ? completedAt
     : reminderAt;
-}
-
-/** The open thread is already being read even if its visited timestamp update is one render late. */
-export function hasUnreadActivity(
-  threads: readonly SidebarThreadSummary[],
-  activeThreadId: ThreadId | null,
-): boolean {
-  return collectUnreadActivityThreads(threads).some((thread) => thread.id !== activeThreadId);
 }

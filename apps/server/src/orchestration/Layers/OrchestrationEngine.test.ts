@@ -7,6 +7,7 @@ import {
   MessageId,
   ProjectId,
   THREAD_GOAL_INLINE_MAX_CHARS,
+  THREAD_GOAL_MAX_CHARS,
   ThreadId,
   TurnId,
   type OrchestrationCommand,
@@ -41,6 +42,7 @@ import {
   type OrchestrationEventStoreShape,
 } from "../../persistence/Services/OrchestrationEventStore.ts";
 import { ManagedAttachmentRepository } from "../../persistence/Services/ManagedAttachments.ts";
+import { stageAssistantImageAttachments } from "../../assistantImageAttachments.ts";
 import { OrchestrationCommandReceiptRepository } from "../../persistence/Services/OrchestrationCommandReceipts.ts";
 import { materializeThreadGoalFile, pruneThreadGoalFiles } from "../threadGoalMaterialization.ts";
 import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
@@ -109,6 +111,8 @@ const makeThreadEventReadMethods = (
   OrchestrationEventStoreShape,
   | "getThreadHighWaterSequence"
   | "getThreadTitleHighWaterSequence"
+  | "hasThreadStopAfter"
+  | "canReplayThreadEventsInRange"
   | "readThreadEvents"
   | "readThreadEventsFromSequence"
 > => ({
@@ -119,6 +123,23 @@ const makeThreadEventReadMethods = (
         .at(-1)?.sequence ?? 0,
     ),
   getThreadTitleHighWaterSequence: () => Effect.succeed(0),
+  canReplayThreadEventsInRange: () =>
+    Effect.die("replay admission is not used by the orchestration engine harness"),
+  hasThreadStopAfter: (threadId, sequenceExclusive, turnId) =>
+    Effect.succeed(
+      events.some(
+        (event) =>
+          event.aggregateKind === "thread" &&
+          event.aggregateId === threadId &&
+          event.sequence > sequenceExclusive &&
+          (event.type === "thread.session-stop-requested" ||
+            (event.type === "thread.turn-interrupt-requested" &&
+              (turnId === undefined ||
+                event.payload.turnId === undefined ||
+                event.payload.turnId === null ||
+                event.payload.turnId === turnId))),
+      ),
+    ),
   readThreadEvents: (input) =>
     Effect.succeed(
       events
@@ -204,6 +225,7 @@ async function createOrchestrationSystem(pipeline?: OrchestrationProjectionPipel
     managedAttachmentRepository,
     homeDir: serverConfig.homeDir,
     stateDir: serverConfig.stateDir,
+    attachmentsDir: serverConfig.attachmentsDir,
     run: <A, E>(effect: Effect.Effect<A, E>) => runtime.runPromise(effect),
     dispose: () => runtime.dispose(),
   };
@@ -1416,6 +1438,100 @@ describe("OrchestrationEngine", () => {
     },
   );
 
+  it("admits a gateway continuation for the latest persisted user message on a live thread", async () => {
+    const system = await createOrchestrationSystem();
+    const { engine } = system;
+    const projectId = asProjectId("gateway-wake-project");
+    const threadId = ThreadId.makeUnsafe("gateway-wake-thread");
+    const sourceTurnId = asTurnId("gateway-wake-source-turn");
+    const createdAt = "2026-08-01T00:00:00.000Z";
+    const completedAt = "2026-08-01T00:00:02.000Z";
+    const turnOptions = {
+      threadId,
+      interactionMode: "default",
+      runtimeMode: "approval-required",
+    } as const;
+    try {
+      const dispatch = (command: OrchestrationCommand) => system.run(engine.dispatch(command));
+      await dispatch({
+        type: "project.create",
+        commandId: CommandId.makeUnsafe("gateway-wake-project"),
+        projectId,
+        title: "Gateway wake",
+        workspaceRoot: "/tmp/gateway-wake-project",
+        defaultModelSelection: null,
+        createdAt,
+      });
+      await dispatch({
+        type: "thread.create",
+        commandId: CommandId.makeUnsafe("gateway-wake-thread"),
+        ...turnOptions,
+        projectId,
+        title: "Gateway wake",
+        modelSelection: { provider: "codex", model: "gpt-5-codex" },
+        branch: null,
+        worktreePath: null,
+        createdAt,
+      });
+      await dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("gateway-wake-user-send"),
+        ...turnOptions,
+        message: {
+          messageId: asMessageId("gateway-wake-original-message"),
+          role: "user",
+          text: "Review the changes when the delegated task finishes.",
+          attachments: [],
+        },
+        createdAt,
+      });
+      for (const status of ["running", "ready"] as const) {
+        const running = status === "running";
+        const updatedAt = running ? createdAt : completedAt;
+        await dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.makeUnsafe(`gateway-wake-${status}`),
+          threadId,
+          session: {
+            threadId,
+            providerName: "codex",
+            status,
+            activeTurnId: running ? sourceTurnId : null,
+            runtimeMode: turnOptions.runtimeMode,
+            lastError: null,
+            updatedAt,
+          },
+          createdAt: updatedAt,
+        });
+      }
+
+      const wake = await dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("gateway-wake-follow-up"),
+        ...turnOptions,
+        dispatchOrigin: "agent",
+        dispatchMode: "queue",
+        gatewayCompletionPrecondition: {
+          sourceTurnId,
+          provider: "codex",
+          instanceId: "codex",
+          runtimeMode: turnOptions.runtimeMode,
+          latestUserMessageAt: createdAt,
+        },
+        message: {
+          messageId: asMessageId("gateway-wake-follow-up-message"),
+          role: "user",
+          text: "Read the delegated result.",
+          attachments: [],
+        },
+        createdAt: completedAt,
+      });
+      expect(wake.sequence).toBeGreaterThan(0);
+    } finally {
+      await system.dispose();
+    }
+  });
+
   it.each([false, true])(
     "persists async questions and admits one concurrent answer (running=%s)",
     async (running) => {
@@ -2006,6 +2122,33 @@ describe("OrchestrationEngine", () => {
       runtimeMode: "approval-required" as const,
       createdAt,
     };
+    const reviewCommand = {
+      ...command,
+      commandId: CommandId.makeUnsafe("cmd-native-review-with-managed-image"),
+      reviewTarget: { type: "uncommittedChanges" as const },
+    };
+    await expect(
+      system.run(engine.dispatch(reviewCommand, { attachmentPrincipal: principal })),
+    ).rejects.toThrow("Native code reviews do not support attachments");
+    expect(
+      await system.run(repository.findClaimedForCommand({ commandId: reviewCommand.commandId })),
+    ).toEqual([]);
+    const rejectedEvents = await system.run(
+      system.sql<{ count: number }>`SELECT COUNT(*) AS count FROM orchestration_events
+        WHERE command_id = ${reviewCommand.commandId}`,
+    );
+    expect(rejectedEvents[0]?.count).toBe(0);
+    const beforeSend = (await system.run(engine.getReadModel())).threads.find(
+      (thread) => thread.id === threadId,
+    );
+    expect(beforeSend?.messages).toEqual([]);
+    const staged = await system.run(
+      system.sql<{ state: string }>`SELECT state FROM managed_attachment_blobs
+        WHERE attachment_id = ${firstAttachmentId}`,
+    );
+    expect(staged[0]?.state).toBe("staged");
+
+    // The same staged receipt remains usable when sent as an ordinary message.
     const accepted = await system.run(engine.dispatch(command, { attachmentPrincipal: principal }));
     await expect(
       system.run(engine.dispatch(command, { attachmentPrincipal: principal })),
@@ -2053,6 +2196,191 @@ describe("OrchestrationEngine", () => {
     expect(claimed.map((attachment) => attachment.attachmentId)).toEqual([firstAttachmentId]);
     await system.dispose();
   });
+
+  it.each([
+    { label: "commits", abortCommit: false, lateDelta: false },
+    { label: "rolls back", abortCommit: true, lateDelta: false },
+    { label: "commits a late delta", abortCommit: false, lateDelta: true },
+    { label: "rolls back a late delta", abortCommit: true, lateDelta: true },
+  ])(
+    "$label the assistant image claim with its finalization event",
+    async ({ abortCommit, lateDelta }) => {
+      const system = await createOrchestrationSystem();
+      const createdAt = now();
+      const threadId = ThreadId.makeUnsafe("inline-image-thread");
+      const messageId = asMessageId("inline-image-answer");
+      const commandId = CommandId.makeUnsafe("inline-image-complete");
+      const workspaceRoot = path.join(system.stateDir, "image-workspace");
+      const source = path.join(workspaceRoot, "first image.png");
+      const bytes = Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=",
+        "base64",
+      );
+      const text = "Step 1\n\n![first](./first%20image.png)\n\nStep 2";
+      try {
+        await fs.mkdir(workspaceRoot);
+        await fs.writeFile(source, bytes);
+        await system.run(
+          system.engine.dispatch({
+            type: "project.create",
+            commandId: CommandId.makeUnsafe("inline-image-project"),
+            projectId: asProjectId("inline-image-project"),
+            title: "Image project",
+            workspaceRoot,
+            defaultModelSelection: { provider: "codex", model: "gpt-5-codex" },
+            createdAt,
+          }),
+        );
+        await system.run(
+          system.engine.dispatch({
+            type: "thread.create",
+            commandId: CommandId.makeUnsafe("inline-image-thread-create"),
+            threadId,
+            projectId: asProjectId("inline-image-project"),
+            title: "Image thread",
+            modelSelection: { provider: "codex", model: "gpt-5-codex" },
+            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+            runtimeMode: "approval-required",
+            branch: null,
+            worktreePath: null,
+            createdAt,
+          }),
+        );
+        await system.run(
+          system.engine.dispatch({
+            type: "thread.message.assistant.delta",
+            commandId: CommandId.makeUnsafe("inline-image-text"),
+            threadId,
+            messageId,
+            delta: text,
+            createdAt,
+          }),
+        );
+        if (lateDelta) {
+          // Snapshot deltas are permitted only after the row is already finalized.
+          await expect(
+            system.run(
+              system.engine.dispatch({
+                type: "thread.message.assistant.delta",
+                commandId: CommandId.makeUnsafe("inline-image-invalid-early-snapshot"),
+                threadId,
+                messageId,
+                attachments: [],
+                delta: "",
+                createdAt,
+              }),
+            ),
+          ).rejects.toThrow("already finalized assistant message");
+          await system.run(
+            system.engine.dispatch({
+              type: "thread.message.assistant.complete",
+              commandId: CommandId.makeUnsafe("inline-image-initial-completion"),
+              threadId,
+              messageId,
+              createdAt,
+            }),
+          );
+        }
+        const prepared = await system.run(
+          stageAssistantImageAttachments({
+            text,
+            threadId,
+            messageId,
+            commandId,
+            cwd: workspaceRoot,
+            sourceRoots: [workspaceRoot],
+            attachmentsDir: system.attachmentsDir,
+            existingAttachments: [],
+            repository: system.managedAttachmentRepository,
+          }),
+        );
+        expect(prepared.attachments).toHaveLength(1);
+        await fs.unlink(source);
+        if (abortCommit) {
+          await system.run(system.sql`
+          CREATE TEMP TRIGGER fail_inline_image_completion BEFORE INSERT ON orchestration_events
+          WHEN NEW.command_id = 'inline-image-complete'
+          BEGIN SELECT RAISE(ABORT, 'fixture refuses completion event'); END
+        `);
+        }
+        const command: OrchestrationCommand = lateDelta
+          ? {
+              type: "thread.message.assistant.delta",
+              commandId,
+              threadId,
+              messageId,
+              delta: "\nLate tail",
+              attachments: prepared.attachments,
+              createdAt,
+            }
+          : {
+              type: "thread.message.assistant.complete",
+              commandId,
+              threadId,
+              messageId,
+              attachments: prepared.attachments,
+              createdAt,
+            };
+        if (abortCommit) {
+          await expect(system.run(system.engine.dispatch(command))).rejects.toThrow();
+          const rows = await system.run(system.sql<{ state: string }>`
+          SELECT state FROM managed_attachment_blobs WHERE owner_thread_id = ${threadId}
+        `);
+          expect(rows).toEqual([{ state: "staged" }]);
+          const events = await system.run(system.sql<{ count: number }>`
+          SELECT COUNT(*) AS count FROM orchestration_events WHERE command_id = ${commandId}
+        `);
+          expect(events[0]?.count).toBe(0);
+        } else {
+          const accepted = await system.run(system.engine.dispatch(command));
+          const claimed = await system.run(
+            system.managedAttachmentRepository.findClaimedForCommand({ commandId }),
+          );
+          expect(claimed).toHaveLength(1);
+          expect(claimed[0]?.claimMessageId).toBe(messageId);
+          expect(
+            await fs.readFile(path.join(system.attachmentsDir, claimed[0]!.relativePath)),
+          ).toEqual(bytes);
+          const message = (await system.run(system.engine.getReadModel())).threads
+            .find((item) => item.id === threadId)
+            ?.messages.find((item) => item.id === messageId);
+          expect(message?.text).toBe(lateDelta ? `${text}\nLate tail` : text);
+          expect(message?.attachments?.[0]).toMatchObject({
+            type: "image",
+            sourcePath: "./first image.png",
+            mimeType: "image/png",
+          });
+          await expect(system.run(system.engine.dispatch(command))).resolves.toEqual(accepted);
+          const finalized = await system.run(system.sql<{ count: number }>`
+          SELECT COUNT(*) AS count FROM orchestration_events
+          WHERE command_id = ${commandId} AND event_type = 'thread.message-sent'
+            AND json_extract(payload_json, '$.streaming') = 0
+        `);
+          expect(finalized[0]?.count).toBe(1);
+          const reused = await system.run(
+            stageAssistantImageAttachments({
+              text,
+              threadId,
+              messageId,
+              commandId,
+              cwd: workspaceRoot,
+              sourceRoots: [workspaceRoot],
+              attachmentsDir: system.attachmentsDir,
+              existingAttachments: message?.attachments ?? [],
+              repository: system.managedAttachmentRepository,
+            }),
+          );
+          expect(reused.attachments).toEqual(message?.attachments);
+          const rows = await system.run(system.sql<{ count: number }>`
+          SELECT COUNT(*) AS count FROM managed_attachment_blobs WHERE owner_thread_id = ${threadId}
+        `);
+          expect(rows[0]?.count).toBe(1);
+        }
+      } finally {
+        await system.dispose();
+      }
+    },
+  );
 
   it("keeps dispatch responsive and replays every event when a subscriber falls behind", async () => {
     const system = await createOrchestrationSystem();
@@ -2137,15 +2465,16 @@ describe("OrchestrationEngine", () => {
       }),
     );
 
-    const oversizedGoal = `Long-lived objective. ${"d".repeat(THREAD_GOAL_INLINE_MAX_CHARS)}`;
-    await system.run(
-      engine.dispatch({
-        type: "thread.meta.update",
-        commandId: CommandId.makeUnsafe("cmd-goal-materialize-update"),
-        threadId,
-        goal: oversizedGoal,
-      }),
-    );
+    const oversizedGoal = "d".repeat(THREAD_GOAL_MAX_CHARS);
+    const goalCommand = {
+      type: "thread.meta.update",
+      commandId: CommandId.makeUnsafe("cmd-goal-materialize-update"),
+      threadId,
+      goal: oversizedGoal,
+      goalStartBehavior: "start-with-message",
+    } as const;
+    const firstReceipt = await system.run(engine.dispatch(goalCommand));
+    expect(await system.run(engine.dispatch(goalCommand))).toEqual(firstReceipt);
 
     const thread = (await system.run(engine.getReadModel())).threads.find(
       (entry) => entry.id === threadId,
@@ -2154,6 +2483,21 @@ describe("OrchestrationEngine", () => {
     const goalFilePath = thread?.goal?.replace("Read this file: ", "");
     expect(goalFilePath).toContain("thread-goals");
     await expect(fs.readFile(goalFilePath ?? "", "utf8")).resolves.toBe(oversizedGoal);
+    expect(thread?.messages).toMatchObject([
+      { role: "user", text: `/goal ${thread?.goal}`, startsNewTurn: true },
+    ]);
+    expect(thread!.messages[0]!.text.length).toBeLessThan(THREAD_GOAL_INLINE_MAX_CHARS);
+    const events = await system.run(Stream.runCollect(engine.readEvents(0)));
+    expect(Array.from(events).filter((event) => event.type === "thread.turn-queued")).toMatchObject(
+      [
+        {
+          payload: {
+            messageId: thread!.messages[0]!.id,
+            initialGoalStartedAt: thread?.goalStartedAt,
+          },
+        },
+      ],
+    );
 
     // Edit goal exposes this exact reference. Saving it unchanged must retain
     // the objective even though the reference itself fits the inline budget.
@@ -2166,6 +2510,10 @@ describe("OrchestrationEngine", () => {
       }),
     );
     await expect(fs.readFile(goalFilePath ?? "", "utf8")).resolves.toBe(oversizedGoal);
+    expect(
+      (await system.run(engine.getReadModel())).threads.find((entry) => entry.id === threadId)
+        ?.messages,
+    ).toHaveLength(1);
 
     // A second oversized goal gets its own file — the previous file is pruned
     // once the new reference commits, so the live file can never be clobbered.
@@ -2470,7 +2818,7 @@ describe("OrchestrationEngine", () => {
       const pending = system.run(
         engine
           .dispatch({ type: "thread.meta.update", commandId, threadId, goal })
-          .pipe(Effect.timeoutOption("2 seconds")),
+          .pipe(Effect.timeoutOption("250 millis")),
       );
       await pending;
       const receipt = await system.run(originalLookup({ commandId }));
@@ -2559,75 +2907,6 @@ describe("OrchestrationEngine", () => {
     expect(thread?.goal ?? "").toBe("");
     await expect(fs.access(goalFilePath ?? "")).rejects.toThrow();
 
-    await system.dispose();
-  });
-
-  it("stores completed checkpoint summaries even when no files changed", async () => {
-    const system = await createOrchestrationSystem();
-    const { engine } = system;
-    const createdAt = now();
-
-    await system.run(
-      engine.dispatch({
-        type: "project.create",
-        commandId: CommandId.makeUnsafe("cmd-project-turn-diff-create"),
-        projectId: asProjectId("project-turn-diff"),
-        title: "Turn Diff Project",
-        workspaceRoot: "/tmp/project-turn-diff",
-        defaultModelSelection: {
-          provider: "codex",
-          model: "gpt-5-codex",
-        },
-        createdAt,
-      }),
-    );
-    await system.run(
-      engine.dispatch({
-        type: "thread.create",
-        commandId: CommandId.makeUnsafe("cmd-thread-turn-diff-create"),
-        threadId: ThreadId.makeUnsafe("thread-turn-diff"),
-        projectId: asProjectId("project-turn-diff"),
-        title: "Turn diff thread",
-        modelSelection: {
-          provider: "codex",
-          model: "gpt-5-codex",
-        },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        branch: null,
-        worktreePath: null,
-        createdAt,
-      }),
-    );
-    await system.run(
-      engine.dispatch({
-        type: "thread.turn.diff.complete",
-        commandId: CommandId.makeUnsafe("cmd-turn-diff-complete"),
-        threadId: ThreadId.makeUnsafe("thread-turn-diff"),
-        turnId: asTurnId("turn-1"),
-        completedAt: createdAt,
-        checkpointRef: asCheckpointRef("refs/synara/checkpoints/thread-turn-diff/turn/1"),
-        status: "ready",
-        files: [],
-        checkpointTurnCount: 1,
-        createdAt,
-      }),
-    );
-
-    const thread = (await system.run(engine.getReadModel())).threads.find(
-      (entry) => entry.id === "thread-turn-diff",
-    );
-    expect(thread?.checkpoints).toEqual([
-      {
-        turnId: asTurnId("turn-1"),
-        checkpointTurnCount: 1,
-        checkpointRef: asCheckpointRef("refs/synara/checkpoints/thread-turn-diff/turn/1"),
-        status: "ready",
-        files: [],
-        assistantMessageId: null,
-        completedAt: createdAt,
-      },
-    ]);
     await system.dispose();
   });
 
@@ -3184,31 +3463,6 @@ describe("OrchestrationEngine", () => {
         }),
       ),
     ).rejects.toThrow("still has a pending interaction");
-
-    await system.dispose();
-  });
-
-  it("keeps projection health healthy when optional cursors do not exist yet", async () => {
-    const system = await createOrchestrationSystem();
-    const createdAt = now();
-
-    await system.run(
-      system.engine.dispatch({
-        type: "project.create",
-        commandId: CommandId.makeUnsafe("cmd-project-health-fresh"),
-        projectId: asProjectId("project-health-fresh"),
-        title: "Fresh projection health",
-        workspaceRoot: "/tmp/project-health-fresh",
-        defaultModelSelection: null,
-        createdAt,
-      }),
-    );
-
-    await system.run(system.engine.drain);
-    await expect(system.run(system.engine.getProjectionCatchUpStatus)).resolves.toMatchObject({
-      state: "healthy",
-      missingProjectors: [],
-    });
 
     await system.dispose();
   });

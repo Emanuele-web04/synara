@@ -6,7 +6,24 @@ import {
   resolveThreadStatusPill,
 } from "../components/Sidebar.logic";
 import { formatSnoozeRemainingTime } from "./relativeTime";
-import { parseFutureDateTimeLocalValue, toDateTimeLocalValue } from "./threadSnooze";
+import {
+  formatSnoozeDeadline,
+  parseFutureDateTimeLocalValue,
+  toDateTimeLocalValue,
+} from "./threadSnooze";
+
+it("formats snooze deadlines", () => {
+  const deadline = "2026-10-02T12:28:00Z";
+  expect(formatSnoozeDeadline(deadline)).toBe(
+    new Intl.DateTimeFormat("en", {
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    }).format(new Date(deadline)),
+  );
+});
 
 describe("snooze remaining time", () => {
   const now = Date.parse("2026-10-02T12:00:00Z");

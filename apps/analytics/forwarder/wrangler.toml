@@ -1,0 +1,7 @@
+# Deployed on the OLD account under the old name, replacing the real worker
+# there, so https://synara-beta-diagnostics.kartik-9f9.workers.dev keeps working
+# for betas that shipped with that URL. See MIGRATION.md.
+name = "synara-beta-diagnostics"
+main = "worker.ts"
+compatibility_date = "2026-09-01"
+workers_dev = true

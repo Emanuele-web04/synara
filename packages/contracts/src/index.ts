@@ -1,3 +1,10 @@
+export * from "./account";
+export * from "./hostAuth";
+export * from "./hostSecrets";
+export * from "./hostSessions";
+export * from "./hostConnection";
+export * from "./accountUsage";
+export * from "./editorDebug";
 export * from "./auth";
 export * from "./automation";
 export * from "./baseSchemas";
@@ -14,6 +21,7 @@ export * from "./browserAutomationToolCatalogue";
 export * from "./browserVault";
 export * from "./browserAnnotations";
 export * from "./ipc";
+export * from "./desktopUpdate";
 export * from "./terminal";
 export * from "./provider";
 export * from "./providerDiscovery";
@@ -23,6 +31,7 @@ export * from "./model";
 export * from "./agentMentions";
 export * from "./agentGateway";
 export * from "./externalMcp";
+export * from "./mcpConnectors";
 export * from "./ws";
 export * from "./wsCompatibility";
 export * from "./keybindings";
@@ -37,12 +46,15 @@ export * from "./githubInbox";
 export * from "./orchestration";
 export * from "./asyncUserInput";
 export * from "./editor";
+export * from "./editorIntelligence";
 export * from "./environment";
 export * from "./project";
 export * from "./projectAgent";
 export * from "./hubWork";
 export * from "./projectImport";
 export * from "./studio";
+export * from "./inlineVisual";
+export * from "./inlineVisualSpec";
 export * from "./filesystem";
 export * from "./device";
 export * from "./computer";
@@ -51,4 +63,21 @@ export * from "./computerAudit";
 export * from "./computerBrowser";
 export * from "./rpc";
 export * from "./claudeCache";
+
+export * from "./remotePairing";
+
+export * from "./remoteResources";
+
+export * from "./remoteAgentGateway";
 export * from "./todo";
+export * from "./inboxRecaps";
+export * from "./productAnalytics";
+export * from "./reliability";
+
+export * from "./liveActivities";
+
+export * from "./accountBilling";
+
+export * from "./uiLocale";
+
+export * from "./usageLimit";

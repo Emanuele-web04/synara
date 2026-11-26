@@ -1,12 +1,12 @@
 // FILE: backgroundTaskRow.logic.ts
-// Purpose: Wording for the single transcript row a background task keeps for its
-//          whole life ("running 12s" → "finished · 20s") and for the line that
-//          groups three or more of them.
+// Purpose: Status wording for a background task ("running" → "finished · 20s",
+//          "failed · exit 1"), shared by its transcript row and the right-dock list.
 // Layer: Web chat presentation helpers
-// Exports: describeBackgroundTaskStatus, summarizeBackgroundTaskGroup
+// Exports: describeBackgroundTaskStatus, countBackgroundTasks, backgroundTaskTitle
 
-import { pluralize } from "@synara/shared/text";
+import { t } from "~/i18n";
 
+import { deriveFriendlyCommandTarget } from "../../lib/toolCallLabel";
 import { formatClockElapsed } from "../../session-logic";
 import type { WorkLogBackgroundTask } from "../../workLog";
 
@@ -21,39 +21,54 @@ export interface BackgroundTaskStatusDisplay {
 export function describeBackgroundTaskStatus(
   task: Pick<WorkLogBackgroundTask, "status" | "startedAt" | "completedAt" | "exitCode">,
   nowIso: string,
+  translate: typeof t = t,
 ): BackgroundTaskStatusDisplay {
   const elapsed = formatClockElapsed(task.startedAt, task.completedAt ?? nowIso);
   switch (task.status) {
     case "running":
-      return { status: task.status, label: "running", elapsed };
+      return { status: task.status, label: translate("chat:running"), elapsed };
     case "finished":
-      return { status: task.status, label: "finished", elapsed };
+      return { status: task.status, label: translate("chat:finished"), elapsed };
     case "failed":
       return {
         status: task.status,
-        label: task.exitCode !== null ? `failed · exit ${task.exitCode}` : "failed",
+        label:
+          task.exitCode !== null
+            ? translate("chat:failedExit", { value0: task.exitCode })
+            : translate("common:failed"),
         elapsed,
       };
     case "stopped":
-      return { status: task.status, label: "stopped", elapsed };
+      return { status: task.status, label: translate("chat:stopped2"), elapsed };
   }
 }
 
-const STATUS_ORDER: ReadonlyArray<WorkLogBackgroundTask["status"]> = [
-  "running",
-  "finished",
-  "failed",
-  "stopped",
-];
+export interface BackgroundTaskCounts {
+  running: number;
+  // Every task that ended, however it ended.
+  settled: number;
+  failed: number;
+}
 
-// "4 background tasks · 3 finished, 1 stopped".
-export function summarizeBackgroundTaskGroup(
+export function countBackgroundTasks(
   tasks: ReadonlyArray<Pick<WorkLogBackgroundTask, "status">>,
+): BackgroundTaskCounts {
+  let running = 0;
+  let failed = 0;
+  for (const task of tasks) {
+    if (task.status === "running") running += 1;
+    else if (task.status === "failed") failed += 1;
+  }
+  return { running, settled: tasks.length - running, failed };
+}
+
+// The short name a list row leads with: what ran, without env assignments or
+// shell wrappers ("bun run dev:server"), falling back to the provider's description.
+export function backgroundTaskTitle(
+  task: Pick<WorkLogBackgroundTask, "command" | "description">,
+  translate: typeof t = t,
 ): string {
-  const counts = STATUS_ORDER.map(
-    (status) => [status, tasks.filter((task) => task.status === status).length] as const,
-  ).filter(([, count]) => count > 0);
-  const breakdown = counts.map(([status, count]) => `${count} ${status}`).join(", ");
-  const head = `${tasks.length} background ${pluralize(tasks.length, "task")}`;
-  return breakdown ? `${head} · ${breakdown}` : head;
+  return task.command
+    ? deriveFriendlyCommandTarget(task.command)
+    : (task.description ?? translate("chat:backgroundTask"));
 }

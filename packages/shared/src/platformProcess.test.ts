@@ -4,7 +4,11 @@ import path from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { ExecutableNotFoundError, prepareProcess } from "./platformProcess";
+import {
+  ExecutableNotFoundError,
+  prepareProcess,
+  WorkingDirectoryNotFoundError,
+} from "./platformProcess";
 import * as executable from "./executable";
 import { spawnProcess } from "./processRuntime";
 import os from "node:os";
@@ -331,6 +335,28 @@ describe("prepareProcess", () => {
       }),
     ).toThrow(ExecutableNotFoundError);
   });
+
+  // Spawning into a missing cwd emits ENOENT, which the Claude Agent SDK reports
+  // as "native binary not found" even though the executable resolved.
+  it.each(["win32", "linux"] as const)(
+    "names a missing or non-directory working directory before spawn on %s",
+    (platform) => {
+      writeFileSync(path.join(root, "tool.EXE"), "native");
+      writeFileSync(path.join(root, "tool"), "#!/bin/sh\n", { mode: 0o755 });
+      const file = path.join(root, "notes.txt");
+      writeFileSync(file, "");
+      for (const cwd of [path.join(root, "missing"), file]) {
+        expect(() =>
+          prepareProcess("tool", [], {
+            platform,
+            cwd,
+            env: platform === "win32" ? windowsEnv() : { PATH: root },
+            requireExecutable: true,
+          }),
+        ).toThrow(new WorkingDirectoryNotFoundError(cwd));
+      }
+    },
+  );
 
   it("preserves native Windows support while isolating WSL UNC execution", () => {
     expect(

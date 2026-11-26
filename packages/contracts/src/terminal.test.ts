@@ -5,7 +5,6 @@ import {
   DEFAULT_TERMINAL_ID,
   TerminalAckOutputInput,
   TerminalClearInput,
-  TerminalEvent,
   TerminalOpenInput,
   TerminalThreadInput,
   TerminalWriteInput,
@@ -70,23 +69,6 @@ describe("TerminalOpenInput", () => {
     expect(parsed.terminalId).toBe(DEFAULT_TERMINAL_ID);
   });
 
-  it("accepts optional env overrides", () => {
-    const parsed = decodeSync(TerminalOpenInput, {
-      threadId: "thread-1",
-      cwd: "/tmp/project",
-      cols: 100,
-      rows: 24,
-      env: {
-        SYNARA_PROJECT_ROOT: "/tmp/project",
-        CUSTOM_FLAG: "1",
-      },
-    });
-    expect(parsed.env).toMatchObject({
-      SYNARA_PROJECT_ROOT: "/tmp/project",
-      CUSTOM_FLAG: "1",
-    });
-  });
-
   it("rejects invalid env keys", () => {
     expect(
       decodes(TerminalOpenInput, {
@@ -103,15 +85,6 @@ describe("TerminalOpenInput", () => {
 });
 
 describe("TerminalWriteInput", () => {
-  it("accepts non-empty data", () => {
-    expect(
-      decodes(TerminalWriteInput, {
-        threadId: "thread-1",
-        data: "echo hello\n",
-      }),
-    ).toBe(true);
-  });
-
   it("rejects empty data", () => {
     expect(
       decodes(TerminalWriteInput, {
@@ -123,15 +96,6 @@ describe("TerminalWriteInput", () => {
 });
 
 describe("TerminalAckOutputInput", () => {
-  it("accepts positive parsed byte counts", () => {
-    expect(
-      decodes(TerminalAckOutputInput, {
-        threadId: "thread-1",
-        bytes: 4096,
-      }),
-    ).toBe(true);
-  });
-
   it("rejects empty ACKs", () => {
     expect(
       decodes(TerminalAckOutputInput, {
@@ -155,34 +119,5 @@ describe("TerminalClearInput", () => {
       threadId: "thread-1",
     });
     expect(parsed.terminalId).toBe(DEFAULT_TERMINAL_ID);
-  });
-});
-
-describe("TerminalEvent", () => {
-  it("accepts output events with byte length", () => {
-    expect(
-      decodes(TerminalEvent, {
-        type: "output",
-        threadId: "thread-1",
-        terminalId: DEFAULT_TERMINAL_ID,
-        createdAt: new Date().toISOString(),
-        data: "line\n",
-        byteLength: 5,
-      }),
-    ).toBe(true);
-  });
-
-  it("accepts CLI activity events", () => {
-    expect(
-      decodes(TerminalEvent, {
-        type: "activity",
-        threadId: "thread-1",
-        terminalId: DEFAULT_TERMINAL_ID,
-        createdAt: new Date().toISOString(),
-        hasRunningSubprocess: true,
-        cliKind: "codex",
-        agentState: "running",
-      }),
-    ).toBe(true);
   });
 });

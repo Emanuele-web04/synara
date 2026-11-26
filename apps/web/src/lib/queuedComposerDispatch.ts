@@ -5,7 +5,10 @@
 
 import type { AssistantDeliveryMode, MessageId, ThreadId } from "@synara/contracts";
 
-import { persistModelSelectionBeforeRuntimeMode } from "../components/ChatView.logic";
+import {
+  persistModelSelectionBeforeRuntimeMode,
+  retargetQueuedTurnToThreadProvider,
+} from "../components/ChatView.logic";
 import { useComposerDraftStore, type QueuedComposerTurn } from "../composerDraftStore";
 import { readNativeApi } from "../nativeApi";
 import { clearPendingTurnDispatch, markPendingTurnDispatch } from "../pendingTurnDispatch";
@@ -32,6 +35,11 @@ import {
   IMAGE_ONLY_BOOTSTRAP_PROMPT,
 } from "./terminalContext";
 import { runComposerSendOnce } from "./composerSendOwnership";
+import {
+  dispatchOwnedComposerTurn,
+  ownsUnsettledComposerTurn,
+  settlePendingComposerTurn,
+} from "./composerTurnSettlement";
 import { waitForDraftThreadDispatchToSettle } from "./draftThreadDispatch";
 import { newCommandId, newMessageId } from "./utils";
 
@@ -41,6 +49,7 @@ export async function dispatchQueuedComposerTurnHeadless(input: {
   dispatchMode: "queue" | "steer";
   assistantDeliveryMode: AssistantDeliveryMode;
   messageId?: MessageId;
+  onReconciledMessage?: (messageId: MessageId) => void;
 }): Promise<boolean> {
   return runComposerSendOnce(input.threadId, async () => {
     await waitForDraftThreadDispatchToSettle(input.threadId);
@@ -56,14 +65,22 @@ async function dispatchQueuedComposerTurnOnce(
     return false;
   }
 
+  const previous = await settlePendingComposerTurn(api, input.threadId, input.queuedTurn.id);
+  if (previous.status === "unknown") return false;
+  if (previous.status === "accepted") {
+    if (previous.queuedTurnId !== input.queuedTurn.id) return false;
+    input.onReconciledMessage?.(previous.messageId);
+    return true;
+  }
+
   const thread = getThreadFromState(useStore.getState(), input.threadId);
-  if (!thread || thread.claudeCacheReview != null) {
+  if (!thread || thread.claudeCacheReview != null || thread.usageLimitRecovery != null) {
     return false;
   }
 
   const createdAt = new Date().toISOString();
   const messageId = input.messageId ?? newMessageId();
-  const queuedTurn = input.queuedTurn;
+  const queuedTurn = retargetQueuedTurnToThreadProvider(input.queuedTurn, thread);
 
   if (queuedTurn.kind === "plan-follow-up") {
     const trimmed = queuedTurn.text.trim();
@@ -99,27 +116,31 @@ async function dispatchQueuedComposerTurnOnce(
       useComposerDraftStore
         .getState()
         .setInteractionMode(input.threadId, queuedTurn.interactionMode);
-      await api.orchestration.dispatchCommand({
-        type: "thread.turn.start",
-        commandId: newCommandId(),
-        threadId: input.threadId,
-        message: {
-          messageId,
-          role: "user",
-          text: outgoingMessageText,
-          attachments: [],
+      await dispatchOwnedComposerTurn(
+        api,
+        {
+          type: "thread.turn.start",
+          commandId: newCommandId(),
+          threadId: input.threadId,
+          message: {
+            messageId,
+            role: "user",
+            text: outgoingMessageText,
+            attachments: [],
+          },
+          modelSelection: queuedTurn.modelSelection,
+          ...(queuedTurn.providerOptionsForDispatch
+            ? { providerOptions: queuedTurn.providerOptionsForDispatch }
+            : {}),
+          assistantDeliveryMode: input.assistantDeliveryMode,
+          dispatchMode: input.dispatchMode,
+          runtimeMode: queuedTurn.runtimeMode,
+          interactionMode: queuedTurn.interactionMode,
+          ...(sourceProposedPlan ? { sourceProposedPlan } : {}),
+          createdAt,
         },
-        modelSelection: queuedTurn.modelSelection,
-        ...(queuedTurn.providerOptionsForDispatch
-          ? { providerOptions: queuedTurn.providerOptionsForDispatch }
-          : {}),
-        assistantDeliveryMode: input.assistantDeliveryMode,
-        dispatchMode: input.dispatchMode,
-        runtimeMode: queuedTurn.runtimeMode,
-        interactionMode: queuedTurn.interactionMode,
-        ...(sourceProposedPlan ? { sourceProposedPlan } : {}),
-        createdAt,
-      });
+        queuedTurn.id,
+      );
       return true;
     } catch {
       if (
@@ -128,7 +149,9 @@ async function dispatchQueuedComposerTurnOnce(
       ) {
         return true;
       }
-      clearPendingTurnDispatch(input.threadId);
+      if (!ownsUnsettledComposerTurn(input.threadId, messageId)) {
+        clearPendingTurnDispatch(input.threadId);
+      }
       return false;
     }
   }
@@ -178,6 +201,8 @@ async function dispatchQueuedComposerTurnOnce(
     files: queuedTurn.files,
     assistantSelections: queuedTurn.assistantSelections,
   });
+  // Preparation may outlast a failed upload; the original promise still drives rollback.
+  void turnAttachmentsPromise.catch(() => undefined);
 
   markPendingTurnDispatch(input.threadId);
   try {
@@ -188,9 +213,15 @@ async function dispatchQueuedComposerTurnOnce(
       createdAt,
     });
     const stagedTurnAttachments = await turnAttachmentsPromise;
+    if (getThreadFromState(useStore.getState(), input.threadId)?.usageLimitRecovery) {
+      await stagedTurnAttachments.cleanup();
+      clearPendingTurnDispatch(input.threadId);
+      return false;
+    }
     await stagedTurnAttachments.runWithDispatch((turnAttachments) =>
-      api.orchestration
-        .dispatchCommand({
+      dispatchOwnedComposerTurn(
+        api,
+        {
           type: "thread.turn.start",
           commandId: newCommandId(),
           threadId: input.threadId,
@@ -214,15 +245,9 @@ async function dispatchQueuedComposerTurnOnce(
             ? { sourceProposedPlan: queuedTurn.sourceProposedPlan }
             : {}),
           createdAt,
-        })
-        .catch((error: unknown) => {
-          if (
-            getThreadFromState(useStore.getState(), input.threadId)?.claudeCacheReview
-              ?.messageId !== messageId
-          ) {
-            throw error;
-          }
-        }),
+        },
+        queuedTurn.id,
+      ),
     );
     return true;
   } catch {
@@ -230,7 +255,9 @@ async function dispatchQueuedComposerTurnOnce(
       (staged) => staged.cleanup(),
       () => undefined,
     );
-    clearPendingTurnDispatch(input.threadId);
+    if (!ownsUnsettledComposerTurn(input.threadId, messageId)) {
+      clearPendingTurnDispatch(input.threadId);
+    }
     return false;
   }
 }

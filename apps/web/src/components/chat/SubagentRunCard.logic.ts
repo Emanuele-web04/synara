@@ -1,14 +1,14 @@
+import { t } from "~/i18n";
 // FILE: SubagentRunCard.logic.ts
 // Purpose: Folds routed subagent work into entries for its invocations, and
 // derives each transcript card's rows (identity, live state, current action,
 // durations, result preview, nested subagents) and its
 // header counts.
 // Layer: Chat transcript logic
-// Exports: foldSubagentRunWorkEntries, deriveSubagentRunCard,
-// findLatestRunningSubagentRun, and the card model types
+// Exports: foldSubagentRunWorkEntries, deriveSubagentRunCard, scanSubagentRunCards,
+// summarizeRunningAgents, and the card model types
 
 import { ThreadId, type TurnId } from "@synara/contracts";
-import { pluralize } from "@synara/shared/text";
 
 import {
   deriveWorkLogEntries,
@@ -19,6 +19,7 @@ import {
   type WorkLogSubagent,
   type WorkLogSubagentRun,
   type WorkLogSubagentRunMember,
+  type RunningSubagentTasks,
   type SubagentTaskEnd,
 } from "../../session-logic";
 import {
@@ -246,6 +247,7 @@ export type SubagentRunPhase =
   | "starting"
   | "running"
   | "waiting"
+  | "unreported"
   | "done"
   | "failed"
   | "stopped"
@@ -466,6 +468,12 @@ function isTerminalPhase(phase: SubagentRunPhase): boolean {
   return phase === "done" || phase === "failed" || phase === "stopped" || phase === "interrupted";
 }
 
+// Once the provider runtime has ended, nothing it launched is still at work,
+// whatever end the stream never got to report.
+function retireLivePhase(phase: SubagentRunPhase, runtimeRetired: boolean): SubagentRunPhase {
+  return runtimeRetired && (phase === "running" || phase === "starting") ? "stopped" : phase;
+}
+
 // A direct subagent's state. The launching call's own "completed" is not used:
 // Codex spawn calls (and Claude background launches) complete as soon as the
 // subagent starts. What counts, in order: the subagent's own reported state,
@@ -491,6 +499,7 @@ function directRowPhase(input: {
   if (outcome) {
     return phaseFromStatusKind(null, outcome);
   }
+  if (subagent.rawStatus === "unreported") return "unreported";
   if (subagent.isActive) {
     return "running";
   }
@@ -560,6 +569,23 @@ function rowTiming(
   };
 }
 
+// Every card on a thread looks its children up in the same threads array.
+const threadsByIdCache = new WeakMap<
+  ReadonlyArray<SubagentRunThread>,
+  ReadonlyMap<string, SubagentRunThread>
+>();
+
+function threadsById(
+  threads: ReadonlyArray<SubagentRunThread>,
+): ReadonlyMap<string, SubagentRunThread> {
+  let byId = threadsByIdCache.get(threads);
+  if (!byId) {
+    byId = new Map(threads.map((thread) => [thread.id as string, thread]));
+    threadsByIdCache.set(threads, byId);
+  }
+  return byId;
+}
+
 function providerThreadIdFromChildId(childThreadId: string, rootThreadId: string | null): string {
   const prefix = rootThreadId ? `subagent:${rootThreadId}:` : null;
   return prefix && childThreadId.startsWith(prefix)
@@ -568,11 +594,13 @@ function providerThreadIdFromChildId(childThreadId: string, rootThreadId: string
 }
 
 function nestedRowsFor(input: {
+  translate: typeof t;
   spawningThreadId: ThreadId;
   threads: ReadonlyArray<SubagentRunThread>;
   rootThreadId: ThreadId | null;
   visited: Set<string>;
   launchTurnLive: boolean;
+  runtimeRetired: boolean;
   window: InvocationWindow;
 }): SubagentRunRow[] {
   return input.threads
@@ -589,8 +617,10 @@ function nestedRowsFor(input: {
       input.visited.add(thread.id);
       const statusKind = resolveSubagentThreadStatusKind(thread);
       const nested = nestedRowsFor({ ...input, spawningThreadId: thread.id });
-      const ownPhase =
-        phaseFromStatusKind(statusKind, null) ?? (input.launchTurnLive ? "running" : "done");
+      const ownPhase = retireLivePhase(
+        phaseFromStatusKind(statusKind, null) ?? (input.launchTurnLive ? "running" : "done"),
+        input.runtimeRetired,
+      );
       const phase = ownPhase === "running" && nested.some(isRowLive) ? "waiting" : ownPhase;
       const presentation = resolveSubagentPresentationForThread({ thread, threads: input.threads });
       const statusLabel = humanizeSubagentStatus(statusKind);
@@ -604,7 +634,7 @@ function nestedRowsFor(input: {
         accentColor: presentation.accentColor,
         role: presentation.role,
         modelLabel: formatSubagentModelLabel(thread.modelSelection.model),
-        statusLabel,
+        statusLabel: statusLabel ? input.translate(statusLabel) : undefined,
         statusKind,
         isActive: statusKind === "running",
         isViewed: false,
@@ -653,6 +683,7 @@ function taskEndForLaunch(
 }
 
 export function deriveSubagentRunCard(input: {
+  translate?: typeof t;
   subagents: ReadonlyArray<WorkLogSubagent>;
   run: WorkLogSubagentRun;
   threads: ReadonlyArray<SubagentRunThread>;
@@ -663,9 +694,13 @@ export function deriveSubagentRunCard(input: {
   launchTurnLive?: boolean;
   /** Parent-side task completions, keyed by launching tool call id. */
   taskEndByToolUseId?: ReadonlyMap<string, SubagentTaskEnd>;
+  /** The thread's provider runtime has ended (see isSessionRuntimeRetired). */
+  runtimeRetired?: boolean;
 }): SubagentRunCardModel {
+  const translate = input.translate ?? t;
   const launchTurnLive = input.launchTurnLive ?? true;
-  const threadById = new Map(input.threads.map((thread) => [thread.id as string, thread]));
+  const runtimeRetired = input.runtimeRetired === true;
+  const threadById = threadsById(input.threads);
   const memberByKey = new Map(input.run.members.map((member) => [member.key, member]));
   const backgrounded = input.backgroundedProviderThreadIds ?? new Set<string>();
   const visited = new Set<string>();
@@ -689,7 +724,7 @@ export function deriveSubagentRunCard(input: {
       beforeMs: parseTimeMs(member?.nextLaunchedAt),
     };
     const thread = child ? threadForInvocation(child, window) : undefined;
-    const stripItem = toSubagentStripItem(key, subagent, backgrounded, null);
+    const stripItem = toSubagentStripItem(key, subagent, backgrounded, null, translate);
     // A launch that did not name a model runs on the child's own selection.
     const item =
       stripItem.modelLabel === undefined && thread
@@ -698,15 +733,17 @@ export function deriveSubagentRunCard(input: {
     if (thread) visited.add(thread.id);
     const nested = thread
       ? nestedRowsFor({
+          translate,
           spawningThreadId: thread.id,
           threads: input.threads,
           rootThreadId: input.parentThreadId,
           visited,
           launchTurnLive,
+          runtimeRetired,
           window,
         })
       : [];
-    const ownPhase =
+    const ownPhase = retireLivePhase(
       directRowPhase({
         subagent,
         member,
@@ -714,7 +751,9 @@ export function deriveSubagentRunCard(input: {
         launchTurnLive,
         taskEnd,
         background: item.isBackground,
-      }) ?? "starting";
+      }) ?? "starting",
+      runtimeRetired,
+    );
     const phase = ownPhase === "running" && nested.some(isRowLive) ? "waiting" : ownPhase;
     const childAction = thread ? latestChildAction(thread) : null;
     return {
@@ -732,7 +771,10 @@ export function deriveSubagentRunCard(input: {
         item.isBackground,
       ),
       action: childAction ?? actionFromStep(member?.latestStep ?? null),
-      outcomeText: outcomeTextFor(phase, thread, member?.failure ?? null),
+      outcomeText:
+        phase === "unreported"
+          ? firstLinePreview(subagent.latestUpdate)
+          : outcomeTextFor(phase, thread, member?.failure ?? null),
       nested,
     };
   });
@@ -744,7 +786,7 @@ export function deriveSubagentRunCard(input: {
     else if (row.phase === "done") counts.done += 1;
     else if (row.phase === "failed") counts.failed += 1;
     else if (row.phase === "interrupted") counts.interrupted += 1;
-    else counts.stopped += 1;
+    else if (row.phase === "stopped") counts.stopped += 1;
   }
   const startTimes = allRows.flatMap((row) => (row.startedAtMs !== null ? [row.startedAtMs] : []));
   const endTimes = allRows.flatMap((row) => (row.endedAtMs !== null ? [row.endedAtMs] : []));
@@ -769,6 +811,8 @@ export function subagentRunPhaseStatusKind(phase: SubagentRunPhase): SubagentSta
       return "running";
     case "starting":
       return "queued";
+    case "unreported":
+      return "idle";
     case "done":
       return "completed";
     case "failed":
@@ -813,6 +857,13 @@ export function describeSubagentRunRow(
   switch (row.phase) {
     case "starting":
       return { statusKind, word: "Starting", durationLabel: null, detail: null };
+    case "unreported":
+      return {
+        statusKind,
+        word: "Status unknown",
+        durationLabel: null,
+        detail: row.outcomeText ? { kind: "outcome", text: row.outcomeText } : null,
+      };
     case "running":
       return {
         statusKind,
@@ -855,35 +906,44 @@ export function describeSubagentRunRow(
 }
 
 export interface SubagentRunHeaderDescription {
+  /** "Created subagent" / "Created 3 subagents". */
   title: string;
+  /** The one subagent's name when the card holds a single launch. */
+  subject: string | null;
   nestedLabel: string | null;
   segments: ReadonlyArray<{ text: string; tone: "running" | "failed" | null }>;
   durationLabel: string | null;
 }
 
-// "2 subagents · 1 running · 12s" while live; "3 subagents · 1 done · 1 failed
-// · 1 stopped · 21s" after, or "· stopped by you ·" when every one was stopped.
-// Only the running and failed counts take a hue.
+// "Created 2 subagents · 1 running · 12s" while live; "Created 3 subagents ·
+// 1 done · 1 failed · 1 stopped · 21s" after, or "· stopped ·" when every one
+// was stopped. A single launch names its subagent and drops the counts:
+// "Created subagent Explore auth · running · 4s". Only the running and failed
+// segments take a hue.
 export function describeSubagentRunHeader(
   card: SubagentRunCardModel,
   nowMs: number,
+  translate: typeof t = t,
 ): SubagentRunHeaderDescription {
+  const single = card.rows.length === 1;
+  const count = (value: number, word: string) => (single ? word : `${value} ${word}`);
   const segments: Array<{ text: string; tone: "running" | "failed" | null }> = [];
   if (card.isLive) {
-    segments.push({ text: `${card.counts.running} running`, tone: "running" });
+    segments.push({ text: count(card.counts.running, "running"), tone: "running" });
   } else if (card.allStopped) {
     segments.push({ text: "stopped", tone: null });
   } else {
-    if (card.counts.done > 0) segments.push({ text: `${card.counts.done} done`, tone: null });
+    if (card.counts.done > 0) segments.push({ text: count(card.counts.done, "done"), tone: null });
     if (card.counts.failed > 0)
-      segments.push({ text: `${card.counts.failed} failed`, tone: "failed" });
+      segments.push({ text: count(card.counts.failed, "failed"), tone: "failed" });
     if (card.counts.stopped > 0)
-      segments.push({ text: `${card.counts.stopped} stopped`, tone: null });
+      segments.push({ text: count(card.counts.stopped, "stopped"), tone: null });
     if (card.counts.interrupted > 0)
-      segments.push({ text: `${card.counts.interrupted} interrupted`, tone: null });
+      segments.push({ text: count(card.counts.interrupted, "interrupted"), tone: null });
   }
   return {
-    title: `${card.rows.length} ${pluralize(card.rows.length, "subagent")}`,
+    title: translate("chat:subagentsCreated", { count: card.rows.length }),
+    subject: single ? (card.rows[0]?.item.primaryLabel ?? null) : null,
     nestedLabel: card.nestedCount > 0 ? `+${card.nestedCount} nested` : null,
     segments,
     durationLabel: elapsedLabel(card.startedAtMs, card.endedAtMs, card.isLive, nowMs),
@@ -906,12 +966,7 @@ export function isLaunchTurnLive(
   return !entry.turnId || entry.turnId === liveTurnId;
 }
 
-/**
- * The newest card that still has a subagent at work, for the floating
- * "N running" chip: its entry id (to scroll to) and how many of its direct
- * subagents are running.
- */
-export function findLatestRunningSubagentRun(input: {
+export interface SubagentRunScanInput {
   entries: ReadonlyArray<WorkLogEntry>;
   threads: ReadonlyArray<SubagentRunThread>;
   parentThreadId: ThreadId | null;
@@ -919,46 +974,200 @@ export function findLatestRunningSubagentRun(input: {
   liveTurnId: TurnId | null;
   taskEndByToolUseId?: ReadonlyMap<string, SubagentTaskEnd>;
   backgroundedProviderThreadIds?: ReadonlySet<string>;
-}): { entryId: string; runningCount: number } | null {
+  runtimeRetired?: boolean;
+}
+
+export interface SubagentRunCardScan {
+  /** The newest card with a subagent still at work: the floating chip's card. */
+  latestRunningCard: { entryId: string; runningCount: number } | null;
+  /** Provider thread ids of the live rows across every card, nested ones included. */
+  liveProviderThreadIds: ReadonlySet<string>;
+  /** Child thread ids of the live rows that have one. */
+  liveThreadIds: ReadonlySet<string>;
+  /** Provider thread ids of every row, live or settled. */
+  coveredProviderThreadIds: ReadonlySet<string>;
+  /** Work entry ids of the cards with a row still live; settled cards fold with their turn. */
+  liveCardEntryIds: ReadonlySet<string>;
+}
+
+export const EMPTY_SUBAGENT_RUN_SCAN: SubagentRunCardScan = Object.freeze({
+  latestRunningCard: null,
+  liveProviderThreadIds: new Set<string>(),
+  liveThreadIds: new Set<string>(),
+  coveredProviderThreadIds: new Set<string>(),
+  liveCardEntryIds: new Set<string>(),
+});
+
+function deriveEntrySubagentRunCard(
+  entry: WorkLogEntry,
+  run: WorkLogSubagentRun,
+  input: SubagentRunScanInput,
+): SubagentRunCardModel {
+  return deriveSubagentRunCard({
+    subagents: entry.subagents ?? [],
+    run,
+    threads: input.threads,
+    parentThreadId: input.parentThreadId,
+    launchTurnLive: isLaunchTurnLive(entry, input.liveTurnId),
+    ...(input.taskEndByToolUseId ? { taskEndByToolUseId: input.taskEndByToolUseId } : {}),
+    ...(input.backgroundedProviderThreadIds
+      ? { backgroundedProviderThreadIds: input.backgroundedProviderThreadIds }
+      : {}),
+    ...(input.runtimeRetired ? { runtimeRetired: true } : {}),
+  });
+}
+
+/**
+ * Every transcript card's rows in one pass: which subagents are still at work
+ * (a subagent resumed by a later card counts once) and the newest card among
+ * them, so the composer capsule and the floating chip agree with the cards.
+ */
+export function scanSubagentRunCards(input: SubagentRunScanInput): SubagentRunCardScan {
+  let latestRunningCard: SubagentRunCardScan["latestRunningCard"] = null;
+  const liveProviderThreadIds = new Set<string>();
+  const liveThreadIds = new Set<string>();
+  const coveredProviderThreadIds = new Set<string>();
+  const liveCardEntryIds = new Set<string>();
   for (let index = input.entries.length - 1; index >= 0; index -= 1) {
     const entry = input.entries[index]!;
     if (!entry.subagentRun) continue;
-    const { counts } = deriveSubagentRunCard({
-      subagents: entry.subagents ?? [],
-      run: entry.subagentRun,
-      threads: input.threads,
-      parentThreadId: input.parentThreadId,
-      launchTurnLive: isLaunchTurnLive(entry, input.liveTurnId),
-      ...(input.taskEndByToolUseId ? { taskEndByToolUseId: input.taskEndByToolUseId } : {}),
-      ...(input.backgroundedProviderThreadIds
-        ? { backgroundedProviderThreadIds: input.backgroundedProviderThreadIds }
-        : {}),
-    });
-    if (counts.running > 0) {
-      return { entryId: entry.id, runningCount: counts.running };
+    const card = deriveEntrySubagentRunCard(entry, entry.subagentRun, input);
+    if (latestRunningCard === null && card.counts.running > 0) {
+      latestRunningCard = { entryId: entry.id, runningCount: card.counts.running };
+    }
+    for (const row of flattenRows(card.rows)) {
+      coveredProviderThreadIds.add(row.item.providerThreadId);
+      if (!isRowLive(row)) continue;
+      liveCardEntryIds.add(entry.id);
+      liveProviderThreadIds.add(row.item.providerThreadId);
+      if (row.threadId) liveThreadIds.add(row.threadId);
     }
   }
-  return null;
+  return coveredProviderThreadIds.size === 0
+    ? EMPTY_SUBAGENT_RUN_SCAN
+    : {
+        latestRunningCard,
+        liveProviderThreadIds,
+        liveThreadIds,
+        coveredProviderThreadIds,
+        liveCardEntryIds,
+      };
+}
+
+/**
+ * Adjacent cards from one turn render as one card: their members and subagents
+ * join under the first entry's identity.
+ */
+export function mergeSubagentRunEntries(entries: ReadonlyArray<WorkLogEntry>): WorkLogEntry {
+  const first = entries[0]!;
+  if (entries.length === 1) return first;
+  return {
+    ...first,
+    subagents: entries.flatMap((entry) => entry.subagents ?? []),
+    subagentRun: {
+      members: entries.flatMap((entry) => entry.subagentRun?.members ?? []),
+      entryIds: entries.map((entry) => entry.id),
+    },
+  };
+}
+
+export interface RunningAgentsSummary {
+  count: number;
+  /** Transcript entry to bring into view: the newest card or agent row still at work. */
+  targetEntryId: string | null;
+}
+
+export const NO_RUNNING_AGENTS: RunningAgentsSummary = Object.freeze({
+  count: 0,
+  targetEntryId: null,
+});
+
+const AGENT_LAUNCH_TOOLS = new Set(["task", "subtask", "agent", "spawnagent"]);
+
+// An agent call still in flight that has no subagent of its own yet, or never
+// gets one (OpenCode's foreground `task`).
+function isInFlightAgentCall(entry: WorkLogEntry): entry is WorkLogEntry & { toolCallId: string } {
+  if (entry.itemType !== "collab_agent_tool_call" || !entry.toolCallId) return false;
+  if (entry.subagentRun || (entry.subagents?.length ?? 0) > 0) return false;
+  const action = entry.subagentAction;
+  if (!action || !AGENT_LAUNCH_TOOLS.has(action.tool.toLowerCase().replace(/[^a-z]/g, ""))) {
+    return false;
+  }
+  return normalizeSubagentStatusKind(action.status) === "running";
+}
+
+/**
+ * Agents still at work anywhere in the thread: the cards' live rows, then the
+ * subagent tasks no live row shows (OpenCode, Droid, Omp, or a resumed agent
+ * whose card has settled), then running child threads nothing else accounts for
+ * (Antigravity, or a card that fell out of the activity window), then agent
+ * calls of the live turn that never got a card.
+ */
+export function summarizeRunningAgents(input: {
+  scan: SubagentRunCardScan;
+  tasks: RunningSubagentTasks;
+  runningChildThreadIds: ReadonlyArray<ThreadId>;
+  rootThreadId: ThreadId | null;
+  entries: ReadonlyArray<WorkLogEntry>;
+  liveTurnId: TurnId | null;
+}): RunningAgentsSummary {
+  const { scan, tasks } = input;
+  const countedKeys = new Set<string>();
+  const countedTaskIds = new Set<string>();
+  for (const task of tasks.running) {
+    const key = task.toolUseId ?? task.taskId;
+    if (scan.liveProviderThreadIds.has(key)) continue;
+    // A settled row stands for its task until the task's own end arrives; a
+    // task started again after an end is a resume the card does not show.
+    if (scan.coveredProviderThreadIds.has(key) && !task.resumed) continue;
+    countedKeys.add(key);
+    countedTaskIds.add(task.taskId);
+  }
+  for (const threadId of input.runningChildThreadIds) {
+    const key = providerThreadIdFromChildId(threadId, input.rootThreadId);
+    if (scan.liveThreadIds.has(threadId) || scan.liveProviderThreadIds.has(key)) continue;
+    // An agent the task model tracks is counted, or settled, by its task.
+    if (tasks.trackedKeys.has(key)) continue;
+    countedKeys.add(key);
+  }
+  if (input.liveTurnId !== null) {
+    for (const entry of input.entries) {
+      if (entry.turnId !== input.liveTurnId || !isInFlightAgentCall(entry)) continue;
+      const key = entry.toolCallId;
+      if (scan.coveredProviderThreadIds.has(key) || tasks.trackedKeys.has(key)) continue;
+      countedKeys.add(key);
+    }
+  }
+  const count = scan.liveProviderThreadIds.size + countedKeys.size;
+  if (count === 0) return NO_RUNNING_AGENTS;
+  const runningCardId = scan.latestRunningCard?.entryId ?? null;
+  let targetEntryId: string | null = null;
+  for (let index = input.entries.length - 1; index >= 0; index -= 1) {
+    const entry = input.entries[index]!;
+    if (
+      entry.id === runningCardId ||
+      (entry.backgroundTask !== undefined && countedTaskIds.has(entry.backgroundTask.taskId)) ||
+      (entry.toolCallId !== undefined && countedKeys.has(entry.toolCallId)) ||
+      (entry.subagentRun !== undefined &&
+        (entry.subagents ?? []).some((subagent) =>
+          countedKeys.has(subagent.providerThreadId ?? subagent.threadId),
+        ))
+    ) {
+      targetEntryId = entry.id;
+      break;
+    }
+  }
+  return { count, targetEntryId };
 }
 
 /** A child's own view shares the outcome and clock its launching card reports. */
 export function findLatestSubagentThreadRun(
-  input: Parameters<typeof findLatestRunningSubagentRun>[0] & { childThreadId: ThreadId },
+  input: SubagentRunScanInput & { childThreadId: ThreadId },
 ): SubagentRunRow | null {
   for (let index = input.entries.length - 1; index >= 0; index -= 1) {
     const entry = input.entries[index]!;
     if (!entry.subagentRun) continue;
-    const card = deriveSubagentRunCard({
-      subagents: entry.subagents ?? [],
-      run: entry.subagentRun,
-      threads: input.threads,
-      parentThreadId: input.parentThreadId,
-      launchTurnLive: isLaunchTurnLive(entry, input.liveTurnId),
-      ...(input.taskEndByToolUseId ? { taskEndByToolUseId: input.taskEndByToolUseId } : {}),
-      ...(input.backgroundedProviderThreadIds
-        ? { backgroundedProviderThreadIds: input.backgroundedProviderThreadIds }
-        : {}),
-    });
+    const card = deriveEntrySubagentRunCard(entry, entry.subagentRun, input);
     const row = flattenRows(card.rows).find(
       (candidate) => candidate.threadId === input.childThreadId,
     );

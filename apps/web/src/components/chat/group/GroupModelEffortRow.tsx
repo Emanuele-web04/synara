@@ -36,6 +36,7 @@ import {
   modelSelectionsEqual,
   resolveGroupModelCatalogPrefetchProviders,
 } from "./groupSettingsDialog.logic";
+import { useTranslation } from "~/i18n";
 
 function useGroupModelCatalog(input: {
   readonly selection: ModelSelection;
@@ -119,6 +120,8 @@ function useSelectionProviderInstanceId(
 }
 
 function UseDefaultLink(props: { readonly disabled: boolean; readonly onClick: () => void }) {
+  const { t } = useTranslation();
+
   return (
     <button
       type="button"
@@ -129,7 +132,7 @@ function UseDefaultLink(props: { readonly disabled: boolean; readonly onClick: (
       )}
       onClick={props.onClick}
     >
-      Use default
+      {t("workspace:useDefault")}
     </button>
   );
 }
@@ -236,6 +239,8 @@ export function GroupEffortRow(props: {
   readonly projectCwd: string;
   readonly onChange: (next: ModelSelection) => void;
 }) {
+  const { t } = useTranslation();
+
   const { settings } = useAppSettings();
   const selectedProviderInstanceId = useSelectionProviderInstanceId(settings, props.selection);
   const { runtimeModelsByProvider, selectedProviderModelsLoading } = useGroupModelCatalog({
@@ -255,6 +260,7 @@ export function GroupEffortRow(props: {
     "",
     props.selection.options ?? undefined,
     runtimeModel,
+    t,
   );
   const optionId = traits.primarySelectDescriptor?.id ?? null;
   const effortOptions = traits.effortLevels.filter(
@@ -273,8 +279,8 @@ export function GroupEffortRow(props: {
         status={
           <span className="text-muted-foreground">
             {selectedProviderModelsLoading
-              ? "Checking effort support…"
-              : `Not available for ${props.selection.model}.`}
+              ? t("workspace:checkingEffortSupport")
+              : t("workspace:notAvailableFor", { value0: props.selection.model })}
           </span>
         }
       />

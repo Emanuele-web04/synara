@@ -3,17 +3,17 @@
 //   and settings, including the explicit state of a selection whose account is gone.
 // Layer: Web presentation helper
 
-import type { ProviderInstanceId, ProviderKind } from "@synara/contracts";
-
-export const MISSING_PROVIDER_INSTANCE_LABEL = "Missing account";
+import { t } from "~/i18n";
+import type { ProviderInstanceId, ProviderKind, ServerProviderStatus } from "@synara/contracts";
 
 export function resolveProviderInstanceLabel(
   instances: ReadonlyArray<{ readonly instanceId: ProviderInstanceId; readonly label: string }>,
   selectedInstanceId: ProviderInstanceId,
+  translate: typeof t = t,
 ): string {
   return (
     instances.find((instance) => instance.instanceId === selectedInstanceId)?.label ??
-    MISSING_PROVIDER_INSTANCE_LABEL
+    translate("settings:missingAccount")
   );
 }
 
@@ -42,6 +42,18 @@ export function providerAccountQualifiedLabel(providerLabel: string, accountLabe
     : `${providerLabel} · ${accountLabel}`;
 }
 
+export function providerAccountIdentityLabel(
+  status: Pick<ServerProviderStatus, "accountEmail" | "accountOrganization"> | undefined,
+): string | null {
+  const email = status?.accountEmail;
+  const organization = status?.accountOrganization;
+  if (!email) return organization || null;
+  if (!organization || organization.toLowerCase() === `${email.toLowerCase()}'s organization`) {
+    return email;
+  }
+  return `${email} · ${organization}`;
+}
+
 const ACCOUNT_ID_SLUG_MAX_CHARS = 48;
 
 // Routing id proposed for a new account from its label: "Work laptop" on Claude ->
@@ -66,11 +78,11 @@ export function validateProviderAccountId(
   existingIds: ReadonlySet<string>,
 ): string | null {
   const trimmed = accountId.trim();
-  if (trimmed.length === 0) return "Account ID is required.";
-  if (trimmed.length > ACCOUNT_ID_MAX_CHARS) return "Account ID must be 64 characters or fewer.";
+  if (trimmed.length === 0) return t("settings:accountIdRequired");
+  if (trimmed.length > ACCOUNT_ID_MAX_CHARS) return t("settings:accountIdTooLong");
   if (!ACCOUNT_ID_PATTERN.test(trimmed)) {
-    return "Account ID must start with a letter and use only letters, digits, '-', or '_'.";
+    return t("settings:accountIdInvalid");
   }
-  if (existingIds.has(trimmed)) return `An account with the ID '${trimmed}' already exists.`;
+  if (existingIds.has(trimmed)) return t("settings:accountIdExists", { id: trimmed });
   return null;
 }

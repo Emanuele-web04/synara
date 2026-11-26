@@ -79,6 +79,30 @@ describe("AgentGatewaySessionRegistry", () => {
     assert.isTrue(registry.verifyWriteAuthority(turnBAuthority!));
   });
 
+  it("lists retired write authorities per thread until the credential is revoked", () => {
+    let nextId = 0;
+    const registry = makeAgentGatewaySessionRegistry({ randomId: () => String(++nextId) });
+    const thread = ThreadId.makeUnsafe("thread-1");
+    const issued = registry.issue(thread, "codex");
+    const otherThread = registry.issue(ThreadId.makeUnsafe("thread-2"), "codex");
+
+    assert.deepEqual(registry.listRetiredWriteAuthorities(thread), []);
+
+    registry.retireWriteAuthority(issued.token, "turn-a");
+    registry.retireWriteAuthority(otherThread.token, "turn-x");
+
+    const retired = registry.listRetiredWriteAuthorities(thread);
+    assert.equal(retired.length, 1);
+    assert.equal(retired[0]?.sessionKey, issued.sessionKey);
+    assert.equal(retired[0]?.provider, "codex");
+    assert.equal(retired[0]?.retiredTurnId, "turn-a");
+    assert.notInclude(JSON.stringify(retired), issued.token);
+
+    registry.revoke(issued.token);
+    assert.deepEqual(registry.listRetiredWriteAuthorities(thread), []);
+    assert.equal(registry.listRetiredWriteAuthorities("thread-2").length, 1);
+  });
+
   it("keeps credentials valid for a long-lived provider session but not across restart", () => {
     let time = 1_000;
     const firstRegistry = makeAgentGatewaySessionRegistry({

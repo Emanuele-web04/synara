@@ -4,7 +4,7 @@
 
 import "../index.css";
 
-import { TurnId, type NativeApi } from "@synara/contracts";
+import { CheckpointRef, TurnId, type NativeApi } from "@synara/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useState } from "react";
 import { page } from "vitest/browser";
@@ -72,7 +72,7 @@ function DiffPanelHarness() {
   );
 }
 
-async function mountPanel(getDiff: ReturnType<typeof vi.fn>) {
+async function mountPanel(getDiff: ReturnType<typeof vi.fn>, thread = THREAD) {
   vi.stubGlobal("nativeApi", {
     orchestration: { getTurnDiff: getDiff, getFullThreadDiff: getDiff },
     git: {
@@ -91,7 +91,7 @@ async function mountPanel(getDiff: ReturnType<typeof vi.fn>) {
       onActionProgress: () => () => undefined,
     },
   } as unknown as NativeApi);
-  useStore.setState(makeState(THREAD));
+  useStore.setState(makeState(thread));
   const client = new QueryClient({
     defaultOptions: {
       queries: { retry: false, refetchOnWindowFocus: false, refetchOnReconnect: false },
@@ -186,3 +186,59 @@ it.each(["files", "raw"])(
     expectNoHardCapacityError();
   },
 );
+
+it("refreshes a live turn patch for each snapshot and its final checkpoint without a manual reload", async () => {
+  const summary = {
+    ...THREAD.turnDiffSummaries[0]!,
+    checkpointRef: CheckpointRef.makeUnsafe("provider-diff:first"),
+    status: "missing",
+  };
+  const liveThread = { ...THREAD, turnDiffSummaries: [summary] };
+  const getDiff = vi.fn().mockResolvedValue({ diff: PATCH });
+  const client = await mountPanel(getDiff, liveThread);
+  await expect.element(page.getByText("export const value = 2;", { exact: true })).toBeVisible();
+
+  // Identical counts and timestamps must not reuse the previous revision forever.
+  getDiff.mockResolvedValue({ diff: PATCH.replace("value = 2", "value = 3") });
+  useStore.setState(
+    makeState({
+      ...liveThread,
+      turnDiffSummaries: [
+        { ...summary, checkpointRef: CheckpointRef.makeUnsafe("provider-diff:next") },
+      ],
+    }),
+  );
+  await expect.element(page.getByText("export const value = 3;", { exact: true })).toBeVisible();
+  expect(getDiff).toHaveBeenCalledTimes(2);
+  await vi.waitFor(
+    () =>
+      expect(client.getQueryCache().findAll({ queryKey: providerQueryKeys.all })).toHaveLength(1),
+    { timeout: 1_000 },
+  );
+
+  getDiff.mockResolvedValue({ diff: PATCH.replace("value = 2", "value = 4") });
+  useStore.setState(
+    makeState({
+      ...liveThread,
+      turnDiffSummaries: [
+        {
+          ...summary,
+          checkpointRef: CheckpointRef.makeUnsafe("refs/synara/checkpoints/thread/turn/2"),
+          status: "ready",
+        },
+      ],
+    }),
+  );
+  await expect.element(page.getByText("export const value = 4;", { exact: true })).toBeVisible();
+  expect(getDiff).toHaveBeenCalledTimes(3);
+  await vi.waitFor(
+    () =>
+      expect(client.getQueryCache().findAll({ queryKey: providerQueryKeys.all })).toHaveLength(1),
+    { timeout: 1_000 },
+  );
+  await screen!.unmount();
+  screen = undefined;
+  // Let zero-delay live-cache cleanup run; the final checkpoint keeps its normal cache lifetime.
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  expect(client.getQueryCache().findAll({ queryKey: providerQueryKeys.all })).toHaveLength(1);
+});

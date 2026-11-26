@@ -4,10 +4,13 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 
+import { FilesystemBrowseResult } from "@synara/contracts";
+import { Schema } from "effect";
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
 
 import * as ProcessRunner from "./processRunner";
 import {
+  browseWorkspaceEntries,
   clearWorkspaceIndexCache,
   discoverProjectScripts,
   listWorkspaceDirectories,
@@ -472,6 +475,37 @@ describe("searchLocalEntries", () => {
   });
 });
 
+describe("browseWorkspaceEntries", () => {
+  afterEach(() => {
+    for (const dir of tempDirs.splice(0, tempDirs.length)) {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps folder names with surrounding whitespace encodable over RPC", async () => {
+    const root = makeTempDir("synara-filesystem-browse-");
+    fs.mkdirSync(path.join(root, "Photos ", "2026"), { recursive: true });
+    fs.mkdirSync(path.join(root, " Archive"));
+    writeFile(root, "notes.txt");
+    const encode = Schema.encodeUnknownSync(FilesystemBrowseResult);
+
+    const listing = await browseWorkspaceEntries({ partialPath: `${root}/` });
+    expect(encode(listing)).toEqual({
+      parentPath: root,
+      entries: [
+        { name: " Archive", fullPath: path.join(root, " Archive") },
+        { name: "Photos ", fullPath: path.join(root, "Photos ") },
+      ],
+    });
+
+    const nested = await browseWorkspaceEntries({ partialPath: `${path.join(root, "Photos ")}/` });
+    expect(encode(nested)).toEqual({
+      parentPath: path.join(root, "Photos "),
+      entries: [{ name: "2026", fullPath: path.join(root, "Photos ", "2026") }],
+    });
+  });
+});
+
 describe("listWorkspaceDirectories", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -627,6 +661,7 @@ describe("searchWorkspaceContent", () => {
       "export const a = 1;\nexport function findMe() {\n  return true;\n}\n",
     );
     writeFile(cwd, "src/other.ts", "const FINDME = 'x';\n");
+    writeFile(cwd, "src/unicode.ts", `${"İ".repeat(16)}\nfindMe\nunrelated line\n`);
     writeFile(cwd, "README.md", "not a match\n");
 
     const result = await searchWorkspaceContent({ cwd, query: "findme" });
@@ -635,6 +670,7 @@ describe("searchWorkspaceContent", () => {
     expect(result.matches).toEqual([
       { path: "src/index.ts", lineNumber: 2, lineText: "export function findMe() {" },
       { path: "src/other.ts", lineNumber: 1, lineText: "const FINDME = 'x';" },
+      { path: "src/unicode.ts", lineNumber: 2, lineText: "findMe" },
     ]);
   });
 

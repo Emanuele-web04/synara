@@ -1,3 +1,4 @@
+import { useTranslation } from "~/i18n";
 // FILE: useHandleNewGroupChat.ts
 // Purpose: Starts ordinary AI threads inside a specific Group container project.
 //          Groups are explicit — never auto-created — so the target project id is
@@ -15,6 +16,8 @@ import { useComposerDraftStore } from "../composerDraftStore";
 import { useHandleNewThread } from "./useHandleNewThread";
 
 export function useHandleNewGroupChat() {
+  const { t } = useTranslation();
+
   const { handleNewThread } = useHandleNewThread();
 
   const handleNewGroupChat = async (
@@ -41,7 +44,7 @@ export function useHandleNewGroupChat() {
       // A group owns one durable local workspace per chat. Reopening its stored draft
       // must never inherit an old project/worktree environment.
       forceLocalWorkspace: true,
-      errorLabel: "Unable to prepare a new hub chat.",
+      errorLabel: t("chat:unableToPrepareANewHubChat"),
     });
 
   return { handleNewGroupChat };

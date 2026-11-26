@@ -5,6 +5,7 @@
 // contract's `stopAfterConsecutiveFailures` field. Used by the creation dialog and the
 // detail page's "On failure" row so both surfaces read identically.
 
+import { t } from "~/i18n";
 import { DEFAULT_AUTOMATION_STOP_AFTER_CONSECUTIVE_FAILURES } from "@synara/contracts";
 
 /** "never" or a positive integer rendered as a string ("1", "3", "5", …). */
@@ -18,9 +19,9 @@ export const DEFAULT_AUTOMATION_FAILURE_POLICY_VALUE: AutomationFailurePolicyVal
 
 const FAILURE_POLICY_PRESET_THRESHOLDS: readonly number[] = [1, 3, 5];
 
-function failurePolicyLabel(value: AutomationFailurePolicyValue): string {
-  if (value === AUTOMATION_FAILURE_POLICY_NEVER) return "Keep running";
-  return value === "1" ? "Stop after 1 failure" : `Stop after ${value} failures`;
+function failurePolicyLabel(value: AutomationFailurePolicyValue, translate: typeof t): string {
+  if (value === AUTOMATION_FAILURE_POLICY_NEVER) return translate("automation:failureKeepRunning");
+  return translate("automation:failureStopAfter", { count: Number(value) });
 }
 
 /** Form/UI value for a stored threshold (`null` = never auto-disable). */
@@ -54,18 +55,19 @@ export function stopAfterConsecutiveFailuresFromPolicyValue(
  */
 export function automationFailurePolicyOptions(
   currentValue: AutomationFailurePolicyValue,
+  translate: typeof t = t,
 ): readonly { readonly value: AutomationFailurePolicyValue; readonly label: string }[] {
   const presets = [
     ...FAILURE_POLICY_PRESET_THRESHOLDS.map((threshold) => {
       const value = String(threshold);
-      return { value, label: failurePolicyLabel(value) };
+      return { value, label: failurePolicyLabel(value, translate) };
     }),
     {
       value: AUTOMATION_FAILURE_POLICY_NEVER,
-      label: failurePolicyLabel(AUTOMATION_FAILURE_POLICY_NEVER),
+      label: failurePolicyLabel(AUTOMATION_FAILURE_POLICY_NEVER, translate),
     },
   ];
   return presets.some((preset) => preset.value === currentValue)
     ? presets
-    : [{ value: currentValue, label: failurePolicyLabel(currentValue) }, ...presets];
+    : [{ value: currentValue, label: failurePolicyLabel(currentValue, translate) }, ...presets];
 }

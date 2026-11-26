@@ -9,6 +9,7 @@
 // mergeSubagentSnapshots, and the row types
 
 import { ThreadId, type TurnId } from "@synara/contracts";
+import { t } from "~/i18n";
 
 import type { WorkLogEntry, WorkLogSubagent } from "../../session-logic";
 import {
@@ -82,15 +83,18 @@ export function mergeSubagentSnapshots(
 
 // A row may exist before the Agent tool description streams in; until then it
 // reads as starting, and settles on a neutral label (never the raw provider id).
-function anonymousSubagentLabel(statusKind: SubagentStatusKind | null): string {
+function anonymousSubagentLabel(
+  statusKind: SubagentStatusKind | null,
+  translate: typeof t,
+): string {
   switch (statusKind) {
     case "completed":
     case "failed":
     case "stopped":
     case "idle":
-      return "Subagent";
+      return translate("chat:subagent");
     default:
-      return "Starting subagent…";
+      return translate("chat:startingSubagent");
   }
 }
 
@@ -99,19 +103,38 @@ export function toSubagentStripItem(
   subagent: WorkLogSubagent,
   backgroundedThreadIds: ReadonlySet<string>,
   viewedThreadId: ThreadId | null,
+  translate: typeof t = t,
 ): ComposerSubagentStripItem {
-  const statusLabel =
+  // Enrichment stores the source label because it also drives state. Translate
+  // only the final UI row, after classification, and preserve unknown labels.
+  const sourceStatusLabel =
     subagent.statusLabel ?? humanizeSubagentStatus(subagent.rawStatus, subagent.isActive);
   const statusKind = normalizeSubagentStatusKind(
-    statusLabel ?? subagent.rawStatus,
+    sourceStatusLabel ?? subagent.rawStatus,
     subagent.isActive,
   );
+  const statusKeys: Record<SubagentStatusKind, string> = {
+    running: "chat:runStatus_running",
+    completed: "workspace:triageOutcome_completed",
+    failed: "chat:runStatus_failed",
+    stopped: "chat:stopped",
+    queued: "workspace:runStatus_queued",
+    idle: "chat:idle",
+  };
+  const sourceStatusKind = normalizeSubagentStatusKind(sourceStatusLabel);
+  const statusLabel = sourceStatusKind
+    ? translate(statusKeys[sourceStatusKind])
+    : sourceStatusLabel === "Connecting"
+      ? translate("chat:composer_connecting")
+      : sourceStatusLabel === "Closed"
+        ? translate("chat:closed")
+        : sourceStatusLabel;
   const presentation = resolveSubagentPresentation({
     nickname: subagent.nickname,
     role: subagent.role,
     title: subagent.title,
     fallbackId: subagent.threadId,
-    placeholderLabel: anonymousSubagentLabel(statusKind),
+    placeholderLabel: anonymousSubagentLabel(statusKind, translate),
   });
   const modelLabel = formatSubagentModelLabel(subagent.model);
   const threadId = ThreadId.makeUnsafe(subagent.resolvedThreadId ?? subagent.threadId);
@@ -179,12 +202,18 @@ export function collectForegroundRunningSubagentStripItems(
 }
 
 const NO_BACKGROUNDED_THREAD_IDS: ReadonlySet<string> = new Set();
+// One shared empty result keeps memoized consumers (and the Ctrl+B handler built
+// from it) stable on the common no-subagent path, where every flush re-derives.
+const NO_STRIP_ROWS: ReadonlyArray<ComposerSubagentStripRow> = Object.freeze([]);
 
 function withParentRow(
   items: ComposerSubagentStripItem[],
   parentRow: { threadId: ThreadId; label: string | null } | null | undefined,
-): ComposerSubagentStripRow[] {
-  if (items.length === 0 || !parentRow) {
+): ReadonlyArray<ComposerSubagentStripRow> {
+  if (items.length === 0) {
+    return NO_STRIP_ROWS;
+  }
+  if (!parentRow) {
     return items;
   }
   return [
@@ -192,7 +221,7 @@ function withParentRow(
       kind: "parent",
       key: `parent:${parentRow.threadId}`,
       threadId: parentRow.threadId,
-      label: parentRow.label ?? "Main thread",
+      label: parentRow.label ?? t("chat:mainThread"),
     },
     ...items,
   ];
@@ -207,12 +236,12 @@ export function deriveComposerSubagentStripItems(input: {
   viewedThreadId?: ThreadId | null;
   // Present while a subagent thread is open: prepends a row back to the parent.
   parentRow?: { threadId: ThreadId; label: string | null } | null;
-}): ComposerSubagentStripRow[] {
+}): ReadonlyArray<ComposerSubagentStripRow> {
   const entriesWithSubagents = input.workEntries.filter(
     (entry) => (entry.subagents?.length ?? 0) > 0,
   );
   if (entriesWithSubagents.length === 0) {
-    return [];
+    return NO_STRIP_ROWS;
   }
 
   const backgroundedThreadIds = input.backgroundedProviderThreadIds ?? NO_BACKGROUNDED_THREAD_IDS;
@@ -248,5 +277,5 @@ export function deriveComposerSubagentStripItems(input: {
   );
   return items.some((item) => item.statusKind === "running" || item.statusKind === "queued")
     ? withParentRow(items, input.parentRow)
-    : [];
+    : NO_STRIP_ROWS;
 }

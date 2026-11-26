@@ -1,6 +1,7 @@
 import * as React from "react";
 
 import { toastManager } from "../components/ui/toast";
+import { t, useTranslation } from "~/i18n";
 
 function fallbackCopyTextToClipboard(value: string): boolean {
   if (typeof document === "undefined" || typeof document.execCommand !== "function") {
@@ -50,7 +51,7 @@ function fallbackCopyTextToClipboard(value: string): boolean {
 
 export async function copyTextToClipboard(value: string): Promise<void> {
   if (typeof window === "undefined") {
-    throw new Error("Clipboard API unavailable.");
+    throw new Error(t("common:clipboardAPIUnavailable"));
   }
 
   if (!value) {
@@ -73,7 +74,7 @@ export async function copyTextToClipboard(value: string): Promise<void> {
     return;
   }
 
-  throw new Error("Clipboard API unavailable.");
+  throw new Error(t("common:clipboardAPIUnavailable"));
 }
 
 export function useCopyToClipboard<TContext = void>({
@@ -151,6 +152,8 @@ interface CopyToastLabels {
  * one success/error toast shape, one place to change it.
  */
 function useCopyWithToasts(): (value: string, labels: CopyToastLabels) => void {
+  const { t } = useTranslation();
+
   const { copyToClipboard } = useCopyToClipboard<CopyToastLabels>({
     onCopy: (labels) =>
       toastManager.add({
@@ -162,7 +165,7 @@ function useCopyWithToasts(): (value: string, labels: CopyToastLabels) => void {
       toastManager.add({
         type: "error",
         title: labels.errorTitle,
-        description: error instanceof Error ? error.message : "An error occurred.",
+        description: error instanceof Error ? error.message : t("common:proposedPlan_unknownError"),
       }),
   });
   return copyToClipboard;
@@ -173,12 +176,14 @@ function useCopyWithToasts(): (value: string, labels: CopyToastLabels) => void {
  * of truth for the "Path copied" affordance used by the sidebar and the kanban board.
  */
 export function useCopyPathToClipboard(): (path: string) => void {
+  const { t } = useTranslation();
+
   const copy = useCopyWithToasts();
   return (path: string) =>
     copy(path, {
-      successTitle: "Path copied",
+      successTitle: t("common:pathCopied"),
       successDescription: path,
-      errorTitle: "Failed to copy path",
+      errorTitle: t("common:failedToCopyPath"),
     });
 }
 
@@ -195,24 +200,30 @@ export function useCopyFileContentsToClipboard(): (
   fileName: string,
   options?: { partial?: boolean },
 ) => void {
+  const { t } = useTranslation();
+
   const copy = useCopyWithToasts();
   return (contents: string, fileName: string, options?: { partial?: boolean }) => {
     if (contents.length === 0) {
-      toastManager.add({ type: "info", title: "Nothing to copy", description: "File is empty" });
+      toastManager.add({
+        type: "info",
+        title: t("common:nothingToCopy"),
+        description: t("common:fileIsEmpty"),
+      });
       return;
     }
     copy(
       contents,
       options?.partial
         ? {
-            successTitle: "Partial contents copied",
-            successDescription: "Large file — only the loaded part was copied",
-            errorTitle: "Failed to copy contents",
+            successTitle: t("common:partialContentsCopied"),
+            successDescription: t("common:largeFileOnlyTheLoadedPartWasCopied"),
+            errorTitle: t("common:failedToCopyContents"),
           }
         : {
-            successTitle: "Contents copied",
+            successTitle: t("common:contentsCopied"),
             successDescription: fileName,
-            errorTitle: "Failed to copy contents",
+            errorTitle: t("common:failedToCopyContents"),
           },
     );
   };
@@ -220,11 +231,13 @@ export function useCopyFileContentsToClipboard(): (
 
 /** Copy a thread id and surface the shared "Thread ID copied" toast. */
 export function useCopyThreadIdToClipboard(): (threadId: string) => void {
+  const { t } = useTranslation();
+
   const copy = useCopyWithToasts();
   return (threadId: string) =>
     copy(threadId, {
-      successTitle: "Thread ID copied",
+      successTitle: t("common:threadIDCopied"),
       successDescription: threadId,
-      errorTitle: "Failed to copy thread ID",
+      errorTitle: t("common:failedToCopyThreadID"),
     });
 }

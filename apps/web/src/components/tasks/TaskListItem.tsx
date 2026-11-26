@@ -21,12 +21,14 @@ import { TaskRowTitle, useTaskRename } from "./TaskRowTitle";
 import { buildTaskRowContextMenu } from "./taskRowContextMenu";
 import {
   describeTaskMeta,
+  taskStatusPresentation,
   formatDueLabel,
   type TaskRowModel,
   unlinkChatInput,
 } from "./tasks.logic";
 import { useTaskCanUnlink } from "./taskDelegationState";
 import { useOpenChat } from "./useOpenChat";
+import { useTranslation } from "~/i18n";
 
 export function TaskListItem({
   row,
@@ -44,6 +46,8 @@ export function TaskListItem({
   onUpdate: (input: TodoUpdateInput) => void;
   onDelete: () => void;
 }) {
+  const { t, formatLocale } = useTranslation();
+
   const { todo, status, thread } = row;
   const openChat = useOpenChat(todo.threadId);
   const rename = useTaskRename(todo, onUpdate);
@@ -51,7 +55,11 @@ export function TaskListItem({
   const canUnlink = useTaskCanUnlink(todo, status.kind, now);
   // Linked to a chat that still exists, even before its summary loads ("Starting").
   const isDelegated = todo.threadId !== null && !status.chatMissing;
-  const meta = describeTaskMeta(status, todo.dueDate ? formatDueLabel(todo.dueDate, now) : null);
+  const meta = describeTaskMeta(
+    status,
+    todo.dueDate ? formatDueLabel(todo.dueDate, now, t, formatLocale) : null,
+    t,
+  );
   const agent = thread && !isDone ? thread.modelSelection : null;
   // Only the priorities worth a mark; the card shows every level.
   const flagsPriority = !isDone && (todo.priority === "urgent" || todo.priority === "high");
@@ -68,12 +76,15 @@ export function TaskListItem({
     onSelect();
     void (async () => {
       const clicked = await api.contextMenu.show(
-        buildTaskRowContextMenu({
-          isDelegated,
-          isDone,
-          hasLink: todo.threadId !== null,
-          canUnlink,
-        }),
+        buildTaskRowContextMenu(
+          {
+            isDelegated,
+            isDone,
+            hasLink: todo.threadId !== null,
+            canUnlink,
+          },
+          t,
+        ),
         { x: event.clientX, y: event.clientY },
       );
       if (clicked === "rename") rename.startEditing();
@@ -101,7 +112,11 @@ export function TaskListItem({
       <button
         type="button"
         onClick={toggleDone}
-        aria-label={`${isDone ? "Mark as not done" : "Mark as done"}: ${todo.title} (${status.label})`}
+        aria-label={t("common:symbol11", {
+          value0: isDone ? t("common:markAsNotDone") : t("common:markAsDone"),
+          value1: todo.title,
+          value2: taskStatusPresentation(status, t).label,
+        })}
         className="flex shrink-0 rounded-full outline-none focus-visible:ring-1 focus-visible:ring-ring"
       >
         <TaskStatusGlyph kind={status.kind} className="size-4.5" />

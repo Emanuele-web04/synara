@@ -19,6 +19,7 @@ import {
   ScratchRuntimeControls,
 } from "~/components/chat/ScratchAgentControls";
 import { useProviderStatusesForLocalConfig } from "~/hooks/useProviderStatusesForLocalConfig";
+import { useNewChatDefault } from "~/hooks/useNewChatDefault";
 import { useScratchComposerDraft } from "~/hooks/useScratchComposerDraft";
 import { useScratchModelCatalog } from "~/hooks/useScratchModelCatalog";
 import { LoaderCircleIcon } from "~/lib/icons";
@@ -33,6 +34,7 @@ import { buildDelegationPrompt } from "./tasks.logic";
 import { useTaskDelegateChat } from "./useTaskDelegateChat";
 import { useTaskDelegateTarget } from "./useTaskDelegateTarget";
 import { useTaskDelegation } from "./useTaskDelegation";
+import { useTranslation } from "~/i18n";
 
 export function TaskHandOff({
   todo,
@@ -48,11 +50,14 @@ export function TaskHandOff({
   /** Set to this hand-off's Start while it is mounted. */
   startRef: RefObject<(() => void) | null>;
 }) {
+  const { t } = useTranslation();
+
   const { settings } = useAppSettings();
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const providerStatuses = useProviderStatusesForLocalConfig();
+  const newChatDefault = useNewChatDefault(settings);
   const draft = useScratchComposerDraft({
-    defaultProvider: settings.defaultProvider,
+    newChatDefault,
     settings,
     initialPrompt: buildDelegationPrompt(todo),
   });
@@ -102,8 +107,8 @@ export function TaskHandOff({
   });
 
   return (
-    <section aria-label="Hand it to an agent" className="flex flex-col gap-1.5">
-      <TaskCardLabel>Hand it to an agent</TaskCardLabel>
+    <section aria-label={t("common:handItToAnAgent")} className="flex flex-col gap-1.5">
+      <TaskCardLabel>{t("common:handItToAnAgent")}</TaskCardLabel>
       {existingChat ? null : (
         <div className="-ml-1.5 flex min-w-0 flex-wrap items-center gap-0.5">
           <ScratchModelPickers
@@ -129,7 +134,7 @@ export function TaskHandOff({
           onClick={() => setShowsMore((current) => !current)}
           className="text-ui-sm text-muted-foreground outline-none hover:text-foreground focus-visible:underline"
         >
-          {showsMore ? "Fewer options" : "More options"}
+          {showsMore ? t("common:fewerOptions") : t("common:moreOptions")}
         </button>
         <TaskActionButton
           disabled={!canStart}
@@ -137,7 +142,7 @@ export function TaskHandOff({
           className={cn("gap-2", isStarting && "cursor-progress")}
         >
           {isStarting ? <LoaderCircleIcon className="size-3.5 animate-spin" /> : null}
-          Start
+          {t("common:start")}
         </TaskActionButton>
       </div>
     </section>

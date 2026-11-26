@@ -119,18 +119,45 @@ export class BackendSupervisionPolicy {
 
 /** Keeps the tail of a backend session's output so a give-up can quote the real error. */
 export class BackendOutputTailDetector {
-  private tail = "";
+  // Rolling window of decoded chunks, joined only when a crash reads it, so a
+  // long-lived backend does not rebuild an 8 KB string for every chunk.
+  private chunks: string[] = [];
+  private head = 0;
+  private length = 0;
 
   push(chunk: unknown): void {
-    const text = Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk);
-    this.tail = `${this.tail}${text.replace(/\r/g, "")}`;
-    if (this.tail.length > BACKEND_FAILURE_OUTPUT_TAIL_CHARS) {
-      this.tail = this.tail.slice(-BACKEND_FAILURE_OUTPUT_TAIL_CHARS);
+    const raw = Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk);
+    const text = raw.includes("\r") ? raw.replace(/\r/g, "") : raw;
+    if (text.length === 0) return;
+    if (text.length >= BACKEND_FAILURE_OUTPUT_TAIL_CHARS) {
+      this.chunks = [text.slice(-BACKEND_FAILURE_OUTPUT_TAIL_CHARS)];
+      this.head = 0;
+      this.length = BACKEND_FAILURE_OUTPUT_TAIL_CHARS;
+      return;
+    }
+    this.chunks.push(text);
+    this.length += text.length;
+    // Drop whole chunks that fall entirely outside the window.
+    while (
+      this.length - (this.chunks[this.head]?.length ?? 0) >=
+      BACKEND_FAILURE_OUTPUT_TAIL_CHARS
+    ) {
+      this.length -= this.chunks[this.head]?.length ?? 0;
+      // Release the dropped text now; the slot itself is compacted below.
+      this.chunks[this.head] = "";
+      this.head += 1;
+    }
+    if (this.head > 64 && this.head * 2 > this.chunks.length) {
+      this.chunks = this.chunks.slice(this.head);
+      this.head = 0;
     }
   }
 
   read(): string {
-    return this.tail;
+    const tail = this.chunks.slice(this.head).join("");
+    return tail.length > BACKEND_FAILURE_OUTPUT_TAIL_CHARS
+      ? tail.slice(-BACKEND_FAILURE_OUTPUT_TAIL_CHARS)
+      : tail;
   }
 }
 

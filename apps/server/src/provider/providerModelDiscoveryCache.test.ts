@@ -251,6 +251,32 @@ describe("makeProviderModelDiscoveryCache", () => {
     expect(calls).toBe(2);
   });
 
+  it("does not reuse a catalog after the provider config file changes", async () => {
+    const cache = makeProviderModelDiscoveryCache<ProviderAdapterRequestError>();
+    const renamed = { ...CATALOG, models: [{ slug: "renamed-model", name: "Renamed model" }] };
+    let calls = 0;
+    const discover = Effect.sync(() => {
+      calls += 1;
+      return calls === 1 ? CATALOG : renamed;
+    });
+
+    // Same key, same fingerprint: the fresh window still serves the cache.
+    await Effect.runPromise(cache.lookup({ ...KEY, configFingerprint: "config-v1" }, discover));
+    const cachedRead = await Effect.runPromise(
+      cache.lookup({ ...KEY, configFingerprint: "config-v1" }, discover),
+    );
+    expect(cachedRead.cached).toBe(true);
+    expect(calls).toBe(1);
+
+    // The config file changed, so a new fingerprint must miss and rediscover.
+    const refreshed = await Effect.runPromise(
+      cache.lookup({ ...KEY, configFingerprint: "config-v2" }, discover),
+    );
+    expect(refreshed.models).toEqual(renamed.models);
+    expect(refreshed.cached).toBe(false);
+    expect(calls).toBe(2);
+  });
+
   it("replays a failure briefly instead of re-spawning discovery", async () => {
     const clock = makeClock();
     const cache = makeProviderModelDiscoveryCache<ProviderAdapterRequestError>({
@@ -302,6 +328,65 @@ describe("makeProviderModelDiscoveryCache", () => {
     expect(recovered.models).toEqual(CATALOG.models);
     expect(cache.size()).toBe(1);
   });
+
+  it("retries a fallback catalog after the failure window without persisting it", async () => {
+    const clock = makeClock();
+    const snapshots: Array<ReadonlyArray<PersistedModelCatalogEntryInput>> = [];
+    const cache = makeProviderModelDiscoveryCache<ProviderAdapterRequestError>({
+      now: clock.now,
+      failureTtlMs: 1_000,
+      onCatalogsChanged: (entries) => snapshots.push(entries),
+    });
+    const fallback = {
+      ...CATALOG,
+      models: [{ slug: "fallback", name: "Fallback" }],
+      degraded: true,
+    };
+    let calls = 0;
+    const discover = Effect.sync(() => (++calls === 1 ? fallback : CATALOG));
+
+    expect(await Effect.runPromise(cache.lookup(KEY, discover))).toEqual(fallback);
+    expect(await Effect.runPromise(cache.lookup(KEY, discover))).toEqual(fallback);
+    expect(snapshots).toEqual([]);
+    expect(cache.size()).toBe(0);
+    clock.advance(1_001);
+    expect(await Effect.runPromise(cache.lookup(KEY, discover))).toEqual(CATALOG);
+    expect(calls).toBe(2);
+    expect(snapshots.at(-1)?.[0]?.result).toEqual(CATALOG);
+  });
+
+  it.each(["if-stale", "now"] as const)(
+    "keeps the last good catalog through degraded %s refreshes and cooldown",
+    async (refresh) => {
+      const clock = makeClock();
+      const snapshots: Array<ReadonlyArray<PersistedModelCatalogEntryInput>> = [];
+      const cache = makeProviderModelDiscoveryCache<ProviderAdapterRequestError>({
+        now: clock.now,
+        freshTtlMs: 1_000,
+        failureTtlMs: 10_000,
+        onCatalogsChanged: (entries) => snapshots.push(entries),
+      });
+      await Effect.runPromise(cache.lookup(KEY, Effect.succeed(CATALOG)));
+      clock.advance(61_000);
+      let calls = 0;
+      const discover = Effect.sync(() => {
+        calls += 1;
+        return { ...CATALOG, models: [], degraded: true };
+      });
+
+      const expected = { ...CATALOG, cached: true };
+      expect(await Effect.runPromise(cache.lookup(KEY, discover, refresh))).toEqual(expected);
+      expect(await Effect.runPromise(cache.lookup(KEY, discover, refresh))).toEqual(expected);
+      expect(await Effect.runPromise(cache.lookup(KEY, discover))).toEqual(expected);
+      expect(calls).toBe(1);
+      expect(snapshots).toHaveLength(1);
+      expect(cache.size()).toBe(1);
+      clock.advance(10_001);
+      expect(await Effect.runPromise(cache.lookup(KEY, Effect.succeed(CATALOG), refresh))).toEqual(
+        CATALOG,
+      );
+    },
+  );
 
   it.each(["rejected", "degraded"])(
     "honors cooldown after a %s refresh with a stale catalog",

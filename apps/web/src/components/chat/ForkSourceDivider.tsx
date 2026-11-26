@@ -6,6 +6,8 @@ import { type ThreadId } from "@synara/contracts";
 import { memo, type MouseEvent } from "react";
 
 import { GitForkIcon } from "~/lib/icons";
+import { useTranslation } from "~/i18n";
+import { TranscriptDividerRule } from "./TranscriptDividerRule";
 
 export interface ForkSourceReference {
   readonly sourceThreadId: ThreadId;
@@ -23,6 +25,8 @@ export const ForkSourceDivider = memo(function ForkSourceDivider({
   readonly source: ForkSourceReference;
   readonly onOpenSourceThread: (threadId: ThreadId) => void;
 }) {
+  const { t } = useTranslation();
+
   const sourceHref = `/${encodeURIComponent(source.sourceThreadId)}`;
 
   return (
@@ -30,10 +34,10 @@ export const ForkSourceDivider = memo(function ForkSourceDivider({
       data-fork-source-divider="true"
       className="flex w-full items-center gap-4 py-4 font-system-ui"
     >
-      <span aria-hidden className="h-px min-w-0 flex-1 bg-[color:var(--color-border-light)]" />
+      <TranscriptDividerRule />
       <a
         href={sourceHref}
-        aria-label={`Open source chat ${source.sourceTitle}`}
+        aria-label={t("chat:openSourceChat", { value0: source.sourceTitle })}
         title={source.sourceTitle}
         className="inline-flex min-w-0 shrink items-center gap-2 rounded-sm text-ui font-normal text-[var(--color-text-accent)] transition-opacity duration-150 hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--color-border-focus)]/60"
         onClick={(event) => {
@@ -45,9 +49,9 @@ export const ForkSourceDivider = memo(function ForkSourceDivider({
         }}
       >
         <GitForkIcon className="size-4 shrink-0 text-muted-foreground/70" aria-hidden />
-        <span className="truncate">Continued from chat</span>
+        <span className="truncate">{t("chat:continuedFromChat")}</span>
       </a>
-      <span aria-hidden className="h-px min-w-0 flex-1 bg-[color:var(--color-border-light)]" />
+      <TranscriptDividerRule />
     </div>
   );
 });

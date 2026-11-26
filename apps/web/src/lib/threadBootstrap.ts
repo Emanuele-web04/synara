@@ -16,6 +16,7 @@ import {
   type ThreadId,
 } from "@synara/contracts";
 import { resolveThreadEnvironmentMode } from "@synara/shared/threadEnvironment";
+import type { NewChatDefault } from "../appSettings";
 import {
   type ComposerThreadDraftState,
   type DraftThreadEnvMode,
@@ -105,7 +106,8 @@ export type ThreadBootstrapPlan = DraftReusePlanStored | DraftReusePlanRoute | D
 interface ResolveTerminalThreadCreationStateInput {
   activeDraftThread: DraftThreadState | null;
   activeThread: ActiveThreadSnapshot | null;
-  defaultProvider?: ProviderKind | null | undefined;
+  /** Null falls back to codex on its default account. */
+  newChatDefault: NewChatDefault | null;
   draftComposerState: ComposerThreadDraftState | null;
   draftThread: DraftThreadState | null;
   options: NewThreadOptions | undefined;
@@ -216,6 +218,8 @@ export function createFreshDraftThreadSeed(input: {
   entryPoint: ThreadPrimarySurface;
   options: NewThreadOptions | undefined;
   defaultEnvMode?: DraftThreadEnvMode;
+  // The shared new-chat access mode, when the user has picked one.
+  defaultRuntimeMode?: RuntimeMode;
 }): Omit<DraftThreadState, "projectId" | "interactionMode"> {
   return {
     createdAt: input.createdAt,
@@ -225,7 +229,7 @@ export function createFreshDraftThreadSeed(input: {
     envMode:
       input.options?.envMode ??
       (input.options?.worktreePath ? "worktree" : (input.defaultEnvMode ?? "local")),
-    runtimeMode: DEFAULT_RUNTIME_MODE,
+    runtimeMode: input.defaultRuntimeMode ?? DEFAULT_RUNTIME_MODE,
     entryPoint: input.entryPoint,
     ...(input.options?.temporary ? { isTemporary: true } : {}),
   };
@@ -317,7 +321,7 @@ export function resolveTerminalThreadCreationState(
           ? input.activeThread.modelSelection
           : null,
       projectModelSelection: input.projectDefaultModelSelection,
-      defaultProvider: input.defaultProvider,
+      newChatDefault: input.newChatDefault,
       ...(input.resolveProviderForInstanceId
         ? { resolveProviderForInstanceId: input.resolveProviderForInstanceId }
         : {}),

@@ -94,7 +94,9 @@ import {
 import type { ProviderAdapterForkThreadInput } from "./provider/Services/ProviderAdapter.ts";
 import { withoutProviderCredentialEnvironment } from "./providerChildEnvironment.ts";
 import { resolveCodexServiceTier } from "./codexServiceTier.ts";
+import { classifyTerminalTurnApplicability } from "./provider/terminalTurnApplicability.ts";
 import { assertCodexWorkingDirectoryExists } from "./codexWorkingDirectory.ts";
+import { startEventLoopDeadline } from "./eventLoopDeadline.ts";
 import { executableIdentity, resolveExecutable } from "./executableLookup.ts";
 import {
   teardownChildProcessTree,
@@ -102,8 +104,16 @@ import {
 } from "./provider/supervisedProcessTeardown.ts";
 import { ensureIsolatedScratchWorkspace, resolveScratchWorkspaceCwd } from "./scratchWorkspaces.ts";
 import { createLogger } from "./logger";
+import {
+  classifyCodexStderr,
+  isCodexMultiAgentDeprecationWarning,
+  normalizeCodexProcessLine,
+  isIgnorableCodexProcessLine,
+  normalizeCodexUserVisibleErrorMessage,
+} from "@synara/shared/codexStderr";
 import { transcribeVoiceWithChatGptSession } from "./voiceTranscription.ts";
 import {
+  CODEX_APP_SERVER_MAX_DISCOVERY_FRAME_BYTES,
   CodexAppServerTransportError,
   CodexJsonlFramer,
   CodexJsonlWriter,
@@ -206,6 +216,9 @@ type CodexSessionApprovalOverride = {
 export class CodexSessionAuthInvalidatedError extends Error {}
 
 interface CodexSessionContext {
+  reportedMultiAgentDeprecation?: boolean;
+  reportedMcpSubscriptionErrors?: Set<string>;
+  mcpStartupServers?: Set<string>;
   authInvalidation?: string;
   readonly autoApproveSynaraTools?: boolean;
   readonly enableComputerControl?: boolean;
@@ -418,17 +431,13 @@ const CODEX_VERSION_CHECK_MAX_OUTPUT_BYTES = 1024 * 1024;
  */
 const CODEX_VERSION_CHECK_CACHE_TTL_MS = 10 * 60 * 1000;
 
-const ANSI_ESCAPE_CHAR = String.fromCharCode(27);
-const ANSI_ESCAPE_REGEX = new RegExp(`${ANSI_ESCAPE_CHAR}\\[[0-9;]*m`, "g");
-const CODEX_STDERR_LOG_REGEX =
-  /^\d{4}-\d{2}-\d{2}T\S+\s+(TRACE|DEBUG|INFO|WARN|ERROR)\s+\S+:\s+(.*)$/;
-const BENIGN_ERROR_LOG_SNIPPETS = [
-  "state db missing rollout path for thread",
-  "state db record_discrepancy: find_thread_path_by_id_str_in_subdir, falling_back",
-];
-const BENIGN_PROCESS_OUTPUT_REGEXES = [/^(?:\^C)?Token usage:/i];
+const loggedUserMcpOAuthServers = new Set<string>();
+
 const RECOVERABLE_THREAD_RESUME_ERROR_SNIPPETS = [
   "not found",
+  // Codex writes a thread's rollout on its first turn, so a thread opened and
+  // restarted before any turn (e.g. right after a handoff) has nothing to resume.
+  "no rollout found",
   "missing thread",
   "no such thread",
   "unknown thread",
@@ -466,19 +475,6 @@ function asString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
-function normalizeCodexProcessLine(rawLine: string): string {
-  return (
-    rawLine.includes(ANSI_ESCAPE_CHAR) ? rawLine.replaceAll(ANSI_ESCAPE_REGEX, "") : rawLine
-  ).trim();
-}
-
-function isIgnorableCodexProcessLine(line: string): boolean {
-  if (!line) {
-    return true;
-  }
-  return BENIGN_PROCESS_OUTPUT_REGEXES.some((pattern) => pattern.test(line));
-}
-
 function isCodexProtocolEnvelope(value: Record<string, unknown>): boolean {
   if (typeof value.method === "string") {
     return true;
@@ -497,20 +493,6 @@ function logIgnoredCodexStdout(rawLine: string, line: string, reason: string): v
     preview: line.slice(0, 160),
     length: rawLine.length,
   });
-}
-
-function normalizeCodexUserVisibleErrorMessage(rawMessage: string): string {
-  const message = normalizeCodexProcessLine(rawMessage);
-
-  const duplicateFunctionArgMatch = message.match(
-    /failed to parse function arguments: duplicate field `([^`]+)`/i,
-  );
-  if (duplicateFunctionArgMatch) {
-    const fieldName = duplicateFunctionArgMatch[1];
-    return `Tool call failed because the same argument was sent twice${fieldName ? ` (${fieldName})` : ""}.`;
-  }
-
-  return message;
 }
 
 export function readCodexAccountSnapshot(response: unknown): CodexAccountSnapshot {
@@ -1052,26 +1034,32 @@ export function parseCodexUserInputQuestions(
   return parsedQuestions.length > 0 ? parsedQuestions : undefined;
 }
 
-export function classifyCodexStderrLine(rawLine: string): { message: string } | null {
-  const line = normalizeCodexProcessLine(rawLine);
-  if (isIgnorableCodexProcessLine(line)) {
+// The same classifier also filters diagnostics persisted by older hosts in the web transcript.
+export function classifyCodexStderrLine(
+  rawLine: string,
+  mirroredUserConfigPath?: string,
+): { message: string; configWarning?: true; mcpSubscriptionError?: string } | null {
+  const diagnostic = classifyCodexStderr(rawLine, mirroredUserConfigPath, {
+    errorLikePlainLinesOnly: true,
+  });
+  if (diagnostic?.kind === "user-mcp-oauth") {
+    if (!loggedUserMcpOAuthServers.has(diagnostic.server)) {
+      loggedUserMcpOAuthServers.add(diagnostic.server);
+      log.warn("codex MCP OAuth failed for a server in the user's Codex config", {
+        server: diagnostic.server,
+      });
+    }
     return null;
   }
-
-  const match = line.match(CODEX_STDERR_LOG_REGEX);
-  if (match) {
-    const level = match[1];
-    if (level && level !== "ERROR") {
-      return null;
-    }
-
-    const isBenignError = BENIGN_ERROR_LOG_SNIPPETS.some((snippet) => line.includes(snippet));
-    if (isBenignError) {
-      return null;
-    }
-  }
-
-  return { message: normalizeCodexUserVisibleErrorMessage(line) };
+  return diagnostic
+    ? {
+        message: diagnostic.message,
+        ...(diagnostic.configWarning ? { configWarning: diagnostic.configWarning } : {}),
+        ...(diagnostic.mcpSubscriptionError
+          ? { mcpSubscriptionError: diagnostic.mcpSubscriptionError }
+          : {}),
+      }
+    : null;
 }
 
 export function isRecoverableThreadResumeError(error: unknown): boolean {
@@ -1261,6 +1249,40 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   // they settle, even after the caller's deadline rejects its session origin.
   // Stay below libuv's default four-worker pool so auth reads cannot occupy it all.
   private readonly authReadSlots = Semaphore.makeUnsafe(2);
+
+  /** Codex deep-merges MCP tables: never mix a connector with the user's server. */
+  private async gatewayThreadConfig(
+    context: CodexSessionContext,
+    connection: AgentGatewaySessionLease["connection"],
+  ): Promise<ReturnType<typeof buildCodexMcpThreadConfig>> {
+    if (!connection.connectors?.length) return buildCodexMcpThreadConfig(connection);
+    let configured: Record<string, unknown>;
+    try {
+      const response = this.readObject(
+        await this.sendRequest(context, "config/read", {
+          includeLayers: false,
+          cwd: context.session.cwd,
+        }),
+      );
+      const config = this.readObject(response, "config");
+      if (!config) throw new Error("Missing Codex configuration.");
+      configured = this.readObject(config, "mcp_servers") ?? {};
+    } catch {
+      // Do not guess a free namespace or log raw config errors containing secrets.
+      log.warn(
+        "Codex connector configuration could not be checked; connectors omitted for this session",
+      );
+      return buildCodexMcpThreadConfig({ ...connection, connectors: [] });
+    }
+    const connectors = connection.connectors.filter((connector) => {
+      if (!Object.hasOwn(configured, connector.name)) return true;
+      log.warn("Codex connector name is already configured; preserving the user's MCP server", {
+        server: connector.name,
+      });
+      return false;
+    });
+    return buildCodexMcpThreadConfig({ ...connection, connectors });
+  }
   constructor(
     services?: ServiceMap.ServiceMap<never>,
     options?: {
@@ -1501,7 +1523,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       );
       const sessionOverrides = {
         ...(gatewaySessionLease
-          ? { config: buildCodexMcpThreadConfig(gatewaySessionLease.connection) }
+          ? { config: await this.gatewayThreadConfig(context, gatewaySessionLease.connection) }
           : {}),
         model: normalizedModel ?? null,
         ...(input.serviceTier !== undefined ? { serviceTier: input.serviceTier } : {}),
@@ -1746,9 +1768,13 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         turnStartParams.summary = "none";
       }
     }
-    if (input.serviceTier !== undefined) {
-      turnStartParams.serviceTier = input.serviceTier;
-    }
+    const switchingAwayFromUltrafast =
+      context.serviceTier === "ultrafast" &&
+      normalizedModel !== undefined &&
+      normalizedModel !== context.session.model;
+    const serviceTier =
+      input.serviceTier === undefined && switchingAwayFromUltrafast ? "default" : input.serviceTier;
+    if (serviceTier !== undefined) turnStartParams.serviceTier = serviceTier;
     if (input.effort) {
       turnStartParams.effort = input.effort;
     }
@@ -1773,7 +1799,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     }
     const turnId = TurnId.makeUnsafe(turnIdRaw);
 
-    if (input.serviceTier !== undefined) context.serviceTier = input.serviceTier;
+    if (serviceTier !== undefined) context.serviceTier = serviceTier;
 
     this.updateSession(context, {
       status: "running",
@@ -2552,7 +2578,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       }
       const forkParams = {
         ...(gatewaySessionLease
-          ? { config: buildCodexMcpThreadConfig(gatewaySessionLease.connection) }
+          ? { config: await this.gatewayThreadConfig(context, gatewaySessionLease.connection) }
           : {}),
         threadId: sourceProviderThreadId,
         excludeTurns: true,
@@ -3115,7 +3141,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
           model: context.session.model ?? null,
           ...(context.serviceTier !== undefined ? { serviceTier: context.serviceTier } : {}),
           ...mapCodexRuntimeMode(context.session.runtimeMode),
-          config: buildCodexMcpThreadConfig(replacement.connection),
+          config: await this.gatewayThreadConfig(context, replacement.connection),
         }),
       );
       if (
@@ -3140,6 +3166,17 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       replacement?.release();
       context.gatewayRenewalInProgress = false;
     }
+  }
+
+  /**
+   * Whether this session's gateway bearer was retired by a terminal turn and
+   * has not yet been replaced. This is the authoritative signal for routing:
+   * the durable rotation marker rides a runtime event that ProviderService
+   * may drop, but the in-memory fence here is what actually rejects writes.
+   */
+  isAgentGatewayCredentialRetired(threadId: ThreadId): boolean {
+    const context = this.sessions.get(threadId);
+    return context !== undefined && context.gatewayCredentialRetired === true;
   }
 
   private async stopSessionContext(
@@ -3317,7 +3354,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       try {
         let expired = false;
         const abort = new AbortController();
-        let timer: ReturnType<typeof setTimeout> | undefined;
+        let cancelDeadline: (() => void) | undefined;
         const read = async () => {
           for (let attempt = 0; ; attempt++) {
             if (expired || context.authInvalidation)
@@ -3345,17 +3382,18 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
               this.authReadSlots.withPermit(Effect.uninterruptible(Effect.promise(read))),
               { signal: abort.signal },
             ),
+            // A timeout stops the session, so a server event-loop stall must not
+            // count against the read: only a hung read on a live loop expires.
             new Promise<never>((_, reject) => {
-              timer = setTimeout(() => {
+              cancelDeadline = startEventLoopDeadline(this.authRevalidationTimeoutMs, () => {
                 expired = true;
                 abort.abort();
                 reject(new Error("Codex auth revalidation timed out."));
-              }, this.authRevalidationTimeoutMs);
-              timer.unref();
+              });
             }),
           ]);
         } finally {
-          if (timer) clearTimeout(timer);
+          cancelDeadline?.();
         }
         if (fingerprint !== context.authFingerprint) {
           stalenessMessage =
@@ -3505,6 +3543,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       cwd ?? undefined,
       codexOptions,
       authFingerprint,
+      true,
     );
     this.assertDiscoveryAuthMatchesRequest(context, codexOptions, authFingerprint);
     const response = await this.sendRequest<Record<string, unknown>>(context, "plugin/list", {
@@ -3765,6 +3804,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     cwd?: string,
     codexOptions?: CodexDiscoveryOptions,
     expectedAuthFingerprint?: string,
+    dedicated = false,
   ): Promise<CodexSessionContext> {
     const normalizedThreadId = threadId?.trim();
     const normalizedCwd = cwd?.trim() || undefined;
@@ -3773,6 +3813,14 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       codexDiscoveryOptionsCacheKey(context.codexOptions) === optionsKey &&
       (expectedAuthFingerprint === undefined ||
         context.authFingerprint === expectedAuthFingerprint);
+    const selectContext = (context: CodexSessionContext) =>
+      dedicated
+        ? this.getOrCreateDiscoverySession(
+            context.session.cwd ?? process.cwd(),
+            codexOptions,
+            expectedAuthFingerprint,
+          )
+        : context;
     if (normalizedThreadId) {
       try {
         const session = this.requireSession(ThreadId.makeUnsafe(normalizedThreadId));
@@ -3781,7 +3829,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
           (!normalizedCwd || session.session.cwd === normalizedCwd) &&
           isCompatibleContext(session)
         ) {
-          return session;
+          return selectContext(session);
         }
       } catch {
         // Discovery is read-only metadata, so if the current draft thread does not
@@ -3796,7 +3844,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
           activeSession.session.cwd === normalizedCwd &&
           isCompatibleContext(activeSession)
         ) {
-          return activeSession;
+          return selectContext(activeSession);
         }
       }
       return this.getOrCreateDiscoverySession(normalizedCwd, codexOptions, expectedAuthFingerprint);
@@ -3805,7 +3853,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       (context) => this.isContextInitializedAndRoutable(context) && isCompatibleContext(context),
     );
     if (firstActive) {
-      return firstActive;
+      return selectContext(firstActive);
     }
     return this.getOrCreateDiscoverySession(process.cwd(), codexOptions, expectedAuthFingerprint);
   }
@@ -4003,7 +4051,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         sparkEnabled: true,
       },
       child,
-      stdoutFramer: new CodexJsonlFramer(),
+      stdoutFramer: new CodexJsonlFramer(CODEX_APP_SERVER_MAX_DISCOVERY_FRAME_BYTES),
       stdinWriter: new CodexJsonlWriter(child.stdin),
       pending: new Map(),
       pendingApprovals: new Map(),
@@ -4183,9 +4231,23 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       const raw = chunk.toString();
       const lines = raw.split(/\r?\n/g);
       for (const rawLine of lines) {
-        const classified = classifyCodexStderrLine(rawLine);
+        const classified = classifyCodexStderrLine(rawLine, context.authTracking?.sourceConfigPath);
         if (!classified) {
           continue;
+        }
+
+        if (classified.configWarning) {
+          this.handleServerNotification(context, {
+            method: "configWarning",
+            params: { summary: classified.message, details: null },
+          });
+          continue;
+        }
+        if (classified.mcpSubscriptionError) {
+          const reported = (context.reportedMcpSubscriptionErrors ??= new Set());
+          if (reported.has(classified.mcpSubscriptionError)) continue;
+          // Bound retained server-provided strings; an unrecognized error is never suppressed.
+          if (reported.size < 32) reported.add(classified.mcpSubscriptionError);
         }
 
         this.emitErrorEvent(context, "process/stderr", classified.message);
@@ -4328,6 +4390,42 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     context: CodexSessionContext,
     notification: JsonRpcNotification,
   ): void {
+    const configSummary =
+      notification.method === "configWarning"
+        ? this.readString(notification.params, "summary")
+        : notification.method === "warning"
+          ? this.readString(notification.params, "message")
+          : undefined;
+    if (
+      configSummary &&
+      isCodexMultiAgentDeprecationWarning(configSummary) &&
+      !this.readString(notification.params, "details") &&
+      !this.readString(notification.params, "path") &&
+      this.readObject(notification.params)?.range == null
+    ) {
+      if (context.reportedMultiAgentDeprecation) return;
+      context.reportedMultiAgentDeprecation = true;
+      // All three Codex channels describe one configuration issue, regardless of arrival order.
+      const threadId = this.readString(notification.params, "threadId");
+      notification = {
+        method: "configWarning",
+        params: { summary: configSummary, details: null, ...(threadId ? { threadId } : {}) },
+      };
+    }
+    if (notification.method === "mcpServer/startupStatus/updated") {
+      const name = this.readString(notification.params, "name");
+      const status = this.readString(notification.params, "status");
+      if (name && status) {
+        const servers = (context.mcpStartupServers ??= new Set());
+        const key = `${this.readString(notification.params, "threadId") ?? ""}:${name}`;
+        // Initial stdout can arrive after stderr from that same attempt. Only a
+        // known server restarting (or becoming ready) releases the duplicate guard.
+        if (status === "ready" || (status === "starting" && servers.has(key))) {
+          context.reportedMcpSubscriptionErrors?.clear();
+        }
+        if (servers.size < 32) servers.add(key);
+      }
+    }
     const rawRoute = this.readRouteFields(notification.params);
     this.rememberCollabReceiverTurns(context, notification.params, rawRoute.turnId);
     const resolvedCollaborationRoute = this.resolveCollaborationRoute(context, notification.params);
@@ -4381,9 +4479,16 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       (notification.method === "turn/completed" ||
         notification.method === "turn/aborted" ||
         isTerminalError);
-    const terminalGatewayTurnId = isTerminalParentTurn
-      ? (rawRoute.turnId ?? context.session.activeTurnId)
-      : undefined;
+    const appliesToActiveTurn =
+      !isTerminalParentTurn ||
+      classifyTerminalTurnApplicability({
+        activeTurnId: context.session.activeTurnId,
+        eventTurnId: rawRoute.turnId,
+      }).applicable;
+    const terminalGatewayTurnId =
+      isTerminalParentTurn && appliesToActiveTurn
+        ? (rawRoute.turnId ?? context.session.activeTurnId)
+        : undefined;
     const gatewayTurnAuthorityRetired =
       terminalGatewayTurnId !== undefined && context.gatewaySessionLease !== undefined;
     if (gatewayTurnAuthorityRetired) {
@@ -4420,6 +4525,16 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       textDelta,
       payload: eventPayload,
     });
+
+    // Keep late outcomes in history without releasing a newer native turn.
+    // The legacy completion fallback can finish before stalled stdout catches up.
+    if (isTerminalParentTurn && !appliesToActiveTurn) {
+      // Clean the old review membership without touching the current owner.
+      // Otherwise a later exitedReviewMode can mistake that finished review
+      // for an active chain and settle an unrelated newer turn.
+      if (rawRoute.turnId) context.reviewTurnIds.delete(rawRoute.turnId);
+      return;
+    }
 
     if (notification.method === "thread/started") {
       const startedThreadId = normalizeProviderThreadId(
@@ -5413,10 +5528,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       method === "thread/closed" ||
       method === "thread/compacted" ||
       method === "thread/name/updated" ||
-      method === "thread/tokenUsage/updated" ||
-      method === "turn/started" ||
-      method === "turn/completed" ||
-      method === "turn/aborted"
+      method === "thread/tokenUsage/updated"
     );
   }
 
@@ -5880,7 +5992,7 @@ export const __codexCliVersionGateTesting = {
   cacheTtlMs: CODEX_VERSION_CHECK_CACHE_TTL_MS,
 };
 
-function readResumeCursorThreadId(resumeCursor: unknown): string | undefined {
+export function readResumeCursorThreadId(resumeCursor: unknown): string | undefined {
   if (!resumeCursor || typeof resumeCursor !== "object" || Array.isArray(resumeCursor)) {
     return undefined;
   }

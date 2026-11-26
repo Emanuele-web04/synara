@@ -172,3 +172,10 @@ retries discovery briefly across a server restart or port change, bounds and abo
 and processes several stdio requests concurrently so a long wait does not block ping or read calls.
 It fails clearly when no instance, multiple instances, an unauthenticated endpoint, an unsafe
 credential file, or a revoked/expired credential is found.
+
+### Connected computers
+
+External integrations remain scoped to the installation where they were paired. A
+remote connection shown in Synara's sidebar does not add that computer's projects to
+an integration's grant. The internal provider-session gateway has separate,
+[environment-qualified tools](remote-connections-v2.md#agent-tools-across-computers).

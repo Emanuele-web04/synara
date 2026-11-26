@@ -25,7 +25,16 @@ export class ByteAccumulator {
    */
   append(chunk: Uint8Array): void {
     if (chunk.byteLength === 0) return;
-    this.chunks.push(Buffer.from(chunk));
+    this.appendOwned(Buffer.from(chunk));
+  }
+
+  /**
+   * Appends without copying. The caller must never mutate these bytes again,
+   * including through other views. Use `append` for reusable scratch buffers.
+   */
+  appendOwned(chunk: Buffer): void {
+    if (chunk.byteLength === 0) return;
+    this.chunks.push(chunk);
     this.length += chunk.byteLength;
   }
 

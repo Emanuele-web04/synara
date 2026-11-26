@@ -1,3 +1,4 @@
+import { executionStorage } from "./lib/hosts/executionStorage";
 import type { ProjectId } from "@synara/contracts";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
@@ -55,7 +56,7 @@ export const usePinnedProjectAgentsStore = create<PinnedProjectAgentsStoreState>
     }),
     {
       name: PINNED_PROJECT_AGENTS_STORAGE_KEY,
-      storage: createJSONStorage(() => localStorage),
+      storage: createJSONStorage(() => executionStorage),
       partialize: (state) => ({
         pinnedProjectAgentIds: normalizePinnedIds(state.pinnedProjectAgentIds),
       }),

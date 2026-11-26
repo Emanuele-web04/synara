@@ -2,7 +2,8 @@
 // Boots the same `localImageEffectRouteLayer` that `makeEffectHttpRouteLayer` wires
 // into `effectServer.ts` and exercises it through a real HTTP listener.
 import http from "node:http";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -17,6 +18,7 @@ import { HttpRouter } from "effect/unstable/http";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { ServerAuth, type ServerAuthShape } from "./auth/Services/ServerAuth";
+import { RemoteSessionRegistryLive } from "./remoteSessions/sessionRegistry";
 import {
   resolveDefaultChatWorkspaceRoot,
   resolveDefaultGroupsWorkspaceRoot,
@@ -28,6 +30,12 @@ import { attachmentsEffectRouteLayer, localImageEffectRouteLayer } from "./http"
 import { createLocalPreviewGrant } from "./localImageFiles";
 import type { CodexGeneratedImageHomeCandidate } from "./codexGeneratedImages.ts";
 import { ManagedAttachmentRepositoryLive } from "./persistence/Layers/ManagedAttachments";
+import {
+  ManagedAttachmentRepository,
+  type ManagedAttachmentRepositoryShape,
+} from "./persistence/Services/ManagedAttachments";
+import { stageAssistantImageAttachments } from "./assistantImageAttachments";
+import { LOCAL_LOOPBACK_ATTACHMENT_PRINCIPAL } from "./managedAttachmentPrincipal";
 import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite";
 import type { ProviderAdapterError } from "./provider/Errors.ts";
 import type { ProviderAdapterShape } from "./provider/Services/ProviderAdapter.ts";
@@ -212,7 +220,7 @@ function makeServerSettings(getSettings: ServerSettingsShape["getSettings"]): Se
 async function withEffectServer(
   config: ServerConfigShape,
   routeLayer: typeof localImageEffectRouteLayer | typeof attachmentsEffectRouteLayer,
-  run: (origin: string) => Promise<void>,
+  run: (origin: string, managedAttachments: ManagedAttachmentRepositoryShape) => Promise<void>,
   options: {
     readonly providerRegistry?: typeof ProviderAdapterRegistry.Service;
     readonly serverSettings?: ServerSettingsShape;
@@ -220,9 +228,11 @@ async function withEffectServer(
 ): Promise<void> {
   const scope = await Effect.runPromise(Scope.make("sequential"));
   let nodeServer: http.Server | null = null;
+  let managedAttachments: ManagedAttachmentRepositoryShape | undefined;
   const servicesLayer = Layer.mergeAll(
     Layer.succeed(ServerConfig, config),
     Layer.succeed(ServerAuth, makeFakeServerAuth()),
+    RemoteSessionRegistryLive,
     ...(options.providerRegistry
       ? [Layer.succeed(ProviderAdapterRegistry, options.providerRegistry)]
       : []),
@@ -233,9 +243,12 @@ async function withEffectServer(
     NodeHttpServer.layerHttpServices,
   );
   try {
+    // Keep the database and HTTP services alive through the callback's real requests.
+    const services = await Effect.runPromise(Layer.buildWithScope(servicesLayer, scope));
     await Effect.runPromise(
       Scope.provide(
         Effect.gen(function* () {
+          managedAttachments = yield* ManagedAttachmentRepository;
           const httpServer = yield* NodeHttpServer.make(
             () => {
               nodeServer = http.createServer();
@@ -247,7 +260,7 @@ async function withEffectServer(
             ? HttpRouter.toHttpEffect(localImageEffectRouteLayer)
             : HttpRouter.toHttpEffect(attachmentsEffectRouteLayer);
           yield* httpServer.serve(httpApp);
-        }).pipe(Effect.provide(servicesLayer)),
+        }).pipe(Effect.provideServices(services)),
         scope,
       ),
     );
@@ -256,7 +269,8 @@ async function withEffectServer(
       throw new Error("Expected effect server to expose an address");
     }
     const origin = `http://127.0.0.1:${address.port}`;
-    await run(origin);
+    if (!managedAttachments) throw new Error("Expected route attachment repository");
+    await run(origin, managedAttachments);
   } finally {
     await Effect.runPromise(Scope.close(scope, Exit.void));
   }
@@ -276,6 +290,29 @@ describe("localImageEffectRouteLayer", () => {
       expect(previewResponse.status).toBe(200);
       expect(previewResponse.headers.get("content-type")).toContain("image/png");
       expect(previewResponse.headers.get("content-disposition")).toBeNull();
+      expect(Buffer.from(await previewResponse.arrayBuffer())).toEqual(
+        Buffer.from([0x89, 0x50, 0x4e, 0x47]),
+      );
+      for (const [range, bytes] of [
+        ["bytes=1-2", [0x50, 0x4e]],
+        ["bytes=-2", [0x4e, 0x47]],
+        ["bytes=2-", [0x4e, 0x47]],
+      ] as const) {
+        const part = await fetch(`${origin}/api/local-image?${params}`, {
+          headers: { Range: range },
+        });
+        expect(part.status).toBe(206);
+        expect(part.headers.get("accept-ranges")).toBe("bytes");
+        expect(part.headers.get("content-length")).toBe("2");
+        expect(Buffer.from(await part.arrayBuffer())).toEqual(Buffer.from(bytes));
+      }
+      for (const range of ["bytes=10-20", "bytes=3-1", "bytes=-0", "bytes=0-1,2-3", "bytes=a-b"]) {
+        const invalid = await fetch(`${origin}/api/local-image?${params}`, {
+          headers: { Range: range },
+        });
+        expect(invalid.status).toBe(416);
+        expect(invalid.headers.get("content-range")).toBe("bytes */4");
+      }
 
       params.set("download", "1");
       const downloadResponse = await fetch(`${origin}/api/local-image?${params}`);
@@ -283,6 +320,52 @@ describe("localImageEffectRouteLayer", () => {
       expect(downloadResponse.headers.get("content-disposition")).toBe(
         'attachment; filename="hero.png"',
       );
+    });
+  });
+
+  it("streams workspace videos with their video content type and byte ranges", async () => {
+    const workspace = makeTempDir("synara-effect-video-workspace-");
+    writeFileSync(path.join(workspace, ".git"), "gitdir: .git");
+    const config = makeServerConfig({ cwd: workspace });
+    const bytes = Buffer.from(Array.from({ length: 64 }, (_, index) => index));
+    const files = [
+      ["demo.mp4", "video/mp4"],
+      ["demo.m4v", "video/x-m4v"],
+      ["demo.webm", "video/webm"],
+      ["demo.mov", "video/quicktime"],
+      ["demo.ogv", "video/ogg"],
+    ] as const;
+    for (const [fileName] of files) writeFileSync(path.join(workspace, fileName), bytes);
+
+    await withEffectServer(config, localImageEffectRouteLayer, async (origin) => {
+      for (const [fileName, contentType] of files) {
+        const params = new URLSearchParams({
+          path: path.join(workspace, fileName),
+          cwd: workspace,
+        });
+        const full = await fetch(`${origin}/api/local-image?${params}`);
+        expect(full.status).toBe(200);
+        expect(full.headers.get("content-type")).toBe(contentType);
+        expect(full.headers.get("accept-ranges")).toBe("bytes");
+        expect(full.headers.get("x-content-type-options")).toBe("nosniff");
+        await full.arrayBuffer();
+
+        // Media elements probe with an open-ended range, then seek.
+        for (const [range, start, end] of [
+          ["bytes=0-", 0, 63],
+          ["bytes=16-31", 16, 31],
+          ["bytes=-8", 56, 63],
+        ] as const) {
+          const part = await fetch(`${origin}/api/local-image?${params}`, {
+            headers: { Range: range },
+          });
+          expect(part.status).toBe(206);
+          expect(part.headers.get("content-type")).toBe(contentType);
+          expect(part.headers.get("content-range")).toBe(`bytes ${start}-${end}/64`);
+          expect(part.headers.get("content-length")).toBe(String(end - start + 1));
+          expect(Buffer.from(await part.arrayBuffer())).toEqual(bytes.subarray(start, end + 1));
+        }
+      }
     });
   });
 
@@ -346,6 +429,64 @@ describe("localImageEffectRouteLayer", () => {
       params.delete("grant");
       const ungrantedResponse = await fetch(`${origin}/api/local-image?${params}`);
       expect(ungrantedResponse.status).toBe(404);
+    });
+  });
+
+  it("opens a generated PNG in a sibling Git worktree only with its canonical file grant", async () => {
+    // Keep the fixture outside temporary roots, which already permit generated images.
+    const root = makeRepoTempDir("synara-linked-preview-");
+    const workspace = path.join(root, "playjelly");
+    const worktree = path.join(root, "playjelly-test-synara");
+    mkdirSync(workspace);
+    const git = (args: string[]) =>
+      execFileSync("git", ["-C", workspace, ...args], { stdio: "pipe" });
+    git(["init", "--quiet"]);
+    git([
+      "-c",
+      "user.name=Preview fixture",
+      "-c",
+      "user.email=preview@example.invalid",
+      "-c",
+      "commit.gpgsign=false",
+      "-c",
+      "core.hooksPath=/dev/null",
+      "commit",
+      "--quiet",
+      "--allow-empty",
+      "-m",
+      "Preview fixture",
+    ]);
+    git(["worktree", "add", "--quiet", "--detach", worktree]);
+    const imagePath = path.join(worktree, "dossiers-graphique.png");
+    const unrelatedPath = path.join(root, "unrelated.png");
+    const linkPath = path.join(worktree, "image-link.png");
+    const bytes = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a7dUAAAAASUVORK5CYII=",
+      "base64",
+    );
+    writeFileSync(imagePath, bytes);
+    writeFileSync(unrelatedPath, bytes);
+    symlinkSync(imagePath, linkPath);
+    const config = makeServerConfig({ cwd: workspace });
+
+    await withEffectServer(config, localImageEffectRouteLayer, async (origin) => {
+      const params = new URLSearchParams({ path: imagePath, cwd: workspace });
+      const preview = () => fetch(`${origin}/api/local-image?${params}`);
+      expect((await preview()).status).toBe(404);
+      const grant = await createLocalPreviewGrant({ requestedPath: linkPath });
+      params.set("grant", grant.grant);
+      const response = await preview();
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toContain("image/png");
+      expect(Buffer.from(await response.arrayBuffer())).toEqual(bytes);
+
+      // Neither the containing worktree nor a subsequently retargeted link inherits the grant.
+      params.set("path", unrelatedPath);
+      expect((await preview()).status).toBe(404);
+      rmSync(linkPath);
+      symlinkSync(unrelatedPath, linkPath);
+      params.set("path", linkPath);
+      expect((await preview()).status).toBe(404);
     });
   });
 
@@ -623,6 +764,85 @@ describe("attachmentsEffectRouteLayer", () => {
       expect(response.headers.get("cache-control")).toBe("private, no-store");
       expect(response.headers.get("pragma")).toBe("no-cache");
       await expect(response.arrayBuffer()).resolves.toHaveProperty("byteLength", 4);
+    });
+  });
+
+  it.each(["png", "svg"] as const)(
+    "serves the claimed inline %s snapshot after the original image is deleted",
+    async (extension) => {
+      const config = makeServerConfig({ authToken: "desktop-secret" });
+      const workspace = makeTempDir("inline-snapshot-http-");
+      const source = path.join(workspace, `chart.${extension}`);
+      const bytes = Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=",
+        "base64",
+      );
+      const sourceBytes =
+        extension === "svg"
+          ? Buffer.from(
+              '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script><rect width="10" height="10"/></svg>',
+            )
+          : bytes;
+      writeFileSync(source, sourceBytes);
+      await withEffectServer(config, attachmentsEffectRouteLayer, async (origin, repository) => {
+        const prepared = await Effect.runPromise(
+          stageAssistantImageAttachments({
+            text: `Before\n\n![chart](./chart.${extension})\n\nAfter`,
+            threadId: "inline-snapshot-thread",
+            messageId: "inline-snapshot-message",
+            commandId: "inline-snapshot-complete",
+            cwd: workspace,
+            sourceRoots: [workspace],
+            attachmentsDir: config.attachmentsDir,
+            existingAttachments: [],
+            repository,
+          }),
+        );
+        expect(prepared.attachments).toHaveLength(1);
+        const claim = await Effect.runPromise(
+          repository.claimForAcceptedTurn({
+            attachmentIds: prepared.attachmentIds,
+            ownerThreadId: "inline-snapshot-thread",
+            ...LOCAL_LOOPBACK_ATTACHMENT_PRINCIPAL,
+            commandId: "inline-snapshot-complete",
+            messageId: "inline-snapshot-message",
+            now: new Date().toISOString(),
+          }),
+        );
+        expect(claim.status).toBe("claimed");
+        unlinkSync(source);
+        const response = await fetch(
+          `${origin}/attachments/${prepared.attachments[0]!.id}?token=desktop-secret`,
+        );
+        expect(response.status).toBe(200);
+        expect(response.headers.get("content-type")).toContain(
+          extension === "svg" ? "image/svg+xml" : "image/png",
+        );
+        if (extension === "svg") {
+          expect(response.headers.get("content-security-policy")).toContain("sandbox");
+          expect(response.headers.get("content-security-policy")).toContain("default-src 'none'");
+          expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+        }
+        expect(response.headers.get("cache-control")).toBe("private, no-store");
+        expect(Buffer.from(await response.arrayBuffer())).toEqual(sourceBytes);
+      });
+    },
+  );
+
+  it("never serves inline visual HTML from the app origin", async () => {
+    const config = makeServerConfig({ authToken: "desktop-secret" });
+    const visualDirectory = path.join(config.attachmentsDir, "visuals", "thread-1");
+    mkdirSync(visualDirectory, { recursive: true });
+    const visualName = `vis_${"c".repeat(32)}.html`;
+    writeFileSync(path.join(visualDirectory, visualName), "<script>parent.document</script>");
+
+    await withEffectServer(config, attachmentsEffectRouteLayer, async (origin) => {
+      for (const prefix of ["visuals", "Visuals", "./visuals"]) {
+        const response = await fetch(
+          `${origin}/attachments/${prefix}/thread-1/${visualName}?token=desktop-secret`,
+        );
+        expect(response.status, prefix).toBe(404);
+      }
     });
   });
 });

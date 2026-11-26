@@ -1,18 +1,30 @@
 // FILE: expensiveReadRetry.ts
 // Purpose: Shared retry policy for WebSocket RPC capacity backpressure.
 // Layer: Web data-fetching helpers
-// The server rejects saturated unary calls before the handler runs
-// (retryable: true, retryAfterMs: 250). Callers must honor that contract
-// instead of treating capacity as a hard failure.
+// The transport queues unary calls against the server's per-class budgets
+// (rpcRequestQueue.ts) and reports a retryable capacity error when no slot frees
+// in time. The server still rejects saturated calls before the handler runs
+// (retryable: true, retryAfterMs: 250), for example right after a cancelled
+// request; the transport retries those in place. Callers must honor that
+// contract instead of treating capacity as a hard failure.
 
-const RPC_CAPACITY_EXCEEDED_CODES = new Set([
-  "RPC_EXPENSIVE_READ_CAPACITY_EXCEEDED",
-  "RPC_REQUEST_CAPACITY_EXCEEDED",
-]);
+import {
+  WS_REQUEST_CAPACITY_EXCEEDED_CODES,
+  WS_REQUEST_CAPACITY_RETRY_AFTER_MS,
+} from "@synara/shared/wsRequestClass";
+
+const RPC_CAPACITY_EXCEEDED_CODES = new Set<string>(WS_REQUEST_CAPACITY_EXCEEDED_CODES);
 
 export const RPC_CAPACITY_RETRY_LIMIT = 12;
 export const MAX_UNARY_RPC_CAPACITY_RETRY_ATTEMPTS = RPC_CAPACITY_RETRY_LIMIT;
-export const DEFAULT_RPC_CAPACITY_RETRY_MS = 250;
+export const DEFAULT_RPC_CAPACITY_RETRY_MS = WS_REQUEST_CAPACITY_RETRY_AFTER_MS;
+/**
+ * Longest wait for a client-side request slot: the time budget the in-place
+ * retry loop had before requests were queued, so capacity errors still surface
+ * when they used to.
+ */
+export const UNARY_RPC_CAPACITY_QUEUE_WAIT_MS =
+  MAX_UNARY_RPC_CAPACITY_RETRY_ATTEMPTS * DEFAULT_RPC_CAPACITY_RETRY_MS;
 const DEFAULT_GENERIC_RETRY_LIMIT = 3;
 
 export function isRpcCapacityExceededError(error: unknown): error is {

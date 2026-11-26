@@ -49,6 +49,19 @@ describe("composer mention reference filtering", () => {
     expect(filterPromptProviderMentionReferences("Use @linear please", [plugin])).toEqual([plugin]);
   });
 
+  it("resolves connector chips from connector:// references and keeps them while the token stays", () => {
+    const superx = { name: "superx.so", path: "connector://superx_so_connector" };
+
+    // A host-like name is a file path until a connector reference claims it.
+    expect(resolveMentionChipKind("superx.so")).toBe("path");
+    expect(resolveMentionChipKind("superx.so", { mentionReferences: [superx] })).toBe("connector");
+    expect(resolveMentionChipKind("connector://superx_so_connector")).toBe("connector");
+    expect(filterPromptProviderMentionReferences("Post with @superx.so now", [superx])).toEqual([
+      superx,
+    ]);
+    expect(filterPromptProviderMentionReferences("Post now", [superx])).toEqual([]);
+  });
+
   it("resolves plugin chip kind from stored mention references", () => {
     const plugin = { name: "linear", path: "plugin://linear@openai-curated" };
 

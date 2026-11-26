@@ -21,6 +21,7 @@ import { StatusDot } from "~/components/ui/status-chip";
 import { toastManager } from "~/components/ui/toast";
 import { AppSnapPermissionGuide } from "./AppSnapPermissionGuide";
 import { SettingsRow, SettingsSection } from "./SettingsPanelPrimitives";
+import { useTranslation } from "~/i18n";
 
 export interface AppSnapPermissionPaneDescriptor {
   readonly pane: DesktopAppSnapSettingsPane;
@@ -32,15 +33,13 @@ export interface AppSnapPermissionPaneDescriptor {
 export const APP_SNAP_PERMISSION_PANES: readonly AppSnapPermissionPaneDescriptor[] = [
   {
     pane: "input-monitoring",
-    title: "Input Monitoring",
-    description:
-      "Lets Synara notice the double-Option chord while another app owns the keyboard. Nothing you type is recorded.",
+    title: "settings:inputMonitoring",
+    description: "settings:letsSynaraNoticeTheDoubleOptionChordWhileAnother",
   },
   {
     pane: "screen-recording",
-    title: "Screen Recording",
-    description:
-      "Lets Synara capture an image of the frontmost window. Only the single window you snap is captured, only at the moment you press the chord.",
+    title: "settings:screenRecording",
+    description: "settings:letsSynaraCaptureAnImageOfTheFrontmostWindow",
   },
 ];
 
@@ -52,39 +51,37 @@ export const APP_SNAP_PERMISSION_PANES: readonly AppSnapPermissionPaneDescriptor
 export const COMPUTER_PERMISSION_PANES: readonly AppSnapPermissionPaneDescriptor[] = [
   {
     pane: "accessibility",
-    title: "Accessibility",
-    description:
-      "Lets Synara move the pointer, click, and type on your behalf. Nothing is driven unless you authorize a Computer task.",
+    title: "settings:accessibility",
+    description: "settings:letsSynaraMoveThePointerClickAndTypeOn",
   },
   {
     pane: "screen-recording",
-    title: "Screen Recording",
-    description:
-      "Lets Synara capture windows and the desktop so the agent can see what it is driving.",
+    title: "settings:screenRecording",
+    description: "settings:letsSynaraCaptureWindowsAndTheDesktopSoThe",
   },
   {
     pane: "input-monitoring",
-    title: "Input Monitoring",
-    description:
-      "Lets Synara detect Escape and pause when you take over during a Computer task. This does not enable the AppSnap shortcut.",
+    title: "settings:inputMonitoring",
+    description: "settings:letsSynaraDetectEscapeAndPauseWhenYouTake",
   },
 ];
 
 const PERMISSION_LABELS: Record<DesktopAppSnapPermission, string> = {
-  granted: "Granted",
-  denied: "Denied",
-  "not-determined": "Not requested yet",
-  restricted: "Restricted",
-  unknown: "Unknown",
+  granted: "settings:granted",
+  denied: "settings:denied",
+  "not-determined": "settings:notRequestedYet",
+  restricted: "settings:restricted",
+  unknown: "common:common_unknown",
 };
 
 const PANE_LABELS: Record<DesktopAppSnapSettingsPane, string> = {
-  accessibility: "Accessibility",
-  "input-monitoring": "Input Monitoring",
-  "screen-recording": "Screen Recording",
+  accessibility: "settings:accessibility",
+  "input-monitoring": "settings:inputMonitoring",
+  "screen-recording": "settings:screenRecording",
 };
 
 function AppSnapPermissionBadge({ permission }: { permission: DesktopAppSnapPermission }) {
+  const { t } = useTranslation();
   return (
     <span className="inline-flex items-center gap-1.5 text-ui-xs font-medium text-muted-foreground">
       <StatusDot
@@ -97,7 +94,7 @@ function AppSnapPermissionBadge({ permission }: { permission: DesktopAppSnapPerm
               : "bg-[color:var(--color-border)]"
         }
       />
-      {PERMISSION_LABELS[permission]}
+      {t(PERMISSION_LABELS[permission])}
     </span>
   );
 }
@@ -197,6 +194,8 @@ export function AppSnapPermissionSection({
    */
   readonly showRecheck?: boolean;
 }) {
+  const { t } = useTranslation();
+
   const [recheckPending, setRecheckPending] = useState(false);
   const requestGuardRef = useRef(createLatestAppSnapRequestGuard());
   const onStateChangeRef = useRef(onStateChange);
@@ -252,14 +251,14 @@ export function AppSnapPermissionSection({
   useEffect(() => {
     if (!guidePane) return;
     if (appSnapPanePermission(state, guidePane) !== "granted") return;
-    const paneLabel = PANE_LABELS[guidePane];
+    const paneLabel = t(PANE_LABELS[guidePane]);
     onGuidePaneChange(null);
     toastManager.add({
       type: "success",
-      title: "Permission granted",
-      description: `${paneLabel} is ready for ${feature}.`,
+      title: t("settings:permissionGranted"),
+      description: t("settings:isReadyFor", { value0: paneLabel, value1: feature }),
     });
-  }, [guidePane, state, feature, onGuidePaneChange]);
+  }, [guidePane, state, feature, onGuidePaneChange, t]);
 
   async function recheckPermissions() {
     const bridge = window.desktopBridge?.appSnap;
@@ -276,16 +275,16 @@ export function AppSnapPermissionSection({
       if (next.status === "permission-required") {
         toastManager.add({
           type: "info",
-          title: "Permissions unchanged",
-          description: "Use Grant next to a permission to walk through setup.",
+          title: t("settings:permissionsUnchanged"),
+          description: t("settings:useGrantNextToAPermissionToWalkThrough"),
         });
       }
     } catch (error) {
       if (!requestGuard.isCurrent(requestId)) return;
       toastManager.add({
         type: "error",
-        title: "Could not check permissions",
-        description: error instanceof Error ? error.message : "Permission check failed.",
+        title: t("settings:couldNotCheckPermissions"),
+        description: error instanceof Error ? error.message : t("settings:permissionCheckFailed"),
       });
     } finally {
       if (requestGuard.isCurrent(requestId)) setRecheckPending(false);
@@ -293,15 +292,15 @@ export function AppSnapPermissionSection({
   }
 
   return (
-    <SettingsSection title="macOS permissions">
+    <SettingsSection title="settings:macOSPermissions">
       {panes.map(({ pane, title, description }) => {
         const permission = appSnapPanePermission(state, pane);
         const guideOpen = guidePane === pane;
         return (
           <SettingsRow
             key={pane}
-            title={title}
-            description={description}
+            title={t(title)}
+            description={t(description)}
             control={
               <div className="flex items-center gap-2">
                 <AppSnapPermissionBadge permission={permission} />
@@ -320,7 +319,7 @@ export function AppSnapPermissionSection({
                       }
                     }}
                   >
-                    {guideOpen ? "Hide steps" : "Grant"}
+                    {guideOpen ? t("settings:hideSteps") : t("settings:grant")}
                   </Button>
                 ) : null}
               </div>
@@ -348,8 +347,9 @@ export function AppSnapPermissionSection({
       })}
       {showRecheck ? (
         <SettingsRow
-          title="Permission status"
-          description="Grant each permission with the steps above. If you take longer than 10 minutes, press Set up again."
+          id="setting-permission-status"
+          title="settings:permissionStatus"
+          description="settings:grantEachPermissionWithTheStepsAboveIfYou"
           control={
             <Button
               type="button"
@@ -361,10 +361,10 @@ export function AppSnapPermissionSection({
               {recheckPending ? (
                 <>
                   <Spinner className="size-3" />
-                  Rechecking…
+                  {t("settings:rechecking")}
                 </>
               ) : (
-                "Recheck permissions"
+                t("settings:recheckPermissions")
               )}
             </Button>
           }

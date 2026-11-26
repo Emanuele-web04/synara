@@ -55,7 +55,11 @@ import {
   isSynaraGatewayToolCall,
   shouldAllowSynaraComputerProviderTool,
 } from "../../agentGateway/computerToolPermission.ts";
-import { buildOpenCodeMcpServer, SYNARA_MCP_SERVER_NAME } from "../../agentGateway/mcpInjection.ts";
+import {
+  buildOpenCodeConnectorMcpServers,
+  buildOpenCodeMcpServer,
+  SYNARA_MCP_SERVER_NAME,
+} from "../../agentGateway/mcpInjection.ts";
 import { AgentGatewayCredentials } from "../../agentGateway/Services/AgentGatewayCredentials.ts";
 import {
   acquireAgentGatewaySessionLease,
@@ -322,6 +326,37 @@ const installOpenCodeGatewayMcp = Effect.fn("installOpenCodeGatewayMcp")(functio
   ).pipe(Effect.timeout("10 seconds"));
   const status = result.data?.[SYNARA_MCP_SERVER_NAME];
   if (status?.status === "connected") {
+    // Connectors are optional: one that fails to start must not block the session.
+    // Installed together, so slow vendors cost one timeout rather than one each.
+    yield* Effect.forEach(
+      buildOpenCodeConnectorMcpServers(input.connection),
+      (connector) =>
+        runOpenCodeSdk("mcp.add", (signal) =>
+          input.client.mcp.add(
+            { directory: input.directory, name: connector.name, config: connector.config },
+            { signal },
+          ),
+        ).pipe(
+          Effect.timeout("10 seconds"),
+          Effect.flatMap((added) => {
+            const connectorStatus = added.data?.[connector.name]?.status;
+            return connectorStatus === "connected"
+              ? Effect.void
+              : Effect.logWarning("OpenCode connector MCP install failed", {
+                  connector: connector.name,
+                  detail: `status: ${connectorStatus ?? "missing"}`,
+                });
+          }),
+          // Log the summarized detail only: the raw cause can echo request headers.
+          Effect.catch((error) =>
+            Effect.logWarning("OpenCode connector MCP install failed", {
+              connector: connector.name,
+              detail: error instanceof OpenCodeRuntimeError ? error.detail : "timed out",
+            }),
+          ),
+        ),
+      { concurrency: "unbounded", discard: true },
+    );
     return;
   }
   return yield* new OpenCodeRuntimeError({
@@ -1368,9 +1403,12 @@ const stopOpenCodeContext = Effect.fn("stopOpenCodeContext")(function* (
 
   yield* runOpenCodeSdk("session.abort", () =>
     context.client.session.abort({ sessionID: context.openCodeSessionId }),
-  ).pipe(Effect.ignore({ log: true }));
-
-  yield* releaseOpenCodeSessionResources(context, beforeRelease);
+  ).pipe(
+    Effect.ignore({ log: true }),
+    // A cancelled abort still retires the stopped context before recovery can
+    // replace it. Otherwise its managed server and gateway lease are abandoned.
+    Effect.ensuring(releaseOpenCodeSessionResources(context, beforeRelease)),
+  );
 });
 
 export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
@@ -2901,7 +2939,9 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                 }),
                 type: "runtime.warning",
                 payload: {
-                  message: event.properties.status.message,
+                  // Constant text (the attempt counter lives in detail) lets repeats merge.
+                  message: `${adapterConfig.displayName} is retrying the request.`,
+                  willRetry: true,
                   detail: event.properties.status,
                 },
               });
@@ -3304,7 +3344,8 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
               }),
               type: "runtime.warning",
               payload: {
-                message: event.properties.error.message,
+                message: `${adapterConfig.displayName} is retrying the request.`,
+                willRetry: true,
                 detail: event.properties,
               },
             });
@@ -3660,6 +3701,10 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
 
         yield* Effect.gen(function* () {
           let reconnectAttempt = 0;
+          // A single dropped stream recovers silently; only back-to-back failures
+          // (no event delivered in between) are worth a transcript row.
+          let consecutiveDisconnects = 0;
+          let deliveredEvent = false;
           while (!eventsAbortController.signal.aborted && !(yield* Ref.get(context.stopped))) {
             const subscriptionExit = yield* Effect.exit(
               Effect.gen(function* () {
@@ -3685,7 +3730,12 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                       detail: openCodeRuntimeErrorDetail(cause),
                       cause,
                     }),
-                ).pipe(Stream.runForEach((event) => handleSubscribedEvent(context, event)));
+                ).pipe(
+                  Stream.runForEach((event) => {
+                    deliveredEvent = true;
+                    return handleSubscribedEvent(context, event);
+                  }),
+                );
               }),
             );
             if (eventsAbortController.signal.aborted || (yield* Ref.get(context.stopped))) {
@@ -3700,6 +3750,8 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                 Math.min(reconnectAttempt, OPENCODE_EVENT_RECONNECT_DELAYS_MS.length - 1)
               ] ?? OPENCODE_EVENT_RECONNECT_DELAYS_MS[0];
             reconnectAttempt += 1;
+            consecutiveDisconnects = deliveredEvent ? 1 : consecutiveDisconnects + 1;
+            deliveredEvent = false;
             yield* Effect.sleep(delayMs);
             if (eventsAbortController.signal.aborted || (yield* Ref.get(context.stopped))) {
               return;
@@ -3707,6 +3759,10 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             const detail = Exit.isFailure(subscriptionExit)
               ? openCodeRuntimeErrorDetail(Cause.squash(subscriptionExit.cause))
               : `${adapterConfig.displayName} event stream ended.`;
+            if (consecutiveDisconnects < 2) {
+              continue;
+            }
+            // The message stays constant so the transcript merges repeats into one row.
             yield* emit(context, {
               ...buildEventBase({ threadId: context.session.threadId }),
               type: "runtime.warning",
@@ -4541,7 +4597,10 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         Effect.sync(() => [...sessions.values()].map((context) => context.session));
 
       const hasSession: OpenCodeAdapterShape["hasSession"] = (threadId) =>
-        Effect.sync(() => sessions.has(threadId));
+        Effect.sync(() => {
+          const context = sessions.get(threadId);
+          return context !== undefined && !Ref.getUnsafe(context.stopped);
+        });
 
       const readThread: OpenCodeAdapterShape["readThread"] = Effect.fn("readThread")(
         function* (threadId) {
@@ -4813,6 +4872,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           readonly experimentalWebSockets?: boolean;
           readonly environment?: Readonly<Record<string, string>>;
           readonly reuseAnyActiveContext?: boolean;
+          readonly poolIsolationKey?: string;
         },
         fn: (input: {
           readonly client: OpencodeClient;
@@ -4874,6 +4934,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                   ...(serverUrl ? { serverUrl } : {}),
                   ...(input.environment !== undefined ? { environment: input.environment } : {}),
                   ...(input.experimentalWebSockets ? { experimentalWebSockets: true } : {}),
+                  ...(input.poolIsolationKey ? { poolIsolationKey: input.poolIsolationKey } : {}),
                 })
                 .pipe(Effect.mapError(toAdapterRequestError));
               const clientServerPassword = serverPasswordForOpenCodeClient(server, serverPassword);
@@ -4897,6 +4958,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           readonly serverPassword?: string | null;
           readonly experimentalWebSockets?: boolean;
           readonly environment?: Readonly<Record<string, string>>;
+          readonly poolIsolationKey?: string;
         },
         fn: (input: {
           readonly client: OpencodeClient;
@@ -4907,7 +4969,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         withDiscoveryClient(
           {
             ...input,
-            reuseAnyActiveContext: true,
+            reuseAnyActiveContext: input.poolIsolationKey === undefined,
           },
           ({ activeContext, client }) =>
             Effect.gen(function* () {
@@ -4936,6 +4998,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
       const listModels: NonNullable<OpenCodeAdapterShape["listModels"]> = (input) => {
         const binaryPath = input.binaryPath?.trim() || adapterConfig.defaultBinaryPath;
         return Effect.gen(function* () {
+          let cliDiscoveryFailed = false;
           const cliModelsEffect = openCodeRuntime
             .listOpenCodeCliModels({
               binaryPath,
@@ -4947,12 +5010,13 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
               ...(input.environment !== undefined ? { environment: input.environment } : {}),
             })
             .pipe(
-              Effect.catch((error) =>
-                Effect.logDebug(`${adapterConfig.displayName} CLI model discovery failed`, {
+              Effect.catch((error) => {
+                cliDiscoveryFailed = true;
+                return Effect.logDebug(`${adapterConfig.displayName} CLI model discovery failed`, {
                   binaryPath,
                   detail: openCodeRuntimeErrorDetail(error),
-                }).pipe(Effect.as([] as ReadonlyArray<OpenCodeCliModelDescriptor>)),
-              ),
+                }).pipe(Effect.as([] as ReadonlyArray<OpenCodeCliModelDescriptor>));
+              }),
             );
           const inventoryEffect = withDiscoveryInventory(
             {
@@ -4965,6 +5029,11 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                 ? { experimentalWebSockets: input.experimentalWebSockets }
                 : {}),
               ...(input.environment !== undefined ? { environment: input.environment } : {}),
+              // A running session can retain the previous model catalog. Read
+              // this revision from a discovery-only server on a cache miss.
+              ...(input.localConfigRevision !== undefined
+                ? { poolIsolationKey: `model-catalog:${input.localConfigRevision}` }
+                : {}),
             },
             ({ inventory, credentialProviderIDs }) =>
               Effect.succeed({
@@ -5002,6 +5071,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                   ? adapterConfig.cliModelSource
                   : adapterConfig.fallbackModelSource,
               cached: false,
+              degraded: cliDiscoveryFailed,
             };
           }
 
@@ -5026,6 +5096,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
               models,
               source: adapterConfig.cliModelSource,
               cached: false,
+              degraded: true,
             };
           }
 

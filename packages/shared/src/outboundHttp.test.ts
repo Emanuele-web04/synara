@@ -271,4 +271,50 @@ describe("loopback HTTP transport", () => {
       await closeHttpServer(server);
     }
   });
+
+  it("stops reading a stream the server keeps open once the caller has what it needs", async () => {
+    const { server, origin } = await listenHttpServer((_request, response) => {
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.write("data: first\n\n");
+      // Never ends: a buffered read would wait for the timeout.
+    });
+    try {
+      const seen: string[] = [];
+      const response = await outboundHttp.request({
+        policy: { ...loopbackPolicyFor([origin]), timeoutMs: 2_000 },
+        url: origin,
+        stopReadingAfter: (chunk, headers) => {
+          seen.push(headers.get("content-type") ?? "");
+          return new TextDecoder().decode(chunk).includes("first");
+        },
+      });
+      expect(response.status).toBe(200);
+      expect(new TextDecoder().decode(response.body)).toBe("data: first\n\n");
+      expect(seen).toEqual(["text/event-stream"]);
+    } finally {
+      server.closeAllConnections();
+      await closeHttpServer(server);
+    }
+  });
+
+  it("fails only the request when the caller's reader throws", async () => {
+    const { server, origin } = await listenHttpServer((_request, response) => {
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.write("data: first\n\n");
+    });
+    try {
+      await expect(
+        outboundHttp.request({
+          policy: { ...loopbackPolicyFor([origin]), timeoutMs: 2_000 },
+          url: origin,
+          stopReadingAfter: () => {
+            throw new Error("collector bug");
+          },
+        }),
+      ).rejects.toMatchObject({ code: "request", message: "Outbound response reader failed." });
+    } finally {
+      server.closeAllConnections();
+      await closeHttpServer(server);
+    }
+  });
 });

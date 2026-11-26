@@ -9,11 +9,22 @@
 //          mergeSkillsIntoCatalog, filterDisabledSkills, ensureSynaraSkillsDir
 
 import * as fs from "node:fs/promises";
+import { createRequire } from "node:module";
 import * as nodePath from "node:path";
 
 import type { ProviderKind, ProviderSkillDescriptor } from "@synara/contracts";
-import YAML from "yaml";
 import { discoverClaudePluginSkillRoots } from "./claudePluginSkills.ts";
+
+let cachedYaml: typeof import("yaml") | undefined;
+function loadYamlSync(): typeof import("yaml") {
+  if (!cachedYaml) {
+    const mod = createRequire(import.meta.url)("yaml") as
+      | typeof import("yaml")
+      | { readonly default: typeof import("yaml") };
+    cachedYaml = "parse" in mod ? mod : mod.default;
+  }
+  return cachedYaml;
+}
 
 type FrontmatterValue = string | boolean;
 
@@ -71,7 +82,7 @@ export function parseSkillFrontmatter(markdown: string): Record<string, Frontmat
   try {
     // Skill files can come from untrusted repositories: `uniqueKeys: false` skips the quadratic
     // duplicate-key check, and `logLevel: "error"` keeps unusual tags from printing process warnings.
-    const parsed: unknown = YAML.parse(block, { uniqueKeys: false, logLevel: "error" });
+    const parsed: unknown = loadYamlSync().parse(block, { uniqueKeys: false, logLevel: "error" });
     if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
       const record: Record<string, FrontmatterValue> = {};
       for (const [key, value] of Object.entries(parsed)) {
@@ -370,6 +381,8 @@ export interface SkillsCatalogDiscoveryInput {
   /** Optional workspace cwd; when present, project-level skill folders are included. */
   readonly cwd?: string | null;
   readonly homeDir: string;
+  /** Active Claude profile; replaces only the Claude home origin. */
+  readonly claudeConfigDir?: string | undefined;
   /** Synara base dir (usually `~/.synara`); skills live in `{base}/skills`. */
   readonly synaraBaseDir: string;
   /** Provider whose native copies should win when the same skill exists in several roots. */
@@ -460,7 +473,9 @@ const SKILL_ORIGIN_ROOTS = {
     projectRootNames: [".codex"],
   },
   claude: {
-    homeRoots: (input) => [nodePath.join(input.homeDir, ".claude", "skills")],
+    homeRoots: (input) => [
+      nodePath.join(input.claudeConfigDir ?? nodePath.join(input.homeDir, ".claude"), "skills"),
+    ],
     projectRootNames: [".claude"],
   },
   cursor: {
@@ -586,6 +601,11 @@ function rootsForOrderedOrigins(
     ),
   );
   const homeRootPaths = new Set(homeRoots.map((root) => nodePath.resolve(root.path)));
+  // A profile override replaces the default Claude home even if its path is
+  // seen again while walking the project ancestors.
+  if (input.claudeConfigDir) {
+    homeRootPaths.add(nodePath.resolve(input.homeDir, ".claude", "skills"));
+  }
 
   const projectRoots: SkillRoot[] = [];
   const cwd = input.cwd?.trim();
@@ -637,6 +657,7 @@ export async function discoverSkillsCatalog(
     input.cwd?.trim() ?? "",
     input.provider ?? "",
     input.homeDir,
+    input.claudeConfigDir ?? "",
     input.synaraBaseDir,
     input.agentDir?.trim() ?? "",
     input.includeDuplicateOrigins ? "all-origins" : "deduped",
@@ -660,6 +681,7 @@ export async function discoverSkillsCatalog(
       ...skillsCatalogRoots(input),
       ...(await discoverClaudePluginSkillRoots({
         homeDir: input.homeDir,
+        ...(input.claudeConfigDir ? { claudeConfigDir: input.claudeConfigDir } : {}),
         ...(input.cwd ? { cwd: input.cwd } : {}),
       })),
     ];

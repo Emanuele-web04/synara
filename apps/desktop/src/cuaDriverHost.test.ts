@@ -80,6 +80,10 @@ async function fixture(
     browserHang?: boolean;
     browserCleanupUnconfirmed?: boolean;
     browserObservations?: boolean;
+    clipboardPreservation?: boolean;
+    clipboardReplyLost?: boolean;
+    clipboardRestoreFailure?: "lost-reply" | "native-error";
+    clipboardRestored?: boolean;
     inputDelayMs?: number;
     delayBrowserObservation?: boolean;
     delayObservation?: boolean;
@@ -88,6 +92,7 @@ async function fixture(
     dropCancel?: boolean;
     startupTimeoutMs?: number;
     deathFlag?: string;
+    teardownFlag?: string;
     ownPids?: () => ReadonlySet<number>;
     cursorStyle?: () => { fill?: string; rim?: string; shadow?: string } | null | undefined;
     checkPermissions?: (options?: { readonly force: boolean }) => Promise<{
@@ -123,13 +128,21 @@ async function fixture(
   cleanups.push(() => rm(directory, { recursive: true, force: true }));
   const log = join(directory, "events.jsonl");
   const binary = join(directory, "driver");
-  options = { ...options, deathFlag: join(directory, "session-died") };
+  // The teardown flag appears only after the test body: from then on the fake
+  // driver skips its modeled acknowledgement and exit delays, so cleanup takes
+  // the same path without paying ~180 ms of sleeps per test.
+  options = {
+    ...options,
+    deathFlag: join(directory, "session-died"),
+    teardownFlag: join(directory, "teardown"),
+  };
   await writeFile(
     binary,
     `#!${process.execPath}
 const net=require('node:net'),fs=require('node:fs');
 const log=${JSON.stringify(log)}, options=${JSON.stringify(options)};
 const write=event=>fs.appendFileSync(log,JSON.stringify({event,pid:process.pid,time:Date.now()})+'\\n');
+const modeledDelay=ms=>fs.existsSync(options.teardownFlag)?0:ms;
 write('start');
 if(!options.unpatched){
   if(!process.argv.includes('--compact-cursor')) throw new Error('Missing compact cursor profile');
@@ -137,7 +150,7 @@ if(!options.unpatched){
 }
 if(options.unpatched&&(process.argv.includes('--compact-cursor')||process.argv.includes('--idle-hide-ms'))) throw new Error('Upstream driver cannot parse Synara cursor flags');
 const socket=process.argv[process.argv.indexOf('--socket')+1];
-let action, timer, inputEpoch=0, interruptions=0, browserCleanupPending=false, cursorEnables=0, cursorHides=0;
+let action, timer, inputEpoch=0, interruptions=0, browserCleanupPending=false, cursorEnables=0, cursorHides=0, clipboardRestores=0;
 net.createServer(s=>{
   const reply=result=>s.end(JSON.stringify({ok:true,result})+'\\n');
   s.once('data',b=>{
@@ -165,7 +178,7 @@ net.createServer(s=>{
       setTimeout(()=>{
         write('cleanup-ack');
         reply({pid:process.pid+(options.cleanup==='wrong-pid'?1:0),input_admission_closed:options.cleanup==='missing-admission'?undefined:true,cleanup_complete:!browserCleanupPending&&options.cleanup!=='incomplete',pending_input:browserCleanupPending||options.cleanup==='incomplete'?1:0});
-      },30);
+      },modeledDelay(30));
     }
     else if(options.sessionDeathOnce && r.method==='call' && r.args && r.args.session && r.name!=='start_session' && r.name!=='set_agent_cursor_motion' && r.name!=='set_agent_cursor_style' && r.name!=='set_agent_cursor_enabled' && r.name!=='get_agent_cursor_state' && !fs.existsSync(options.deathFlag)) { fs.writeFileSync(options.deathFlag, '1'); reply({isError:true, content:[{type:'text', text:"session '"+r.args.session+"' has ended; tool call '"+r.name+"' was rejected. Call start_session with this id to revive it before issuing further actions, or use a new session id."}], structuredContent:{effect:'not-dispatched'}}); }
     else if(options.sessionDeathTransport && r.method==='call' && r.args && r.args.session && r.name!=='start_session' && r.name!=='set_agent_cursor_motion' && r.name!=='set_agent_cursor_style' && r.name!=='set_agent_cursor_enabled' && r.name!=='get_agent_cursor_state' && !fs.existsSync(options.deathFlag)) { fs.writeFileSync(options.deathFlag, '1'); s.end(JSON.stringify({ok:false,error:"session '"+r.args.session+"' has ended; tool call '"+r.name+"' was rejected. Call start_session with this id to revive it before issuing further actions, or use a new session id.",effect:'not-dispatched'})+'\\n'); }
@@ -193,6 +206,16 @@ net.createServer(s=>{
       write('permitted-native:'+r.name); reply({});
     }
     else if(r.name==='press_key') { if(!options.unpatched&&r.expected_input_epoch!==inputEpoch) { reply({isError:true,structuredContent:{effect:'refused',code:'input_admission_closed'}}); return; } write('key'); write('observation-budget-'+process.env.SYNARA_CUA_FOREGROUND_OBSERVATION_MS); reply(options.actionResult??{}); }
+    else if(options.clipboardPreservation&&r.name==='clipboard_write') {
+      write('clipboard:'+JSON.stringify(r.args));
+      const restoring=typeof r.args.restore_token==='string';
+      if(restoring&&clipboardRestores++===0&&options.clipboardRestoreFailure) {
+        if(options.clipboardRestoreFailure==='lost-reply') s.destroy();
+        else reply({isError:true,structuredContent:{effect:'unverifiable'}});
+      }
+      else if(options.clipboardReplyLost&&r.args.preserve) s.destroy();
+      else reply({structuredContent:{restore_token:r.args.preserve_token,clipboard_restored:restoring&&(options.clipboardRestored??true)}});
+    }
     else if(r.name==='get_window_state' && !r.args?.empty) { write('observe'); setTimeout(()=>reply({structuredContent:{elements:r.args?.fixture_usable?[{role:"AXWindow"}]:[],window_is_on_screen:r.args?.fixture_usable===true,window_on_current_space:r.args?.fixture_usable===true,degraded:r.args?.fixture_degraded,screenshot_frame_valid:r.args?.fixture_stale!==true,pid:r.args?.pid,window_id:r.args?.fixture_wrong_window?99999:r.args?.window_id}}),options.delayObservation?60:0); }
     else if(r.name==='get_desktop_state') reply({content:[{type:'image',data:'fixture-image'}]});
     else if(r.name==='list_windows') { write('list-windows'); setTimeout(()=>{reply({structuredContent:{windows:options.listWindows||[]}});if(options.delayListWindowsMs) write('list-windows-replied');},options.delayListWindowsMs??0); }
@@ -228,7 +251,7 @@ net.createServer(s=>{
   s.on('error',()=>{});
 }).listen(socket);
 let retiring=false;
-function retire(){if(retiring)return;retiring=true;write('retiring');setTimeout(()=>{write('exit');process.exit(0)},150)}
+function retire(){if(retiring)return;retiring=true;write('retiring');setTimeout(()=>{write('exit');process.exit(0)},modeledDelay(150))}
 process.on('SIGTERM',retire);
 process.stdin.resume(); process.stdin.on('end',retire);
 `,
@@ -259,6 +282,7 @@ process.stdin.resume(); process.stdin.on('end',retire);
       .split("\n")
       .map((row) => JSON.parse(row));
   cleanups.push(async () => {
+    await writeFile(options.teardownFlag!, "");
     try {
       await host.dispose();
     } catch (error) {
@@ -1337,6 +1361,164 @@ describe("agent cursor style", () => {
 
 describe("task-owned user stop", () => {
   const task = { threadId: "thread", turnId: "turn" };
+  it.each([
+    { failure: "none", restored: true },
+    { failure: "lost-reply", restored: true },
+    { failure: "native-error", restored: false },
+  ] as const)(
+    "restores only the stopped task's saved clipboard after $failure without reopening input",
+    async ({ failure, restored }) => {
+      const f = await fixture(capability, {
+        clipboardPreservation: true,
+        ...(failure === "none" ? {} : { clipboardRestoreFailure: failure }),
+        clipboardRestored: restored,
+      });
+      const token = "2cfba20e-1536-4dd3-a92b-92667fefbefe";
+      const clipboard = (args: Record<string, unknown>, owner = task) =>
+        cuaRequest<CuaReply>(f.endpoint, {
+          method: "call",
+          name: "clipboard_write",
+          task: owner,
+          args,
+        });
+      await expect(
+        clipboard({ text: "temporary", preserve: true, preserve_token: token }),
+      ).resolves.toMatchObject({ ok: true });
+      await f.host.stopTaskByUser(task);
+      await expect(clipboard({ restore_token: token, text: "new payload" })).resolves.toMatchObject(
+        {
+          ok: false,
+          effect: "not-dispatched",
+        },
+      );
+      await expect(
+        clipboard({ restore_token: token }, { threadId: "other", turnId: "turn" }),
+      ).resolves.toMatchObject({ ok: false, effect: "not-dispatched" });
+      if (failure !== "none") {
+        await expect(clipboard({ restore_token: token })).resolves.toMatchObject(
+          failure === "lost-reply"
+            ? { ok: false, effect: "dispatched-unknown" }
+            : { ok: true, result: { isError: true } },
+        );
+      }
+      await expect(clipboard({ restore_token: token })).resolves.toMatchObject({
+        ok: true,
+        result: { structuredContent: { clipboard_restored: restored } },
+      });
+      await expect(clipboard({ restore_token: token })).resolves.toMatchObject({ ok: false });
+      await expect(
+        cuaRequest(f.endpoint, {
+          method: "call",
+          name: "press_key",
+          task,
+          args: { key: "enter" },
+        }),
+      ).resolves.toMatchObject({ ok: false, effect: "not-dispatched" });
+      const events = await f.events();
+      expect(events.filter((event) => event.event.startsWith("clipboard:"))).toHaveLength(
+        failure === "none" ? 2 : 3,
+      );
+      expect(events.filter((event) => event.event === "start")).toHaveLength(1);
+      expect(events.some((event) => event.event === "key")).toBe(false);
+    },
+  );
+
+  it("never starts a replacement driver to restore an old clipboard token", async () => {
+    const f = await fixture(capability, { clipboardPreservation: true });
+    const token = "2cfba20e-1536-4dd3-a92b-92667fefbefe";
+    await cuaRequest(f.endpoint, {
+      method: "call",
+      name: "clipboard_write",
+      task,
+      args: { text: "temporary", preserve: true, preserve_token: token },
+    });
+    await f.host.stop();
+    await expect(
+      cuaRequest(f.endpoint, {
+        method: "call",
+        name: "clipboard_write",
+        task,
+        args: { restore_token: token },
+      }),
+    ).resolves.toMatchObject({ ok: false, effect: "not-dispatched" });
+    const events = await f.events();
+    expect(events.filter((event) => event.event.startsWith("clipboard:"))).toHaveLength(1);
+    expect(events.filter((event) => event.event === "start")).toHaveLength(1);
+  });
+
+  it("keeps clipboard cleanup available after a lost preparation reply only after native drain", async () => {
+    const f = await fixture(capability, { clipboardPreservation: true, clipboardReplyLost: true });
+    const token = "2cfba20e-1536-4dd3-a92b-92667fefbefe";
+    await expect(
+      cuaRequest(f.endpoint, {
+        method: "call",
+        name: "clipboard_write",
+        task,
+        args: { text: "temporary", preserve: true, preserve_token: token },
+      }),
+    ).resolves.toMatchObject({ ok: false, effect: "dispatched-unknown" });
+    await expect(
+      cuaRequest(f.endpoint, {
+        method: "call",
+        name: "clipboard_write",
+        task,
+        args: { restore_token: token },
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      result: { structuredContent: { clipboard_restored: true } },
+    });
+    const events = (await f.events()).map(({ event }) => event);
+    expect(events.filter((event) => event === "start")).toHaveLength(1);
+    expect(events.filter((event) => event.startsWith("clipboard:"))).toHaveLength(2);
+    expect(events.indexOf("interrupt-ack")).toBeGreaterThan(
+      events.findIndex((event) => event.startsWith("clipboard:")),
+    );
+    expect(events.findLastIndex((event) => event.startsWith("clipboard:"))).toBeGreaterThan(
+      events.indexOf("interrupt-ack"),
+    );
+    expect(events).not.toContain("cancel");
+  });
+
+  it.each(["incomplete", "once-incomplete"] as const)(
+    "rechecks a %s native drain before clipboard restoration",
+    async (interruptCleanup) => {
+      const f = await fixture(capability, { clipboardPreservation: true, interruptCleanup });
+      const token = "2cfba20e-1536-4dd3-a92b-92667fefbefe";
+      await cuaRequest(f.endpoint, {
+        method: "call",
+        name: "clipboard_write",
+        task,
+        args: { text: "temporary", preserve: true, preserve_token: token },
+      });
+      await expect(cuaRequest(f.endpoint, { method: "stop" })).resolves.toMatchObject({
+        ok: false,
+      });
+      const restored = await cuaRequest(f.endpoint, {
+        method: "call",
+        name: "clipboard_write",
+        task,
+        args: { restore_token: token },
+      });
+      const confirmed = interruptCleanup === "once-incomplete";
+      expect(restored).toMatchObject(
+        confirmed
+          ? { ok: true, result: { structuredContent: { clipboard_restored: true } } }
+          : { ok: false, effect: "not-dispatched" },
+      );
+      const events = (await f.events()).map(({ event }) => event);
+      expect(events.filter((event) => event === "interrupt-ack")).toHaveLength(2);
+      expect(events.filter((event) => event.startsWith("clipboard:"))).toHaveLength(
+        confirmed ? 2 : 1,
+      );
+      if (confirmed)
+        expect(events.findLastIndex((event) => event.startsWith("clipboard:"))).toBeGreaterThan(
+          events.lastIndexOf("interrupt-ack"),
+        );
+      expect(events.filter((event) => event === "start")).toHaveLength(1);
+    },
+  );
+
   it("end_task succeeds without a native preview", async () => {
     const f = await fixture();
     await expect(cuaRequest(f.endpoint, { method: "end_task", task })).resolves.toMatchObject({

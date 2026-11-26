@@ -14,7 +14,13 @@ import rootPackageJson from "../package.json" with { type: "json" };
 import desktopPackageJson from "../apps/desktop/package.json" with { type: "json" };
 import serverPackageJson from "../apps/server/package.json" with { type: "json" };
 
+import {
+  evaluatePackagedBundleSize,
+  formatBundleBudgetReport,
+  readBundleSizeBudget,
+} from "./check-bundle-size.ts";
 import { startBuildStage } from "./lib/build-timing.ts";
+import { retargetStagedEntry } from "./lib/desktop-artifact-naming.ts";
 import { verifyPortableBuild } from "./lib/portable-build.ts";
 import {
   BETA_ASSET_PATHS,
@@ -30,6 +36,7 @@ import {
   MAC_WINDOW_MATERIAL_ADDON_STAGE_PATH,
   validateDesktopNativeBuildHost,
 } from "./lib/desktop-platform-build-config.ts";
+import { stageCloudflared } from "./lib/cloudflared.ts";
 import { stageDesktopRuntimeResources } from "./lib/desktop-runtime-resources.ts";
 import {
   SYNARA_PACKAGED_DESKTOP_FLAVORS,
@@ -45,6 +52,7 @@ import {
   RELEASE_WORKSPACE_MANIFEST_PATHS,
 } from "./lib/release-workspace-manifests.ts";
 import { resolveCatalogDependencies } from "./lib/resolve-catalog.ts";
+import { settleConcurrently } from "./lib/settle-concurrently.ts";
 
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -122,6 +130,7 @@ interface BuildCliInput {
   readonly outputDir: Option.Option<string>;
   readonly skipBuild: Option.Option<boolean>;
   readonly keepStage: Option.Option<boolean>;
+  readonly checkSizeBudget: boolean;
   readonly signed: Option.Option<boolean>;
   readonly verbose: Option.Option<boolean>;
   readonly mockUpdates: Option.Option<boolean>;
@@ -222,6 +231,7 @@ interface ResolvedBuildOptions {
   readonly outputDir: string;
   readonly skipBuild: boolean;
   readonly keepStage: boolean;
+  readonly checkSizeBudget: boolean;
   readonly signed: boolean;
   readonly verbose: boolean;
   readonly mockUpdates: boolean;
@@ -328,6 +338,11 @@ export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
     catch: (cause) => new BuildScriptError({ message: String(cause), cause }),
   });
   const arch = mergeOptions(input.arch, env.arch, getDefaultArch(platform));
+  if (flavor === "remote" && (platform === "mac" ? arch !== "arm64" : arch !== "x64")) {
+    return yield* new BuildScriptError({
+      message: "Synara Remote supports macOS ARM64 and Windows/Linux x64 artifacts.",
+    });
+  }
   const version = mergeOptions(input.buildVersion, env.version, undefined);
   const sourceCommit = mergeOptions(input.sourceCommit, env.sourceCommit, undefined);
   const sourceTag = mergeOptions(input.sourceTag, env.sourceTag, undefined);
@@ -368,6 +383,7 @@ export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
     outputDir,
     skipBuild,
     keepStage,
+    checkSizeBudget: input.checkSizeBudget,
     signed,
     verbose,
     mockUpdates,
@@ -1304,6 +1320,23 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     );
   }
 
+  yield* timedBuildStage(
+    "cloudflared-provision",
+    Effect.tryPromise({
+      try: () =>
+        stageCloudflared(
+          path.join(stageResourcesDir, "cloudflared"),
+          options.platform,
+          options.arch,
+        ),
+      catch: (cause) =>
+        new BuildScriptError({
+          message: "Could not stage the verified Cloudflare connector.",
+          cause,
+        }),
+    }),
+  );
+
   yield* stageDesktopRuntimeResources(
     stageResourcesDir,
     path.join(stageAppDir, "apps/desktop/prod-resources"),
@@ -1433,32 +1466,11 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     });
   }
 
-  if (options.platform === "mac" && options.target === "dmg" && options.signed) {
-    yield* Effect.log("[desktop-artifact] Notarizing and validating signed macOS DMG...");
-    const finalizedDmg = yield* Effect.tryPromise({
-      try: () =>
-        finalizeSignedMacDmg({
-          stageDistDir,
-          appleApiKey: buildEnv.APPLE_API_KEY,
-          appleApiKeyId: buildEnv.APPLE_API_KEY_ID,
-          appleApiIssuer: buildEnv.APPLE_API_ISSUER,
-          verbose: options.verbose,
-        }),
-      catch: (cause) =>
-        new BuildScriptError({
-          message: "macOS DMG signing/notarization finalization failed.",
-          cause,
-        }),
-    });
-    yield* Effect.log(
-      `[desktop-artifact] Signed and notarized macOS DMG (${finalizedDmg.dmgFileName}).`,
-    );
-  }
-
   if (options.platform === "mac") {
-    yield* Effect.log("[desktop-artifact] Repacking and validating macOS update zip...");
-    const finalizedZip = yield* timedBuildStage(
+    const updateZip = timedBuildStage(
       "update-zip",
+      // Wait for archive subprocesses and extraction cleanup before the
+      // enclosing build scope removes the staging directory on interruption.
       Effect.tryPromise({
         try: () =>
           finalizeMacUpdateZip({
@@ -1475,8 +1487,44 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
             message: "macOS update zip finalization failed.",
             cause,
           }),
-      }),
+      }).pipe(Effect.uninterruptible),
     );
+    let finalizedZip: Effect.Success<typeof updateZip>;
+    if (options.target === "dmg" && options.signed) {
+      // The app was notarized and stapled during packaging. DMG finalization
+      // verifies, notarizes and staples only the disk image; the update ZIP only
+      // reads that app and writes its own ZIP and feed. While Apple processes the
+      // DMG, the ZIP is packed from the same final app it always used.
+      yield* Effect.log(
+        "[desktop-artifact] Notarizing the signed macOS DMG while repacking the update zip...",
+      );
+      const finalizeDmg = Effect.tryPromise({
+        try: () =>
+          finalizeSignedMacDmg({
+            stageDistDir,
+            appleApiKey: buildEnv.APPLE_API_KEY,
+            appleApiKeyId: buildEnv.APPLE_API_KEY_ID,
+            appleApiIssuer: buildEnv.APPLE_API_ISSUER,
+            verbose: options.verbose,
+          }),
+        catch: (cause) =>
+          new BuildScriptError({
+            message: "macOS DMG signing/notarization finalization failed.",
+            cause,
+          }),
+      });
+      const [finalizedDmg, zip] = yield* timedBuildStage(
+        "dmg-notarization-and-update-zip",
+        settleConcurrently(finalizeDmg, updateZip),
+      );
+      finalizedZip = zip;
+      yield* Effect.log(
+        `[desktop-artifact] Signed and notarized macOS DMG (${finalizedDmg.dmgFileName}).`,
+      );
+    } else {
+      yield* Effect.log("[desktop-artifact] Repacking and validating macOS update zip...");
+      finalizedZip = yield* updateZip;
+    }
     if (finalizedZip.removedZipBlockmapPath) {
       yield* Effect.log(
         `[desktop-artifact] Removed stale macOS zip blockmap (${path.basename(finalizedZip.removedZipBlockmapPath)}).`,
@@ -1485,6 +1533,41 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   }
 
   const stageEntries = yield* fs.readDirectory(stageDistDir);
+  if (options.checkSizeBudget) {
+    const productName = artifactIdentity.identity.displayName;
+    const appDirs = stageEntries
+      .map((entry) =>
+        options.platform === "mac"
+          ? path.join(stageDistDir, entry, `${productName}.app`)
+          : path.join(stageDistDir, entry),
+      )
+      .filter((dir) =>
+        existsSync(
+          path.join(
+            dir,
+            options.platform === "mac" ? "Contents/Resources" : "resources",
+            "app.asar",
+          ),
+        ),
+      );
+    const appDir = appDirs[0];
+    if (appDirs.length !== 1 || !appDir) {
+      return yield* new BuildScriptError({
+        message: `Expected one unpacked desktop app in ${stageDistDir}, found ${appDirs.length}.`,
+      });
+    }
+    const report = evaluatePackagedBundleSize({
+      platform: options.platform,
+      arch: options.arch,
+      assetsDir: stageDistDir,
+      appDir,
+      budgets: readBundleSizeBudget(path.join(repoRoot, "scripts/bundle-size-budget.json"))
+        .packaged,
+    });
+    const summary = formatBundleBudgetReport(report);
+    if (!report.passed) return yield* new BuildScriptError({ message: summary });
+    yield* Effect.log(summary);
+  }
   yield* fs.makeDirectory(options.outputDir, { recursive: true });
 
   const copiedArtifacts: string[] = [];
@@ -1493,10 +1576,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     const stat = yield* fs.stat(from).pipe(Effect.catch(() => Effect.succeed(null)));
     if (!stat || stat.type !== "File") continue;
 
-    const outputEntry =
-      options.platform === "mac" && options.arch !== "arm64" && entry === "latest-mac.yml"
-        ? `latest-mac-${options.arch}.yml`
-        : entry;
+    const outputEntry = retargetStagedEntry(entry, options.platform, options.arch);
     const to = path.join(options.outputDir, outputEntry);
     yield* fs.copyFile(from, to);
     copiedArtifacts.push(to);
@@ -1515,7 +1595,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
 
 const buildDesktopArtifactCli = Command.make("build-desktop-artifact", {
   flavor: Flag.choice("flavor", BuildFlavor.literals).pipe(
-    Flag.withDescription("Packaged identity: production (default), canary, cua, or beta."),
+    Flag.withDescription("Packaged identity: production (default), canary, cua, beta, or remote."),
     Flag.optional,
   ),
   platform: Flag.choice("platform", BuildPlatform.literals).pipe(
@@ -1561,6 +1641,11 @@ const buildDesktopArtifactCli = Command.make("build-desktop-artifact", {
   keepStage: Flag.boolean("keep-stage").pipe(
     Flag.withDescription("Keep temporary staging files (env: SYNARA_DESKTOP_KEEP_STAGE)."),
     Flag.optional,
+  ),
+  checkSizeBudget: Flag.boolean("check-size-budget").pipe(
+    Flag.withDescription(
+      "Verify the staged installer and unpacked app against release size budgets.",
+    ),
   ),
   signed: Flag.boolean("signed").pipe(
     Flag.withDescription(

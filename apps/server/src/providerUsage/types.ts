@@ -25,8 +25,14 @@ export interface ProviderUsageContext {
   readonly claudeBinaryPath?: string;
   /** Codex CLI binary (settings.providers.codex.binaryPath); defaults to "codex". */
   readonly codexBinaryPath?: string;
+  /** Antigravity CLI binary for the selected account; defaults to "agy". */
+  readonly antigravityBinaryPath?: string;
   /** Stable account route; omitted by legacy provider-only callers. */
   readonly instanceId?: ProviderInstanceId;
+  /** Recovery-only: owning task cwd used to exclude project authentication overrides. */
+  readonly workingDirectory?: string;
+  /** Authoritative source project root, including shared local settings for linked worktrees. */
+  readonly projectRoot?: string;
   /** Explicit account boundary: credential readers must not fall back to ambient accounts. */
   readonly isolateCredentials?: boolean;
   /** Selected Codex archive root; extra accounts omit archive totals rather than mix identities. */
@@ -38,12 +44,20 @@ export interface ProviderUsageContext {
 
 export interface ProviderUsageFetcher {
   readonly provider: ProviderKind;
+  /** Share concurrent reads, but do not keep the snapshot when account changes are opaque. */
+  readonly retainSnapshot?: false;
   /**
    * Resolve a non-secret identity for the currently selected credentials. A changed identity
    * invalidates the orchestration cache before its TTL expires. Null disables caching for the
    * request when credential identity cannot be read safely.
    */
   readonly cacheKey?: (ctx: ProviderUsageContext) => Promise<string | null>;
+  /**
+   * Native immutable account/organization identity for a durable recovery fence.
+   * Never use rotating access/refresh tokens, display labels, or usage cache keys.
+   * Null keeps automatic recovery unavailable when identity cannot be proven.
+   */
+  readonly recoveryIdentity?: (ctx: ProviderUsageContext) => Promise<string | null>;
   /** Resolve credentials and fetch live usage. Never throws. */
   fetch(ctx: ProviderUsageContext): Promise<ServerProviderUsageSnapshot>;
 }

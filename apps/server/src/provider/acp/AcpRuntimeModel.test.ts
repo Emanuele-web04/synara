@@ -164,6 +164,43 @@ describe("AcpRuntimeModel", () => {
     }
   });
 
+  it("retains ACP extension metadata on tool and streamed content updates", () => {
+    const toolMetadata = {
+      "cognition.ai/subagent_started": {
+        agentId: "agent-1",
+        title: "Explore the API",
+        task: "Inspect the public API surface",
+        isBackground: true,
+      },
+    };
+    const toolCall = parseSessionUpdateEvent({
+      sessionId: "session-1",
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "agent-1",
+        status: "in_progress",
+        _meta: toolMetadata,
+      },
+    } satisfies Acp.SessionNotification).events[0];
+    expect(toolCall?._tag).toBe("ToolCallUpdated");
+    if (toolCall?._tag !== "ToolCallUpdated") throw new Error("Expected tool call update");
+    expect(toolCall.toolCall.metadata).toEqual(toolMetadata);
+
+    const content = parseSessionUpdateEvent({
+      sessionId: "session-1",
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "child output" },
+        _meta: { "cognition.ai/subagent_context": { parentAgentId: "agent-1" } },
+      },
+    } satisfies Acp.SessionNotification).events[0];
+    expect(content).toMatchObject({
+      _tag: "ContentDelta",
+      text: "child output",
+      metadata: { "cognition.ai/subagent_context": { parentAgentId: "agent-1" } },
+    });
+  });
+
   it.each(["_toolName", "toolName", "tool_name"] as const)(
     "projects the authoritative %s Computer name on initial calls and updates",
     (nameKey) => {
@@ -337,6 +374,52 @@ describe("AcpRuntimeModel", () => {
         detail: "src/index.ts:12",
       },
     });
+  });
+
+  it.each([
+    { kind: "read", title: "Read `/home/gabriel`" },
+    { kind: "search", title: "Find `foo` in `src`" },
+    { kind: "edit", title: "Edit `src/app.ts`" },
+  ] as const)(
+    "does not promote a backticked $kind title fragment into data.command",
+    ({ kind, title }) => {
+      // Grok wraps targets in backticks ("Read `/home/gabriel`"); for non-execute
+      // kinds that fragment is a path, not a command — the transcript rendered
+      // "Ran /home/gabriel" until the extraction was gated.
+      const parsed = parseSessionUpdateEvent({
+        sessionId: "session-1",
+        update: {
+          sessionUpdate: "tool_call",
+          toolCallId: `${kind}-call`,
+          title,
+          kind,
+          status: "in_progress",
+          rawInput: { _toolName: kind === "read" ? "read_file" : kind },
+        },
+      } satisfies Acp.SessionNotification);
+
+      const event = parsed.events[0];
+      if (event?._tag !== "ToolCallUpdated") throw new Error("Expected tool update");
+      expect(event.toolCall.data).not.toHaveProperty("command");
+    },
+  );
+
+  it("keeps command extraction for execute and kindless calls", () => {
+    const execute = parseSessionUpdateEvent({
+      sessionId: "session-1",
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: "bash-1",
+        title: "Run `ls -la`",
+        kind: "execute",
+        status: "in_progress",
+        rawInput: { command: "ls -la" },
+      },
+    } satisfies Acp.SessionNotification);
+
+    const executeEvent = execute.events[0];
+    if (executeEvent?._tag !== "ToolCallUpdated") throw new Error("Expected tool update");
+    expect(executeEvent.toolCall.data.command).toBe("ls -la");
   });
 
   it("infers Cursor placeholder kinds before deriving display titles", () => {

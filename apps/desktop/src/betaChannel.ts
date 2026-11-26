@@ -35,7 +35,10 @@ import {
   SYNARA_STABLE_WINDOWS_INSTALLER_GUID,
   type BetaImportResult,
 } from "@synara/shared/betaChannel";
-import { SYNARA_DESKTOP_SMOKE_USER_DATA_ENV } from "@synara/shared/desktopIdentity";
+import {
+  SYNARA_DESKTOP_SMOKE_USER_DATA_ENV,
+  synaraDesktopIdentity,
+} from "@synara/shared/desktopIdentity";
 import type {
   DesktopBetaActionError,
   DesktopBetaActionResult,
@@ -51,7 +54,7 @@ export const BETA_WINDOWS_UNINSTALL_GUID = SYNARA_BETA_WINDOWS_INSTALLER_GUID;
 const BETA_MAC_APP_NAME = "Synara Beta.app";
 const BETA_MAC_EXECUTABLE_NAME = "Synara Beta";
 const BETA_WINDOWS_EXE_NAME = "Synara Beta.exe";
-const BETA_LINUX_DESKTOP_FILE = "synara-beta.desktop";
+const BETA_LINUX_DESKTOP_FILE = `${synaraDesktopIdentity("beta").userDataDirectoryName}.desktop`;
 const STABLE_MAC_APP_NAME = "Synara.app";
 const STABLE_MAC_EXECUTABLE_NAME = "Synara";
 const STABLE_WINDOWS_EXE_NAME = "Synara.exe";
@@ -68,7 +71,7 @@ interface BetaChannelDeps {
   readonly homeDir: string;
   readonly betaHomeDir: string;
   /** Flavor of the running app; only "production" may initiate the handoff. */
-  readonly flavor: "production" | "beta" | "canary" | "cua";
+  readonly flavor: DesktopBetaChannelState["flavor"];
   /** Base URL serving beta-mac.yml and its files; falls back to GitHub releases. */
   readonly feedUrlOverride?: string | undefined;
   /** Install target for the macOS bundle; defaults to /Applications. */
@@ -466,19 +469,21 @@ export class DesktopBetaChannel {
   }
 
   getState(): DesktopBetaChannelState {
-    const detection = this.detect();
-    const running = isBetaServerRunning(this.deps.betaHomeDir);
-    const result = readBetaImportResult(this.deps.betaHomeDir);
+    // Remote owns a separate install and never probes Beta's app or data home.
+    const supported = this.deps.flavor !== "remote";
+    const detection = supported ? this.detect() : null;
+    const running = supported && isBetaServerRunning(this.deps.betaHomeDir);
+    const result = supported ? readBetaImportResult(this.deps.betaHomeDir) : null;
     const stableExecutable = this.deps.flavor === "beta" ? this.detectStable() : null;
     return {
-      supported: true,
+      supported,
       flavor: this.deps.flavor,
       stableInstalled: stableExecutable !== null,
       canMoveBetaToTrash: this.deps.flavor === "beta" && this.deps.canTrashOwnBundle === true,
       stableDownloadUrl: SYNARA_STABLE_RELEASES_URL,
-      installed: detection.installed,
-      version: detection.version,
-      canInstall: this.canInstall,
+      installed: detection?.installed ?? false,
+      version: detection?.version ?? null,
+      canInstall: supported && this.canInstall,
       running,
       lastImportAt: result && result.ok ? result.completedAt : null,
       lastImportError: result && !result.ok ? (result.error ?? "import failed") : null,

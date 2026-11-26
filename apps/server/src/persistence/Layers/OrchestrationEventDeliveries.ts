@@ -9,6 +9,7 @@ import {
   OrchestrationEventDeliveryRepository,
   ProviderBlockingDeliveryEvidence,
   providerThreadProcessedConsumerName,
+  type BlockedOrchestrationEventDeliveryState,
   type OrchestrationEventDeliveryRepositoryShape,
 } from "../Services/OrchestrationEventDeliveries.ts";
 
@@ -83,6 +84,16 @@ const makeRepository = Effect.gen(function* () {
             toPersistenceSqlError("OrchestrationEventDelivery.recordThreadProcessedSequence"),
           ),
         );
+
+  const readEventSequencePage: OrchestrationEventDeliveryRepositoryShape["readEventSequencePage"] =
+    (input) =>
+      sql<{ readonly sequence: number }>`
+      SELECT sequence FROM orchestration_events
+      WHERE sequence > ${input.sequenceExclusive} AND sequence <= ${input.throughSequenceInclusive}
+      ORDER BY sequence ASC LIMIT ${input.limit}
+    `.pipe(
+        Effect.mapError(toPersistenceSqlError("OrchestrationEventDelivery.readEventSequencePage")),
+      );
 
   const getDelivery: OrchestrationEventDeliveryRepositoryShape["getDelivery"] = (input) =>
     getDeliveryRow(input.consumerName, input.eventSequence).pipe(
@@ -366,7 +377,7 @@ const makeRepository = Effect.gen(function* () {
       .withTransaction(
         Effect.gen(function* () {
           const candidates = yield* sql<{
-            readonly state: "dead" | "uncertain";
+            readonly state: BlockedOrchestrationEventDeliveryState;
           }>`
           SELECT state
           FROM orchestration_event_deliveries
@@ -409,6 +420,7 @@ const makeRepository = Effect.gen(function* () {
 
   return {
     getConsumerState,
+    readEventSequencePage,
     recordThreadProcessedSequence,
     getDelivery,
     claim,

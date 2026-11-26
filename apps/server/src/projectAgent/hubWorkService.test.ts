@@ -8,7 +8,9 @@ import {
   type OrchestrationThreadShell,
 } from "@synara/contracts";
 import { Effect, Exit, Layer, Option } from "effect";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 
+import { stableGatewayDigest } from "../agentGateway/creationUtils";
 import { OrchestrationCommandReceiptRepositoryLive } from "../persistence/Layers/OrchestrationCommandReceipts";
 import { ProjectionThreadMessageRepositoryLive } from "../persistence/Layers/ProjectionThreadMessages";
 import { OrchestrationCommandReceiptRepository } from "../persistence/Services/OrchestrationCommandReceipts";
@@ -128,6 +130,20 @@ function harness(name: string) {
       failNotifications: () => {
         notificationsFail = true;
       },
+      setLimits: (maxNewWorkersPerTurn: number) =>
+        Effect.gen(function* () {
+          const current = yield* projectAgentRepository.getConfig(projectId);
+          if (Option.isNone(current)) throw new Error("Missing test hub");
+          yield* projectAgentRepository.saveConfig(
+            {
+              ...current.value,
+              limits: { ...current.value.limits, maxNewWorkersPerTurn },
+              revision: current.value.revision + 1,
+            },
+            current.value.revision,
+          );
+        }),
+      restart: () => makeHubWorkService(dependencies),
       setShells: (value: OrchestrationThreadShell[]) => {
         shells = value;
       },
@@ -193,6 +209,247 @@ tests("Hub work provenance, ownership and lifecycle", (it) => {
           true,
         );
       }),
+  );
+
+  it.effect("freezes one worker per task key across retries, wakes and restarts", () =>
+    Effect.gen(function* () {
+      const h = yield* harness("keyed-routing");
+      const keyed = {
+        callerThreadId: h.coordinator,
+        callerTurnId: TurnId.makeUnsafe(`${h.projectId}:turn:1`),
+        requestId: "keyed-request",
+        sourceMessages: h.input.sourceMessages,
+        tasks: [
+          {
+            spec: { ...h.input.tasks[0]!.spec, taskKey: "Alpha", routingReason: "Ship the fix" },
+          },
+          {
+            spec: { ...h.input.tasks[1]!.spec, taskKey: "beta", routingReason: "Add the test" },
+          },
+        ],
+      };
+      const first = yield* h.service.submit(keyed);
+      assert.equal(first.replayed, false);
+      assert.deepEqual(
+        first.items.map((item) => item.taskKey),
+        ["alpha", "beta"],
+      );
+      assert.deepEqual(
+        first.items.map((item) => item.routingReason),
+        ["Ship the fix", "Add the test"],
+      );
+      assert.equal(first.items[0]!.creationSpec.taskKey, "alpha");
+      const ids = first.items.map((item) => item.id);
+
+      // A retry in a later wake, under a different request id, must not fork work.
+      const wake = yield* h.service.submit({
+        ...keyed,
+        callerTurnId: TurnId.makeUnsafe(`${h.projectId}:turn:2`),
+        requestId: "later-wake",
+      });
+      assert.equal(wake.replayed, true);
+      assert.deepEqual(
+        wake.items.map((item) => item.id),
+        ids,
+      );
+
+      // A restart reads the same frozen decisions from persistence.
+      const restarted = yield* h.restart().submit({
+        ...keyed,
+        callerTurnId: TurnId.makeUnsafe(`${h.projectId}:turn:3`),
+        requestId: "after-restart",
+      });
+      assert.equal(restarted.replayed, true);
+      assert.deepEqual(
+        (yield* h.repository.list(h.projectId)).map((item) => item.id),
+        ids,
+      );
+
+      // The key is the server's: the same key with a different plan is refused
+      // instead of creating a second worker.
+      assert.equal(
+        Exit.isFailure(
+          yield* Effect.exit(
+            h.service.submit({
+              ...keyed,
+              requestId: "changed-plan",
+              tasks: [
+                {
+                  spec: { ...h.input.tasks[0]!.spec, prompt: "Changed", taskKey: "alpha" },
+                },
+              ],
+            }),
+          ),
+        ),
+        true,
+      );
+      // A refined reason is not a different decision.
+      assert.equal(
+        (yield* h.service.submit({
+          ...keyed,
+          requestId: "refined-reason",
+          tasks: [
+            {
+              spec: { ...h.input.tasks[0]!.spec, taskKey: "alpha", routingReason: "Fix bug" },
+            },
+          ],
+        })).replayed,
+        true,
+      );
+      // A key the server cannot freeze is refused, never silently replaced.
+      assert.equal(
+        Exit.isFailure(
+          yield* Effect.exit(
+            h.service.submit({
+              ...keyed,
+              requestId: "unusable-key",
+              tasks: [{ spec: { ...h.input.tasks[0]!.spec, taskKey: "not a key" } }],
+            }),
+          ),
+        ),
+        true,
+      );
+      assert.equal(
+        Exit.isFailure(
+          yield* Effect.exit(
+            h.service.submit({
+              ...keyed,
+              requestId: "duplicate-key",
+              tasks: [
+                { spec: { ...h.input.tasks[0]!.spec, taskKey: "gamma" } },
+                { spec: { ...h.input.tasks[1]!.spec, taskKey: "GAMMA" } },
+              ],
+            }),
+          ),
+        ),
+        true,
+      );
+      assert.equal((yield* h.repository.list(h.projectId)).length, 2);
+    }),
+  );
+
+  it.effect("adds a new task from the same original message without reworking frozen tasks", () =>
+    Effect.gen(function* () {
+      const h = yield* harness("appended-routing");
+      const submit = (keys: readonly string[], requestId: string) =>
+        h.service.submit({
+          callerThreadId: h.coordinator,
+          requestId,
+          sourceMessages: h.input.sourceMessages,
+          tasks: keys.map((taskKey, index) => ({
+            spec: { ...h.input.tasks[index]!.spec, taskKey },
+          })),
+        });
+      const first = yield* submit(["alpha"], "plan-one");
+      const claimed = yield* h.service.claimNext(h.projectId);
+      yield* h.service.attachWorker({ workItemId: claimed!.id, workerThreadId: h.workerId });
+      const extended = yield* submit(["alpha", "gamma"], "plan-two");
+      assert.equal(extended.replayed, false);
+      assert.equal(extended.items.length, 2);
+      assert.deepEqual(
+        extended.items.map((item) => item.id),
+        [first.items[0]!.id, extended.items[1]!.id],
+      );
+      // The frozen task keeps its worker and its position; only the new task is added.
+      const frozen = (yield* h.repository.get(first.items[0]!.id))!;
+      assert.equal(frozen.workerThreadId, h.workerId);
+      assert.equal(frozen.taskIndex, 0);
+      assert.equal((yield* h.repository.get(extended.items[1]!.id))?.taskIndex, 1);
+      const originalReplay = yield* submit(["alpha"], "plan-one");
+      assert.deepEqual(
+        originalReplay.items.map((item) => item.id),
+        [first.items[0]!.id],
+      );
+      yield* h.service.setState({ workItemId: frozen.id, state: "completed" });
+      assert.equal((yield* h.service.claimNext(h.projectId))?.id, extended.items[1]?.id);
+    }),
+  );
+
+  it.effect("replays an unkeyed request persisted before keyed routing", () =>
+    Effect.gen(function* () {
+      const h = yield* harness("legacy-routing");
+      const initial = yield* h.service.submit(h.input);
+      const legacyFingerprint = stableGatewayDigest(
+        {
+          sourceMessages: h.input.sourceMessages,
+          tasks: h.input.tasks,
+        },
+        64,
+      );
+      // Model the pre-upgrade durable record and request receipt together.
+      for (const item of initial.items) {
+        const { taskKey: _key, taskFingerprint: _fingerprint, ...record } = item;
+        yield* h.repository.save({
+          record: {
+            ...record,
+            fingerprint: legacyFingerprint,
+            revision: item.revision + 1,
+          },
+          expectedRevision: item.revision,
+        });
+      }
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`UPDATE project_agent_work_requests SET fingerprint = ${legacyFingerprint}
+        WHERE project_id = ${h.projectId} AND request_id = ${h.input.requestId}`;
+      const replay = yield* h.restart().submit(h.input);
+      assert.equal(replay.replayed, true);
+      assert.deepEqual(
+        replay.items.map((record) => record.id),
+        initial.items.map((record) => record.id),
+      );
+    }),
+  );
+
+  it.effect("verifies a replay before refusing a saturated per-turn cap", () =>
+    Effect.gen(function* () {
+      const h = yield* harness("cap-replay");
+      const plan = {
+        callerThreadId: h.coordinator,
+        requestId: "cap-plan",
+        sourceMessages: h.input.sourceMessages,
+        tasks: [0, 1].map((index) => ({
+          spec: { ...h.input.tasks[index]!.spec, taskKey: `task-${index}` },
+        })),
+      };
+      yield* h.setLimits(2);
+      const first = yield* h.service.submit(plan);
+      assert.equal(first.items.length, 2);
+      yield* h.setLimits(1);
+      // The frozen plan replays even though the cap no longer admits that many
+      // workers: a replay starts nothing.
+      const replayed = yield* h.service.submit({ ...plan, requestId: "cap-replay" });
+      assert.equal(replayed.replayed, true);
+      assert.deepEqual(
+        replayed.items.map((item) => item.id),
+        first.items.map((item) => item.id),
+      );
+      // Genuinely new work beyond the cap is still refused, even when the same
+      // request also replays frozen tasks.
+      assert.equal(
+        Exit.isFailure(
+          yield* Effect.exit(
+            h.service.submit({
+              ...plan,
+              requestId: "cap-overflow",
+              tasks: [
+                ...plan.tasks,
+                { spec: { ...plan.tasks[0]!.spec, taskKey: "task-2" } },
+                { spec: { ...plan.tasks[1]!.spec, taskKey: "task-3" } },
+              ],
+            }),
+          ),
+        ),
+        true,
+      );
+      // One new task alongside replays stays within the cap.
+      const extended = yield* h.service.submit({
+        ...plan,
+        requestId: "cap-extended",
+        tasks: [...plan.tasks, { spec: { ...plan.tasks[0]!.spec, taskKey: "task-2" } }],
+      });
+      assert.equal(extended.items.length, 3);
+      assert.equal((yield* h.repository.list(h.projectId)).length, 3);
+    }),
   );
 
   it.effect(

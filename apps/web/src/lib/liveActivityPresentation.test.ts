@@ -17,24 +17,15 @@ function runningActivity(overrides: Partial<WorkLogLiveActivity> = {}): WorkLogL
 }
 
 describe("live activity presentation", () => {
-  it("renders recent activity and elapsed time from one normalized state", () => {
-    const activity = runningActivity();
+  it("keeps a running tool call's row free of timing; elapsed stays available", () => {
+    const activity = runningActivity({ label: "Settings" });
     const nowMs = Date.parse("2026-07-26T14:02:14.000Z");
 
+    // The row reads like any running tool call; the details panel shows timing.
+    expect(formatLiveActivityMeta(activity, nowMs)).toBeNull();
+    expect(formatLiveActivityMeta({ ...activity, progress: 0.42 }, nowMs)).toBeNull();
     expect(liveActivityElapsedMs(activity, nowMs)).toBe(134_000);
-    expect(formatLiveActivityMeta(activity, nowMs)).toBe("Active 3s ago · 2m 14s elapsed");
-  });
-
-  it("reports quiet live tools without claiming they are frozen", () => {
-    expect(
-      formatLiveActivityMeta(
-        runningActivity({
-          lastActivityAt: "2026-07-26T14:01:44.000Z",
-          elapsedSeconds: 104,
-        }),
-        Date.parse("2026-07-26T14:02:14.000Z"),
-      ),
-    ).toBe("No activity for 30s · 2m 14s elapsed");
+    expect(activity.label).toBe("Settings");
   });
 
   it("never reports a quiet subagent as idle while it is still running", () => {
@@ -49,10 +40,8 @@ describe("live activity presentation", () => {
     expect(formatLiveActivityMeta(quietSubagent, nowMs, { subagent: true })).toBe(
       "Subagent working · 4m 55s elapsed",
     );
-    // Same activity without the subagent hint keeps the generic idle wording.
-    expect(formatLiveActivityMeta(quietSubagent, nowMs)).toBe(
-      "No activity for 4m 54s · 4m 55s elapsed",
-    );
+    // The same activity on a plain tool row carries no tail.
+    expect(formatLiveActivityMeta(quietSubagent, nowMs)).toBeNull();
     // Terminal states are unaffected by the hint.
     expect(
       formatLiveActivityMeta(

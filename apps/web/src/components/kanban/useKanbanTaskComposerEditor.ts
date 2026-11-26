@@ -22,6 +22,7 @@ import {
   detectComposerTrigger,
   expandCollapsedComposerCursor,
   replaceTextRange,
+  type ComposerCommandKey,
   type ComposerTrigger,
 } from "~/composer-logic";
 import {
@@ -348,10 +349,7 @@ export function useKanbanTaskComposerEditor(input: UseKanbanTaskComposerEditorIn
     setComposerHighlightedItemId(composerMenuItems[nextIndex]?.id ?? null);
   };
 
-  const onComposerCommandKey = (
-    key: "ArrowDown" | "ArrowUp" | "Enter" | "Tab" | "Slash",
-    event: KeyboardEvent,
-  ) => {
+  const onComposerCommandKey = (key: ComposerCommandKey, event: KeyboardEvent) => {
     if (key === "Tab" && event.shiftKey) {
       setInteractionMode((current) => (current === "plan" ? "default" : "plan"));
       return true;

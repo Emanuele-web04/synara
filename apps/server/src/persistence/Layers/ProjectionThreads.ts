@@ -4,6 +4,7 @@ import { Effect, Layer, Schema, Struct } from "effect";
 import * as SchemaGetter from "effect/SchemaGetter";
 
 import { toPersistenceSqlError } from "../Errors.ts";
+import { PullRequestLinksJsonColumn } from "../pullRequestLinksColumn.ts";
 import {
   DeleteProjectionThreadInput,
   GetProjectionThreadInput,
@@ -20,6 +21,8 @@ import {
   ThreadHandoff,
   ThreadGoalAchievements,
   ThreadSidechatContext,
+  UsageLimitRecovery,
+  UsageLimitRecoverySource,
 } from "@synara/contracts";
 
 const SqliteBoolean = Schema.Number.pipe(
@@ -33,11 +36,16 @@ const ProjectionThreadDbRow = ProjectionThread.mapFields(
   Struct.assign({
     createBranchFlowCompleted: SqliteBoolean,
     isPinned: SqliteBoolean,
+    usageLimitRecovery: Schema.optional(Schema.NullOr(Schema.fromJsonString(UsageLimitRecovery))),
+    usageLimitRecoverySource: Schema.optional(
+      Schema.NullOr(Schema.fromJsonString(UsageLimitRecoverySource)),
+    ),
     handoff: Schema.NullOr(Schema.fromJsonString(ThreadHandoff)),
     claudeCacheReview: Schema.optional(
       Schema.NullOr(Schema.fromJsonString(PendingClaudeCacheReview)),
     ),
     lastKnownPr: Schema.NullOr(Schema.fromJsonString(OrchestrationThreadPullRequest)),
+    pullRequests: Schema.optional(PullRequestLinksJsonColumn),
     sidechatContext: Schema.optional(Schema.NullOr(Schema.fromJsonString(ThreadSidechatContext))),
     pinnedMessages: Schema.NullOr(Schema.fromJsonString(ThreadPinnedMessages)),
     goalAchievements: Schema.optional(
@@ -87,6 +95,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           sidechat_last_activity_at,
           sidechat_expired_at,
           last_known_pr_json,
+          pull_requests_json,
           latest_turn_id,
           handoff_json,
           claude_cache_review_json,
@@ -105,6 +114,11 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           updated_at,
           archived_at,
           settled_at,
+          usage_limit_recovery_source_json,
+          usage_limit_recovery_json,
+          usage_limit_recovery_cancelled_at,
+          usage_limit_recovery_cancelled_turn_id,
+          usage_limit_recovery_last_reset_at,
           snoozed_until,
           snooze_reminder_at,
           deleted_at
@@ -141,6 +155,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           ${row.sidechatLastActivityAt ?? null},
           ${row.sidechatExpiredAt ?? null},
           ${row.lastKnownPr === null ? null : JSON.stringify(row.lastKnownPr)},
+          ${row.pullRequests == null ? null : JSON.stringify(row.pullRequests)},
           ${row.latestTurnId},
           ${row.handoff === null ? null : JSON.stringify(row.handoff)},
           ${row.claudeCacheReview == null ? null : JSON.stringify(row.claudeCacheReview)},
@@ -159,6 +174,11 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           ${row.updatedAt},
           ${row.archivedAt ?? null},
           ${row.settledAt ?? null},
+          ${row.usageLimitRecoverySource == null ? null : JSON.stringify(row.usageLimitRecoverySource)},
+          ${row.usageLimitRecovery == null ? null : JSON.stringify(row.usageLimitRecovery)},
+          ${row.usageLimitRecoveryCancelledAt ?? null},
+          ${row.usageLimitRecoveryCancelledTurnId ?? null},
+          ${row.usageLimitRecoveryLastResetAt ?? null},
           ${row.snoozedUntil ?? null},
           ${row.snoozeReminderAt ?? null},
           ${row.deletedAt}
@@ -195,6 +215,11 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           sidechat_last_activity_at = excluded.sidechat_last_activity_at,
           sidechat_expired_at = excluded.sidechat_expired_at,
           last_known_pr_json = excluded.last_known_pr_json,
+          pull_requests_json = CASE
+            WHEN ${row.pullRequests == null ? 1 : 0} = 1
+              THEN projection_threads.pull_requests_json
+            ELSE excluded.pull_requests_json
+          END,
           latest_turn_id = excluded.latest_turn_id,
           handoff_json = excluded.handoff_json,
           claude_cache_review_json = CASE
@@ -220,6 +245,31 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           updated_at = excluded.updated_at,
           archived_at = excluded.archived_at,
           settled_at = excluded.settled_at,
+          usage_limit_recovery_source_json = CASE
+            WHEN ${row.usageLimitRecoverySource === undefined ? 1 : 0} = 1
+              THEN projection_threads.usage_limit_recovery_source_json
+            ELSE excluded.usage_limit_recovery_source_json
+          END,
+          usage_limit_recovery_json = CASE
+            WHEN ${row.usageLimitRecovery === undefined ? 1 : 0} = 1
+              THEN projection_threads.usage_limit_recovery_json
+            ELSE excluded.usage_limit_recovery_json
+          END,
+          usage_limit_recovery_cancelled_at = CASE
+            WHEN ${row.usageLimitRecoveryCancelledAt === undefined ? 1 : 0} = 1
+              THEN projection_threads.usage_limit_recovery_cancelled_at
+            ELSE excluded.usage_limit_recovery_cancelled_at
+          END,
+          usage_limit_recovery_cancelled_turn_id = CASE
+            WHEN ${row.usageLimitRecoveryCancelledTurnId === undefined ? 1 : 0} = 1
+              THEN projection_threads.usage_limit_recovery_cancelled_turn_id
+            ELSE excluded.usage_limit_recovery_cancelled_turn_id
+          END,
+          usage_limit_recovery_last_reset_at = CASE
+            WHEN ${row.usageLimitRecoveryLastResetAt === undefined ? 1 : 0} = 1
+              THEN projection_threads.usage_limit_recovery_last_reset_at
+            ELSE excluded.usage_limit_recovery_last_reset_at
+          END,
           snoozed_until = excluded.snoozed_until,
           snooze_reminder_at = excluded.snooze_reminder_at,
           deleted_at = excluded.deleted_at
@@ -263,6 +313,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           sidechat_last_activity_at AS "sidechatLastActivityAt",
           sidechat_expired_at AS "sidechatExpiredAt",
           last_known_pr_json AS "lastKnownPr",
+          pull_requests_json AS "pullRequests",
           latest_turn_id AS "latestTurnId",
           handoff_json AS "handoff",
           claude_cache_review_json AS "claudeCacheReview",
@@ -281,6 +332,11 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           updated_at AS "updatedAt",
           archived_at AS "archivedAt",
           settled_at AS "settledAt",
+          usage_limit_recovery_source_json AS "usageLimitRecoverySource",
+          usage_limit_recovery_json AS "usageLimitRecovery",
+          usage_limit_recovery_cancelled_at AS "usageLimitRecoveryCancelledAt",
+          usage_limit_recovery_cancelled_turn_id AS "usageLimitRecoveryCancelledTurnId",
+          usage_limit_recovery_last_reset_at AS "usageLimitRecoveryLastResetAt",
           snoozed_until AS "snoozedUntil",
           snooze_reminder_at AS "snoozeReminderAt",
           deleted_at AS "deletedAt"
@@ -326,6 +382,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           sidechat_last_activity_at AS "sidechatLastActivityAt",
           sidechat_expired_at AS "sidechatExpiredAt",
           last_known_pr_json AS "lastKnownPr",
+          pull_requests_json AS "pullRequests",
           latest_turn_id AS "latestTurnId",
           handoff_json AS "handoff",
           claude_cache_review_json AS "claudeCacheReview",
@@ -344,6 +401,11 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           updated_at AS "updatedAt",
           archived_at AS "archivedAt",
           settled_at AS "settledAt",
+          usage_limit_recovery_source_json AS "usageLimitRecoverySource",
+          usage_limit_recovery_json AS "usageLimitRecovery",
+          usage_limit_recovery_cancelled_at AS "usageLimitRecoveryCancelledAt",
+          usage_limit_recovery_cancelled_turn_id AS "usageLimitRecoveryCancelledTurnId",
+          usage_limit_recovery_last_reset_at AS "usageLimitRecoveryLastResetAt",
           snoozed_until AS "snoozedUntil",
           snooze_reminder_at AS "snoozeReminderAt",
           deleted_at AS "deletedAt"

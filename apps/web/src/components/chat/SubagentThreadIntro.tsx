@@ -20,6 +20,7 @@ import { cn } from "~/lib/utils";
 import { formatClockDuration } from "../../session-logic";
 import ChatMarkdown from "../ChatMarkdown";
 import { ProviderIcon } from "../ProviderIcon";
+import { useTranslation, t } from "~/i18n";
 
 export interface SubagentThreadPresentation {
   parentThreadId: ThreadId;
@@ -46,15 +47,15 @@ export function subagentThreadStateLabel(
   const elapsed = elapsedMs === null ? null : formatClockDuration(elapsedMs);
   switch (statusKind) {
     case "running":
-      return elapsed ? `Running · ${elapsed}` : "Running";
+      return elapsed ? t("chat:running2", { value0: elapsed }) : t("chat:runStatus_running");
     case "queued":
-      return "Starting";
+      return t("chat:runStatus_starting");
     case "completed":
-      return elapsed ? `Done in ${elapsed}` : "Done";
+      return elapsed ? t("chat:doneIn", { value0: elapsed }) : t("git:detail_done");
     case "failed":
-      return elapsed ? `Failed after ${elapsed}` : "Failed";
+      return elapsed ? t("chat:failedAfter", { value0: elapsed }) : t("chat:runStatus_failed");
     case "stopped":
-      return elapsed ? `Stopped after ${elapsed}` : "Stopped";
+      return elapsed ? t("chat:stoppedAfter", { value0: elapsed }) : t("chat:stopped");
     default:
       return null;
   }
@@ -67,6 +68,8 @@ export function SubagentThreadIntro({
   subagent: SubagentThreadPresentation;
   onOpenThread?: ((threadId: ThreadId) => void) | undefined;
 }) {
+  const { t } = useTranslation();
+
   const live = subagent.statusKind === "running";
   const nowMs = useNowMs(live);
   const stateLabel = subagentThreadStateLabel(
@@ -85,10 +88,10 @@ export function SubagentThreadIntro({
         className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-[color:var(--color-border)] px-3 py-1 text-muted-foreground transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-foreground"
         onClick={() => onOpenThread?.(subagent.parentThreadId)}
         disabled={!onOpenThread}
-        aria-label={`Open parent thread ${subagent.parentTitle}`}
+        aria-label={t("chat:openParentThread", { value0: subagent.parentTitle })}
       >
         <BackToParentIcon className="size-3 shrink-0" />
-        <span className="shrink-0">Subagent of</span>
+        <span className="shrink-0">{t("chat:subagentOf")}</span>
         <span className="min-w-0 truncate font-medium text-foreground/85">
           {subagent.parentTitle}
         </span>
@@ -133,6 +136,8 @@ export function SubagentBriefCard({
   markdownCwd: string | undefined;
   textStyle?: CSSProperties | undefined;
 }) {
+  const { t } = useTranslation();
+
   return (
     <div
       data-testid="subagent-brief-card"
@@ -140,7 +145,7 @@ export function SubagentBriefCard({
     >
       <div className="mb-1 flex min-w-0 items-center gap-1.5 font-system-ui text-ui-sm text-muted-foreground">
         <BotIcon className="size-3.5 shrink-0" />
-        <span className="shrink-0">Brief from</span>
+        <span className="shrink-0">{t("chat:briefFrom")}</span>
         <span className="min-w-0 truncate font-medium text-foreground/80">{parentTitle}</span>
         {timestamp ? <span className="ml-auto shrink-0 tabular-nums">{timestamp}</span> : null}
       </div>
@@ -150,14 +155,18 @@ export function SubagentBriefCard({
 }
 
 export function SubagentDeliveredNote({ parentTitle }: { parentTitle: string }) {
+  const { t } = useTranslation();
+
   return (
     <span
       data-testid="subagent-delivered-note"
       className="ml-auto inline-flex min-w-0 items-center gap-1.5"
-      title={`This answer went back to ${parentTitle}`}
+      title={t("chat:thisAnswerWentBackTo", { value0: parentTitle })}
     >
       <BackToParentIcon className="size-3 shrink-0" />
-      <span className="truncate">Delivered to {parentTitle}</span>
+      <span className="truncate">
+        {t("chat:deliveredTo")} {parentTitle}
+      </span>
     </span>
   );
 }

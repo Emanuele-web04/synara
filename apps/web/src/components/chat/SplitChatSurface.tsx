@@ -26,10 +26,7 @@ import {
 } from "./ChatThreadSurfacePrimitives";
 import { FloatingBrowserPanel } from "./FloatingBrowserPanel";
 import { shouldRenderFloatingBrowserPanel } from "./floatingBrowserPanel.logic";
-import {
-  selectFloatingBrowserRequested,
-  useFloatingBrowserRequestStore,
-} from "./floatingBrowserRequestStore";
+import { useFloatingBrowserRequestStore } from "./floatingBrowserRequestStore";
 import { useBrowserPanelDesktopBridge } from "../../hooks/useBrowserPanelDesktopBridge";
 import { useHandleNewChat } from "../../hooks/useHandleNewChat";
 import type { ChatRightPanel } from "../../diffRouteSearch";
@@ -42,7 +39,9 @@ import {
 } from "../../lib/panelResize";
 import { splitViewPaneScopeId } from "../../lib/chatPaneScope";
 import { selectRightDockState, useRightDockStore } from "../../rightDockStore";
+import type { RightDockPaneKind } from "../../rightDockStore.logic";
 import { SubagentsDockPane } from "./SubagentsDockPane";
+import { BackgroundTasksDockPane } from "./BackgroundTasksDockPane";
 import { DockPaneHeader } from "./DockPaneHeader";
 import { resolveActiveSplitView } from "../../splitViewRoute";
 import { canSubdividePane, collectLeaves, findLeafPaneById } from "../../splitView.logic";
@@ -77,6 +76,7 @@ import {
 import { routeSplitBrowserPanelOpenRequest } from "./browserPanelOpenRequest";
 import { cn } from "~/lib/utils";
 import { isSidechatThread } from "@synara/shared/sidechatThread";
+import { useTranslation } from "~/i18n";
 
 const SPLIT_PANE_PANEL_DEFAULT_WIDTH_PX = 22 * 16;
 const BROWSER_SPLIT_PANE_PANEL_DEFAULT_WIDTH_PX = 30 * 16;
@@ -85,6 +85,11 @@ const SINGLE_PANEL_MIN_WIDTH = 26 * 16;
 const BROWSER_PANEL_MIN_WIDTH = 21 * 16;
 const RIGHT_PANEL_SIDEBAR_WIDTH_STORAGE_KEY = "chat_right_panel_width";
 const DockTerminalPane = lazy(() => import("./DockTerminalPane"));
+
+// Dock panes a split pane shows in place of its side panel (terminal and the run lists).
+function isSplitDockOverlayPaneKind(kind: RightDockPaneKind): boolean {
+  return kind === "terminal" || kind === "subagents" || kind === "backgroundTasks";
+}
 // Split panes cannot reuse the desktop Sidebar primitive because it positions the panel
 // against the viewport. This embedded shell keeps side-panel content anchored to the pane.
 function SplitPaneEmbeddedPanel(props: {
@@ -103,6 +108,8 @@ function SplitPaneEmbeddedPanel(props: {
     patch: Partial<Pick<SplitViewPanePanelState, "panel" | "diffTurnId" | "diffFilePath">>,
   ) => void;
 }) {
+  const { t } = useTranslation();
+
   const dockState = useRightDockStore(selectRightDockState(props.threadId));
   const terminalPane = dockState.open
     ? dockState.panes.find((pane) => pane.id === dockState.activePaneId && pane.kind === "terminal")
@@ -112,7 +119,12 @@ function SplitPaneEmbeddedPanel(props: {
         (pane) => pane.id === dockState.activePaneId && pane.kind === "subagents",
       )
     : undefined;
-  const panel = terminalPane || subagentsPane ? null : props.panel;
+  const backgroundTasksPane = dockState.open
+    ? dockState.panes.find(
+        (pane) => pane.id === dockState.activePaneId && pane.kind === "backgroundTasks",
+      )
+    : undefined;
+  const panel = terminalPane || subagentsPane || backgroundTasksPane ? null : props.panel;
   const wrapperRef = useRef<HTMLDivElement>(null);
   const panelWidthStorageKey =
     panel === "browser" ? "browser" : panel === "diff" ? "diff" : "panel";
@@ -188,7 +200,10 @@ function SplitPaneEmbeddedPanel(props: {
     });
   };
 
-  if ((!props.panelOpen && !terminalPane && !subagentsPane) || !props.threadId) {
+  if (
+    (!props.panelOpen && !terminalPane && !subagentsPane && !backgroundTasksPane) ||
+    !props.threadId
+  ) {
     return null;
   }
 
@@ -212,20 +227,33 @@ function SplitPaneEmbeddedPanel(props: {
       {subagentsPane ? (
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           <DockPaneHeader
-            title="Subagents"
-            closeLabel="Hide subagents"
+            title={t("chat:subagents")}
+            closeLabel={t("chat:hideSubagents")}
             onClose={props.onClosePanel}
           />
-          <SubagentsDockPane hostThreadId={props.threadId} onOpenThread={props.onOpenThread} />
+          <SubagentsDockPane
+            hostThreadId={props.threadId}
+            splitViewId={props.splitViewId}
+            onOpenThread={props.onOpenThread}
+          />
+        </div>
+      ) : backgroundTasksPane ? (
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+          <DockPaneHeader
+            title={t("chat:backgroundTasks")}
+            closeLabel={t("chat:hideBackgroundTasks")}
+            onClose={props.onClosePanel}
+          />
+          <BackgroundTasksDockPane hostThreadId={props.threadId} />
         </div>
       ) : terminalPane ? (
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           <DockPaneHeader
-            title="Terminal"
-            closeLabel="Hide terminal"
+            title={t("workspace:viewportPane_terminal")}
+            closeLabel={t("workspace:hideTerminal")}
             onClose={props.onClosePanel}
           />
-          <Suspense fallback={<PanelStateMessage>Loading terminal...</PanelStateMessage>}>
+          <Suspense fallback={<PanelStateMessage>{t("chat:loadingTerminal")}</PanelStateMessage>}>
             <DockTerminalPane
               hostThreadId={props.threadId}
               paneId={terminalPane.id}
@@ -236,7 +264,7 @@ function SplitPaneEmbeddedPanel(props: {
           </Suspense>
         </div>
       ) : panel === "browser" ? (
-        <Suspense fallback={<PanelStateMessage>Loading browser...</PanelStateMessage>}>
+        <Suspense fallback={<PanelStateMessage>{t("computer:loadingBrowser")}</PanelStateMessage>}>
           <LazyBrowserPanel
             mode="sidebar"
             threadId={props.threadId}
@@ -269,6 +297,8 @@ function SplitPaneEmptyState(props: {
   excludedThreadIds: ReadonlySet<ThreadId>;
   onSelectThread: (threadId: ThreadId) => void;
 }) {
+  const { t } = useTranslation();
+
   return (
     <div
       className={cn(
@@ -278,7 +308,9 @@ function SplitPaneEmptyState(props: {
       onMouseDown={props.onFocus}
     >
       <div className="w-full max-w-sm space-y-4">
-        <p className="text-center text-ui-lg font-medium text-foreground/70">Select a chat</p>
+        <p className="text-center text-ui-lg font-medium text-foreground/70">
+          {t("chat:selectAChat")}
+        </p>
         <div className="max-h-[60vh] space-y-1 overflow-y-auto">
           {props.threads.map((thread) => {
             const isUsed = props.excludedThreadIds.has(thread.id);
@@ -626,8 +658,7 @@ export function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadI
     const terminalOpen =
       dock.open &&
       dock.panes.some(
-        (pane) =>
-          pane.id === dock.activePaneId && (pane.kind === "terminal" || pane.kind === "subagents"),
+        (pane) => pane.id === dock.activePaneId && isSplitDockOverlayPaneKind(pane.kind),
       );
     updatePanePanelState(
       paneId,
@@ -681,9 +712,7 @@ export function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadI
       if (
         dock.open &&
         dock.panes.some(
-          (pane) =>
-            pane.id === dock.activePaneId &&
-            (pane.kind === "terminal" || pane.kind === "subagents"),
+          (pane) => pane.id === dock.activePaneId && isSplitDockOverlayPaneKind(pane.kind),
         )
       ) {
         store.setDockOpen(leaf.threadId, false);

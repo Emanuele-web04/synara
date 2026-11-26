@@ -1,3 +1,4 @@
+import { executionStorage } from "./lib/hosts/executionStorage";
 import type { ProjectId } from "@synara/contracts";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
@@ -12,23 +13,23 @@ interface LatestProjectStore {
 
 export const useLatestProjectStore = create<LatestProjectStore>()(
   persist(
-    (set) => ({
+    (set, get) => ({
       latestProjectId: null,
-      setLatestProjectId: (projectId) => set({ latestProjectId: projectId }),
-      clearLatestProjectId: (projectId) =>
-        set((state) => {
-          if (projectId && state.latestProjectId !== projectId) {
-            return state;
-          }
-          if (state.latestProjectId === null) {
-            return state;
-          }
-          return { latestProjectId: null };
-        }),
+      setLatestProjectId: (projectId) => {
+        if (get().latestProjectId === projectId) return;
+        set({ latestProjectId: projectId });
+      },
+      clearLatestProjectId: (projectId) => {
+        const current = get().latestProjectId;
+        if (current === null || (projectId && current !== projectId)) {
+          return;
+        }
+        set({ latestProjectId: null });
+      },
     }),
     {
       name: LATEST_PROJECT_STORAGE_KEY,
-      storage: createJSONStorage(() => localStorage),
+      storage: createJSONStorage(() => executionStorage),
       // Guard against a corrupt persisted value (non-string) reaching consumers
       // that treat it as a project id.
       merge: (persisted, current) => {

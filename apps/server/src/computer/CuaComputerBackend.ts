@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { cuaSpaceInventory } from "./cuaSpaceInventory.ts";
 import {
   parseCuaActionDiagnostics,
@@ -54,6 +55,7 @@ import {
   type ComputerBrowserCall,
   type ComputerBrowserCallResult,
   type ComputerCaptureRequest,
+  type ComputerClipboardPayload,
   type ComputerFrameListener,
   type ComputerMenuBackendTarget,
   type ComputerShieldTarget,
@@ -65,6 +67,7 @@ import {
   desktopOperationSignal,
   assertDesktopOperationActive,
   desktopDeliveryMode,
+  withoutDesktopCancellation,
 } from "./DesktopOperationQueue.ts";
 import { StillFramePublisher, resolveStillIntervalMs } from "./stillFramePublisher.ts";
 import { isModelDesktopObservationActive } from "./modelDesktopObservation.ts";
@@ -105,6 +108,12 @@ const text = (value: unknown, max = 1024): string =>
   typeof value === "string" ? value.slice(0, max) : "";
 const number = (value: unknown): number =>
   typeof value === "number" && Number.isFinite(value) ? value : NaN;
+function matchesPreviewTask(owned: CuaComputerTask, scope: CuaComputerTask): boolean {
+  return (
+    owned.threadId === scope.threadId &&
+    (scope.turnId === undefined || owned.turnId === scope.turnId)
+  );
+}
 function captureAccessAvailable(permission: Record<string, unknown>, platform: string): boolean {
   if (platform !== "linux" || typeof permission.screen_recording === "boolean")
     return permission.screen_recording === true;
@@ -373,7 +382,11 @@ export class CuaComputerBackend implements ComputerBackend {
    * is undefined — a display-wide capture is never a pane frame.
    */
   private stillTarget:
-    | { readonly kind: "window"; readonly windowId: string }
+    | {
+        readonly kind: "window";
+        readonly windowId: string;
+        readonly task?: CuaComputerTask;
+      }
     | {
         readonly kind: "browser";
         readonly targetId: string;
@@ -391,6 +404,8 @@ export class CuaComputerBackend implements ComputerBackend {
       semanticTextLaneHoldMs?: number;
       /** Test injection so lane tests do not sleep for real. */
       semanticTextLaneGapMs?: number;
+      /** Test injection so permission re-probes do not wait out the real tccd settle delay. */
+      permissionReprobeDelayMs?: number;
       /**
        * Still-capture cadence for the pane preview; defaults to
        * `SYNARA_CUA_PREVIEW_STILL_MS`, then 1000 ms. Injectable so tests can
@@ -404,6 +419,7 @@ export class CuaComputerBackend implements ComputerBackend {
     this.request = options.request ?? cuaRequest;
     this.semanticTextLaneHoldMs = options.semanticTextLaneHoldMs ?? CUA_SEMANTIC_TEXT_LANE_HOLD_MS;
     this.semanticTextLaneGapMs = options.semanticTextLaneGapMs ?? CUA_SEMANTIC_TEXT_LANE_GAP_MS;
+    this.permissionReprobeDelayMs = options.permissionReprobeDelayMs ?? 600;
     this.stills = new StillFramePublisher({
       capture: () => this.captureStill(),
       prepare: async () => {
@@ -423,6 +439,7 @@ export class CuaComputerBackend implements ComputerBackend {
   private readonly request: typeof cuaRequest;
   private readonly semanticTextLaneHoldMs: number;
   private readonly semanticTextLaneGapMs: number;
+  private readonly permissionReprobeDelayMs: number;
   /**
    * One tail promise per (pid, window) lane. Tails only ever resolve, so a
    * failed write never wedges its lane-mates; entries are pruned when their
@@ -778,7 +795,7 @@ export class CuaComputerBackend implements ComputerBackend {
         !this.hadMissingPermissions
       ) {
         for (let attempt = 0; attempt < 4; attempt += 1) {
-          await new Promise((resolve) => setTimeout(resolve, 600));
+          await new Promise((resolve) => setTimeout(resolve, this.permissionReprobeDelayMs));
           permission =
             (await this.call("check_permissions", { prompt: false })).structuredContent ?? {};
           if (missingComputerPermissions(permission, hostPlatform).length === 0) break;
@@ -800,8 +817,8 @@ export class CuaComputerBackend implements ComputerBackend {
         permission.input_monitoring === true &&
         permission.input_monitor_ready === false;
       const monitorMessage =
-        "Computer control is paused because the Escape and human-input listener could not start. " +
-        "Reopen Synara, then check Computer settings again.";
+        "Computer control is paused until the Escape and human-input listener is ready. " +
+        "Synara reconnects it automatically; check Computer settings if it remains unavailable.";
       this.setHealth({
         ...this.currentHealth,
         status: this.captureFailed || monitorUnavailable ? "unavailable" : "connected",
@@ -995,10 +1012,13 @@ export class CuaComputerBackend implements ComputerBackend {
     // Selection sends no input. The actual actuator revalidates the exact
     // window immediately before dispatch; reuse the just-observed identity here.
     await this.target(windowId, !this.windows.some((window) => window.id === windowId));
+    assertDesktopOperationActive();
+    const task = currentComputerTask();
+    if (task) this.trackPreviewTask(task);
     this.selectedWindow = windowId;
     // The pane still follows the window the task aims at, so a watching pane
     // mirrors the work without a per-action capture request.
-    this.stillTarget = { kind: "window", windowId };
+    this.stillTarget = { kind: "window", windowId, ...(task ? { task } : {}) };
   }
   async checkInputReady(windowId: string): Promise<void> {
     const { pid, window_id, window } = await this.target(windowId);
@@ -1973,12 +1993,10 @@ export class CuaComputerBackend implements ComputerBackend {
     );
   }
   /**
-   * Type into a Chromium-family web element. `AXSelectedText` writes dispatch
-   * successfully yet never reach the DOM (verified: Electron 43, inactive and
-   * frontmost alike), so the write composes `existing + text` through an
-   * `AXValue` set — which lands, fires `input`, and leaves the operator's front
-   * process untouched — then confirms the DOM value on a fresh read instead of
-   * trusting the dispatch reply.
+   * Type into a Chromium-family web element by composing `existing + text`
+   * through an AXValue write, without changing foreground focus. Web editors
+   * can echo AX writes without accepting them in renderer state, so matching
+   * accessibility text alone cannot establish that the edit landed.
    */
   private async webContentTypeText(
     node: ComputerUiNode,
@@ -2000,10 +2018,9 @@ export class CuaComputerBackend implements ComputerBackend {
     });
   }
   /**
-   * Write an `AXValue` into a web element and confirm it on a fresh read. The
-   * driver's own read-back runs before Chromium publishes the new value and so
-   * reports `unverifiable` on writes that landed; verification here re-resolves
-   * the element and compares its DOM-visible value.
+   * Write AXValue and inspect fresh accessibility state for a mismatch. An AX
+   * echo does not prove renderer acceptance or persistence: preserve the
+   * driver's verdict when values match, including its web-surface uncertainty.
    */
   private async webSetValue(
     node: ComputerUiNode,
@@ -2024,7 +2041,7 @@ export class CuaComputerBackend implements ComputerBackend {
     );
     assertDesktopOperationActive();
     const after = await this.resolveWebField(windowId, node);
-    if (after?.value === value) return { ...result, verified: "confirmed", effect: "verified" };
+    if (after?.value === value) return result;
     return { ...result, verified: "unconfirmed", effect: "dispatched-unknown" };
   }
   /**
@@ -2210,6 +2227,52 @@ export class CuaComputerBackend implements ComputerBackend {
   async writeClipboard(value: string) {
     assertComputerClipboardWriteFits(value);
     await this.call("clipboard_write", { text: value }, true);
+  }
+  async prepareClipboardPaste(payload: ComputerClipboardPayload): Promise<() => Promise<boolean>> {
+    // A host probe can be answered before the driver has started. This read
+    // requires its validated handshake, without touching clipboard contents.
+    if (this.driverNativeRevision === undefined)
+      await this.call("get_screen_size", {}, false, false);
+    if (
+      (this.hostPlatform ?? process.platform) !== "darwin" ||
+      (this.driverNativeRevision ?? 0) < 40
+    )
+      throw new CuaActionError(
+        "This native driver cannot preserve the clipboard for paste; no clipboard content was changed.",
+        "not-dispatched",
+        "clipboard_preservation_unavailable",
+      );
+    if ("text" in payload) assertComputerClipboardWriteFits(payload.text);
+    const content =
+      "text" in payload
+        ? { text: payload.text }
+        : "imagePath" in payload
+          ? { image_path: payload.imagePath }
+          : { file_path: payload.filePath };
+    // Known before dispatch so a lost write acknowledgement cannot lose the
+    // only handle to the saved clipboard. The token never reaches the model.
+    const token = randomUUID();
+    const restore = async () => {
+      const restored = await this.call("clipboard_write", { restore_token: token }, true);
+      return restored.structuredContent?.clipboard_restored === true;
+    };
+    try {
+      const result = await this.call(
+        "clipboard_write",
+        { ...content, preserve: true, preserve_token: token },
+        true,
+      );
+      if (result.structuredContent?.restore_token !== token)
+        throw new CuaActionError(
+          "The native clipboard write returned no matching restoration receipt. Do not repeat the paste.",
+          "dispatched-unknown",
+          "clipboard_restore_receipt_missing",
+        );
+    } catch (error) {
+      await withoutDesktopCancellation(() => restore().catch(() => false));
+      throw error;
+    }
+    return restore;
   }
   async launchApp(
     app: string,
@@ -2742,9 +2805,11 @@ export class CuaComputerBackend implements ComputerBackend {
   private async captureStill(): Promise<Uint8Array | undefined> {
     const target = this.stillTarget;
     if (!target || this.disposed) return undefined;
-    return target.kind === "browser"
-      ? await this.captureBrowserStill(target)
-      : await this.captureWindowStill(target.windowId);
+    const frame =
+      target.kind === "browser"
+        ? await this.captureBrowserStill(target)
+        : await this.captureWindowStill(target);
+    return this.stillTarget === target && !this.disposed ? frame : undefined;
   }
   /**
    * The pane still of one exact window: the driver's window capture with the
@@ -2754,8 +2819,11 @@ export class CuaComputerBackend implements ComputerBackend {
    * throws through the shared validation, so unverified pixels never become a
    * pane frame.
    */
-  private async captureWindowStill(windowId: string): Promise<Uint8Array> {
-    const { pid, window_id } = await this.target(windowId);
+  private async captureWindowStill(target: {
+    readonly windowId: string;
+  }): Promise<Uint8Array | undefined> {
+    const { pid, window_id } = await this.target(target.windowId);
+    if (this.stillTarget !== target || this.disposed) return undefined;
     const result = await this.call(
       "get_window_state",
       {
@@ -2838,20 +2906,10 @@ export class CuaComputerBackend implements ComputerBackend {
   async stopInput(task?: { readonly threadId: string; readonly turnId?: string }) {
     if (task) {
       for (const [key, owned] of this.previewTasks) {
-        if (owned.threadId === task.threadId && (!task.turnId || owned.turnId === task.turnId))
-          this.previewTasks.delete(key);
+        if (matchesPreviewTask(owned, task)) this.previewTasks.delete(key);
       }
-      const still = this.stillTarget;
-      // Native window stills have no task attribution. Stop that preview
-      // until a fresh observation supplies a target, rather than reuse a
-      // cancelled task's window for a surviving subscriber.
-      if (
-        still?.kind === "window" ||
-        (still?.kind === "browser" &&
-          still.task.threadId === task.threadId &&
-          (!task.turnId || still.task.turnId === task.turnId))
-      )
-        this.stillTarget = undefined;
+      const owner = this.stillTarget?.task;
+      if (!owner || matchesPreviewTask(owner, task)) this.stillTarget = undefined;
     } else {
       this.previewTasks.clear();
       this.stillTarget = undefined;
@@ -2874,13 +2932,14 @@ export class CuaComputerBackend implements ComputerBackend {
   }
   async endTask(threadId: string, turnId?: string): Promise<void> {
     if (!this.endpoint || this.disposed) return;
-    const matches = [...this.previewTasks].filter(
-      ([, task]) => task.threadId === threadId && (turnId === undefined || task.turnId === turnId),
-    );
+    const task = { threadId, ...(turnId !== undefined ? { turnId } : {}) };
+    const owner = this.stillTarget?.task;
+    if (owner && matchesPreviewTask(owner, task)) this.stillTarget = undefined;
+    const matches = [...this.previewTasks].filter(([, owned]) => matchesPreviewTask(owned, task));
     if (matches.length === 0) return;
     const reply = await this.request<CuaReply>(this.endpoint, {
       method: "end_task",
-      task: { threadId, ...(turnId ? { turnId } : {}) },
+      task,
       capability: this.capability,
     });
     this.observeDesktopInterruption(reply);
@@ -2888,15 +2947,6 @@ export class CuaComputerBackend implements ComputerBackend {
     for (const [key] of matches) {
       this.previewTasks.delete(key);
     }
-    // A pane still must never revive an ended browser session: drop the target
-    // the moment its task ends.
-    const still = this.stillTarget;
-    if (
-      still?.kind === "browser" &&
-      still.task.threadId === threadId &&
-      (turnId === undefined || still.task.turnId === turnId)
-    )
-      this.stillTarget = undefined;
     // Task-owned grounding ends with the task: a revoked task's window pixels
     // must not ground a later claim, so the next input re-observes first.
     this.observedGeometry.clear();

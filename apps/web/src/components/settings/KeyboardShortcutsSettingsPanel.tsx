@@ -9,7 +9,7 @@ import type {
   ServerConfig,
   ServerKeybindingEdit,
 } from "@synara/contracts";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { Button } from "~/components/ui/button";
@@ -30,6 +30,7 @@ import { CentralIcon } from "~/lib/central-icons";
 import { AddPlusIcon, PencilIcon, ResetIcon, TrashCanIcon } from "~/lib/icons";
 import { ensureNativeApi, readNativeApi } from "~/nativeApi";
 import { serverConfigQueryOptions, serverQueryKeys } from "~/lib/serverReactQuery";
+import { readWorkspaceFrame } from "~/lib/hosts/workspaceFrame";
 import { cn, getNavigatorPlatform } from "~/lib/utils";
 import {
   SETTINGS_CARD_ROW_CLASS_NAME,
@@ -38,12 +39,15 @@ import {
 } from "~/settingsPanelStyles";
 import { SettingsCard, SettingsEmptyState } from "./SettingsPanelPrimitives";
 import { ShortcutRecorderDialog, type ShortcutRecorderTarget } from "./ShortcutRecorderDialog";
+import { useTranslation } from "~/i18n";
 
 // Stable empty reference while the server config query is still loading.
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 
 /** The live bindings as editor rows, and the one call that changes them. */
 function useShortcutEditor() {
+  const { t } = useTranslation();
+
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const queryClient = useQueryClient();
   const source: ShortcutEditorSource = {
@@ -68,8 +72,8 @@ function useShortcutEditor() {
       void queryClient.invalidateQueries({ queryKey: serverQueryKeys.config() });
       toastManager.add({
         type: "error",
-        title: "Could not change shortcuts",
-        description: error instanceof Error ? error.message : "Try again.",
+        title: t("settings:couldNotChangeShortcuts"),
+        description: error instanceof Error ? error.message : t("chat:tryAgain"),
       });
       return false;
     }
@@ -85,6 +89,12 @@ function useShortcutEditor() {
 
 /** Header action for the Keybindings section: puts every built-in shortcut back. */
 export function KeyboardShortcutsResetButton() {
+  return readWorkspaceFrame() ? null : <LocalKeyboardShortcutsResetButton />;
+}
+
+function LocalKeyboardShortcutsResetButton() {
+  const { t } = useTranslation();
+
   const { rows, isLoading, applyEdits } = useShortcutEditor();
   const [isResetting, setIsResetting] = useState(false);
   const customized = rows.some((row) => !row.isDefault);
@@ -102,7 +112,7 @@ export function KeyboardShortcutsResetButton() {
     setIsResetting(true);
     try {
       if (await applyEdits([{ type: "reset" }])) {
-        toastManager.add({ type: "success", title: "Shortcuts reset to defaults" });
+        toastManager.add({ type: "success", title: t("settings:shortcutsResetToDefaults") });
       }
     } finally {
       setIsResetting(false);
@@ -118,12 +128,31 @@ export function KeyboardShortcutsResetButton() {
       onClick={() => void resetAll()}
     >
       <ResetIcon className="size-3.5" />
-      Reset all to defaults
+      {t("settings:resetAllToDefaults")}
     </Button>
   );
 }
 
 export function KeyboardShortcutsSettingsPanel() {
+  const frame = readWorkspaceFrame();
+  useEffect(() => {
+    frame?.controller.navigate("/settings?section=shortcuts");
+  }, [frame]);
+  return frame ? (
+    <SettingsEmptyState>
+      <p className="mb-3">App shortcuts are managed on this computer.</p>
+      <Button onClick={() => frame.controller.navigate("/settings?section=shortcuts")}>
+        Edit keybindings on this computer
+      </Button>
+    </SettingsEmptyState>
+  ) : (
+    <LocalKeyboardShortcutsSettingsPanel />
+  );
+}
+
+function LocalKeyboardShortcutsSettingsPanel() {
+  const { t } = useTranslation();
+
   const { source, rows, isLoading, applyEdits } = useShortcutEditor();
   const [query, setQuery] = useState("");
   const [recorderTarget, setRecorderTarget] = useState<ShortcutRecorderTarget | null>(null);
@@ -153,9 +182,9 @@ export function KeyboardShortcutsSettingsPanel() {
         <SearchInput
           type="search"
           nativeInput
-          placeholder="Search shortcuts"
+          placeholder={t("common:searchShortcuts")}
           value={query}
-          aria-label="Search shortcuts"
+          aria-label={t("common:searchShortcuts")}
           onChange={(event) => setQuery(event.target.value)}
           onKeyDown={(event) => {
             if (event.key === "Escape" && query.length > 0) {
@@ -173,7 +202,7 @@ export function KeyboardShortcutsSettingsPanel() {
       </div>
 
       {isLoading ? (
-        <SettingsEmptyState layout="status">Loading shortcuts…</SettingsEmptyState>
+        <SettingsEmptyState layout="status">{t("settings:loadingShortcuts")}</SettingsEmptyState>
       ) : filteredRows.length > 0 ? (
         <SettingsCard>
           {filteredRows.map((row) => (
@@ -187,7 +216,7 @@ export function KeyboardShortcutsSettingsPanel() {
           ))}
         </SettingsCard>
       ) : (
-        <SettingsEmptyState>No shortcuts match &ldquo;{query}&rdquo;.</SettingsEmptyState>
+        <SettingsEmptyState>{t("settings:noShortcutsMatchQuery", { query })}</SettingsEmptyState>
       )}
 
       <ShortcutRecorderDialog
@@ -212,6 +241,8 @@ function ShortcutRow({
   onRecord: (binding: ShortcutEditorBinding | null) => void;
   onRemove: (binding: ShortcutEditorBinding) => void;
 }) {
+  const { t } = useTranslation();
+
   return (
     <div
       className={cn(
@@ -233,8 +264,11 @@ function ShortcutRow({
             <div key={binding.id} className="flex min-h-6 flex-wrap items-center gap-0.5">
               <ShortcutKbd shortcutLabel={binding.label} groupClassName="mr-1.5 shrink-0" />
               <IconButton
-                label={`Change the shortcut ${binding.label} for ${row.label}`}
-                tooltip="Change shortcut"
+                label={t("settings:changeTheShortcutFor", {
+                  value0: binding.label,
+                  value1: row.label,
+                })}
+                tooltip={t("settings:changeShortcut")}
                 disabled={disabled}
                 onClick={() => onRecord(binding)}
               >
@@ -242,8 +276,8 @@ function ShortcutRow({
               </IconButton>
               {index === row.bindings.length - 1 ? (
                 <IconButton
-                  label={`Add another shortcut for ${row.label}`}
-                  tooltip="Add another shortcut"
+                  label={t("settings:addAnotherShortcutFor", { value0: row.label })}
+                  tooltip={t("settings:addAnotherShortcut")}
                   className="opacity-0 transition-opacity focus-visible:opacity-100 group-hover/shortcut:opacity-100 pointer-coarse:opacity-100"
                   disabled={disabled}
                   onClick={() => onRecord(null)}
@@ -252,8 +286,11 @@ function ShortcutRow({
                 </IconButton>
               ) : null}
               <IconButton
-                label={`Remove the shortcut ${binding.label} from ${row.label}`}
-                tooltip="Remove shortcut"
+                label={t("settings:removeTheShortcutFrom", {
+                  value0: binding.label,
+                  value1: row.label,
+                })}
+                tooltip={t("settings:removeShortcut")}
                 className="ml-auto"
                 disabled={disabled}
                 onClick={() => onRemove(binding)}
@@ -264,10 +301,10 @@ function ShortcutRow({
           ))
         ) : (
           <div className="flex min-h-6 flex-wrap items-center gap-0.5">
-            <span className="mr-1.5 text-ui text-muted-foreground">Unassigned</span>
+            <span className="mr-1.5 text-ui text-muted-foreground">{t("git:unassigned")}</span>
             <IconButton
-              label={`Set a shortcut for ${row.label}`}
-              tooltip="Set shortcut"
+              label={t("settings:setAShortcutFor", { value0: row.label })}
+              tooltip={t("settings:setShortcut")}
               disabled={disabled}
               onClick={() => onRecord(null)}
             >

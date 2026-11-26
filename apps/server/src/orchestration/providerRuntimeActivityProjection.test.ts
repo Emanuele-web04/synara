@@ -1,9 +1,11 @@
-import type { OrchestrationThreadActivity, ProviderRuntimeEvent } from "@synara/contracts";
+import { createHash } from "node:crypto";
+import type { OrchestrationThreadActivity } from "@synara/contracts";
 import {
   ApprovalRequestId,
   CommandId,
   EventId,
   OrchestrationCommand,
+  ProviderRuntimeEvent,
   RuntimeItemId,
   ThreadId,
   TurnId,
@@ -20,6 +22,72 @@ import {
 const CREATED_AT = "2026-07-20T10:00:00.000Z";
 const THREAD_ID = ThreadId.makeUnsafe("thread-activity-projection");
 const TURN_ID = TurnId.makeUnsafe("turn-activity-projection");
+
+it.each([1_023, 1_024, 1_025])(
+  "bounds activity fingerprints at %i serialized code units",
+  (length) => {
+    const activity: OrchestrationThreadActivity = {
+      id: EventId.makeUnsafe("fingerprint"),
+      createdAt: CREATED_AT,
+      tone: "tool",
+      kind: "task.progress",
+      summary: "Reasoning trace",
+      payload: { detail: "" },
+      turnId: TURN_ID,
+    };
+    const serializedFields = {
+      kind: activity.kind,
+      summary: activity.summary,
+      payload: activity.payload,
+      turnId: activity.turnId,
+    };
+    const sizedActivity = {
+      ...activity,
+      payload: { detail: "é".repeat(length - JSON.stringify(serializedFields).length) },
+    };
+    const serialized = JSON.stringify({ ...serializedFields, payload: sizedActivity.payload });
+    expect(serialized.length).toBe(length);
+    expect(providerActivityUpdateFingerprint(sizedActivity)).toBe(
+      length <= 1_024 ? serialized : createHash("sha256").update(serialized).digest("hex"),
+    );
+  },
+);
+
+it("preserves fingerprint serialization, including aliases, escapes and changing payloads", () => {
+  const shared = { detail: `${"x".repeat(1_024)}\ud800\n"` };
+  const activity: OrchestrationThreadActivity = {
+    id: EventId.makeUnsafe("fingerprint"),
+    createdAt: CREATED_AT,
+    tone: "tool",
+    kind: "task.progress",
+    summary: "Reasoning trace",
+    turnId: TURN_ID,
+    payload: { first: shared, second: shared },
+  };
+  const serialized = JSON.stringify({
+    kind: activity.kind,
+    summary: activity.summary,
+    payload: { first: shared, second: "[Circular]" },
+    turnId: TURN_ID,
+  });
+  const fingerprint = providerActivityUpdateFingerprint(activity);
+  expect(fingerprint).toBe(createHash("sha256").update(serialized).digest("hex"));
+  expect(
+    providerActivityUpdateFingerprint({
+      ...activity,
+      id: EventId.makeUnsafe("another"),
+      createdAt: "2026-07-21T00:00:00.000Z",
+      sequence: 2,
+    }),
+  ).toBe(fingerprint);
+  for (const change of [
+    { kind: "tool.updated" },
+    { summary: "Changed" },
+    { turnId: null },
+    { payload: { first: shared, second: { detail: "Changed" } } },
+  ])
+    expect(providerActivityUpdateFingerprint({ ...activity, ...change })).not.toBe(fingerprint);
+});
 
 function runtimeEvent(input: Record<string, unknown> & { eventId: string }): ProviderRuntimeEvent {
   return {
@@ -55,6 +123,25 @@ function expectSchemaValidActivities(event: ProviderRuntimeEvent, sessionSequenc
   }
 }
 
+it.each(["codex", "claudeAgent", "pi"] as const)(
+  "preserves %s on terminal turn activities",
+  (provider) => {
+    const [activity] = projectProviderRuntimeActivities(
+      runtimeEvent({
+        provider,
+        type: "turn.completed",
+        eventId: "terminal-provider",
+        turnId: TURN_ID,
+        payload: { state: "completed" },
+      }),
+    );
+    expect(activity).toMatchObject({
+      kind: "turn.completed",
+      payload: { provider, state: "completed" },
+    });
+    expect(() => decodeActivityAppendCommand(activity!)).not.toThrow();
+  },
+);
 it("persists terminal error identity and announced retry state in chat activities", () => {
   const error = projectProviderRuntimeActivities(
     runtimeEvent({
@@ -62,7 +149,7 @@ it("persists terminal error identity and announced retry state in chat activitie
       eventId: "error",
       turnId: TURN_ID,
       payload: {
-        message: "Temporarily unavailable",
+        message: "Temporarily unavailable\n    at request (/app/provider.ts:12:1)",
         class: "provider_error",
         errorCode: "server_overloaded",
       },
@@ -79,12 +166,18 @@ it("persists terminal error identity and announced retry state in chat activitie
       turnId: TURN_ID,
       payload: {
         state: "failed",
-        errorMessage: "Temporarily unavailable",
+        errorMessage: "Temporarily unavailable\n    at request (/app/provider.ts:12:1)",
         errorCode: "server_overloaded",
+        httpStatus: 529,
       },
     }),
   )[0]!;
-  expect(completion.payload).toMatchObject({ errorCode: "server_overloaded", state: "failed" });
+  expect(completion.payload).toMatchObject({
+    errorCode: "server_overloaded",
+    httpStatus: 529,
+    state: "failed",
+    errorMessage: "Temporarily unavailable",
+  });
   const warning = projectProviderRuntimeActivities(
     runtimeEvent({
       type: "runtime.warning",
@@ -211,6 +304,26 @@ it.each(["info", "warning"])("projects Pi %s notifications as notices", (type) =
   expect(() => decodeActivityAppendCommand(activity!)).not.toThrow();
 });
 
+it("marks Codex stderr warnings so replay can apply the stderr policy to them alone", () => {
+  const project = (provider: "codex" | "cursor", method: string) =>
+    projectProviderRuntimeActivities(
+      runtimeEvent({
+        provider,
+        type: "runtime.warning",
+        eventId: `${provider}-${method}`,
+        turnId: TURN_ID,
+        payload: { message: "fatal: permission denied" },
+        raw: { source: "codex.app-server.notification", method, payload: {} },
+      }),
+    )[0];
+
+  expect(project("codex", "process/stderr")?.payload).toMatchObject({
+    nativeEventType: "codex.process/stderr",
+  });
+  expect(project("cursor", "process/stderr")?.payload).not.toHaveProperty("nativeEventType");
+  expect(project("codex", "warning")?.payload).toMatchObject({ nativeEventType: "codex.warning" });
+});
+
 it("projects Claude Monitor events as labeled notices", () => {
   const message = "CI checks on PR #1699 — Collect PR targets: pass · Detect code changes: pass";
   const [activity] = projectProviderRuntimeActivities(
@@ -241,194 +354,137 @@ it("projects Claude Monitor events as labeled notices", () => {
   expect(() => decodeActivityAppendCommand(activity!)).not.toThrow();
 });
 
-it("keeps the full runtime warning message so the row's hover card can reveal it", () => {
-  // The work-log row clips the notice to one line with CSS `truncate`; the hover
-  // card can only show what the server stored, so the payload must carry the full
-  // text (e.g. Claude's ~190-char token-usage warning) rather than a row-sized cut.
-  const claudeWarning =
-    "Claude is processing ~201k logical prompt tokens per request (~200k cached reads, ~1k new/cache-write). Large active contexts can consume usage faster; cached reads cost less than fresh input.";
-  const [activity] = projectProviderRuntimeActivities(
-    runtimeEvent({
-      provider: "claudeAgent",
-      type: "runtime.warning",
-      eventId: "runtime-warning-full-message",
-      turnId: TURN_ID,
-      payload: { message: claudeWarning },
+// The work-log row and approval panel can only show what the server stored, so each
+// free-text field must carry the full string (not a 180-char row-sized cut) up to the
+// shared activity-data cap.
+const longTextCases: ReadonlyArray<{
+  name: string;
+  build: (text: string, id: string) => ReturnType<typeof runtimeEvent>;
+  fullText: string;
+  expected: (text: string) => Record<string, unknown>;
+  cappedField: "message" | "detail";
+}> = [
+  {
+    name: "runtime warning message",
+    build: (text, id) =>
+      runtimeEvent({
+        provider: "claudeAgent",
+        type: "runtime.warning",
+        eventId: id,
+        turnId: TURN_ID,
+        payload: { message: text },
+      }),
+    fullText:
+      "Claude is processing ~201k logical prompt tokens per request (~200k cached reads, ~1k new/cache-write). Large active contexts can consume usage faster; cached reads cost less than fresh input.",
+    expected: (text) => ({
+      kind: "runtime.warning",
+      summary: "Runtime warning",
+      payload: { message: text, detail: text },
     }),
-  );
+    cappedField: "message",
+  },
+  {
+    name: "approval detail",
+    build: (text, id) =>
+      runtimeEvent({
+        type: "request.opened",
+        eventId: id,
+        turnId: TURN_ID,
+        requestId: ApprovalRequestId.makeUnsafe(`request-${id}`),
+        payload: { requestType: "command_execution_approval", detail: text },
+      }),
+    fullText: `Bash: ${"git -C /workspace status && ".repeat(14)}git push origin main`.slice(
+      0,
+      400,
+    ),
+    expected: (text) => ({ kind: "approval.requested", payload: { detail: text } }),
+    cappedField: "detail",
+  },
+  {
+    name: "tool progress summary",
+    build: (text, id) =>
+      runtimeEvent({
+        type: "tool.progress",
+        eventId: id,
+        turnId: TURN_ID,
+        payload: {
+          toolUseId: `tool-${id}`,
+          toolName: "mcp__long-runner__sync",
+          summary: text,
+          elapsedSeconds: 4.8,
+        },
+      }),
+    fullText: `mcp__long-runner__sync: fetched 1,204 records across 17 pages; last checkpoint at offset 9,216 (page 14 of 17) — resuming pagination for shard eu-west after the rate-limit window resets`,
+    expected: (text) => ({ kind: "tool.updated", payload: { detail: text } }),
+    cappedField: "detail",
+  },
+  {
+    name: "task failure summary",
+    build: (text, id) =>
+      runtimeEvent({
+        type: "task.completed",
+        eventId: id,
+        turnId: TURN_ID,
+        payload: { taskId: `task-${id}`, status: "failed", summary: text },
+      }),
+    fullText: `Subagent run failed after 3 retries: provider returned 429 rate_limit_error — "request exceeds the per-minute token budget for claude-opus-4-1; reduce context or wait for the current window to reset" (request id req_01JX4K9VF0Q8M2W7ABCDE)`,
+    expected: (text) => ({ kind: "task.completed", tone: "error", payload: { detail: text } }),
+    cappedField: "detail",
+  },
+  {
+    name: "task update error",
+    build: (text, id) =>
+      runtimeEvent({
+        type: "task.updated",
+        eventId: id,
+        turnId: TURN_ID,
+        payload: { taskId: `task-${id}`, status: "failed", error: text },
+      }),
+    fullText: `Task crashed while streaming the provider response: socket hang up after 42s without a delta — the CLI reported "unsupported client version 0.31.x; server requires >= 0.40.0" and refused the reconnect attempt (attempt 3 of 3)`,
+    expected: (text) => ({ kind: "task.updated", tone: "error", payload: { detail: text } }),
+    cappedField: "detail",
+  },
+];
 
-  expect(activity).toMatchObject({
-    kind: "runtime.warning",
-    summary: "Runtime warning",
-    payload: { message: claudeWarning, detail: claudeWarning },
-  });
+it.each(longTextCases)("keeps the full $name and still caps oversized text", (testCase) => {
+  expect(testCase.fullText.length).toBeGreaterThan(180);
+  const [activity] = projectProviderRuntimeActivities(testCase.build(testCase.fullText, "full"));
+  expect(activity).toMatchObject(testCase.expected(testCase.fullText));
   expect(() => decodeActivityAppendCommand(activity!)).not.toThrow();
 
-  // The shared activity-data cap still bounds oversized warnings.
   const oversized = `prefix-${"x".repeat(2_100)}`;
-  const [capped] = projectProviderRuntimeActivities(
-    runtimeEvent({
-      type: "runtime.warning",
-      eventId: "runtime-warning-oversized",
-      turnId: TURN_ID,
-      payload: { message: oversized },
-    }),
-  );
-  const cappedPayload = capped?.payload as { message: string; detail: string };
-  expect(cappedPayload.message).toHaveLength(2_000);
-  expect(cappedPayload.message.endsWith("...")).toBe(true);
+  const [capped] = projectProviderRuntimeActivities(testCase.build(oversized, "oversized"));
+  const cappedText = (capped?.payload as Record<string, string>)[testCase.cappedField]!;
+  expect(cappedText).toHaveLength(2_000);
+  expect(cappedText.endsWith("...")).toBe(true);
 });
 
-it("keeps the full approval detail so the pending-approval panel shows the whole command", () => {
-  // The Claude adapter deliberately allows ~400 chars of command text in the
-  // approval detail; the panel can only render what the server stored, so the
-  // payload must carry the full string rather than a 180-char row-sized cut.
-  const approvalDetail =
-    `Bash: ${"git -C /workspace status && ".repeat(14)}git push origin main`.slice(0, 400);
-  const [activity] = projectProviderRuntimeActivities(
-    runtimeEvent({
-      type: "request.opened",
-      eventId: "approval-full-detail",
-      turnId: TURN_ID,
-      requestId: ApprovalRequestId.makeUnsafe("request-full-detail"),
-      payload: { requestType: "command_execution_approval", detail: approvalDetail },
-    }),
-  );
-
-  expect(activity).toMatchObject({
-    kind: "approval.requested",
-    payload: { detail: approvalDetail },
-  });
-  expect(() => decodeActivityAppendCommand(activity!)).not.toThrow();
-
-  // The shared activity-data cap still bounds oversized details.
-  const oversized = `prefix-${"x".repeat(2_100)}`;
-  const [capped] = projectProviderRuntimeActivities(
-    runtimeEvent({
-      type: "request.opened",
-      eventId: "approval-oversized-detail",
-      turnId: TURN_ID,
-      payload: { requestType: "command_execution_approval", detail: oversized },
-    }),
-  );
-  const cappedPayload = capped?.payload as { detail: string };
-  expect(cappedPayload.detail).toHaveLength(2_000);
-  expect(cappedPayload.detail.endsWith("...")).toBe(true);
-});
-
-it("keeps the full tool progress summary so the hover card can reveal it", () => {
-  // The work-log row clips the progress detail to one line with CSS `truncate`;
-  // the hover card can only show what the server stored, so the payload must
-  // carry the full summary rather than a 180-char row-sized cut.
-  const progressSummary = `mcp__long-runner__sync: fetched 1,204 records across 17 pages; last checkpoint at offset 9,216 (page 14 of 17) — resuming pagination for shard eu-west after the rate-limit window resets`;
-  expect(progressSummary.length).toBeGreaterThan(180);
-  const [activity] = projectProviderRuntimeActivities(
-    runtimeEvent({
-      type: "tool.progress",
-      eventId: "tool-progress-full-summary",
-      turnId: TURN_ID,
-      payload: {
-        toolUseId: "tool-progress-full",
-        toolName: "mcp__long-runner__sync",
-        summary: progressSummary,
-        elapsedSeconds: 4.8,
-      },
-    }),
-  );
-
-  expect(activity).toMatchObject({
-    kind: "tool.updated",
-    payload: { detail: progressSummary },
-  });
-  expect(() => decodeActivityAppendCommand(activity!)).not.toThrow();
-
-  // The shared activity-data cap still bounds oversized summaries.
-  const oversized = `prefix-${"y".repeat(2_100)}`;
-  const [capped] = projectProviderRuntimeActivities(
-    runtimeEvent({
-      type: "tool.progress",
-      eventId: "tool-progress-oversized",
-      turnId: TURN_ID,
-      payload: { toolUseId: "tool-oversized", toolName: "mcp__x", summary: oversized },
-    }),
-  );
-  const cappedPayload = capped?.payload as { detail: string };
-  expect(cappedPayload.detail).toHaveLength(2_000);
-  expect(cappedPayload.detail.endsWith("...")).toBe(true);
-});
-
-it("keeps the full task failure summary so the work-log reveal can show it", () => {
-  // A failed background/subagent task's summary is exactly what the operator
-  // needs to read in full; provider-authored failure text (rate-limit bodies,
-  // unsupported-version messages) routinely runs past 180 chars.
-  const failureSummary = `Subagent run failed after 3 retries: provider returned 429 rate_limit_error — "request exceeds the per-minute token budget for claude-opus-4-1; reduce context or wait for the current window to reset" (request id req_01JX4K9VF0Q8M2W7ABCDE)`;
-  expect(failureSummary.length).toBeGreaterThan(180);
+it.each([
+  {
+    name: "provider confirmation when a late completion reconciles a local stop",
+    payload: { taskId: "task-after-stop", status: "completed", reconcilesStop: true },
+  },
+  {
+    name: "pending provider confirmation for a stopped Devin task",
+    payload: {
+      taskId: "task-awaiting-confirmation",
+      status: "stopped",
+      awaitingProviderConfirmation: true,
+    },
+  },
+])("persists $name", ({ payload }) => {
   const [activity] = projectProviderRuntimeActivities(
     runtimeEvent({
       type: "task.completed",
-      eventId: "task-completed-full-summary",
+      eventId: `task-stop-${payload.taskId}`,
+      provider: "devin",
       turnId: TURN_ID,
-      payload: { taskId: "task-failed-1", status: "failed", summary: failureSummary },
+      payload,
     }),
   );
 
-  expect(activity).toMatchObject({
-    kind: "task.completed",
-    tone: "error",
-    payload: { detail: failureSummary },
-  });
+  expect(activity).toMatchObject({ kind: "task.completed", payload });
   expect(() => decodeActivityAppendCommand(activity!)).not.toThrow();
-
-  // The shared activity-data cap still bounds oversized summaries.
-  const oversized = `prefix-${"z".repeat(2_100)}`;
-  const [capped] = projectProviderRuntimeActivities(
-    runtimeEvent({
-      type: "task.completed",
-      eventId: "task-completed-oversized",
-      turnId: TURN_ID,
-      payload: { taskId: "task-failed-2", status: "failed", summary: oversized },
-    }),
-  );
-  const cappedPayload = capped?.payload as { detail: string };
-  expect(cappedPayload.detail).toHaveLength(2_000);
-  expect(cappedPayload.detail.endsWith("...")).toBe(true);
-});
-
-it("keeps the full task update error so the work-log reveal can show it", () => {
-  // The task.updated error is the provider's own failure text; the row's CSS
-  // `truncate` does the one-line clip, so the payload must carry the full
-  // string rather than a 180-char row-sized cut.
-  const taskError = `Task crashed while streaming the provider response: socket hang up after 42s without a delta — the CLI reported "unsupported client version 0.31.x; server requires >= 0.40.0" and refused the reconnect attempt (attempt 3 of 3)`;
-  expect(taskError.length).toBeGreaterThan(180);
-  const [activity] = projectProviderRuntimeActivities(
-    runtimeEvent({
-      type: "task.updated",
-      eventId: "task-updated-full-error",
-      turnId: TURN_ID,
-      payload: { taskId: "task-failed-3", status: "failed", error: taskError },
-    }),
-  );
-
-  expect(activity).toMatchObject({
-    kind: "task.updated",
-    tone: "error",
-    payload: { detail: taskError },
-  });
-  expect(() => decodeActivityAppendCommand(activity!)).not.toThrow();
-
-  // The shared activity-data cap still bounds oversized errors.
-  const oversized = `prefix-${"e".repeat(2_100)}`;
-  const [capped] = projectProviderRuntimeActivities(
-    runtimeEvent({
-      type: "task.updated",
-      eventId: "task-updated-oversized",
-      turnId: TURN_ID,
-      payload: { taskId: "task-failed-4", status: "failed", error: oversized },
-    }),
-  );
-  const cappedPayload = capped?.payload as { detail: string };
-  expect(cappedPayload.detail).toHaveLength(2_000);
-  expect(cappedPayload.detail.endsWith("...")).toBe(true);
 });
 
 describe("projected activities satisfy the orchestration command schema", () => {
@@ -1284,6 +1340,25 @@ describe("provider runtime activity projection", () => {
       ["fast-mode-with-context:fast-mode", "fast-mode.state"],
     ]);
 
+    const [resultlessTurn] = projectProviderRuntimeActivities(
+      runtimeEvent({
+        type: "turn.completed",
+        eventId: "resultless-turn",
+        provider: "claudeAgent",
+        turnId: TURN_ID,
+        payload: {
+          state: "completed",
+          tokenAccountingVersion: 1,
+          mainLoopTokens: 10,
+          claudeResultObserved: false,
+        },
+      }),
+    );
+    expect(resultlessTurn?.payload).toMatchObject({
+      claudeResultObserved: false,
+      mainLoopTokens: 10,
+    });
+
     const [turn] = projectProviderRuntimeActivities(
       runtimeEvent({
         type: "turn.completed",
@@ -1292,6 +1367,7 @@ describe("provider runtime activity projection", () => {
         turnId: TURN_ID,
         payload: {
           state: "completed",
+          claudeResultObserved: true,
           tokenAccountingVersion: 1,
           mainLoopTokens: 1_000,
           modelUsage: {
@@ -1311,6 +1387,7 @@ describe("provider runtime activity projection", () => {
       payload: {
         state: "completed",
         provider: "claudeAgent",
+        claudeResultObserved: true,
         tokenAccountingVersion: 1,
         mainLoopTokens: 1_000,
         modelUsage: {
@@ -1494,4 +1571,97 @@ describe("provider runtime activity projection", () => {
     });
     expect(() => decodeActivityAppendCommand(blocked!)).not.toThrow();
   });
+});
+
+it.each(["task.started", "task.updated", "task.completed"] as const)(
+  "persists the child launch mode from %s",
+  (type) => {
+    const event = Schema.decodeUnknownSync(ProviderRuntimeEvent)(
+      runtimeEvent({
+        type,
+        eventId: `policy-${type}`,
+        provider: "devin",
+        turnId: TURN_ID,
+        payload: {
+          taskId: "child-policy",
+          interactionMode: "plan",
+          ...(type === "task.started" ? {} : { status: "completed" }),
+        },
+      }),
+    );
+    const activities = projectProviderRuntimeActivities(event);
+    expect(activities[0]?.payload).toMatchObject({ interactionMode: "plan" });
+    decodeActivityAppendCommand(activities[0]!);
+  },
+);
+
+it("persists running-task stop reconciliation for resumed background work", () => {
+  const event = Schema.decodeUnknownSync(ProviderRuntimeEvent)(
+    runtimeEvent({
+      type: "task.updated",
+      eventId: "replayed-running",
+      provider: "devin",
+      turnId: TURN_ID,
+      payload: { taskId: "child", status: "running", reconcilesStop: true, isBackgrounded: true },
+    }),
+  );
+  const activity = projectProviderRuntimeActivities(event)[0]!;
+  expect(activity.payload).toMatchObject({
+    status: "running",
+    reconcilesStop: true,
+    isBackgrounded: true,
+  });
+  decodeActivityAppendCommand(activity);
+});
+
+it("projects the real nested Claude SDK rate-limit envelope", () => {
+  const event = runtimeEvent({
+    type: "account.rate-limits.updated",
+    eventId: "claude-nested-quota",
+    provider: "claudeAgent",
+    turnId: TURN_ID,
+    payload: {
+      rateLimits: {
+        type: "rate_limit_event",
+        uuid: "quota-event",
+        session_id: "sdk-session",
+        rate_limit_info: {
+          status: "rejected",
+          rateLimitType: "five_hour",
+          resetsAt: 1_800_000_000,
+          utilization: 1,
+        },
+      },
+    },
+  });
+  const activities = projectProviderRuntimeActivities(event);
+  expect(activities.map((activity) => activity.kind)).toEqual([
+    "account.rate-limits.updated",
+    "account.rate-limited",
+  ]);
+  expect(activities[1]?.payload).toMatchObject({
+    status: "rejected",
+    rateLimitType: "five_hour",
+    resetsAt: "2027-01-15T08:00:00.000Z",
+    utilization: 1,
+  });
+  expectSchemaValidActivities(event);
+});
+
+it("keeps approaching limits as usage state without adding work-log warnings", () => {
+  const event = runtimeEvent({
+    type: "account.rate-limits.updated",
+    eventId: "claude-approaching",
+    provider: "claudeAgent",
+    turnId: TURN_ID,
+    payload: {
+      rateLimits: {
+        rate_limit_info: { status: "allowed_warning", utilization: 0.9, resetsAt: 1_800_000_000 },
+      },
+    },
+  });
+  expect(projectProviderRuntimeActivities(event).map((activity) => activity.kind)).toEqual([
+    "account.rate-limits.updated",
+  ]);
+  expectSchemaValidActivities(event);
 });

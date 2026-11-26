@@ -12,6 +12,7 @@ import { readNativeApi } from "../../nativeApi";
 import { shouldAutoDeleteTerminalThreadOnLastClose } from "../ChatView.logic";
 import { toastManager } from "../ui/toast";
 import { disposeAndCloseTerminalSession } from "../terminal/terminalSession";
+import { registerWorkspaceTerminalCreation } from "../../lib/hosts/workspaceCommands";
 
 type AutoDeleteCandidateThread = Pick<
   Thread,
@@ -125,6 +126,11 @@ export function useChatTerminalController({
     openFullWidthTerminalInStore(activeThreadId);
     requestTerminalFocus();
   }, [activeProjectPresent, activeThreadId, openFullWidthTerminalInStore, requestTerminalFocus]);
+
+  useEffect(() => {
+    if (!isFocusedPane) return;
+    return registerWorkspaceTerminalCreation(createTerminalFromShortcut);
+  }, [createTerminalFromShortcut, isFocusedPane]);
 
   useEffect(() => {
     const onMenuAction = window.desktopBridge?.onMenuAction;

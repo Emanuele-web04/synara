@@ -46,3 +46,9 @@ Hubs use the running app's data home; Stable and Beta keep separate Hubs and cha
 In 1.0.2-beta.1, pending worker approvals appear above the coordinator composer. Open the named worker or choose **Approve once**, **Always allow this session** when supported, **Decline**, or **Cancel turn**. Answering in either conversation clears the request in both. These are human controls; agents have no tool for approving a worker.
 
 A task accepted into the Hub queue inherits the coordinator's access mode unless explicitly overridden, and retains that mode while queued. Changing an active chat's mode applies on its next turn. Hubs are available in Stable and Beta.
+
+## Routing and follow-ups in 1.0.8
+
+Delegated work retains the original human request and attachment references alongside the coordinator's brief. Keep source messages and their files until queued tasks start. A stable task key identifies each decision: retries and wakes reuse it instead of creating duplicate workers; a different plan under that key is refused.
+
+Workers receive shared instructions and memory, while coordinator-only playbooks, monitoring rules and reports stay with the coordinator. Context labels identify human instructions, server state, Hub records and other agents' reports. Only the user grants authority for external actions. Ordinary follow-ups **queue** after the current turn; **steer** is for an immediate correction and can interrupt where native steering is unavailable. Non-Git workers can complete normally, and pausing/resuming a Hub no longer strands a settings save.

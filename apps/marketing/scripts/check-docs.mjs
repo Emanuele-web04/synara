@@ -160,7 +160,7 @@ function validateGettingStartedContract() {
   return errors;
 }
 
-export function collectDocumentationErrors() {
+function collectDocumentationErrors() {
   const errors = [];
   const docs = walkFiles(DOCS_ROOT, (file) => file.endsWith(".mdx"));
   const docRoutes = new Set(docs.map(routeForDocFile));

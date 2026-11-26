@@ -26,6 +26,7 @@ import { useWorkspacePathsStore } from "~/workspacePathsStore";
 
 import { GroupLinkProjectDialog } from "./GroupLinkProjectDialog";
 import type { GroupSettingsDraft } from "./groupSettingsDialog.logic";
+import { useTranslation } from "~/i18n";
 
 export function GroupEnvironmentSection(props: {
   readonly workspacePath: string;
@@ -33,6 +34,8 @@ export function GroupEnvironmentSection(props: {
   readonly agent: ReturnType<typeof useProjectAgent>;
   readonly onChange: (patch: Partial<GroupSettingsDraft>) => void;
 }) {
+  const { t } = useTranslation();
+
   const { draft, onChange } = props;
   const projects = useStore((state) => state.projects);
   const homeDir = useWorkspacePathsStore((state) => state.homeDir);
@@ -62,8 +65,8 @@ export function GroupEnvironmentSection(props: {
     if (!ok) {
       toastManager.add({
         type: "error",
-        title: "Unable to unlink repository",
-        description: props.agent.readError() ?? "An unknown error occurred.",
+        title: t("workspace:unableToUnlinkRepository"),
+        description: props.agent.readError() ?? t("workspace:anUnknownErrorOccurred"),
       });
     }
   };
@@ -78,15 +81,17 @@ export function GroupEnvironmentSection(props: {
   return (
     <div className="space-y-6">
       <SettingsSectionShell
-        title="Linked repositories"
+        title="workspace:linkedRepositories"
         action={
           <Button size="xs" variant="outline" onClick={() => setLinkPickerOpen(true)}>
-            Add repository
+            {t("workspace:addRepository")}
           </Button>
         }
       >
         {linkedProjects.length === 0 && missingLinkedIds.length === 0 ? (
-          <SettingsEmptyState layout="status">No linked repositories.</SettingsEmptyState>
+          <SettingsEmptyState layout="status">
+            {t("workspace:noLinkedRepositories")}
+          </SettingsEmptyState>
         ) : (
           <SettingsCard>
             {linkedProjects.map((project) => (
@@ -100,7 +105,7 @@ export function GroupEnvironmentSection(props: {
                     variant="outline"
                     onClick={() => void unlinkProject(project.id)}
                   >
-                    Remove
+                    {t("workspace:edit_remove")}
                   </Button>
                 }
               />
@@ -109,10 +114,10 @@ export function GroupEnvironmentSection(props: {
               <SettingsListRow
                 key={id}
                 title={id}
-                description="This project is no longer available."
+                description={t("workspace:thisProjectIsNoLongerAvailable")}
                 actions={
                   <Button size="xs" variant="outline" onClick={() => void unlinkProject(id)}>
-                    Remove
+                    {t("workspace:edit_remove")}
                   </Button>
                 }
               />
@@ -120,18 +125,19 @@ export function GroupEnvironmentSection(props: {
           </SettingsCard>
         )}
         <p className="mt-2 px-1 text-ui-sm text-muted-foreground">
-          Linking and unlinking apply immediately.
+          {t("workspace:linkingAndUnlinkingApplyImmediately")}
         </p>
       </SettingsSectionShell>
 
-      <SettingsSectionShell title="Workspace">
+      <SettingsSectionShell title="workspace:editor_workspaceLabel">
         <SettingsCard>
           <SettingsRow
-            title="Hub folder"
+            id="setting-hub-folder"
+            title="workspace:hubFolder"
             description={
               props.workspacePath
                 ? abbreviateHomePath(props.workspacePath, homeDir)
-                : "No folder assigned"
+                : "workspace:noFolderAssigned"
             }
             control={
               canReveal ? (
@@ -148,76 +154,80 @@ export function GroupEnvironmentSection(props: {
             }
           />
           <SettingsRow
-            title="Worker environment"
-            description="Where worker threads run their tasks."
+            id="setting-worker-environment"
+            title="workspace:workerEnvironment"
+            description="workspace:whereWorkerThreadsRunTheirTasks"
             control={
               <SettingsSegmentedControl
                 value={draft.workerEnvironment}
                 onValueChange={(value) => onChange({ workerEnvironment: value })}
                 options={[
-                  { value: "local", label: "Local" },
-                  { value: "worktree", label: "Worktree" },
+                  { value: "local", label: t("computer:worktreeMode_local") },
+                  { value: "worktree", label: t("common:worktreeMode_worktree") },
                 ]}
-                ariaLabel="Worker environment"
+                ariaLabel={t("workspace:workerEnvironment")}
               />
             }
           />
         </SettingsCard>
       </SettingsSectionShell>
 
-      <SettingsSectionShell title="Library hosting">
+      <SettingsSectionShell title="workspace:libraryHosting">
         <SettingsCard>
           <SettingsRow
-            title="Location"
+            id="setting-location"
+            title="workspace:location"
             description={
               canPickFolder
                 ? draft.libraryPath
                   ? abbreviateHomePath(draft.libraryPath, homeDir)
-                  : "Not set"
-                : "Absolute path to the library folder."
+                  : "workspace:pathNotSet"
+                : "workspace:libraryAbsolutePath"
             }
             control={
               canPickFolder ? (
                 <Button size="xs" variant="outline" onClick={() => void pickLibraryPath()}>
-                  Change…
+                  {t("workspace:change")}
                 </Button>
               ) : (
                 <Input
                   value={draft.libraryPath}
                   onChange={(event) => onChange({ libraryPath: event.target.value })}
-                  placeholder="/absolute/path"
-                  aria-label="Library location"
+                  placeholder={t("workspace:absolutePath")}
+                  aria-label={t("workspace:libraryLocation")}
                   className="w-full sm:w-64"
                 />
               )
             }
           />
           <SettingsRow
-            title="Git remote"
-            description="Remote the library pushes to."
+            id="setting-git-remote"
+            title="workspace:gitRemote"
+            description="workspace:remoteTheLibraryPushesTo"
             control={
               <Input
                 value={draft.libraryRemoteUrl}
                 onChange={(event) => onChange({ libraryRemoteUrl: event.target.value })}
                 placeholder="https://…"
-                aria-label="Library git remote"
+                aria-label={t("workspace:libraryGitRemote")}
                 className="w-full sm:w-64"
               />
             }
           />
           <SettingsRow
-            title="Push on change"
-            description="Push library commits to the remote automatically."
+            id="setting-push-on-change"
+            title="workspace:pushOnChange"
+            description="workspace:pushLibraryCommitsToTheRemoteAutomatically"
             control={
               <Switch
                 checked={draft.libraryPushOnChange}
                 onCheckedChange={(checked) => onChange({ libraryPushOnChange: Boolean(checked) })}
-                aria-label="Push on change"
+                aria-label={t("workspace:pushOnChange")}
               />
             }
           />
           <div className="px-4 py-2.5 text-ui-sm text-muted-foreground">
-            The library is a git repository; every change is committed.
+            {t("workspace:theLibraryIsAGitRepositoryEveryChangeIs")}
           </div>
         </SettingsCard>
       </SettingsSectionShell>
@@ -233,8 +243,8 @@ export function GroupEnvironmentSection(props: {
             if (!ok) {
               toastManager.add({
                 type: "error",
-                title: "Unable to link repository",
-                description: props.agent.readError() ?? "An unknown error occurred.",
+                title: t("workspace:unableToLinkRepository"),
+                description: props.agent.readError() ?? t("workspace:anUnknownErrorOccurred"),
               });
             }
           });

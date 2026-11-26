@@ -13,6 +13,20 @@ const connected: ServerProviderStatus = {
 };
 
 describe("providerSetupStatusLabel", () => {
+  it("reports account health without translating server diagnostics or identity", () => {
+    const status = {
+      ...connected,
+      status: "error" as const,
+      available: false,
+      message: "Settings: /repo/Read",
+    };
+    expect(providerAccountStatusSummary({ status, enabled: true })).toMatchObject({
+      detail: "Settings: /repo/Read",
+      tone: "error",
+    });
+    expect(status.message).toBe("Settings: /repo/Read");
+    expect(status.provider).toBe("opencode");
+  });
   it.each([
     [undefined, false, false, "Checking setup"],
     [connected, true, true, "Disabled · enable to check setup"],

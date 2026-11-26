@@ -1,8 +1,11 @@
 # Project Coordinator implementation ledger
 
-Base SHA: `779cd649e060c17a57ede329b51fbe67e6b02663`  
-Branch: `synara/build-project-coordinator`  
-Worktree: `/Users/dilipreddy/.synara/worktrees/0e19289d2a9e`  
+Base SHA: `779cd649e060c17a57ede329b51fbe67e6b02663`
+
+Branch: `synara/build-project-coordinator`
+
+Worktree: `/Users/dilipreddy/.synara/worktrees/0e19289d2a9e`
+
 Approved spec: [PROJECT_COORDINATOR_PLAN.md](PROJECT_COORDINATOR_PLAN.md)
 
 ## Status

@@ -4,10 +4,10 @@
 // Layer: Web orchestration helper
 // Exports: dispatchKanbanDraftCard, dispatchKanbanDraftThread, KanbanDraftDispatchResult
 
+import { t } from "~/i18n";
 import type {
   AssistantDeliveryMode,
   ProjectId,
-  ProviderKind,
   ProviderStartOptions,
   ThreadId,
 } from "@synara/contracts";
@@ -17,6 +17,7 @@ import {
   type KanbanCard,
   type KanbanDraftOpenThreadReason,
 } from "../components/kanban/kanban.logic";
+import type { NewChatDefault } from "../appSettings";
 import { useKanbanUiStore } from "../kanbanUiStore";
 import type { SidebarThreadSummary } from "../types";
 import { dispatchDraftThread, type DraftDispatchProviderInstance } from "./draftThreadDispatch";
@@ -39,20 +40,20 @@ export function kanbanDispatchFailureToast(
   if (result.kind === "open-thread") {
     return {
       type: "info",
-      title: "Finish this draft in the chat",
+      title: t("workspace:finishDraftInChat"),
       description:
         result.reason === "empty"
-          ? "Nothing to send yet. Write the prompt in the composer."
+          ? t("workspace:draftEmpty")
           : result.reason === "worktree-pending"
-            ? "Open the chat to create the worktree with the normal send flow."
-            : "Open the chat to continue this task.",
+            ? t("workspace:draftWorktreePending")
+            : t("workspace:draftContinueChat"),
     };
   }
   if (result.kind === "unavailable") {
     return {
       type: "error",
-      title: "Not connected",
-      description: "Reconnect to the server before sending drafts.",
+      title: t("common:toast_notConnected"),
+      description: t("workspace:draftReconnect"),
     };
   }
   return { type: "error", title: errorTitle, description: result.message };
@@ -60,7 +61,7 @@ export function kanbanDispatchFailureToast(
 
 export async function dispatchKanbanDraftCard(input: {
   card: KanbanCard;
-  defaultProvider: ProviderKind;
+  newChatDefault: NewChatDefault;
   assistantDeliveryMode: AssistantDeliveryMode;
   providerOptions?: ProviderStartOptions | undefined;
   providerInstances?: ReadonlyArray<DraftDispatchProviderInstance> | undefined;
@@ -90,7 +91,7 @@ async function dispatchKanbanDraftCardInternal(
       threadId: card.threadId,
       projectId: card.projectId,
       thread: card.thread,
-      defaultProvider: input.defaultProvider,
+      newChatDefault: input.newChatDefault,
       assistantDeliveryMode: input.assistantDeliveryMode,
       providerOptions: input.providerOptions,
       providerInstances: input.providerInstances,
@@ -104,7 +105,7 @@ interface KanbanDraftDispatchInput {
   projectId: ProjectId;
   /** Backing summary; null for local-only draft threads not yet promoted. */
   thread: SidebarThreadSummary | null;
-  defaultProvider: ProviderKind;
+  newChatDefault: NewChatDefault;
   assistantDeliveryMode: AssistantDeliveryMode;
   providerOptions?: ProviderStartOptions | undefined;
   providerInstances?: ReadonlyArray<DraftDispatchProviderInstance> | undefined;

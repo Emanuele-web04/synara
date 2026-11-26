@@ -24,6 +24,7 @@ import { PullRequestDiffStat } from "./PullRequestDiffStat";
 import { PullRequestMetaLine } from "./PullRequestMetaLine";
 import { PR_META_TEXT_CLASS_NAME } from "./pullRequestText";
 import { PullRequestWarningNote } from "./PullRequestWarningNote";
+import { useTranslation } from "~/i18n";
 
 export function PullRequestCodeTab({
   input,
@@ -32,6 +33,8 @@ export function PullRequestCodeTab({
   input: PullRequestDetailInput;
   detail: PullRequestDetail;
 }) {
+  const { t } = useTranslation();
+
   const { resolvedTheme } = useTheme();
   const [collapsedFiles, setCollapsedFiles] = useState<Set<string>>(() => new Set());
   const diffQuery = useQuery(pullRequestDiffQueryOptions(input));
@@ -58,7 +61,7 @@ export function PullRequestCodeTab({
       <div className="flex h-full min-h-0 flex-col">
         {diffQuery.data?.truncated ? (
           <PullRequestWarningNote shape="banner">
-            Diff exceeded 8 MiB and was truncated.
+            {t("git:diffExceeded8MiBAndWasTruncated")}
           </PullRequestWarningNote>
         ) : null}
         {patchTotals ? (
@@ -68,7 +71,9 @@ export function PullRequestCodeTab({
               "border-b border-border/60 px-3 py-2 text-muted-foreground",
             )}
           >
-            <span>{patchTotals.fileCount} files</span>
+            <span>
+              {patchTotals.fileCount} {t("chat:files")}
+            </span>
             <PullRequestDiffStat
               additions={patchTotals.additions}
               deletions={patchTotals.deletions}
@@ -77,7 +82,7 @@ export function PullRequestCodeTab({
           </PullRequestMetaLine>
         ) : null}
         {diffQuery.isPending ? (
-          <DiffPanelLoadingState label="Loading pull request diff…" />
+          <DiffPanelLoadingState label={t("git:loadingPullRequestDiff")} />
         ) : (
           <DiffPanelPatchViewport
             renderablePatch={renderablePatch}
@@ -104,7 +109,7 @@ export function PullRequestCodeTab({
                   : "Could not load diff."
                 : null
             }
-            loadingLabel="Loading pull request diff…"
+            loadingLabel={t("git:loadingPullRequestDiff")}
             emptyLabel="This pull request has no file changes."
             unavailableLabel="The pull request diff is unavailable."
             viewKind="repo"

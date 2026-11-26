@@ -20,3 +20,7 @@ Nested terminal tabs, groups, splits, and the bottom drawer are removed. Synara 
 See [Keyboard shortcuts](/docs/reference/keyboard-shortcuts) for the current keymap and [provider accounts](/docs/features/provider-accounts) for account-specific terminal commands.
 
 Source evidence: Synara `48603e869`, `docs/core-concepts.md`, `apps/web/src/terminalStateStore.ts`, `apps/web/src/components/ThreadTerminalDrawer.tsx`, `apps/web/src/components/chat/DockTerminalPane.tsx`, `apps/server/src/terminal/Layers/Manager.ts`, and `apps/server/src/keybindings.ts`.
+
+## Terminal reuse in 1.0.8
+
+Idle terminal reuse handles large process tables. Input remains protected while shell commands start. **mod+w** closes a focused dock terminal; failed close keeps the pane usable.

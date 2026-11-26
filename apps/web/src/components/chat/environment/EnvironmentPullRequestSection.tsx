@@ -1,10 +1,12 @@
 // FILE: EnvironmentPullRequestSection.tsx
-// Purpose: "Pull request" section of the Environment panel — one row (state glyph, title,
+// Purpose: "Pull request" section of the Environment panel — the thread's current PR (its
+//          linked PR, else the checkout branch's PR) as one row (state glyph, title,
 //          live check status) that opens the PR action menu: view / code changes, the
 //          checks and review-comment lists, Repair (hands comments, failing checks, or
 //          conflicts to the composer as context cards), Auto-fix CI, Merge, Status
-//          (draft / ready / close / reopen), and Add to chat. Copy link and Open in GitHub
-//          ride on the View PR row.
+//          (draft / ready / close / reopen), Add to chat, and Link / Unlink. Copy link and
+//          Open in GitHub ride on the View PR row. The thread's other linked PRs follow as
+//          compact rows; a thread without any PR offers a single "Link pull request" row.
 // Layer: Environment panel section
 // Depends on: git status/PR-snapshot React Query helpers, the pull request action mutation,
 //             and the shared Environment row skin.
@@ -12,6 +14,8 @@
 import type {
   GitPullRequestCheck,
   GitPullRequestComment,
+  OrchestrationThreadPullRequest,
+  OrchestrationThreadPullRequestLink,
   ProjectId,
   PullRequestAction,
   PullRequestDetailInput,
@@ -21,6 +25,13 @@ import type {
 } from "@synara/contracts";
 import { githubAvatarUrlForLogin } from "@synara/shared/githubAvatar";
 import { parseGitHubRepositoryNameWithOwnerFromPullRequestUrl } from "@synara/shared/githubRepository";
+import {
+  compareLinkedPullRequests,
+  isPullRequestDismissed,
+  pullRequestLinkKey,
+  resolveCurrentPullRequestLink,
+  visiblePullRequestLinks,
+} from "@synara/shared/threadPullRequestLinks";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState, type ReactNode } from "react";
 
@@ -76,7 +87,9 @@ import {
   LinkIcon,
   Loader2Icon,
   PageTextIcon,
+  PlusIcon,
   RefreshCwIcon,
+  XIcon,
 } from "~/lib/icons";
 import { useAppSettings } from "~/appSettings";
 import {
@@ -87,9 +100,12 @@ import {
 } from "~/lib/pullRequestReactQuery";
 import { type PullRequestContextScope } from "~/lib/pullRequestContext";
 import { formatRelativeTime } from "~/lib/relativeTime";
-import { cn } from "~/lib/utils";
+import { cn, newCommandId } from "~/lib/utils";
 import { ensureNativeApi } from "~/nativeApi";
 import { useRightDockStore } from "~/rightDockStore";
+import { useStore } from "~/store";
+import { toThreadPullRequest } from "~/hooks/useThreadPullRequests";
+import { PullRequestThreadDialog } from "../../PullRequestThreadDialog";
 import {
   ENVIRONMENT_ROW_CLASS_NAME,
   ENVIRONMENT_ROW_ICON_CLASS_NAME,
@@ -111,6 +127,10 @@ import {
   withStableCheckKeys,
   type PullRequestChecksTone,
 } from "./environmentPullRequest.logic";
+import { useTranslation } from "~/i18n";
+
+const EMPTY_PULL_REQUEST_LINKS: ReadonlyArray<OrchestrationThreadPullRequestLink> = [];
+
 /** Shares the menu/stack action and loads its settings only when the control is shown. */
 function PullRequestAutoFixToggle(props: {
   threadId: ThreadId;
@@ -119,6 +139,8 @@ function PullRequestAutoFixToggle(props: {
   disabled: boolean;
   number?: number;
 }) {
+  const { t } = useTranslation();
+
   const queryClient = useQueryClient();
   const { updateSettings } = useAppSettings();
   const autoFixMutation = useMutation(pullRequestSetAutoFixMutationOptions(queryClient));
@@ -134,7 +156,7 @@ function PullRequestAutoFixToggle(props: {
           toastManager.add({
             type: "error",
             timeout: DEFAULT_TOAST_TIMEOUT_MS,
-            title: "Couldn't update Auto-fix CI",
+            title: t("git:couldnTUpdateAutoFixCI"),
             description: error instanceof Error ? error.message : undefined,
           });
         },
@@ -155,7 +177,7 @@ function PullRequestAutoFixToggle(props: {
       data-testid="pr-auto-fix-ci"
       onCheckedChange={onCheckedChange}
     >
-      <MenuRowLabel icon={null} label="Auto-fix CI" trailing={display.trailing} />
+      <MenuRowLabel icon={null} label={t("git:autoFixCI")} trailing={display.trailing} />
     </MenuCheckboxItem>
   ) : (
     <span className="flex shrink-0 items-center gap-2">
@@ -163,7 +185,7 @@ function PullRequestAutoFixToggle(props: {
         <span className="text-ui-sm text-muted-foreground">{display.trailing}</span>
       ) : null}
       <Checkbox
-        aria-label={`Auto-fix CI for #${props.number}`}
+        aria-label={t("git:autoFixCIFor", { value0: props.number })}
         title={display.title}
         checked={display.checked}
         disabled={disabled}
@@ -289,6 +311,8 @@ function CommentsMenuRow({
   comment: GitPullRequestComment;
   onOpenUrl: (url: string) => void;
 }) {
+  const { formatLocale } = useTranslation();
+
   const display = describePullRequestComment(comment);
   return (
     // items-stretch overrides the menu-option default items-center for this column layout.
@@ -325,7 +349,9 @@ function CommentsMenuRow({
         ) : null}
         <span className="min-w-0 flex-1 truncate">{comment.path ?? comment.author ?? ""}</span>
         {comment.createdAt ? (
-          <span className="shrink-0 tabular-nums">{formatRelativeTime(comment.createdAt)}</span>
+          <span className="shrink-0 tabular-nums">
+            {formatRelativeTime(comment.createdAt, undefined, formatLocale)}
+          </span>
         ) : null}
       </span>
     </MenuRow>
@@ -376,6 +402,8 @@ export function EnvironmentPullRequestSection({
   onOpenUrl: (url: string) => void;
   onClose: () => void;
 }) {
+  const { t, formatLocale } = useTranslation();
+
   const showDiffColors = showDiffColorsProp ?? true;
   const openPane = useRightDockStore((store) => store.openPane);
   const queryClient = useQueryClient();
@@ -384,7 +412,31 @@ export function EnvironmentPullRequestSection({
   // Share the git block's cache, but revalidate stale status when this always-mounted
   // panel opens so an earlier missing PR does not linger until the next polling tick.
   const { data: gitStatus } = useQuery(gitStatusQueryOptions(gitCwd, enabled));
-  const pr = gitStatus?.pr ?? null;
+  // `null` while the chat is still a local draft: links need a server thread.
+  const threadPullRequestLinks = useStore((state) =>
+    activeThreadId
+      ? (state.threadShellById?.[activeThreadId]?.pullRequests ??
+        (state.threadShellById?.[activeThreadId] ? EMPTY_PULL_REQUEST_LINKS : null))
+      : null,
+  );
+  const [linkDialogOpen, setLinkDialogOpen] = useState(false);
+  const linkedPullRequests = visiblePullRequestLinks(threadPullRequestLinks);
+  const currentLink = resolveCurrentPullRequestLink(threadPullRequestLinks);
+  const reportedBranchPr = gitStatus?.pr ?? null;
+  // Git status can still report a PR after its thread link was dismissed.
+  const branchPr =
+    reportedBranchPr && !isPullRequestDismissed(threadPullRequestLinks, reportedBranchPr.url)
+      ? reportedBranchPr
+      : null;
+  // The thread's own PR wins over whatever the checkout's branch has: a shared checkout can sit
+  // on another thread's branch, and a linked PR stays the thread's PR after the branch moves.
+  // When both are the same PR, the branch status is the fresher copy.
+  const pr = currentLink
+    ? branchPr &&
+      pullRequestLinkKey(branchPr.url) === pullRequestLinkKey(currentLink.pullRequest.url)
+      ? branchPr
+      : toThreadPullRequest(currentLink.pullRequest)
+    : branchPr;
 
   const snapshotQuery = useQuery(
     gitPullRequestSnapshotQueryOptions({
@@ -427,8 +479,79 @@ export function EnvironmentPullRequestSection({
     pullRequestAutoFixQueryOptions(activeThreadId, enabled && autoFixAvailable),
   );
 
+  const linkPullRequest = async (pullRequest: OrchestrationThreadPullRequest) => {
+    if (!activeThreadId) return;
+    await ensureNativeApi().orchestration.dispatchCommand({
+      type: "thread.pull-request.link",
+      commandId: newCommandId(),
+      threadId: activeThreadId,
+      pullRequest,
+      source: "user",
+    });
+  };
+
+  const unlinkPullRequest = (url: string) => {
+    if (!activeThreadId) return;
+    void ensureNativeApi()
+      .orchestration.dispatchCommand({
+        type: "thread.pull-request.unlink",
+        commandId: newCommandId(),
+        threadId: activeThreadId,
+        url,
+      })
+      .catch((error: unknown) => {
+        toastManager.add({
+          type: "error",
+          timeout: DEFAULT_TOAST_TIMEOUT_MS,
+          title: t("git:unlinkPullRequestFailed"),
+          description: error instanceof Error ? error.message : undefined,
+        });
+      });
+  };
+
+  const renderUnlinkButton = (url: string) => (
+    <button
+      type="button"
+      className="flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground opacity-60 outline-none hover:opacity-100 focus-visible:opacity-100"
+      aria-label={t("git:unlinkPullRequest")}
+      title={t("git:unlinkPullRequest")}
+      onClick={() => unlinkPullRequest(url)}
+    >
+      <XIcon className="size-3.5" aria-hidden />
+    </button>
+  );
+
+  const linkDialog =
+    threadPullRequestLinks !== null ? (
+      <PullRequestThreadDialog
+        mode="link"
+        open={linkDialogOpen}
+        cwd={gitCwd}
+        initialReference={null}
+        onOpenChange={setLinkDialogOpen}
+        onLink={linkPullRequest}
+      />
+    ) : null;
+
   if (!displayPr) {
-    return null;
+    // Linking needs a server thread; drafts keep the section hidden as before.
+    if (threadPullRequestLinks === null) return null;
+    return (
+      <EnvironmentLabeledSection label={t("git:general_environmentPullRequest")}>
+        <button
+          type="button"
+          className={ENVIRONMENT_ROW_CLASS_NAME}
+          onClick={() => setLinkDialogOpen(true)}
+          data-testid="pr-link-row"
+        >
+          <EnvironmentRowBody
+            icon={<PlusIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
+            label={<span className="text-muted-foreground">{t("git:linkPullRequest")}</span>}
+          />
+        </button>
+        {linkDialog}
+      </EnvironmentLabeledSection>
+    );
   }
 
   const settledState = displayPr.state !== "open" ? displayPr.state : null;
@@ -439,6 +562,19 @@ export function EnvironmentPullRequestSection({
     autoFixAvailable && detailQuery.data?.stack
       ? detailQuery.data.stack.entries.filter((entry) => entry.number !== displayPr.number)
       : [];
+  const displayPrKey = pullRequestLinkKey(displayPr.url);
+  const linkedPullRequestKeys = new Set(
+    linkedPullRequests.map((link) => pullRequestLinkKey(link.pullRequest.url)),
+  );
+  const displayPrIsLinked = linkedPullRequestKeys.has(displayPrKey);
+  // The thread's other linked PRs; stack siblings already have their own rows above.
+  const stackRowKeys = new Set(stackRows.map((entry) => pullRequestLinkKey(entry.url)));
+  const otherLinkedPullRequests = linkedPullRequests
+    .filter((link) => {
+      const key = pullRequestLinkKey(link.pullRequest.url);
+      return key !== displayPrKey && !stackRowKeys.has(key);
+    })
+    .toSorted(compareLinkedPullRequests);
   const diffStat = summarizePullRequestDiffStat(displayPr);
   const checks = snapshotQuery.data?.checks ?? [];
   const comments = snapshotQuery.data?.comments ?? [];
@@ -471,14 +607,34 @@ export function EnvironmentPullRequestSection({
     onClose();
   };
 
+  // Linked PRs from the project's repositories open in the PR pane; others open on GitHub.
+  const openLinkedPullRequest = (target: { url: string; number: number }) => {
+    const repository = parseGitHubRepositoryNameWithOwnerFromPullRequestUrl(target.url);
+    const ownedRepository = configuredRepositories.find(
+      (candidate) => candidate.nameWithOwner.toLowerCase() === repository?.toLowerCase(),
+    );
+    if (activeThreadId && projectId && ownedRepository) {
+      openPane(activeThreadId, {
+        kind: "pullRequest",
+        pullRequestProjectId: projectId,
+        pullRequestRepository: ownedRepository.nameWithOwner,
+        pullRequestNumber: target.number,
+        pullRequestInitialTab: "summary",
+      });
+    } else {
+      onOpenUrl(target.url);
+    }
+    onClose();
+  };
+
   const openInGitHub = () => {
     void ensureNativeApi()
       .shell.openExternal(displayPr.url)
       .catch((error: unknown) => {
         toastManager.add({
           type: "error",
-          title: "Could not open GitHub",
-          description: error instanceof Error ? error.message : "The link could not be opened.",
+          title: t("git:couldNotOpenGitHub"),
+          description: error instanceof Error ? error.message : t("git:theLinkCouldNotBeOpened"),
         });
       });
     onClose();
@@ -518,14 +674,21 @@ export function EnvironmentPullRequestSection({
       timeout: 0,
     });
     void actionMutation
-      .mutateAsync({ ...actionInput, action, ...(method ? { mergeMethod: method } : {}) })
+      .mutateAsync({
+        ...actionInput,
+        action,
+        ...(method ? { mergeMethod: method } : {}),
+        ...(action === "reopen" && activeThreadId && displayPrIsLinked
+          ? { threadId: activeThreadId }
+          : {}),
+      })
       .then((result) => {
         toastManager.update(toastId, {
           type: "success",
           timeout: DEFAULT_TOAST_TIMEOUT_MS,
           title:
             action === "merge" && result.mergeOutcome === "enqueued"
-              ? "Pull request added to merge queue"
+              ? t("git:pullRequestAddedToMergeQueue")
               : ACTION_SUCCESS_TITLES[action],
         });
       })
@@ -533,8 +696,8 @@ export function EnvironmentPullRequestSection({
         toastManager.update(toastId, {
           type: "error",
           timeout: DEFAULT_TOAST_TIMEOUT_MS,
-          title: "Pull request action failed",
-          description: error instanceof Error ? error.message : "GitHub CLI action failed.",
+          title: t("git:pullRequestActionFailed"),
+          description: error instanceof Error ? error.message : t("git:gitHubCLIActionFailed"),
         });
       });
   };
@@ -575,15 +738,15 @@ export function EnvironmentPullRequestSection({
   const repairDisabled = loading || failed || !activeThreadId || repairs.total === 0;
   const stateLabel = settledState
     ? settledState === "merged"
-      ? "Merged"
-      : "Closed"
+      ? t("git:merged")
+      : t("chat:closed")
     : displayPr.isDraft
-      ? "Draft"
-      : "Ready for review";
+      ? t("git:column_draft")
+      : t("git:readyForReview");
   // The git snapshot has no merged/closed timestamp; the lazily fetched detail does.
   const settledAt = settledState === "merged" ? detail?.mergedAt : detail?.closedAt;
   // formatRelativeTime is the compact list form ("12h"); a sentence needs "12h ago".
-  const settledAgo = settledAt ? formatRelativeTime(settledAt) : null;
+  const settledAgo = settledAt ? formatRelativeTime(settledAt, undefined, formatLocale) : null;
   const statusTrailing =
     settledState && settledAgo
       ? `${stateLabel} ${settledAgo === "now" ? "just now" : `${settledAgo} ago`}`
@@ -599,15 +762,21 @@ export function EnvironmentPullRequestSection({
     checksToneIcon(checksSummary.tone)
   );
   const rowTitle = settledState
-    ? `${stateLabel} on GitHub`
+    ? t("git:onGitHub", { value0: stateLabel })
     : loading
-      ? "Loading checks and comments…"
+      ? t("git:loadingChecksAndComments")
       : failed
-        ? "Couldn't load PR data"
+        ? t("git:pullRequest_couldNotLoadData")
         : checksSummary.label;
 
   return (
-    <EnvironmentLabeledSection label={stackRows.length > 0 ? "Pull requests" : "Pull request"}>
+    <EnvironmentLabeledSection
+      label={
+        stackRows.length > 0 || otherLinkedPullRequests.length > 0
+          ? t("git:pullRequests")
+          : t("git:general_environmentPullRequest")
+      }
+    >
       <Menu open={menuOpen} onOpenChange={setMenuOpen} keepOpenOnSubmenuInteraction>
         <MenuTrigger
           render={<button type="button" className={ENVIRONMENT_ROW_CLASS_NAME} title={rowTitle} />}
@@ -621,7 +790,12 @@ export function EnvironmentPullRequestSection({
             }
             label={
               <span className="flex min-w-0 items-center gap-1.5">
-                <span className="truncate">{`#${displayPr.number} ${displayPr.title}`}</span>
+                <span className="truncate">
+                  {t("git:symbol", {
+                    value0: displayPr.number,
+                    value1: displayPr.title,
+                  })}
+                </span>
               </span>
             }
             trailing={
@@ -649,20 +823,20 @@ export function EnvironmentPullRequestSection({
             <MenuItem className="min-w-0 flex-1" onClick={() => openPullRequest()}>
               <MenuRowLabel
                 icon={<PageTextIcon className={MENU_ICON_CLASS_NAME} aria-hidden />}
-                label="View PR"
+                label={t("git:viewPR")}
               />
             </MenuItem>
             <MenuItem
-              aria-label="Copy link"
-              title="Copy link"
+              aria-label={t("computer:panel_copyLink")}
+              title={t("computer:panel_copyLink")}
               className={MENU_INLINE_ACTION_CLASS_NAME}
               onClick={() => copyPullRequestLink(displayPr.url)}
             >
               <LinkIcon className={MENU_ICON_CLASS_NAME} aria-hidden />
             </MenuItem>
             <MenuItem
-              aria-label="Open in GitHub"
-              title="Open in GitHub"
+              aria-label={t("git:openInGitHub")}
+              title={t("git:openInGitHub")}
               className={MENU_INLINE_ACTION_CLASS_NAME}
               onClick={openInGitHub}
             >
@@ -672,7 +846,7 @@ export function EnvironmentPullRequestSection({
           <MenuItem onClick={() => openPullRequest("code")}>
             <MenuRowLabel
               icon={<DiffIcon className={MENU_ICON_CLASS_NAME} aria-hidden />}
-              label="Code changes"
+              label={t("git:codeChanges")}
               trailing={
                 diffStat ? (
                   <PullRequestDiffStat
@@ -691,7 +865,7 @@ export function EnvironmentPullRequestSection({
                 <MenuSubTrigger disabled={loading}>
                   <MenuRowLabel
                     icon={checksToneIcon(checksSummary.tone)}
-                    label="Checks"
+                    label={t("git:checks")}
                     trailing={loading ? "Loading…" : failed ? "Unavailable" : checksSummary.label}
                   />
                 </MenuSubTrigger>
@@ -700,7 +874,7 @@ export function EnvironmentPullRequestSection({
                     <MenuItem onClick={() => void snapshotQuery.refetch()}>
                       <MenuRowLabel
                         icon={<RefreshCwIcon className={MENU_ICON_CLASS_NAME} aria-hidden />}
-                        label="Retry loading checks"
+                        label={t("git:retryLoadingChecks")}
                       />
                     </MenuItem>
                   ) : checks.length === 0 ? (
@@ -725,7 +899,7 @@ export function EnvironmentPullRequestSection({
                 <MenuSubTrigger disabled={loading}>
                   <MenuRowLabel
                     icon={<ChatBubbleIcon className={MENU_ICON_CLASS_NAME} aria-hidden />}
-                    label="Comments"
+                    label={t("git:comments")}
                     trailing={
                       loading
                         ? "Loading…"
@@ -740,7 +914,7 @@ export function EnvironmentPullRequestSection({
                     <MenuItem onClick={() => void snapshotQuery.refetch()}>
                       <MenuRowLabel
                         icon={<RefreshCwIcon className={MENU_ICON_CLASS_NAME} aria-hidden />}
-                        label="Retry loading comments"
+                        label={t("git:retryLoadingComments")}
                       />
                     </MenuItem>
                   ) : commentsError ? (
@@ -781,7 +955,7 @@ export function EnvironmentPullRequestSection({
                 <MenuSubTrigger disabled={repairDisabled} data-testid="pr-repair-trigger">
                   <MenuRowLabel
                     icon={<HammerIcon className={MENU_ICON_CLASS_NAME} aria-hidden />}
-                    label="Repair"
+                    label={t("git:repair")}
                     trailing={
                       repairs.total > 0 ? (
                         <span className={cn(!repairDisabled && "text-destructive")}>
@@ -798,7 +972,7 @@ export function EnvironmentPullRequestSection({
                   >
                     <MenuRowLabel
                       icon={<ChatBubbleIcon className={MENU_ICON_CLASS_NAME} aria-hidden />}
-                      label="Comments"
+                      label={t("git:comments")}
                       trailing={repairs.comments > 0 ? repairs.comments : null}
                     />
                   </MenuItem>
@@ -808,7 +982,7 @@ export function EnvironmentPullRequestSection({
                   >
                     <MenuRowLabel
                       icon={<CircleAlertIcon className={MENU_ICON_CLASS_NAME} aria-hidden />}
-                      label="Failing checks"
+                      label={t("git:failingChecks")}
                       trailing={repairs.failingChecks > 0 ? repairs.failingChecks : null}
                     />
                   </MenuItem>
@@ -818,14 +992,14 @@ export function EnvironmentPullRequestSection({
                   >
                     <MenuRowLabel
                       icon={<GitMergeConflictIcon className={MENU_ICON_CLASS_NAME} aria-hidden />}
-                      label="Merge conflicts"
+                      label={t("git:mergeConflicts")}
                     />
                   </MenuItem>
                   <MenuSeparator />
                   <MenuItem onClick={() => attachContextCard("everything")}>
                     <MenuRowLabel
                       icon={<HammerIcon className={MENU_ICON_CLASS_NAME} aria-hidden />}
-                      label="Everything"
+                      label={t("git:everything")}
                     />
                   </MenuItem>
                 </ComposerPickerMenuSubPopup>
@@ -855,8 +1029,8 @@ export function EnvironmentPullRequestSection({
                       icon={<GitMergeIcon className={MENU_ICON_CLASS_NAME} aria-hidden />}
                       label={
                         actionPending && actionMutation.variables?.action === "merge"
-                          ? "Merging…"
-                          : "Merge"
+                          ? t("git:merging")
+                          : t("git:merge")
                       }
                       trailing={mergeTrailing}
                     />
@@ -886,7 +1060,7 @@ export function EnvironmentPullRequestSection({
               <MenuSubTrigger disabled={actionPending}>
                 <MenuRowLabel
                   icon={<GitPullRequestIcon className={MENU_ICON_CLASS_NAME} aria-hidden />}
-                  label="Status"
+                  label={t("chat:detail_status")}
                   trailing={statusTrailing}
                 />
               </MenuSubTrigger>
@@ -895,7 +1069,7 @@ export function EnvironmentPullRequestSection({
                   <MenuItem disabled={actionPending} onClick={() => runAction("reopen")}>
                     <MenuRowLabel
                       icon={<GitPullRequestIcon className={MENU_ICON_CLASS_NAME} aria-hidden />}
-                      label="Reopen"
+                      label={t("git:reopen")}
                     />
                   </MenuItem>
                 ) : (
@@ -910,15 +1084,15 @@ export function EnvironmentPullRequestSection({
                   >
                     <MenuRadioItem value="draft" disabled={actionPending}>
                       <GitPullRequestDraftIcon className={MENU_ICON_CLASS_NAME} aria-hidden />
-                      <span>Draft</span>
+                      <span>{t("git:column_draft")}</span>
                     </MenuRadioItem>
                     <MenuRadioItem value="ready" disabled={actionPending}>
                       <GitPullRequestIcon className={MENU_ICON_CLASS_NAME} aria-hidden />
-                      <span>Ready for review</span>
+                      <span>{t("git:readyForReview")}</span>
                     </MenuRadioItem>
                     <MenuRadioItem value="closed" disabled={actionPending}>
                       <GitPullRequestClosedIcon className={MENU_ICON_CLASS_NAME} aria-hidden />
-                      <span>Closed</span>
+                      <span>{t("chat:closed")}</span>
                     </MenuRadioItem>
                   </MenuRadioGroup>
                 )}
@@ -928,7 +1102,7 @@ export function EnvironmentPullRequestSection({
             <MenuItem disabled>
               <MenuRowLabel
                 icon={<GitPullRequestIcon className={MENU_ICON_CLASS_NAME} aria-hidden />}
-                label="Status"
+                label={t("chat:detail_status")}
                 trailing={statusTrailing}
               />
             </MenuItem>
@@ -937,9 +1111,38 @@ export function EnvironmentPullRequestSection({
             <MenuItem onClick={() => attachContextCard("reference")}>
               <MenuRowLabel
                 icon={<ChatBubblePlusIcon className={MENU_ICON_CLASS_NAME} aria-hidden />}
-                label="Add to chat"
+                label={t("git:transcriptSelection_addToChat")}
               />
             </MenuItem>
+          ) : null}
+          {threadPullRequestLinks !== null ? (
+            <>
+              <MenuSeparator />
+              {displayPrIsLinked ? (
+                <MenuItem
+                  onClick={() => {
+                    unlinkPullRequest(displayPr.url);
+                    setMenuOpen(false);
+                  }}
+                >
+                  <MenuRowLabel
+                    icon={<XIcon className={MENU_ICON_CLASS_NAME} aria-hidden />}
+                    label={t("git:unlinkPullRequest")}
+                  />
+                </MenuItem>
+              ) : null}
+              <MenuItem
+                onClick={() => {
+                  setMenuOpen(false);
+                  setLinkDialogOpen(true);
+                }}
+              >
+                <MenuRowLabel
+                  icon={<PlusIcon className={MENU_ICON_CLASS_NAME} aria-hidden />}
+                  label={t("git:linkPullRequest")}
+                />
+              </MenuItem>
+            </>
           ) : null}
         </ComposerPickerMenuPopup>
       </Menu>
@@ -950,7 +1153,7 @@ export function EnvironmentPullRequestSection({
         const presentation = resolvePrStatePresentation(entry);
         const EntryIcon = PR_STATE_PRESENTATION_ICONS[presentation.iconKind];
         const entryAutoFix = findPullRequestAutoFixState(autoFixStates, entry.url);
-        const label = `#${entry.number} ${entry.title}`;
+        const label = t("git:symbol", { value0: entry.number, value1: entry.title });
         return (
           <div
             key={entry.url}
@@ -978,9 +1181,46 @@ export function EnvironmentPullRequestSection({
                 ) : null
               }
             />
+            {linkedPullRequestKeys.has(pullRequestLinkKey(entry.url))
+              ? renderUnlinkButton(entry.url)
+              : null}
           </div>
         );
       })}
+
+      {otherLinkedPullRequests.map((link) => {
+        const linkedPr = link.pullRequest;
+        const presentation = resolvePrStatePresentation(linkedPr);
+        const LinkedIcon = PR_STATE_PRESENTATION_ICONS[presentation.iconKind];
+        const label = t("git:symbol", { value0: linkedPr.number, value1: linkedPr.title });
+        return (
+          <div
+            key={linkedPr.url}
+            className={cn(ENVIRONMENT_ROW_CLASS_NAME, "cursor-default")}
+            data-testid="pr-linked-row"
+          >
+            <button
+              type="button"
+              className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-left outline-none"
+              title={label}
+              onClick={() => openLinkedPullRequest(linkedPr)}
+            >
+              <EnvironmentRowBody
+                icon={
+                  <LinkedIcon
+                    className={cn(ENVIRONMENT_ROW_ICON_CLASS_NAME, presentation.colorClass)}
+                    aria-hidden
+                  />
+                }
+                label={<span className="truncate">{label}</span>}
+              />
+            </button>
+            {renderUnlinkButton(linkedPr.url)}
+          </div>
+        );
+      })}
+
+      {linkDialog}
 
       <PullRequestConfirmActionDialog
         action={confirmAction}

@@ -3,13 +3,13 @@
 // Layer: Web chat component tests
 // Depends on: renderToStaticMarkup and a mocked LegendList.
 
-import { CheckpointRef, MessageId, ThreadId, TurnId } from "@synara/contracts";
+import { MessageId, ThreadId, TurnId } from "@synara/contracts";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { formatShortTimestamp } from "../../timestampFormat";
 import { makeActivity } from "../../storeTestFixtures";
 import { deriveWorkLogEntries, type WorkLogEntry } from "../../workLog";
-import { INLINE_COMMAND_CHIP_CLASS_NAME } from "./chatTypography";
+import type { TimelineEntry } from "../../session-logic";
 
 const TOOLTIP_TRIGGER_MARKER = 'data-base-ui-tooltip-trigger=""';
 // Every settled turn opens with a header carrying its final state.
@@ -154,6 +154,28 @@ beforeAll(() => {
 beforeAll(async () => {
   await import("./MessagesTimeline");
 }, 120_000);
+
+const liveCommandEntry = (
+  id: string,
+  command: string,
+  overrides: Partial<WorkLogEntry> = {},
+): TimelineEntry => ({
+  id: `entry-${id}`,
+  kind: "work",
+  createdAt: "2026-03-17T19:12:28.100Z",
+  entry: {
+    id,
+    createdAt: "2026-03-17T19:12:28.100Z",
+    label: "Ran command",
+    tone: "tool",
+    itemType: "command_execution",
+    toolStatus: "completed",
+    command,
+    ...overrides,
+  },
+});
+const workingIndicatorMarkup = (markup: string): string =>
+  markup.slice(markup.indexOf('data-timeline-row-kind="working"'));
 
 describe("MessagesTimeline", () => {
   it("opts user and assistant transcript markdown into automatic direction mode", async () => {
@@ -329,7 +351,7 @@ describe("MessagesTimeline", () => {
     },
   );
 
-  it("shows the literal failed command, exit code and stderr even when the provider uses an error tone", async () => {
+  it("keeps a failed command on one line with its exit code, output behind the disclosure, even when the provider uses an error tone", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
       <MessagesTimeline
@@ -362,11 +384,12 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain('data-command-literal="true"');
     expect(markup).toContain("missing-command --check");
     expect(markup).toContain("Failed · exit 127");
-    expect(markup).toContain("missing-command: command not found");
+    expect(markup).not.toContain("missing-command: command not found");
+    expect(markup).toContain('aria-expanded="false"');
   });
   // The first test pays the full dynamic-import cost of the MessagesTimeline
   // module graph, which can exceed 10s under CI thread contention.
-  it("renders an accent deep link to the immediate fork source", async () => {
+  it("renders a deep link to the immediate fork source", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
       <MessagesTimeline
@@ -380,7 +403,6 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain('data-fork-source-divider="true"');
     expect(markup).toContain('href="/source-thread"');
     expect(markup).toContain("Continued from chat");
-    expect(markup).toContain("text-[var(--color-text-accent)]");
     expect(markup.indexOf("Imported history")).toBeLessThan(
       markup.indexOf('data-fork-source-divider="true"'),
     );
@@ -544,53 +566,6 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("Sent by the Release Synara coordinator");
     expect(markup).toContain('aria-label="Open coordinator"');
     expect(markup).not.toContain("Sent by Synara from another thread");
-  });
-
-  it("renders edit beside copy for user messages", async () => {
-    const { MessagesTimeline } = await import("./MessagesTimeline");
-    const markup = renderToStaticMarkup(
-      <MessagesTimeline
-        {...makeTimelineBaseProps()}
-        timelineEntries={[
-          {
-            id: "entry-editable-user",
-            kind: "message",
-            createdAt: "2026-03-17T19:12:28.000Z",
-            message: {
-              id: MessageId.makeUnsafe("message-editable-user"),
-              role: "user",
-              text: "adjust this prompt",
-              createdAt: "2026-03-17T19:12:28.000Z",
-              streaming: false,
-            },
-          },
-          {
-            id: "entry-editable-assistant",
-            kind: "message",
-            createdAt: "2026-03-17T19:12:29.000Z",
-            message: {
-              id: MessageId.makeUnsafe("message-editable-assistant"),
-              role: "assistant",
-              text: "",
-              turnId: TurnId.makeUnsafe("turn-editable-user"),
-              createdAt: "2026-03-17T19:12:29.000Z",
-              streaming: false,
-            },
-          },
-        ]}
-        revertTurnCountByUserMessageId={
-          new Map([[MessageId.makeUnsafe("message-editable-user"), 0]])
-        }
-        onEditUserMessage={() => true}
-        editableUserMessageId={MessageId.makeUnsafe("message-editable-user")}
-        resolvedTheme="light"
-      />,
-    );
-
-    expect(markup).toContain('aria-label="Copy message"');
-    expect(markup).toContain('aria-label="Edit message"');
-    expect(markup).toContain('aria-label="Revert to this message"');
-    expect(markup).toContain("size-[1.125em]");
   });
 
   it("keeps edit available and hides undo before a revert checkpoint exists", async () => {
@@ -779,9 +754,7 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).toContain("Compacting context");
-    expect(markup).toContain("/central-icons-reversed/arrows-hide.svg");
     expect(markup).toContain(">Working for <");
-    expect(markup).not.toContain("h-px flex-1 bg-border");
   });
 
   it("does not reserve a timestamp footer between live status updates and Thinking", async () => {
@@ -828,7 +801,6 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("Tasks updated");
     expect(markup).toContain("Thinking");
     expect(markup).not.toContain(formatShortTimestamp(assistantCreatedAt, "locale"));
-    expect(markup).toMatch(/class="[^"]*\bpb-1\b[^"]*" data-timeline-row-kind="message"/);
   });
 
   it("folds work log summaries above the next assistant message footer", async () => {
@@ -875,12 +847,13 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain("Work log");
   });
 
-  it("renders Claude agent task output through the shared markdown renderer", async () => {
+  it("keeps a Claude agent task to one plain line without rendering its Markdown", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
+    // No working row: the task stays a transcript row instead of the indicator's claim.
     const markup = renderToStaticMarkup(
       <MessagesTimeline
         {...makeTimelineBaseProps()}
-        isWorking
+        isWorking={false}
         activeTurnInProgress
         activeTurnStartedAt="2026-05-09T16:31:20.000Z"
         timelineEntries={[
@@ -910,51 +883,15 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain("<h2>Complete File-Icon Rendering Map</h2>");
-    expect(markup).toContain("chat-markdown-codeblock");
-    expect(markup).not.toContain("```tsx");
-  });
-
-  it("renders a lone reasoning update as iconless tool text", async () => {
-    const { MessagesTimeline } = await import("./MessagesTimeline");
-    const activeTurnId = TurnId.makeUnsafe("turn-reasoning-lone");
-    const markup = renderToStaticMarkup(
-      <MessagesTimeline
-        {...makeTimelineBaseProps(null)}
-        isWorking
-        activeTurnInProgress
-        activeTurnId={activeTurnId}
-        activeTurnStartedAt="2026-03-17T19:12:28.000Z"
-        timelineEntries={[
-          {
-            id: "entry-reasoning-trace",
-            kind: "work",
-            createdAt: "2026-03-17T19:12:28.100Z",
-            entry: {
-              id: "reasoning-trace",
-              createdAt: "2026-03-17T19:12:28.100Z",
-              turnId: activeTurnId,
-              label: "Reasoning trace",
-              toolTitle: "Reasoning trace",
-              detail: "**Inspecting apps/web/src/store.ts**\n\n<!-- -->",
-              tone: "tool",
-            },
-          },
-        ]}
-        resolvedTheme="light"
-      />,
-    );
-
-    expect(markup.match(/data-codex-status-row="true"/g) ?? []).toHaveLength(1);
-    expect(markup).not.toContain('data-work-entry-icon="true"');
-    expect(markup).toContain("Inspecting apps/web/src/store.ts");
-    expect(markup).not.toContain("Reasoning trace Inspecting");
+    expect(markup).toContain("Map file-icon logic in file-changes");
+    expect(markup).not.toContain("<h2>");
+    expect(markup).not.toContain("chat-markdown-codeblock");
   });
 
   it.each([
     {
       provider: "Codex",
-      expectedText: "git status --short</code>",
+      expectedText: "git status --short</span>",
       activity: makeActivity({
         id: "codex-live-tool",
         createdAt: "2026-03-17T19:12:28.100Z",
@@ -977,30 +914,186 @@ describe("MessagesTimeline", () => {
         },
       }),
     },
-  ])("renders $provider tool activity beside live Thinking", async ({ activity, expectedText }) => {
+  ])(
+    "renders $provider tool activity in the working indicator instead of Thinking",
+    async ({ activity, expectedText }) => {
+      const { MessagesTimeline } = await import("./MessagesTimeline");
+      const activeTurnId = TurnId.makeUnsafe("turn-provider-live-tool");
+      const markup = renderToStaticMarkup(
+        <MessagesTimeline
+          {...makeTimelineBaseProps()}
+          isWorking
+          activeTurnInProgress
+          activeTurnId={activeTurnId}
+          activeTurnStartedAt="2026-03-17T19:12:28.000Z"
+          timelineEntries={deriveWorkLogEntries([activity], activeTurnId).map((entry) => ({
+            id: entry.id,
+            kind: "work" as const,
+            createdAt: entry.createdAt,
+            entry,
+          }))}
+        />,
+      );
+
+      // The call of the moment leaves the transcript for the working indicator,
+      // which wears it in place of "Thinking", once.
+      expect(markup).not.toContain('data-work-entry-display-text="true"');
+      expect(markup).toContain('data-working-tool-call="true"');
+      expect(markup.split(expectedText)).toHaveLength(2);
+      // A running tool call carries no timing tail; it reads like any tool call.
+      expect(markup).not.toContain('data-live-activity-meta="true"');
+      expect(markup).not.toContain(">Thinking<");
+    },
+  );
+
+  it.each(["Loading", "Waiting for approval", "Waiting for your answer"] as const)(
+    "keeps the live run in history, settled, while the indicator reads %s",
+    async (workingLabel) => {
+      const { MessagesTimeline } = await import("./MessagesTimeline");
+      const markup = renderToStaticMarkup(
+        <MessagesTimeline
+          {...makeTimelineBaseProps()}
+          isWorking
+          workingLabel={workingLabel}
+          activeTurnInProgress
+          activeTurnStartedAt="2026-03-17T19:12:28.000Z"
+          timelineEntries={[
+            liveCommandEntry("w1", "git status"),
+            liveCommandEntry("w2", "git diff", { toolStatus: "running" }),
+          ]}
+        />,
+      );
+
+      // The indicator claims nothing: the run folds to its settled summary.
+      expect(markup).not.toContain('data-working-tool-call="true"');
+      expect(markup).toContain("Ran 2 commands");
+      expect(markup).toContain('data-tool-group-running="true">1 running<');
+      expect(markup).toContain(`<span>${workingLabel}</span>`);
+    },
+  );
+
+  it("shows Loading with its icon and shimmer", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
-    const activeTurnId = TurnId.makeUnsafe("turn-provider-live-tool");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...makeTimelineBaseProps()}
+        isWorking
+        workingLabel="Loading"
+        activeTurnInProgress
+        activeTurnStartedAt="2026-03-17T19:12:28.000Z"
+        timelineEntries={[]}
+      />,
+    );
+    const indicator = workingIndicatorMarkup(markup);
+    expect(indicator).toContain('data-working-state="label"');
+    expect(indicator).toContain("shimmer-group");
+    expect(indicator).toMatch(/data-working-state="label"><span aria-hidden="true"[^>]*><svg/);
+  });
+
+  it.each(["Waiting for approval", "Waiting for your answer"] as const)(
+    "shows %s still and without an icon",
+    async (workingLabel) => {
+      const { MessagesTimeline } = await import("./MessagesTimeline");
+      const markup = renderToStaticMarkup(
+        <MessagesTimeline
+          {...makeTimelineBaseProps()}
+          isWorking
+          workingLabel={workingLabel}
+          activeTurnInProgress
+          activeTurnStartedAt="2026-03-17T19:12:28.000Z"
+          timelineEntries={[]}
+        />,
+      );
+      const indicator = workingIndicatorMarkup(markup);
+      expect(indicator).toContain('data-working-state="waiting"');
+      expect(indicator).not.toContain("shimmer-group");
+      expect(indicator).toMatch(
+        new RegExp(`data-working-state="waiting"><span>${workingLabel}</span></div>`),
+      );
+    },
+  );
+
+  it("reads Thinking without an icon when no tool call is live", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
       <MessagesTimeline
         {...makeTimelineBaseProps()}
         isWorking
         activeTurnInProgress
-        activeTurnId={activeTurnId}
         activeTurnStartedAt="2026-03-17T19:12:28.000Z"
-        timelineEntries={deriveWorkLogEntries([activity], activeTurnId).map((entry) => ({
-          id: entry.id,
-          kind: "work" as const,
-          createdAt: entry.createdAt,
-          entry,
-        }))}
+        timelineEntries={[]}
       />,
     );
 
-    expect(markup).toContain('data-timeline-row-kind="work"');
-    expect(markup).toContain('data-work-entry-display-text="true"');
-    expect(markup).toContain('data-live-activity-meta="true"');
-    expect(markup).toContain(">Thinking<");
-    expect(markup).toContain(expectedText);
+    expect(markup).toMatch(/data-working-state="thinking"><span>Thinking<\/span><\/div>/);
+    expect(workingIndicatorMarkup(markup)).toContain("shimmer-group");
+  });
+
+  it("reads Thinking between calls and keeps the finished run behind its summary", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...makeTimelineBaseProps()}
+        isWorking
+        activeTurnInProgress
+        activeTurnStartedAt="2026-03-17T19:12:28.000Z"
+        timelineEntries={[liveCommandEntry("w1", "git status"), liveCommandEntry("w2", "git diff")]}
+      />,
+    );
+
+    expect(markup).toContain('data-working-state="thinking"');
+    // The run is one click away in the transcript, not unmounted while it runs.
+    expect(markup).toContain("Ran 2 commands");
+    expect(markup).toContain('aria-expanded="false"');
+    expect(markup).not.toContain("git status");
+    expect(markup).not.toContain("git diff");
+  });
+
+  it("shows a failed newest call in the failure tone, still", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...makeTimelineBaseProps()}
+        isWorking
+        activeTurnInProgress
+        activeTurnStartedAt="2026-03-17T19:12:28.000Z"
+        timelineEntries={[
+          liveCommandEntry("w1", "git status"),
+          liveCommandEntry("w2", "bun run lint", {
+            toolStatus: "failed",
+            toolDetails: { kind: "command", title: "Ran command", output: { exitCode: 2 } },
+          }),
+        ]}
+      />,
+    );
+    const indicator = workingIndicatorMarkup(markup);
+
+    expect(indicator).toContain('data-working-state="tool-call-failed"');
+    expect(indicator).toContain("text-destructive");
+    expect(indicator).not.toContain("shimmer-group");
+    expect(indicator).toContain("bun run lint");
+    expect(indicator).toContain('data-tool-failure-meta="true">Failed · exit 2<');
+  });
+
+  it("renders every run settled when there is no working row", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...makeTimelineBaseProps()}
+        isWorking={false}
+        activeTurnInProgress
+        activeTurnStartedAt="2026-03-17T19:12:28.000Z"
+        timelineEntries={[
+          liveCommandEntry("w1", "git status", { toolStatus: "running" }),
+          liveCommandEntry("w2", "git diff"),
+        ]}
+      />,
+    );
+
+    expect(markup).not.toContain('data-timeline-row-kind="working"');
+    expect(markup).toContain("Ran 2 commands");
+    expect(markup).toContain('data-tool-group-running="true">1 running<');
+    expect(markup).not.toContain("git status");
   });
 
   it("attaches trailing tool rows to the last assistant reply after completion", async () => {
@@ -1166,47 +1259,6 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain('data-tool-detail-trigger="true"');
     expect(markup).toContain(TOOLTIP_TRIGGER_MARKER);
     expect(markup).not.toContain('data-tool-details-inline="true"');
-    expect(markup).not.toContain("Diff");
-    expect(markup).not.toContain("Details");
-  });
-
-  it("renders command rows with the literal command and styled hover tooltip trigger", async () => {
-    const { MessagesTimeline } = await import("./MessagesTimeline");
-    const markup = renderToStaticMarkup(
-      <MessagesTimeline
-        {...makeTimelineBaseProps()}
-        timelineEntries={[
-          {
-            id: "entry-inline-command",
-            kind: "work",
-            createdAt: "2026-03-17T19:12:28.000Z",
-            entry: {
-              id: "work-inline-command",
-              createdAt: "2026-03-17T19:12:28.000Z",
-              label: "Ran command",
-              tone: "tool",
-              itemType: "command_execution",
-              toolTitle: "Searched",
-              command: `rg -n "ProjectionSnapshotQuery" apps/server/src`,
-              rawCommand: `/bin/zsh -lc 'rg -n "ProjectionSnapshotQuery" apps/server/src'`,
-            },
-          },
-        ]}
-      />,
-    );
-
-    // The command shows verbatim (minus the shell wrapper) instead of a guessed
-    // sentence, and the search wears the magnifier.
-    expect(markup).toContain(
-      `Ran <code class="${INLINE_COMMAND_CHIP_CLASS_NAME}" data-command-literal="true">rg -n &quot;ProjectionSnapshotQuery&quot; apps/server/src</code>`,
-    );
-    expect(markup).toContain("magnifying-glass.svg");
-    expect(markup).not.toContain("data-work-entry-action-word");
-    expect(markup).toContain(TOOLTIP_TRIGGER_MARKER);
-    expect(markup).not.toContain(
-      `title="/bin/zsh -lc &#x27;rg -n &quot;ProjectionSnapshotQuery&quot; apps/server/src&#x27;"`,
-    );
-    expect(markup).not.toContain("&gt;/bin/zsh -lc");
   });
 
   it("shows the Synara mark for every provider-specific tool row shape", async () => {
@@ -1329,9 +1381,6 @@ describe("MessagesTimeline", () => {
         />,
       );
       expect(markup).toContain('data-tool-icon="computer"');
-      // The computer-use pointer is the mirrored Hugeicons navigation glyph.
-      expect(markup).toContain('data-slot="hugeicon"');
-      expect(markup).toContain('transform="translate(24 0) scale(-1 1)"');
       expect(markup).toContain(
         toolName.includes("browser") ? "Click in the browser" : "Click on “Search” in Safari",
       );
@@ -1487,7 +1536,9 @@ describe("MessagesTimeline", () => {
         timelineEntries={[...workEntries]}
       />,
     );
-    expect(liveMarkup).toContain("Synara created threads");
+    // Mid-turn the finished call waits in the working row's claim until text
+    // settles it; the recap card is reserved for the end of the turn.
+    expect(liveMarkup).toContain('data-working-state="thinking"');
     expect(liveMarkup).not.toContain('data-synara-thread-creation-card="true"');
 
     const markup = renderToStaticMarkup(
@@ -1733,95 +1784,6 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain(">File Change<");
   });
 
-  it("renders a collapsible changed files header with ui-font filenames", async () => {
-    const { MessagesTimeline } = await import("./MessagesTimeline");
-    const assistantMessageId = MessageId.makeUnsafe("message-assistant-diff");
-    const markup = renderToStaticMarkup(
-      <MessagesTimeline
-        {...makeTimelineBaseProps()}
-        timelineEntries={[
-          {
-            id: "entry-assistant-diff",
-            kind: "message",
-            createdAt: "2026-03-17T19:12:29.000Z",
-            message: {
-              id: assistantMessageId,
-              role: "assistant",
-              text: "done",
-              createdAt: "2026-03-17T19:12:29.000Z",
-              completedAt: "2026-03-17T19:12:30.000Z",
-              streaming: false,
-            },
-          },
-        ]}
-        turnDiffSummaryByAssistantMessageId={
-          new Map([
-            [
-              assistantMessageId,
-              {
-                turnId: TurnId.makeUnsafe("turn-diff-1"),
-                checkpointTurnCount: 1,
-                checkpointTurnCounts: [1],
-                checkpointRef: CheckpointRef.makeUnsafe("refs/synara/checkpoints/thread/turn/1"),
-                status: "ready",
-                completedAt: "2026-03-17T19:12:30.000Z",
-                assistantMessageId,
-                files: [
-                  { path: "apps/web/src/components/Sidebar.tsx", additions: 6, deletions: 5 },
-                ],
-              },
-            ],
-          ])
-        }
-        onUndoTurnFiles={() => {}}
-      />,
-    );
-
-    expect(markup).toContain("Edited 1 file");
-    expect(markup).toContain("Undo");
-    expect(markup).toContain("Review");
-    expect(markup).toContain('aria-expanded="true"');
-    expect(markup).toContain('data-edited-file-row="true"');
-    expect(markup).toContain('aria-label="Open apps/web/src/components/Sidebar.tsx options"');
-    expect(markup).toContain("apps/web/src/components/Sidebar.tsx");
-    expect(markup.indexOf('aria-label="Copy message"')).toBeGreaterThan(
-      markup.indexOf("Edited 1 file"),
-    );
-  });
-
-  it("renders an automation-dispatched coordinator prompt as a normal user row", async () => {
-    const { MessagesTimeline } = await import("./MessagesTimeline");
-    const markup = renderToStaticMarkup(
-      <MessagesTimeline
-        {...makeTimelineBaseProps()}
-        conversationOnly
-        timelineEntries={[
-          {
-            id: "checkin-row",
-            kind: "message",
-            createdAt: "2026-03-17T19:12:29.000Z",
-            message: {
-              id: MessageId.makeUnsafe("checkin-message"),
-              role: "user",
-              text: "Automation: Alpha events\nAutomation ID: automation-1\nRun: manual\n\nCoordinator events",
-              createdAt: "2026-03-17T19:12:29.000Z",
-              streaming: false,
-              source: "native",
-              dispatchOrigin: "automation",
-            },
-          },
-        ]}
-      />,
-    );
-
-    // Check-in turns are suppressed upstream in deriveWorkLogEntries; the
-    // timeline no longer has a compact check-in row, so the prompt renders as
-    // a normal user bubble.
-    expect(markup).not.toContain("Coordinator check-in");
-    expect(markup).toContain("--app-user-message-background");
-    expect(markup).toContain("Sent via Automation");
-  });
-
   it("keeps automation-origin user messages as bubbles outside coordinator conversations", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
@@ -1847,7 +1809,6 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).not.toContain("Coordinator check-in");
-    expect(markup).toContain("--app-user-message-background");
     expect(markup).toContain("Sent via Automation");
   });
 

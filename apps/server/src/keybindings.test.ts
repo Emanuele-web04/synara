@@ -159,6 +159,20 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
     }),
   );
 
+  it.effect("assigns mod+w to disjoint close commands per surface", () =>
+    Effect.sync(() => {
+      const modWRules = DEFAULT_KEYBINDINGS.filter((rule) => rule.key === "mod+w");
+      assert.deepEqual(
+        modWRules.map((rule) => [rule.command, rule.when] as const),
+        [
+          ["terminal.close", "terminalFocus"],
+          ["terminal.workspace.closeActive", "terminalWorkspaceOpen"],
+          ["threadTab.close", "!terminalFocus && !terminalWorkspaceOpen"],
+        ],
+      );
+    }),
+  );
+
   it.effect("encodes resolved plus-key shortcuts", () =>
     Effect.gen(function* () {
       const encoded = yield* Schema.encodeEffect(ResolvedKeybindingFromConfig)({
@@ -623,9 +637,13 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
           : rule,
       );
       assert.deepEqual(
-        snapshot.keybindings.filter((rule) => rule.command.startsWith("threadTab.")),
+        snapshot.keybindings.filter(
+          (rule) => rule.command === "threadTab.next" || rule.command === "threadTab.previous",
+        ),
         compileResolvedKeybindingsConfig(
-          expected.filter((rule) => rule.command.startsWith("threadTab.")),
+          expected.filter(
+            (rule) => rule.command === "threadTab.next" || rule.command === "threadTab.previous",
+          ),
         ),
       );
       yield* keybindings.syncDefaultKeybindingsOnStartup;

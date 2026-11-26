@@ -41,6 +41,13 @@ const createMultiFolder = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 
+const editFolders = (additionalFolders: ReadonlyArray<string>) => ({
+  type: "project.meta.update",
+  commandId: `edit-folders-${additionalFolders.length}`,
+  projectId: "project-1",
+  additionalFolders,
+});
+
 describe("multi-folder projects", () => {
   it("keeps workspaceRoot as the primary folder and stores the extra folders in order", async () => {
     const model = await apply(createEmptyReadModel(now), createMultiFolder());
@@ -83,5 +90,45 @@ describe("multi-folder projects", () => {
         workspaceRoot: "/repos/api/src",
       }),
     ).toContain("src is inside api. Add only one of them.");
+  });
+
+  it("adds and removes extra folders of an existing project", async () => {
+    const model = await apply(createEmptyReadModel(now), createMultiFolder());
+    const edited = await apply(model, editFolders(["/repos/shared", "/repos/docs"]));
+    const project = edited.projects.find((entry) => entry.id === "project-1");
+    expect(project?.workspaceRoot).toBe("/repos/web");
+    expect(project?.additionalFolders).toEqual(["/repos/shared", "/repos/docs"]);
+
+    const single = await apply(edited, editFolders([]));
+    expect(single.projects[0]?.additionalFolders).toEqual([]);
+  });
+
+  it("turns a single-folder project into a multi-folder one", async () => {
+    const model = await apply(
+      createEmptyReadModel(now),
+      createMultiFolder({ additionalFolders: undefined }),
+    );
+    const edited = await apply(model, editFolders(["/repos/api"]));
+    expect(edited.projects[0]?.additionalFolders).toEqual(["/repos/api"]);
+  });
+
+  it("rejects edited folders that repeat or nest inside the project's folders", async () => {
+    const model = await apply(createEmptyReadModel(now), createMultiFolder());
+    expect(await rejection(model, editFolders(["/repos/web"]))).toContain(
+      "web is already in this project.",
+    );
+    expect(await rejection(model, editFolders(["/repos/api", "/repos/api/src"]))).toContain(
+      "src is inside api. Add only one of them.",
+    );
+  });
+
+  it("rejects extra folders on container projects when editing", async () => {
+    const model = await apply(
+      createEmptyReadModel(now),
+      createMultiFolder({ kind: "chat", additionalFolders: undefined }),
+    );
+    expect(await rejection(model, editFolders(["/repos/api"]))).toContain(
+      "Only ordinary projects can have additional folders.",
+    );
   });
 });

@@ -3,6 +3,7 @@
 import { timeBuildStage, startBuildStage } from "../../../scripts/lib/build-timing.ts";
 import { mkdir, readFile, writeFile, chmod, mkdtemp, rm, copyFile, cp } from "node:fs/promises";
 import { createHash } from "node:crypto";
+import { stripMacCuaSymbols } from "./strip-mac-cua-symbols.mjs";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
@@ -260,6 +261,7 @@ try {
     binary = join(temporary, "cua-driver");
     if (binaries.length > 1) run("lipo", ["-create", ...binaries, "-output", binary]);
     else await copyFile(binaries[0], binary);
+    if (platform === "darwin") stripMacCuaSymbols(binary, run);
     if (platform === "linux") {
       const target = sourceTargets.linux[architectures[0]];
       linuxSidecars = Object.fromEntries(

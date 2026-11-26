@@ -103,6 +103,33 @@ type CommandExecutionState = "queued" | "in-flight" | "abandoned";
 type DispatchTimeoutDecision = { kind: "abandon" } | { kind: "wait" };
 type OrchestrationEnginePhase = "running" | "quiescing" | "draining" | "stopped";
 
+// Finalization claims server-staged snapshots at the same transaction boundary as its message.
+function commandAttachmentClaim(command: OrchestrationCommand): {
+  attachments: ReadonlyArray<ChatAttachment>;
+  threadId: ThreadId;
+  messageId: string;
+} | null {
+  if (command.type === "thread.turn.start") {
+    return {
+      attachments: command.message.attachments,
+      threadId: command.threadId,
+      messageId: command.message.messageId,
+    };
+  }
+  if (
+    (command.type === "thread.message.assistant.complete" ||
+      command.type === "thread.message.assistant.delta") &&
+    command.attachments !== undefined
+  ) {
+    return {
+      attachments: command.attachments,
+      threadId: command.threadId,
+      messageId: command.messageId,
+    };
+  }
+  return null;
+}
+
 interface CommandEnvelope {
   command: OrchestrationCommand;
   settleOnly: boolean;
@@ -333,8 +360,9 @@ const makeOrchestrationEngine = Effect.gen(function* () {
     principal: ManagedAttachmentPrincipal,
   ): Effect.Effect<void, OrchestrationCommandPreviouslyRejectedError | PersistenceSqlError> =>
     Effect.gen(function* () {
-      if (command.type !== "thread.turn.start") return;
-      const requestedIds = command.message.attachments
+      const claim = commandAttachmentClaim(command);
+      if (!claim) return;
+      const requestedIds = claim.attachments
         .filter((attachment) => attachment.type === "image" || attachment.type === "file")
         .map((attachment) => attachment.id)
         .sort();
@@ -350,10 +378,10 @@ const makeOrchestrationEngine = Effect.gen(function* () {
         requestedIds.length === claimedAttachments.length &&
         claimedAttachments.every(
           (attachment) =>
-            attachment.ownerThreadId === command.threadId &&
+            attachment.ownerThreadId === claim.threadId &&
             attachment.ownerKind === principal.ownerKind &&
             attachment.ownerId === principal.ownerId &&
-            attachment.claimMessageId === command.message.messageId,
+            attachment.claimMessageId === claim.messageId,
         );
       if (!exactIdentity) {
         return yield* new OrchestrationCommandPreviouslyRejectedError({
@@ -1019,9 +1047,12 @@ const makeOrchestrationEngine = Effect.gen(function* () {
               "This conversation is still being imported. Finish or retry its import before sending a message.",
           });
         }
-        const startCommand = command;
+      }
+      const claimInput = commandAttachmentClaim(command);
+      if (claimInput) {
+        const attachmentCommand = command;
         const attachments = yield* Effect.forEach(
-          startCommand.message.attachments,
+          claimInput.attachments,
           (attachment) => {
             if (attachment.type === "assistant-selection") {
               return Effect.succeed<ChatAttachment>(attachment);
@@ -1029,7 +1060,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
             return managedAttachments
               .findServerOwned({
                 attachmentId: attachment.id,
-                ownerThreadId: startCommand.threadId,
+                ownerThreadId: claimInput.threadId,
                 ownerKind: envelope.attachmentPrincipal.ownerKind,
                 ownerId: envelope.attachmentPrincipal.ownerId,
                 now: new Date().toISOString(),
@@ -1040,15 +1071,18 @@ const makeOrchestrationEngine = Effect.gen(function* () {
                     onNone: () =>
                       Effect.fail(
                         new OrchestrationCommandInvariantError({
-                          commandType: startCommand.type,
+                          commandType: attachmentCommand.type,
                           detail: `Managed attachment ${attachment.id} is unavailable, expired, or owned by another session/thread.`,
                         }),
                       ),
                     onSome: (blob) => {
-                      if (blob.kind !== "image" && blob.kind !== "file") {
+                      if (
+                        (blob.kind !== "image" && blob.kind !== "file") ||
+                        (attachmentCommand.type !== "thread.turn.start" && blob.kind !== "image")
+                      ) {
                         return Effect.fail(
                           new OrchestrationCommandInvariantError({
-                            commandType: startCommand.type,
+                            commandType: attachmentCommand.type,
                             detail: `Managed attachment ${attachment.id} has unsupported kind '${blob.kind}'.`,
                           }),
                         );
@@ -1059,6 +1093,11 @@ const makeOrchestrationEngine = Effect.gen(function* () {
                         name: blob.originalName,
                         mimeType: blob.mimeType,
                         sizeBytes: blob.sizeBytes!,
+                        ...(attachmentCommand.type !== "thread.turn.start" &&
+                        attachment.type === "image" &&
+                        attachment.sourcePath !== undefined
+                          ? { sourcePath: attachment.sourcePath }
+                          : {}),
                       });
                     },
                   }),
@@ -1067,10 +1106,16 @@ const makeOrchestrationEngine = Effect.gen(function* () {
           },
           { concurrency: 1 },
         );
-        command = {
-          ...startCommand,
-          message: { ...startCommand.message, attachments },
-        };
+        command =
+          attachmentCommand.type === "thread.turn.start"
+            ? { ...attachmentCommand, message: { ...attachmentCommand.message, attachments } }
+            : attachmentCommand.type === "thread.message.assistant.complete" ||
+                attachmentCommand.type === "thread.message.assistant.delta"
+              ? {
+                  ...attachmentCommand,
+                  attachments: attachments.filter((item) => item.type === "image"),
+                }
+              : attachmentCommand;
       }
 
       if (command.type === "thread.meta.update" && isOversizedThreadGoal(command.goal)) {
@@ -1175,6 +1220,27 @@ const makeOrchestrationEngine = Effect.gen(function* () {
           }
 
           let deciderReadModel = yield* buildDeciderReadModel(command);
+          if (command.type === "thread.turn.start" && command.gatewayCompletionPrecondition) {
+            const thread = deciderReadModel.threads.find((entry) => entry.id === command.threadId);
+            if (thread) {
+              // Wake admission is serialized with user sends and Stop. Read
+              // the committed message because the command cache omits this timestamp.
+              const latestUserMessageAt = yield* messageRepository
+                .getLatestUserMessageAt({ threadId: command.threadId })
+                .pipe(
+                  Effect.mapError((error) =>
+                    makeCommandInternalError(
+                      command,
+                      `Failed to verify the last user message for gateway continuation: ${error.message}`,
+                    ),
+                  ),
+                );
+              deciderReadModel = overlayThread(deciderReadModel, {
+                ...thread,
+                latestUserMessageAt,
+              });
+            }
+          }
           if (resolvedGoal !== null && command.type === "thread.meta.update") {
             const currentThread = deciderReadModel.threads.find(
               (entry) => entry.id === command.threadId,
@@ -1226,17 +1292,18 @@ const makeOrchestrationEngine = Effect.gen(function* () {
             const committedEvents: OrchestrationEvent[] = [];
             let nextCommandReadModel = commandReadModel;
 
-            if (command.type === "thread.turn.start") {
-              const attachmentIds = command.message.attachments
+            const attachmentClaim = commandAttachmentClaim(command);
+            if (attachmentClaim) {
+              const attachmentIds = attachmentClaim.attachments
                 .filter((attachment) => attachment.type === "image" || attachment.type === "file")
                 .map((attachment) => attachment.id);
               const claim = yield* managedAttachments.claimForAcceptedTurn({
                 attachmentIds,
-                ownerThreadId: command.threadId,
+                ownerThreadId: attachmentClaim.threadId,
                 ownerKind: envelope.attachmentPrincipal.ownerKind,
                 ownerId: envelope.attachmentPrincipal.ownerId,
                 commandId: command.commandId,
-                messageId: command.message.messageId,
+                messageId: attachmentClaim.messageId,
                 now: new Date().toISOString(),
               });
               if (claim.status !== "claimed") {
@@ -2054,6 +2121,8 @@ const makeOrchestrationEngine = Effect.gen(function* () {
     readThreadEvents,
     readThreadEventsThrough,
     getEventHighWaterSequence,
+    hasThreadStopAfter: (threadId, sequenceExclusive, turnId) =>
+      eventStore.hasThreadStopAfter(threadId, sequenceExclusive, turnId),
     getThreadTitleHighWaterSequence,
     subscribeDomainEvents,
     dispatch,

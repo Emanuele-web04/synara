@@ -9,6 +9,7 @@ import {
   acknowledgedWarningIdsForAutomaticChatAutomation,
   acknowledgedRiskIdsForDraft,
   automationApprovalGaps,
+  automationDraftWarningPresentation,
   buildAutomationDraftWarnings,
   hasBlockingAutomationDraftWarnings,
 } from "./automationDraft";
@@ -49,6 +50,11 @@ describe("automation draft warnings", () => {
     ]);
     expect(warnings[0]?.detail).toContain("provider mentions");
     expect(hasBlockingAutomationDraftWarnings(warnings, new Set())).toBe(true);
+    const warning = warnings[0]!;
+    const display = automationDraftWarningPresentation(warning);
+    expect(display.title).toBe(warning.title);
+    expect(display.requiresAcknowledgement).toBe(true);
+    expect(warning.title).toBe("Composer context is not persisted");
   });
 
   it("auto-acknowledges bounded thread fast loops without hiding standalone risks", () => {

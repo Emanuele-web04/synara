@@ -198,6 +198,28 @@ describe("BackendOutputTailDetector", () => {
 
     expect(detector.read().length).toBeLessThanOrEqual(8_192);
   });
+
+  it("returns the exact trailing window across many small chunks", () => {
+    const detector = new BackendOutputTailDetector();
+    let expected = "";
+
+    for (let index = 0; index < 5_000; index += 1) {
+      const chunk = `line ${index}\r\n`;
+      detector.push(index % 2 === 0 ? Buffer.from(chunk, "utf8") : chunk);
+      expected += chunk.replace(/\r/g, "");
+    }
+
+    expect(detector.read()).toBe(expected.slice(-8_192));
+  });
+
+  it("keeps only the tail of a single oversized chunk", () => {
+    const detector = new BackendOutputTailDetector();
+
+    detector.push("early\n");
+    detector.push(`${"a".repeat(10_000)}END`);
+
+    expect(detector.read()).toBe(`${"a".repeat(10_000)}END`.slice(-8_192));
+  });
 });
 
 describe("summarizeBackendFailureOutput", () => {

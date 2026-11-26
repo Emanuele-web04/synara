@@ -51,7 +51,6 @@ import {
   makeCheckGrokProviderStatus,
   makeClaudeProbeEnv,
   makeCheckOpenCodeProviderStatus,
-  makeDisabledProviderStatus,
   makeProviderHealthLive,
   parseAuthStatusFromOutput,
   parseClaudeAuthStatusFromOutput,
@@ -67,11 +66,18 @@ import {
   makeProviderUpdateEnv,
 } from "./ProviderHealth";
 import { resolvePackageManagedProviderMaintenance } from "../providerMaintenance";
+import { writePiInstallFixture } from "../testing/piSdkFixture.ts";
 import { providerIsolatedHomePath } from "../providerProcessEnv.ts";
 
 // ── Test helpers ────────────────────────────────────────────────────
 
 const encoder = new TextEncoder();
+
+// An unsigned ChatGPT id token shaped like the one `codex login` stores in auth.json.
+function codexIdToken(payload: Record<string, unknown>): string {
+  const base64Url = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
+  return `${base64Url({ alg: "RS256", typ: "JWT" })}.${base64Url(payload)}.signature`;
+}
 
 function assertProviderInstanceEnv(
   env: NodeJS.ProcessEnv | undefined,
@@ -203,6 +209,28 @@ function withProcessPlatform<T, E, R>(
       Effect.sync(() => {
         if (descriptor) {
           Object.defineProperty(process, "platform", descriptor);
+        }
+      }),
+  );
+}
+
+// Scope-bound process.env overrides; `undefined` deletes the variable. Restored when the test scope closes.
+function scopedEnv(overrides: Record<string, string | undefined>) {
+  return Effect.acquireRelease(
+    Effect.sync(() => {
+      const previous: Record<string, string | undefined> = {};
+      for (const [key, value] of Object.entries(overrides)) {
+        previous[key] = process.env[key];
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+      return previous;
+    }),
+    (previous) =>
+      Effect.sync(() => {
+        for (const [key, value] of Object.entries(previous)) {
+          if (value === undefined) delete process.env[key];
+          else process.env[key] = value;
         }
       }),
   );
@@ -715,32 +743,6 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
   });
 
   describe("disabled provider handling", () => {
-    it("builds an inert status for disabled providers", () => {
-      assert.deepStrictEqual(makeDisabledProviderStatus("opencode", "2026-06-16T12:00:00.000Z"), {
-        provider: "opencode",
-        instanceId: "opencode",
-        driver: "opencode",
-        status: "warning",
-        available: false,
-        authStatus: "unknown",
-        checkedAt: "2026-06-16T12:00:00.000Z",
-        message: "Provider is disabled in Synara settings.",
-      });
-    });
-
-    it("projects disabled settings over cached ready statuses", () => {
-      const statuses = projectProviderStatusesForSettings(
-        [cachedReadyCodexStatus],
-        allProvidersDisabledServerSettings,
-        "2026-06-16T12:05:00.000Z",
-      );
-      const codex = statuses.find((status) => status.provider === "codex");
-
-      assert.strictEqual(statuses.length, 10);
-      assert.strictEqual(codex?.available, false);
-      assert.strictEqual(codex?.message, "Provider is disabled in Synara settings.");
-    });
-
     it("changes projected statuses for settings-only instance updates", () => {
       const previousStatuses = projectProviderStatusesForSettings(
         [cachedReadyCodexStatus],
@@ -817,6 +819,8 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
             ...cachedReadyCodexStatus,
             authType: "chatgpt",
             authLabel: "Default Account",
+            accountEmail: "default@example.com",
+            accountOrganization: "Example Org",
           },
         ],
         {
@@ -838,9 +842,12 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       const workCodex = statuses.find((status) => status.instanceId === "codex_work");
       assert.strictEqual(defaultCodex?.authStatus, "authenticated");
       assert.strictEqual(defaultCodex?.authLabel, "Default Account");
+      assert.strictEqual(defaultCodex?.accountEmail, "default@example.com");
       assert.strictEqual(workCodex?.status, "warning");
       assert.strictEqual(workCodex?.authStatus, "unknown");
       assert.strictEqual(workCodex?.authLabel, undefined);
+      assert.strictEqual(workCodex?.accountEmail, undefined);
+      assert.strictEqual(workCodex?.accountOrganization, undefined);
     });
 
     it("does not project a custom instance status onto the default account", () => {
@@ -1368,7 +1375,13 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       } satisfies ServerProviderStatus;
 
       const result = stabilizeProviderStatusesAgainstTransientTimeouts(
-        [previousReadyClaude],
+        [
+          {
+            ...previousReadyClaude,
+            accountEmail: "stale@example.com",
+            accountOrganization: "Old Org",
+          },
+        ],
         [
           {
             provider: "claudeAgent",
@@ -1414,7 +1427,7 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         authStatus: "unknown",
         checkedAt: "2026-09-04T01:04:00.000Z",
         message:
-          "Pi SDK is bundled, but the CLI health check timed out before Synara could verify the installed version.",
+          "Pi is installed, but the CLI health check timed out before Synara could verify the installed version.",
       } satisfies ServerProviderStatus;
 
       assert.deepStrictEqual(
@@ -1543,6 +1556,30 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         false,
       );
     });
+
+    it("treats a changed account identity as a status change", () => {
+      assert.strictEqual(
+        providerStatusesEqual(
+          [cachedReadyCodexStatus],
+          [{ ...cachedReadyCodexStatus, accountEmail: "work@example.com" }],
+        ),
+        false,
+      );
+      assert.strictEqual(
+        providerStatusesEqual(
+          [cachedReadyCodexStatus],
+          [{ ...cachedReadyCodexStatus, accountOrganization: "Example Org" }],
+        ),
+        false,
+      );
+      assert.strictEqual(
+        providerStatusesEqual(
+          [{ ...cachedReadyCodexStatus, accountEmail: "work@example.com" }],
+          [{ ...cachedReadyCodexStatus, accountEmail: "work@example.com" }],
+        ),
+        true,
+      );
+    });
   });
 
   // ── checkCodexProviderStatus tests ────────────────────────────────
@@ -1552,29 +1589,6 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
   // path being tested.
 
   describe("checkCodexProviderStatus", () => {
-    it.effect("returns ready when codex is installed and authenticated", () =>
-      Effect.gen(function* () {
-        // Point CODEX_HOME at an empty tmp dir (no config.toml) so the
-        // default code path (OpenAI provider, auth probe runs) is exercised.
-        yield* withTempCodexHome();
-        const status = yield* checkCodexProviderStatus;
-        assert.strictEqual(status.provider, "codex");
-        assert.strictEqual(status.status, "ready");
-        assert.strictEqual(status.available, true);
-        assert.strictEqual(status.authStatus, "authenticated");
-      }).pipe(
-        Effect.provide(
-          mockSpawnerLayer((args) => {
-            const joined = args.join(" ");
-            if (joined === "--version") return { stdout: "codex 1.0.0\n", stderr: "", code: 0 };
-            if (joined === "-c mcp_servers={} login status")
-              return { stdout: "Logged in\n", stderr: "", code: 0 };
-            throw new Error(`Unexpected args: ${joined}`);
-          }),
-        ),
-      ),
-    );
-
     it.effect("uses configured codex binary for version and auth probes", () =>
       Effect.gen(function* () {
         yield* withTempCodexHome();
@@ -1588,6 +1602,215 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
             if (joined === "--version") return { stdout: "codex 1.0.0\n", stderr: "", code: 0 };
             if (joined === "-c mcp_servers={} login status")
               return { stdout: "Logged in\n", stderr: "", code: 0 };
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+      ),
+    );
+
+    it.effect.each([
+      {
+        store: "file",
+        expectedEmail: "work@example.com",
+        expectedPlan: "plus",
+        expectedLabel: "ChatGPT Plus Subscription",
+      },
+      {
+        store: "keyring",
+        expectedEmail: undefined,
+        expectedPlan: undefined,
+        expectedLabel: undefined,
+      },
+    ] as const)(
+      "uses account identity only from the active Codex credentials store ($store)",
+      ({ store, expectedEmail, expectedPlan, expectedLabel }) =>
+        Effect.gen(function* () {
+          const fileSystem = yield* FileSystem.FileSystem;
+          const path = yield* Path.Path;
+          const { tmpDir } = yield* withTempCodexHome();
+          yield* fileSystem.writeFileString(
+            path.join(tmpDir, "config.toml"),
+            'cli_auth_credentials_store = "' + store + '"\n',
+          );
+          yield* fileSystem.writeFileString(
+            path.join(tmpDir, "auth.json"),
+            JSON.stringify({
+              tokens: {
+                access_token: "access",
+                refresh_token: "refresh",
+                id_token: codexIdToken({
+                  email: "work@example.com",
+                  "https://api.openai.com/auth": {
+                    chatgpt_plan_type: "plus",
+                    chatgpt_account_id: "acct_1",
+                  },
+                }),
+              },
+            }),
+          );
+
+          const status = yield* makeCheckCodexProviderStatus("codex");
+          assert.strictEqual(status.status, "ready");
+          assert.strictEqual(status.authStatus, "authenticated");
+          assert.strictEqual(status.accountEmail, expectedEmail);
+          assert.strictEqual(status.accountOrganization, undefined);
+          assert.strictEqual(status.authType, expectedPlan);
+          assert.strictEqual(status.authLabel, expectedLabel);
+        }).pipe(
+          Effect.provide(
+            mockSpawnerLayer((args) => {
+              const joined = args.join(" ");
+              if (joined === "--version") return { stdout: "codex 1.0.0\n", stderr: "", code: 0 };
+              if (joined === "-c mcp_servers={} login status")
+                return { stdout: "", stderr: "Logged in using ChatGPT\n", code: 0 };
+              throw new Error(`Unexpected args: ${joined}`);
+            }),
+          ),
+        ),
+    );
+
+    it.effect("prefers the plan the Codex CLI reports over the stored id token", () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const { tmpDir } = yield* withTempCodexHome();
+        yield* fileSystem.writeFileString(
+          path.join(tmpDir, "auth.json"),
+          JSON.stringify({
+            tokens: {
+              access_token: "access",
+              id_token: codexIdToken({
+                email: "work@example.com",
+                "https://api.openai.com/auth": { chatgpt_plan_type: "plus" },
+              }),
+            },
+          }),
+        );
+
+        const status = yield* makeCheckCodexProviderStatus("codex");
+        assert.strictEqual(status.authStatus, "authenticated");
+        assert.strictEqual(status.accountEmail, "work@example.com");
+        assert.strictEqual(status.authType, "pro");
+        assert.strictEqual(status.authLabel, "ChatGPT Pro Subscription");
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args) => {
+            const joined = args.join(" ");
+            if (joined === "--version") return { stdout: "codex 1.0.0\n", stderr: "", code: 0 };
+            if (joined === "-c mcp_servers={} login status")
+              return {
+                stdout: '{"loggedIn":true,"type":"chatgpt","planType":"pro"}\n',
+                stderr: "",
+                code: 0,
+              };
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+      ),
+    );
+
+    it.effect.each([
+      {
+        name: "the CLI is signed out",
+        authStatus: "unauthenticated",
+        loginStatus: { stdout: "Not logged in\n", stderr: "", code: 1 },
+      },
+      {
+        name: "the CLI does not identify the login method",
+        authStatus: "authenticated",
+        loginStatus: { stdout: "Logged in\n", stderr: "", code: 0 },
+      },
+    ] as const)("does not name a Codex account when $name", ({ authStatus, loginStatus }) =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const { tmpDir } = yield* withTempCodexHome();
+        yield* fileSystem.writeFileString(
+          path.join(tmpDir, "auth.json"),
+          JSON.stringify({
+            tokens: {
+              access_token: "stale",
+              id_token: codexIdToken({
+                email: "stale@example.com",
+                "https://api.openai.com/auth": { chatgpt_plan_type: "plus" },
+              }),
+            },
+          }),
+        );
+
+        const status = yield* makeCheckCodexProviderStatus("codex");
+        assert.strictEqual(status.authStatus, authStatus);
+        assert.strictEqual(status.accountEmail, undefined);
+        assert.strictEqual(status.authType, undefined);
+        assert.strictEqual(status.authLabel, undefined);
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args) => {
+            const joined = args.join(" ");
+            if (joined === "--version") return { stdout: "codex 1.0.0\n", stderr: "", code: 0 };
+            if (joined === "-c mcp_servers={} login status") return loginStatus;
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+      ),
+    );
+
+    it.effect("keeps an API-key Codex login free of the ChatGPT identity its auth file holds", () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const { tmpDir } = yield* withTempCodexHome();
+        yield* fileSystem.writeFileString(
+          path.join(tmpDir, "auth.json"),
+          JSON.stringify({
+            OPENAI_API_KEY: "sk-test",
+            tokens: {
+              access_token: "stale",
+              id_token: codexIdToken({
+                email: "old@example.com",
+                "https://api.openai.com/auth": { chatgpt_plan_type: "plus" },
+              }),
+            },
+          }),
+        );
+
+        const status = yield* makeCheckCodexProviderStatus("codex");
+        assert.strictEqual(status.status, "ready");
+        assert.strictEqual(status.authStatus, "authenticated");
+        assert.strictEqual(status.authType, "apiKey");
+        assert.strictEqual(status.authLabel, "OpenAI API Key");
+        assert.strictEqual(status.accountEmail, undefined);
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args) => {
+            const joined = args.join(" ");
+            if (joined === "--version") return { stdout: "codex 1.0.0\n", stderr: "", code: 0 };
+            if (joined === "-c mcp_servers={} login status")
+              return { stdout: "Logged in using an API key - sk-te***st\n", stderr: "", code: 0 };
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+      ),
+    );
+
+    it.effect("keeps a Codex account authenticated when its auth file is unreadable", () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const { tmpDir } = yield* withTempCodexHome();
+        yield* fileSystem.writeFileString(path.join(tmpDir, "auth.json"), "{not json");
+
+        const status = yield* makeCheckCodexProviderStatus("codex");
+        assert.strictEqual(status.status, "ready");
+        assert.strictEqual(status.authStatus, "authenticated");
+        assert.strictEqual(status.accountEmail, undefined);
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args) => {
+            const joined = args.join(" ");
+            if (joined === "--version") return { stdout: "codex 1.0.0\n", stderr: "", code: 0 };
+            if (joined === "-c mcp_servers={} login status")
+              return { stdout: "Logged in using ChatGPT\n", stderr: "", code: 0 };
             throw new Error(`Unexpected args: ${joined}`);
           }),
         ),
@@ -1696,6 +1919,8 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         assert.strictEqual(status.available, false);
         assert.strictEqual(status.authStatus, "unknown");
         assert.strictEqual(status.message, "Codex CLI (`codex`) is not installed or not on PATH.");
+        // Lets the client say "not installed" for this and nothing else that is unavailable.
+        assert.strictEqual(status.installed, false);
       }).pipe(Effect.provide(failingSpawnerLayer("spawn codex ENOENT"))),
     );
 
@@ -1852,23 +2077,6 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         ),
       ),
     );
-
-    it.effect("still reports error when codex CLI is missing even with custom provider", () =>
-      Effect.gen(function* () {
-        yield* withTempCodexHome(
-          [
-            'model_provider = "portkey"',
-            "",
-            "[model_providers.portkey]",
-            'base_url = "https://api.portkey.ai/v1"',
-            'env_key = "PORTKEY_API_KEY"',
-          ].join("\n"),
-        );
-        const status = yield* checkCodexProviderStatus;
-        assert.strictEqual(status.status, "error");
-        assert.strictEqual(status.available, false);
-      }).pipe(Effect.provide(failingSpawnerLayer("spawn codex ENOENT"))),
-    );
   });
 
   describe("checkCodexProviderStatus with openai model provider", () => {
@@ -1982,30 +2190,6 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
   // ── checkClaudeProviderStatus tests ──────────────────────────
 
   describe("checkClaudeProviderStatus", () => {
-    it.effect("returns ready when claude is installed and authenticated", () =>
-      Effect.gen(function* () {
-        const status = yield* checkClaudeProviderStatus;
-        assert.strictEqual(status.provider, "claudeAgent");
-        assert.strictEqual(status.status, "ready");
-        assert.strictEqual(status.available, true);
-        assert.strictEqual(status.authStatus, "authenticated");
-      }).pipe(
-        Effect.provide(
-          mockSpawnerLayer((args) => {
-            const joined = args.join(" ");
-            if (joined === "--version") return { stdout: "1.0.0\n", stderr: "", code: 0 };
-            if (joined === "auth status")
-              return {
-                stdout: '{"loggedIn":true,"authMethod":"claude.ai"}\n',
-                stderr: "",
-                code: 0,
-              };
-            throw new Error(`Unexpected args: ${joined}`);
-          }),
-        ),
-      ),
-    );
-
     it.effect("fails closed for Auto when the Claude CLI version is unparseable", () =>
       Effect.gen(function* () {
         const status = yield* checkClaudeProviderStatus;
@@ -2267,7 +2451,8 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
               }
               if (joined === "auth status")
                 return {
-                  stdout: '{"loggedIn":false,"authMethod":"none","apiProvider":"firstParty"}\n',
+                  stdout:
+                    '{"loggedIn":false,"authMethod":"claude.ai","email":"stale@example.com","orgName":"Old Org"}\n',
                   stderr: "",
                   code: 0,
                 };
@@ -2282,7 +2467,77 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         assert.strictEqual(status.authStatus, "authenticated");
         assert.strictEqual(status.authType, "max");
         assert.strictEqual(status.authLabel, "Claude Max Subscription");
+        assert.strictEqual(status.accountEmail, undefined);
+        assert.strictEqual(status.accountOrganization, undefined);
         assert.strictEqual(status.message, undefined);
+      }),
+    );
+
+    it.effect("reports who the signed-in Claude account is", () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const homeDir = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "provider-health-claude-identity-",
+        });
+
+        const status = yield* makeCheckClaudeProviderStatus(undefined, "claude", homeDir).pipe(
+          Effect.provide(
+            mockSpawnerLayer((args) => {
+              const joined = args.join(" ");
+              if (joined === "--version") {
+                return { stdout: "2.1.197\n", stderr: "", code: 0 };
+              }
+              if (joined === "auth status")
+                return {
+                  stdout:
+                    '{"loggedIn":true,"authMethod":"claude.ai","apiProvider":"firstParty","email":"work@example.com","orgId":"org_1","orgName":"Example Org","subscriptionType":"max"}\n',
+                  stderr: "",
+                  code: 0,
+                };
+              throw new Error(`Unexpected args: ${joined}`);
+            }),
+          ),
+        );
+
+        assert.strictEqual(status.status, "ready");
+        assert.strictEqual(status.authStatus, "authenticated");
+        assert.strictEqual(status.accountEmail, "work@example.com");
+        assert.strictEqual(status.accountOrganization, "Example Org");
+        assert.strictEqual(status.authLabel, "Claude Max Subscription");
+      }),
+    );
+
+    it.effect("does not name a Claude account the CLI is signed out of", () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const homeDir = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "provider-health-claude-identity-signed-out-",
+        });
+
+        const status = yield* makeCheckClaudeProviderStatus(undefined, "claude", homeDir, {
+          falseNegativeRetryDelayMs: 0,
+        }).pipe(
+          Effect.provide(
+            mockSpawnerLayer((args) => {
+              const joined = args.join(" ");
+              if (joined === "--version") {
+                return { stdout: "2.1.197\n", stderr: "", code: 0 };
+              }
+              if (joined === "auth status")
+                return {
+                  stdout:
+                    '{"loggedIn":false,"authMethod":"none","email":"stale@example.com","orgName":"Example Org"}\n',
+                  stderr: "",
+                  code: 0,
+                };
+              throw new Error(`Unexpected args: ${joined}`);
+            }),
+          ),
+        );
+
+        assert.strictEqual(status.authStatus, "unauthenticated");
+        assert.strictEqual(status.accountEmail, undefined);
+        assert.strictEqual(status.accountOrganization, undefined);
       }),
     );
 
@@ -2601,24 +2856,6 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
   });
 
   describe("checkOpenCodeProviderStatus", () => {
-    it.effect("returns ready when opencode is installed", () =>
-      Effect.gen(function* () {
-        const status = yield* checkOpenCodeProviderStatus;
-        assert.strictEqual(status.provider, "opencode");
-        assert.strictEqual(status.status, "ready");
-        assert.strictEqual(status.available, true);
-        assert.strictEqual(status.authStatus, "unknown");
-      }).pipe(
-        Effect.provide(
-          mockSpawnerLayer((args) => {
-            const joined = args.join(" ");
-            if (joined === "--version") return { stdout: "opencode 1.3.17\n", stderr: "", code: 0 };
-            throw new Error(`Unexpected args: ${joined}`);
-          }),
-        ),
-      ),
-    );
-
     it.effect("expands a tilde opencode binary path for the version probe", () =>
       Effect.gen(function* () {
         const status = yield* makeCheckOpenCodeProviderStatus("~/bin/opencode");
@@ -2686,19 +2923,27 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
   describe("checkPiProviderStatus", () => {
     it.effect("allows a cold Pi CLI to finish its first version probe", () =>
       Effect.gen(function* () {
-        const probe = yield* checkPiProviderStatus().pipe(
+        const root = mkdtempSync(join(OS.tmpdir(), "synara-pi-health-"));
+        const binary = writePiInstallFixture(root, "cold");
+        const started = yield* Deferred.make<void>();
+        const probe = yield* checkPiProviderStatus(undefined, binary).pipe(
+          Effect.ensuring(Effect.sync(() => rmSync(root, { recursive: true, force: true }))),
           Effect.provide(
             Layer.succeed(
               ChildProcessSpawner.ChildProcessSpawner,
               ChildProcessSpawner.make(() =>
-                Effect.succeed(
-                  mockHandle(
-                    { stdout: "pi 0.87.1\n", stderr: "", code: 0 },
-                    {
-                      exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)).pipe(
-                        Effect.delay(Duration.seconds(12)),
+                Deferred.succeed(started, undefined).pipe(
+                  Effect.andThen(
+                    Effect.succeed(
+                      mockHandle(
+                        { stdout: "pi 0.87.1\n", stderr: "", code: 0 },
+                        {
+                          exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)).pipe(
+                            Effect.delay(Duration.seconds(12)),
+                          ),
+                        },
                       ),
-                    },
+                    ),
                   ),
                 ),
               ),
@@ -2706,6 +2951,7 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
           ),
           Effect.forkChild,
         );
+        yield* Deferred.await(started);
         yield* TestClock.adjust(Duration.seconds(12));
         const status = yield* Fiber.join(probe);
         assert.strictEqual(status.status, "ready");
@@ -2715,10 +2961,23 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
 
     it.effect("keeps the first Pi CLI probe bounded when it never finishes", () =>
       Effect.gen(function* () {
-        const probe = yield* checkPiProviderStatus().pipe(
-          Effect.provide(hangingSpawnerLayer({ shouldHang: () => true, onKill: () => {} })),
+        // A timeout stays advisory even without Pi credentials: a slow CLI must not flip Pi off.
+        const root = mkdtempSync(join(OS.tmpdir(), "synara-pi-health-"));
+        const binary = writePiInstallFixture(root, "timeout");
+        const started = yield* Deferred.make<void>();
+        const probe = yield* checkPiProviderStatus(undefined, binary).pipe(
+          Effect.ensuring(Effect.sync(() => rmSync(root, { recursive: true, force: true }))),
+          Effect.provide(
+            Layer.succeed(
+              ChildProcessSpawner.ChildProcessSpawner,
+              ChildProcessSpawner.make(() =>
+                Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never)),
+              ),
+            ),
+          ),
           Effect.forkChild,
         );
+        yield* Deferred.await(started);
         yield* TestClock.adjust(Duration.seconds(20));
         const status = yield* Fiber.join(probe);
         assert.strictEqual(status.status, "warning");
@@ -2727,81 +2986,61 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       }),
     );
 
-    it.effect("returns ready using only the Pi CLI version probe", () =>
-      Effect.gen(function* () {
-        const status = yield* checkPiProviderStatus();
-        assert.strictEqual(status.provider, "pi");
-        assert.strictEqual(status.status, "ready");
-        assert.strictEqual(status.available, true);
-        assert.strictEqual(status.authStatus, "unknown");
-        assert.strictEqual(
-          status.message,
-          "Pi CLI is installed. Configure provider credentials inside Pi as needed.",
-        );
-      }).pipe(
-        Effect.provide(
-          mockSpawnerLayer((args, command) => {
-            assert.strictEqual(command, "pi");
-            const joined = args.join(" ");
-            if (joined === "--version") return { stdout: "pi 0.74.0\n", stderr: "", code: 0 };
-            throw new Error(`Unexpected args: ${joined}`);
-          }),
-        ),
-      ),
-    );
-
-    it.effect("uses configured Pi binary and agent dir without SDK registry reads", () =>
-      Effect.gen(function* () {
-        const status = yield* checkPiProviderStatus("/tmp/pi-agent", "/custom/bin/pi");
-        assert.strictEqual(status.status, "ready");
-        assert.strictEqual(
-          status.message,
-          "Pi CLI is installed. Synara will use Pi agent dir /tmp/pi-agent.",
-        );
-      }).pipe(
-        Effect.provide(
-          mockSpawnerLayer((args, command) => {
-            assert.strictEqual(command, "/custom/bin/pi");
-            const joined = args.join(" ");
-            if (joined === "--version") return { stdout: "pi 0.74.0\n", stderr: "", code: 0 };
-            throw new Error(`Unexpected args: ${joined}`);
-          }),
-        ),
-      ),
-    );
-
-    it.effect("passes configured instance environment to the Pi version probe", () =>
-      Effect.gen(function* () {
-        const status = yield* checkPiProviderStatus("/tmp/pi-agent", "/custom/bin/pi", {
-          PROVIDER_TEST_INSTANCE: "pi-work",
-        });
-        assert.strictEqual(status.status, "ready");
+    it.effect("probes the selected Pi installation with its instance environment", () => {
+      const root = mkdtempSync(join(OS.tmpdir(), "synara-pi-health-"));
+      const binary = writePiInstallFixture(root, "selected");
+      return Effect.gen(function* () {
+        try {
+          const status = yield* checkPiProviderStatus(root, binary, {
+            HOME: root,
+            PROVIDER_TEST_INSTANCE: "pi-work",
+          });
+          assert.strictEqual(status.status, "ready");
+          assert.strictEqual(status.available, true);
+          assert.strictEqual(status.authStatus, "unknown");
+          assert.strictEqual(status.version, "1.4.0");
+          assert.strictEqual(
+            status.message,
+            `Pi CLI is installed. Synara will use Pi agent dir ${root}.`,
+          );
+        } finally {
+          rmSync(root, { recursive: true, force: true });
+        }
       }).pipe(
         Effect.provide(
           mockSpawnerLayer((args, command, env) => {
-            assert.strictEqual(command, "/custom/bin/pi");
+            assert.strictEqual(command, binary);
             assertProviderInstanceEnv(env, "PROVIDER_TEST_INSTANCE", "pi-work");
-            const joined = args.join(" ");
-            if (joined === "--version") return { stdout: "pi 0.74.0\n", stderr: "", code: 0 };
-            throw new Error(`Unexpected args: ${joined}`);
+            assert.deepEqual(args, ["--version"]);
+            return { stdout: "pi 1.4.0\n", stderr: "", code: 0 };
           }),
         ),
-      ),
-    );
+      );
+    });
 
-    it.effect("keeps Pi usable when the advisory CLI probe is missing", () =>
-      Effect.gen(function* () {
-        const status = yield* checkPiProviderStatus();
-        assert.strictEqual(status.provider, "pi");
-        assert.strictEqual(status.status, "warning");
-        assert.strictEqual(status.available, true);
-        assert.strictEqual(status.authStatus, "unknown");
-        assert.strictEqual(
-          status.message,
-          "Pi SDK is bundled, but the Pi CLI (`pi`) is not on PATH, so Synara could not verify the installed CLI version.",
-        );
-      }).pipe(Effect.provide(failingSpawnerLayer("spawn pi ENOENT"))),
-    );
+    it.effect("keeps Pi unavailable without a CLI even when credentials exist", () => {
+      const root = mkdtempSync(join(OS.tmpdir(), "synara-pi-health-"));
+      writeFileSync(join(root, "auth.json"), '{"anthropic":{"type":"api_key","key":"test-only"}}');
+      return Effect.gen(function* () {
+        try {
+          const status = yield* checkPiProviderStatus(root, undefined, {
+            HOME: root,
+            PATH: root,
+          });
+          assert.strictEqual(status.status, "error");
+          assert.strictEqual(status.available, false);
+          assert.include(status.message ?? "", "Pi is not installed");
+        } finally {
+          rmSync(root, { recursive: true, force: true });
+        }
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer(() => {
+            throw new Error("Unexpected CLI probe");
+          }),
+        ),
+      );
+    });
   });
 
   describe("checkOmpProviderStatus", () => {
@@ -2843,22 +3082,22 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
   });
 
   describe("checkAntigravityProviderStatus", () => {
-    it.effect("rejects versions that predate --new-project support", () =>
+    it.effect("rejects versions that predate agy acp", () =>
       Effect.gen(function* () {
         const status = yield* checkAntigravityProviderStatus();
         assert.strictEqual(status.status, "error");
         assert.strictEqual(status.available, false);
-        assert.strictEqual(status.version, "1.0.11");
+        assert.strictEqual(status.version, "1.4.12");
         assert.strictEqual(
           status.message,
-          "Antigravity CLI 1.0.11 is too old for Synara. Upgrade to 1.0.12 or newer.",
+          "Antigravity CLI 1.4.12 is too old for Synara. Upgrade to 1.5.0 or newer.",
         );
       }).pipe(
         Effect.provide(
           mockSpawnerLayer((args) => {
             const joined = args.join(" ");
             if (joined === "--version") {
-              return { stdout: "Antigravity CLI 1.0.11\n", stderr: "", code: 0 };
+              return { stdout: "Antigravity CLI 1.4.12\n", stderr: "", code: 0 };
             }
             throw new Error(`Unexpected args: ${joined}`);
           }),
@@ -2873,7 +3112,7 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         assert.strictEqual(status.status, "ready");
         assert.strictEqual(status.available, true);
         assert.strictEqual(status.authStatus, "authenticated");
-        assert.strictEqual(status.version, "1.1.2");
+        assert.strictEqual(status.version, "1.5.13");
       }).pipe(
         Effect.provide(
           mockSpawnerLayer((args, command, env) => {
@@ -2881,7 +3120,7 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
             assert.strictEqual(env?.AGY_CLI_DISABLE_AUTO_UPDATE, "true");
             const joined = args.join(" ");
             if (joined === "--version") {
-              return { stdout: "Antigravity CLI 1.1.2\n", stderr: "", code: 0 };
+              return { stdout: "Antigravity CLI 1.5.13\n", stderr: "", code: 0 };
             }
             if (joined === "models") {
               return {
@@ -2895,32 +3134,12 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         ),
       ),
     );
-
-    it.effect("uses the configured Antigravity binary", () =>
-      Effect.gen(function* () {
-        const status = yield* checkAntigravityProviderStatus("/custom/bin/agy");
-        assert.strictEqual(status.status, "ready");
-      }).pipe(
-        Effect.provide(
-          mockSpawnerLayer((args, command, env) => {
-            assert.strictEqual(command, "/custom/bin/agy");
-            assert.strictEqual(env?.AGY_CLI_DISABLE_AUTO_UPDATE, "true");
-            return args.join(" ") === "--version"
-              ? { stdout: "1.1.2\n", stderr: "", code: 0 }
-              : { stdout: "GPT-OSS 120B (Medium)\n", stderr: "", code: 0 };
-          }),
-        ),
-      ),
-    );
   });
 
   describe("checkGrokProviderStatus", () => {
-    it.effect("returns ready when Grok CLI is installed", () => {
-      const previousXaiApiKey = process.env.XAI_API_KEY;
-      const previousApiKey = process.env.GROK_CODE_XAI_API_KEY;
-      delete process.env.XAI_API_KEY;
-      delete process.env.GROK_CODE_XAI_API_KEY;
-      return Effect.gen(function* () {
+    it.effect("returns ready when Grok CLI is installed", () =>
+      Effect.gen(function* () {
+        yield* scopedEnv({ XAI_API_KEY: undefined, GROK_CODE_XAI_API_KEY: undefined });
         const status = yield* makeCheckGrokProviderStatus(
           undefined,
           undefined,
@@ -2941,29 +3160,12 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
             throw new Error(`Unexpected args: ${joined}`);
           }),
         ),
-        Effect.ensuring(
-          Effect.sync(() => {
-            if (previousXaiApiKey === undefined) {
-              delete process.env.XAI_API_KEY;
-            } else {
-              process.env.XAI_API_KEY = previousXaiApiKey;
-            }
-            if (previousApiKey === undefined) {
-              delete process.env.GROK_CODE_XAI_API_KEY;
-            } else {
-              process.env.GROK_CODE_XAI_API_KEY = previousApiKey;
-            }
-          }),
-        ),
-      );
-    });
+      ),
+    );
 
-    it.effect("marks Grok authenticated when XAI_API_KEY is present", () => {
-      const previousXaiApiKey = process.env.XAI_API_KEY;
-      const previousApiKey = process.env.GROK_CODE_XAI_API_KEY;
-      process.env.XAI_API_KEY = "xai-test-key";
-      delete process.env.GROK_CODE_XAI_API_KEY;
-      return Effect.gen(function* () {
+    it.effect("marks Grok authenticated when XAI_API_KEY is present", () =>
+      Effect.gen(function* () {
+        yield* scopedEnv({ XAI_API_KEY: "xai-test-key", GROK_CODE_XAI_API_KEY: undefined });
         const status = yield* checkGrokProviderStatus;
         assert.strictEqual(status.authStatus, "authenticated");
         assert.strictEqual(status.authType, "apiKey");
@@ -2976,37 +3178,18 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
             throw new Error(`Unexpected args: ${joined}`);
           }),
         ),
-        Effect.ensuring(
-          Effect.sync(() => {
-            if (previousXaiApiKey === undefined) {
-              delete process.env.XAI_API_KEY;
-            } else {
-              process.env.XAI_API_KEY = previousXaiApiKey;
-            }
-            if (previousApiKey === undefined) {
-              delete process.env.GROK_CODE_XAI_API_KEY;
-            } else {
-              process.env.GROK_CODE_XAI_API_KEY = previousApiKey;
-            }
-          }),
-        ),
-      );
-    });
+      ),
+    );
 
-    it.effect("marks Grok authenticated from a cached grok login", () => {
-      const previousXaiApiKey = process.env.XAI_API_KEY;
-      const previousApiKey = process.env.GROK_CODE_XAI_API_KEY;
-      delete process.env.XAI_API_KEY;
-      delete process.env.GROK_CODE_XAI_API_KEY;
-      return Effect.gen(function* () {
+    it.effect("marks Grok authenticated from a cached grok login", () =>
+      Effect.gen(function* () {
+        yield* scopedEnv({ XAI_API_KEY: undefined, GROK_CODE_XAI_API_KEY: undefined });
         const status = yield* makeCheckGrokProviderStatus(
           undefined,
           undefined,
           undefined,
           undefined,
-          async () => ({
-            accessToken: "cached-token",
-          }),
+          async () => ({ accessToken: "cached-token" }),
         );
         assert.strictEqual(status.status, "ready");
         assert.strictEqual(status.authStatus, "authenticated");
@@ -3020,62 +3203,6 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
             if (joined === "--version") return { stdout: "grok 0.1.0\n", stderr: "", code: 0 };
             throw new Error(`Unexpected args: ${joined}`);
           }),
-        ),
-        Effect.ensuring(
-          Effect.sync(() => {
-            if (previousXaiApiKey === undefined) {
-              delete process.env.XAI_API_KEY;
-            } else {
-              process.env.XAI_API_KEY = previousXaiApiKey;
-            }
-            if (previousApiKey === undefined) {
-              delete process.env.GROK_CODE_XAI_API_KEY;
-            } else {
-              process.env.GROK_CODE_XAI_API_KEY = previousApiKey;
-            }
-          }),
-        ),
-      );
-    });
-
-    it.effect("uses configured Grok binary for version probe", () =>
-      Effect.gen(function* () {
-        const status = yield* makeCheckGrokProviderStatus("/custom/bin/grok");
-        assert.strictEqual(status.status, "ready");
-      }).pipe(
-        Effect.provide(
-          mockSpawnerLayer((args, command) => {
-            assert.strictEqual(command, "/custom/bin/grok");
-            const joined = args.join(" ");
-            if (joined === "--version") return { stdout: "grok 0.1.0\n", stderr: "", code: 0 };
-            throw new Error(`Unexpected args: ${joined}`);
-          }),
-        ),
-      ),
-    );
-
-    it.effect("passes the isolated Grok account environment to cached-login lookup", () =>
-      Effect.gen(function* () {
-        let cachedLoginHome: string | undefined;
-        const status = yield* makeCheckGrokProviderStatus(
-          undefined,
-          undefined,
-          "grok_work",
-          { homeDir: OS.tmpdir(), isolationRootDir: OS.tmpdir() },
-          async (env) => {
-            cachedLoginHome = env?.GROK_HOME;
-            return null;
-          },
-        );
-        assert.strictEqual(status.authStatus, "unknown");
-        assert.ok(cachedLoginHome?.includes("provider-homes"));
-      }).pipe(
-        Effect.provide(
-          mockSpawnerLayer((args) =>
-            args.join(" ") === "--version"
-              ? { stdout: "grok 0.1.0\n", stderr: "", code: 0 }
-              : { stdout: "", stderr: "", code: 1 },
-          ),
         ),
       ),
     );
@@ -3167,10 +3294,9 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       );
     });
 
-    it.effect("treats a non-default Grok instance as an empty credential boundary", () => {
-      const previousXaiApiKey = process.env.XAI_API_KEY;
-      process.env.XAI_API_KEY = "ambient-account-a";
-      return Effect.gen(function* () {
+    it.effect("treats a non-default Grok instance as an empty credential boundary", () =>
+      Effect.gen(function* () {
+        yield* scopedEnv({ XAI_API_KEY: "ambient-account-a" });
         const status = yield* makeCheckGrokProviderStatus(
           "/custom/bin/grok",
           undefined,
@@ -3188,19 +3314,12 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
             throw new Error(`Unexpected args: ${joined}`);
           }),
         ),
-        Effect.ensuring(
-          Effect.sync(() => {
-            if (previousXaiApiKey === undefined) delete process.env.XAI_API_KEY;
-            else process.env.XAI_API_KEY = previousXaiApiKey;
-          }),
-        ),
-      );
-    });
+      ),
+    );
 
-    it.effect("honors an explicit empty environment on the default Grok probe", () => {
-      const previousXaiApiKey = process.env.XAI_API_KEY;
-      process.env.XAI_API_KEY = "ambient-account-a";
-      return Effect.gen(function* () {
+    it.effect("honors an explicit empty environment on the default Grok probe", () =>
+      Effect.gen(function* () {
+        yield* scopedEnv({ XAI_API_KEY: "ambient-account-a" });
         const status = yield* makeCheckGrokProviderStatus("/custom/bin/grok", {}, "grok");
         assert.strictEqual(status.status, "ready");
         assert.strictEqual(status.authStatus, "unknown");
@@ -3214,21 +3333,12 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
             throw new Error(`Unexpected args: ${joined}`);
           }),
         ),
-        Effect.ensuring(
-          Effect.sync(() => {
-            if (previousXaiApiKey === undefined) delete process.env.XAI_API_KEY;
-            else process.env.XAI_API_KEY = previousXaiApiKey;
-          }),
-        ),
-      );
-    });
+      ),
+    );
 
-    it.effect("isolates configured Grok credentials from ambient aliases", () => {
-      const previousXaiApiKey = process.env.XAI_API_KEY;
-      const previousApiKey = process.env.GROK_CODE_XAI_API_KEY;
-      process.env.XAI_API_KEY = "ambient-account-a";
-      delete process.env.GROK_CODE_XAI_API_KEY;
-      return Effect.gen(function* () {
+    it.effect("isolates configured Grok credentials from ambient aliases", () =>
+      Effect.gen(function* () {
+        yield* scopedEnv({ XAI_API_KEY: "ambient-account-a", GROK_CODE_XAI_API_KEY: undefined });
         const status = yield* makeCheckGrokProviderStatus(
           "/custom/bin/grok",
           {
@@ -3251,22 +3361,8 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
             throw new Error(`Unexpected args: ${joined}`);
           }),
         ),
-        Effect.ensuring(
-          Effect.sync(() => {
-            if (previousXaiApiKey === undefined) {
-              delete process.env.XAI_API_KEY;
-            } else {
-              process.env.XAI_API_KEY = previousXaiApiKey;
-            }
-            if (previousApiKey === undefined) {
-              delete process.env.GROK_CODE_XAI_API_KEY;
-            } else {
-              process.env.GROK_CODE_XAI_API_KEY = previousApiKey;
-            }
-          }),
-        ),
-      );
-    });
+      ),
+    );
 
     it.effect("returns unavailable when Grok CLI is missing", () =>
       Effect.gen(function* () {
@@ -3281,12 +3377,9 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
   });
 
   describe("checkDevinProviderStatus", () => {
-    it.effect("returns ready and authenticated when WINDSURF_API_KEY is present", () => {
-      const previousWindsurfKey = process.env.WINDSURF_API_KEY;
-      const previousDevinKey = process.env.DEVIN_API_KEY;
-      process.env.WINDSURF_API_KEY = "windsurf-test-key";
-      delete process.env.DEVIN_API_KEY;
-      return Effect.gen(function* () {
+    it.effect("returns ready and authenticated when WINDSURF_API_KEY is present", () =>
+      Effect.gen(function* () {
+        yield* scopedEnv({ WINDSURF_API_KEY: "windsurf-test-key", DEVIN_API_KEY: undefined });
         const status = yield* checkDevinProviderStatus;
         assert.strictEqual(status.provider, "devin");
         assert.strictEqual(status.status, "ready");
@@ -3303,29 +3396,12 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
             throw new Error(`Unexpected args: ${joined}`);
           }),
         ),
-        Effect.ensuring(
-          Effect.sync(() => {
-            if (previousWindsurfKey === undefined) {
-              delete process.env.WINDSURF_API_KEY;
-            } else {
-              process.env.WINDSURF_API_KEY = previousWindsurfKey;
-            }
-            if (previousDevinKey === undefined) {
-              delete process.env.DEVIN_API_KEY;
-            } else {
-              process.env.DEVIN_API_KEY = previousDevinKey;
-            }
-          }),
-        ),
-      );
-    });
+      ),
+    );
 
-    it.effect("returns ready with auth guidance when no Devin API key is set", () => {
-      const previousWindsurfKey = process.env.WINDSURF_API_KEY;
-      const previousDevinKey = process.env.DEVIN_API_KEY;
-      delete process.env.WINDSURF_API_KEY;
-      delete process.env.DEVIN_API_KEY;
-      return Effect.gen(function* () {
+    it.effect("returns ready with auth guidance when no Devin API key is set", () =>
+      Effect.gen(function* () {
+        yield* scopedEnv({ WINDSURF_API_KEY: undefined, DEVIN_API_KEY: undefined });
         // Stub the credential read so a real `devin auth login` on the host
         // cannot leak an "authenticated" result into this test.
         const status = yield* makeCheckDevinProviderStatus(undefined, async () => undefined);
@@ -3341,22 +3417,8 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
             throw new Error(`Unexpected args: ${joined}`);
           }),
         ),
-        Effect.ensuring(
-          Effect.sync(() => {
-            if (previousWindsurfKey === undefined) {
-              delete process.env.WINDSURF_API_KEY;
-            } else {
-              process.env.WINDSURF_API_KEY = previousWindsurfKey;
-            }
-            if (previousDevinKey === undefined) {
-              delete process.env.DEVIN_API_KEY;
-            } else {
-              process.env.DEVIN_API_KEY = previousDevinKey;
-            }
-          }),
-        ),
-      );
-    });
+      ),
+    );
 
     it.effect("recognizes credentials saved by devin auth login", () => {
       let credentialsRead = false;

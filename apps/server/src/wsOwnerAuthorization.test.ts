@@ -2,7 +2,7 @@ import { Effect } from "effect";
 import { describe, expect, it, vi } from "vitest";
 
 import { CurrentWsSessionRole } from "./wsConnectionSessions";
-import { requireWsOwnerSession } from "./wsOwnerAuthorization";
+import { requireUsageAnalyticsAccess, requireWsOwnerSession } from "./wsOwnerAuthorization";
 
 describe("owner-only read admission", () => {
   it("requires the connection owner role before calling a reader", async () => {
@@ -18,4 +18,16 @@ describe("owner-only read admission", () => {
     ).resolves.toBe("history");
     expect(read).toHaveBeenCalledOnce();
   });
+});
+
+it("keeps external provider session analytics owner-only", async () => {
+  const check = (scope: "mac" | "synara" | undefined, role: "owner" | "client") =>
+    Effect.runPromise(
+      requireUsageAnalyticsAccess(scope).pipe(Effect.provideService(CurrentWsSessionRole, role)),
+    );
+
+  await expect(check("mac", "client")).rejects.toThrow("Owner authorization");
+  await expect(check("mac", "owner")).resolves.toBeUndefined();
+  await expect(check("synara", "client")).resolves.toBeUndefined();
+  await expect(check(undefined, "client")).resolves.toBeUndefined();
 });

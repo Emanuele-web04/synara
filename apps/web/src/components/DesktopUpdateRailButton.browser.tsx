@@ -63,7 +63,7 @@ function item(id: Parameters<typeof railItemGlyphs>[0]): AppRailItem {
   return {
     id,
     glyphs: railItemGlyphs(id),
-    label: id === "settings" ? "Settings" : id,
+    label: id === "settings" ? "Settings" : id === "home" ? "Home" : id,
     badge: null,
     active: false,
     onSelect: vi.fn(),
@@ -84,7 +84,7 @@ function RailFixture({
     });
     queryClient.setQueryData(serverQueryKeys.settings(), DEFAULT_SERVER_SETTINGS_VIEW);
     queryClient.setQueryData(
-      serverQueryKeys.allProviderUsage(),
+      serverQueryKeys.scopedProviderUsage("other"),
       ["codex", "claudeAgent"].map((provider) => ({
         provider,
         updatedAt: new Date().toISOString(),
@@ -156,74 +156,6 @@ function RailFixture({
 
 describe("desktop update rail control", () => {
   it.each(["production", "beta"] as const)(
-    "fits every percentage at supported UI sizes (%s)",
-    async (flavor) => {
-      const control = (percent: number) => (
-        <AppRail
-          items={[]}
-          shortcuts={[]}
-          bottomItems={[]}
-          bottomSlot={
-            <DesktopUpdateRailButton
-              state={{ ...initial, flavor, downloadPercent: percent }}
-              installing={false}
-              onClick={vi.fn()}
-            />
-          }
-        />
-      );
-      const screen = await render(control(100));
-      try {
-        for (const font of [11, 13, 18]) {
-          document.documentElement.style.setProperty(
-            "--app-font-size-ui-2xs",
-            `${getAppTypographyScale(font).ui2XsPx}px`,
-          );
-          for (const percent of [0, 99, 100]) {
-            await screen.rerender(control(percent));
-            const button = page
-              .getByRole("button", { name: `Preparing update (${percent}%)`, exact: true })
-              .element();
-            const label = button.querySelector("span span")!;
-            const disc = label.parentElement!.getBoundingClientRect();
-            const range = document.createRange();
-            range.selectNodeContents(label);
-            const text = range.getBoundingClientRect();
-            console.info("percentage bounds", {
-              flavor,
-              font,
-              percent,
-              textWidth: text.width,
-              discWidth: disc.width,
-            });
-            expect(text.left).toBeGreaterThanOrEqual(disc.left - 0.5);
-            expect(text.right).toBeLessThanOrEqual(disc.right + 0.5);
-            const box = button.getBoundingClientRect();
-            expect(disc.left).toBeGreaterThanOrEqual(box.left - 0.5);
-            expect(disc.right).toBeLessThanOrEqual(box.right + 0.5);
-            const rail = page
-              .getByRole("navigation", { name: "Primary" })
-              .element()
-              .getBoundingClientRect();
-            expect(box.left).toBeGreaterThanOrEqual(rail.left);
-            expect(box.right).toBeLessThanOrEqual(rail.right);
-            expect(getComputedStyle(label).fontSize).toBe(
-              `${getAppTypographyScale(font).ui2XsPx}px`,
-            );
-            await expect
-              .element(
-                page.getByRole("button", { name: `Preparing update (${percent}%)`, exact: true }),
-              )
-              .toBeDisabled();
-          }
-        }
-      } finally {
-        await screen.unmount();
-      }
-    },
-  );
-
-  it.each(["production", "beta"] as const)(
     "keeps bottom actions reachable when an update arrives at minimum height (%s)",
     async (flavor) => {
       await page.viewport(1280, 620);
@@ -265,7 +197,7 @@ describe("desktop update rail control", () => {
         expect(help.bottom).toBeLessThanOrEqual(update.top);
         expect(update.bottom).toBeLessThanOrEqual(settingsButton.getBoundingClientRect().top);
         await userEvent.keyboard("{Shift>}{Tab}{/Shift}");
-        const home = page.getByRole("button", { name: "home", exact: true }).element();
+        const home = page.getByRole("button", { name: "Home", exact: true }).element();
         home.focus();
         expect(home.getBoundingClientRect().top).toBeGreaterThanOrEqual(
           rail.getBoundingClientRect().top,

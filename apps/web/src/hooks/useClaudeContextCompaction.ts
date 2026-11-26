@@ -12,6 +12,7 @@ import {
   derivePendingApprovals,
   derivePendingUserInputs,
 } from "../session-logic";
+import { useTranslation } from "~/i18n";
 
 /** Request Claude's native command through the normal durable user-turn path. */
 export function useClaudeContextCompaction({
@@ -27,6 +28,8 @@ export function useClaudeContextCompaction({
   onAccepted: (threadId: ThreadId) => void;
   onFailure: () => void;
 }) {
+  const { t } = useTranslation();
+
   const inFlightThreadIdsRef = useRef(new Set<ThreadId>());
   const activeThreadIdRef = useRef(threadId);
   const [submittingThreadIds, setSubmittingThreadIds] = useState<ReadonlySet<ThreadId>>(
@@ -144,11 +147,13 @@ export function useClaudeContextCompaction({
       if (activeThreadIdRef.current === threadId) onFailure();
       const toastId = toastManager.add({
         type: "error",
-        title: rejected ? "Could not request compaction" : "Could not confirm compaction",
+        title: rejected
+          ? t("common:couldNotRequestCompaction")
+          : t("common:couldNotConfirmCompaction"),
         description:
           rejected && error instanceof Error
             ? error.message
-            : "Retry to confirm the same request. A second compaction will not be created.",
+            : t("common:retryToConfirmTheSameRequestASecondCompaction"),
       });
       reportToastIssue(toastId, {
         code: rejected ? "claude.compaction.request-failed" : "claude.compaction.uncertain",
@@ -160,7 +165,7 @@ export function useClaudeContextCompaction({
       inFlightThreadIdsRef.current.delete(threadId);
       setSubmittingThreadIds((current) => new Set([...current].filter((id) => id !== threadId)));
     }
-  }, [disabledReason, onAccepted, onBegin, onFailure, threadId]);
+  }, [disabledReason, onAccepted, onBegin, onFailure, threadId, t]);
 
   return { compact, isSubmitting: submittingThreadIds.has(threadId) };
 }

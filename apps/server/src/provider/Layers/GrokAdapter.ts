@@ -442,11 +442,39 @@ export function scopeGrokToolCallStateForTurn(
   return scopeAcpToolCallStateForTurn(PROVIDER, turnId, toolCall);
 }
 
-function parseGrokResume(raw: unknown): { sessionId: string } | undefined {
+// `model` and `reasoningEffort` record the `-m` / `--reasoning-effort` flags the
+// native session was created with. Grok only reads them at process start.
+interface GrokResume {
+  readonly sessionId: string;
+  readonly model?: string;
+  readonly reasoningEffort?: string;
+}
+
+function parseGrokResume(raw: unknown): GrokResume | undefined {
   if (!isRecord(raw)) return undefined;
   if (raw.schemaVersion !== GROK_RESUME_VERSION) return undefined;
   if (typeof raw.sessionId !== "string" || !raw.sessionId.trim()) return undefined;
-  return { sessionId: raw.sessionId.trim() };
+  const model = typeof raw.model === "string" ? raw.model.trim() : "";
+  const reasoningEffort = typeof raw.reasoningEffort === "string" ? raw.reasoningEffort.trim() : "";
+  return {
+    sessionId: raw.sessionId.trim(),
+    ...(model ? { model } : {}),
+    ...(reasoningEffort ? { reasoningEffort } : {}),
+  };
+}
+
+function makeGrokResumeCursor(
+  sessionId: string,
+  spawn:
+    | { readonly model?: string | undefined; readonly reasoningEffort?: string | undefined }
+    | undefined,
+) {
+  return {
+    schemaVersion: GROK_RESUME_VERSION,
+    sessionId,
+    ...(spawn?.model ? { model: spawn.model } : {}),
+    ...(spawn?.reasoningEffort ? { reasoningEffort: spawn.reasoningEffort } : {}),
+  };
 }
 
 function formatGrokModelName(slug: string): string {
@@ -1066,7 +1094,8 @@ export function makeGrokAdapter(
           );
           let ctx!: GrokSessionContext;
 
-          const resumeSessionId = parseGrokResume(input.resumeCursor)?.sessionId;
+          const resume = parseGrokResume(input.resumeCursor);
+          const resumeSessionId = resume?.sessionId;
           const acpNativeLoggers = makeAcpNativeLoggers({
             nativeEventLogger,
             provider: PROVIDER,
@@ -1100,6 +1129,32 @@ export function makeGrokAdapter(
               : {}),
             ...runtimeGrokModelSettings,
           };
+
+          // Grok has no in-session model switch, and a reloaded session is not
+          // known to adopt new `-m` / `--reasoning-effort` flags. Reloading one
+          // created with other flags (or whose cursor predates recording them)
+          // could keep the old model running, so report the cursor as unusable:
+          // ProviderService then starts a fresh session and carries the transcript.
+          if (
+            resume !== undefined &&
+            runtimeGrokModelSettings.model !== undefined &&
+            (resume.model !== runtimeGrokModelSettings.model ||
+              resume.reasoningEffort !== runtimeGrokModelSettings.reasoningEffort)
+          ) {
+            yield* Effect.logInfo("grok.acp.resume.model-mismatch", {
+              threadId: input.threadId,
+              resumedModel: resume.model,
+              resumedReasoningEffort: resume.reasoningEffort,
+              model: runtimeGrokModelSettings.model,
+              reasoningEffort: runtimeGrokModelSettings.reasoningEffort,
+            });
+            return yield* new ProviderAdapterProcessError({
+              provider: PROVIDER,
+              threadId: input.threadId,
+              detail: `Grok session '${resume.sessionId}' was created for different model settings than '${runtimeGrokModelSettings.model}'.`,
+              reason: "resume-state-unavailable",
+            });
+          }
 
           yield* Effect.logInfo("grok.acp.start", {
             marker: GROK_ACP_TRANSPORT_DEBUG_MARKER,
@@ -1354,10 +1409,12 @@ export function makeGrokAdapter(
             cwd,
             model: grokModelSelection?.model,
             threadId: input.threadId,
-            resumeCursor: {
-              schemaVersion: GROK_RESUME_VERSION,
-              sessionId: started.sessionId,
-            },
+            resumeCursor: makeGrokResumeCursor(
+              started.sessionId,
+              resume !== undefined && started.sessionId === resume.sessionId
+                ? resume
+                : runtimeGrokModelSettings,
+            ),
             createdAt: now,
             updatedAt: now,
           };
@@ -2540,6 +2597,7 @@ export function makeGrokAdapter(
           models,
           source: cliModels.length > 0 ? "grok-cli" : "grok-cli+xai-api",
           cached: false,
+          degraded: cliModels.length === 0,
         } satisfies ProviderListModelsResult;
       }).pipe(
         Effect.scoped,
@@ -2649,12 +2707,13 @@ export function makeGrokAdapter(
         // a committed lifecycle lease and the target's first turn resumes it
         // there. Starting the runtime here would capture an undefined
         // lifecycle generation, orphaning the fork's approval requests.
+        // The fork inherits the source session's spawn flags.
         return {
           threadId: input.threadId,
-          resumeCursor: {
-            schemaVersion: GROK_RESUME_VERSION,
-            sessionId: forked.sessionId,
-          },
+          resumeCursor: makeGrokResumeCursor(
+            forked.sessionId,
+            parseGrokResume(activeSource?.session.resumeCursor ?? input.sourceResumeCursor),
+          ),
         };
       }).pipe(
         Effect.mapError((cause) =>

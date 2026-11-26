@@ -8,6 +8,7 @@ export const DESKTOP_IPC_CHANNELS = {
   confirm: "desktop:confirm",
   setTheme: "desktop:set-theme",
   setWindowMaterial: "desktop:set-window-material",
+  windowTranslucency: "desktop:window-translucency",
   getAppIcon: "desktop:get-app-icon",
   setAppIcon: "desktop:set-app-icon",
   contextMenu: "desktop:context-menu",
@@ -27,6 +28,11 @@ export const DESKTOP_IPC_CHANNELS = {
   customTitleBarGetState: "desktop:custom-title-bar-get-state",
   customTitleBarSetPreference: "desktop:custom-title-bar-set-preference",
   customTitleBarRelaunch: "desktop:custom-title-bar-relaunch",
+  keepAwake: {
+    getState: "desktop:keep-awake-get-state",
+    setEnabled: "desktop:keep-awake-set-enabled",
+    setRemoteAccessAllowed: "desktop:keep-awake-set-remote-access-allowed",
+  },
   menuAction: "desktop:menu-action",
   setMenuShortcuts: "desktop:set-menu-shortcuts",
   quitConfirmationRequest: "desktop:quit-confirmation-request",
@@ -46,6 +52,11 @@ export const DESKTOP_IPC_CHANNELS = {
     reportIssue: "desktop:beta-diagnostics-report-issue",
     getReportStatus: "desktop:beta-diagnostics-report-status",
   },
+  productAnalytics: {
+    getState: "desktop:product-analytics-get-state",
+    setEnabled: "desktop:product-analytics-set-enabled",
+    track: "desktop:product-analytics-track",
+  },
   updateState: "desktop:update-state",
   updateGetState: "desktop:update-get-state",
   updateCheck: "desktop:update-check",
@@ -55,9 +66,15 @@ export const DESKTOP_IPC_CHANNELS = {
   notificationsShow: "desktop:notifications-show",
   zoomFactor: "desktop:zoom-factor",
   zoomFactorChanged: "desktop:zoom-factor-changed",
+  remoteResourceUrl: "desktop:remote-resource-url",
   wsUrl: "desktop:get-ws-url",
+  backendReady: "desktop:backend-ready",
   transcribeVoice: "desktop:server-transcribe-voice",
   computerPreviewFrame: "computerPreview.frame",
+  // Renderer preview demand for the native frame tap: the helper captures only
+  // while a main-window preview is subscribed.
+  computerPreviewSubscribe: "desktop:computer-preview-subscribe",
+  computerPreviewUnsubscribe: "desktop:computer-preview-unsubscribe",
   computerSetCursorStyle: "desktop:computer-set-cursor-style",
   audioLevel: {
     setSource: "desktop:audio-level-set-source",

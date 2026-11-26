@@ -21,7 +21,92 @@ const runtimeInfo = {
   runningUnderArm64Translation: false,
 } as const;
 
+// Exercises pending-update replacement at the desktop updater's state boundary.
 describe("updateMachine", () => {
+  const pendingRemoteUpdate = {
+    ...createInitialDesktopUpdateState("1.0.7-remote.16", runtimeInfo, "remote"),
+    enabled: true,
+    status: "downloaded",
+    availableVersion: "1.0.7-remote.18",
+    downloadedVersion: "1.0.7-remote.18",
+    downloadPercent: 100,
+    canRetry: true,
+  } as const;
+
+  it.each(["1.0.7-remote.18", "1.0.7-remote.17"])(
+    "keeps the staged update when a recheck offers %s",
+    (version) => {
+      const checking = reduceDesktopUpdateStateOnCheckStart(
+        pendingRemoteUpdate,
+        "2026-10-17T10:00:00.000Z",
+      );
+      const result = reduceDesktopUpdateStateOnUpdateAvailable(
+        checking,
+        version,
+        "2026-10-17T10:00:01.000Z",
+      );
+
+      expect(result).toMatchObject({
+        status: "downloaded",
+        availableVersion: "1.0.7-remote.18",
+        downloadedVersion: "1.0.7-remote.18",
+        checkedAt: "2026-10-17T10:00:01.000Z",
+        canRetry: true,
+      });
+    },
+  );
+
+  it("keeps the staged update after a missing release or failed background check", () => {
+    const checking = reduceDesktopUpdateStateOnCheckStart(
+      pendingRemoteUpdate,
+      "2026-10-17T10:00:00.000Z",
+    );
+
+    for (const result of [
+      reduceDesktopUpdateStateOnNoUpdate(checking, "2026-10-17T10:00:01.000Z"),
+      reduceDesktopUpdateStateOnCheckFailure(
+        checking,
+        "network unavailable",
+        "2026-10-17T10:00:01.000Z",
+      ),
+    ]) {
+      expect(result).toMatchObject({
+        status: "downloaded",
+        availableVersion: "1.0.7-remote.18",
+        downloadedVersion: "1.0.7-remote.18",
+        canRetry: true,
+      });
+    }
+  });
+
+  it("replaces a staged update with a newer release and ignores old download completions", () => {
+    const available = reduceDesktopUpdateStateOnUpdateAvailable(
+      reduceDesktopUpdateStateOnCheckStart(pendingRemoteUpdate, "2026-10-17T10:00:00.000Z"),
+      "1.0.7-remote.20",
+      "2026-10-17T10:00:01.000Z",
+    );
+    const downloading = reduceDesktopUpdateStateOnDownloadStart(available);
+    const staleDownload = reduceDesktopUpdateStateOnDownloadComplete(
+      downloading,
+      "1.0.7-remote.18",
+    );
+    const downloaded = reduceDesktopUpdateStateOnDownloadComplete(staleDownload, "1.0.7-remote.20");
+
+    expect(available).toMatchObject({
+      status: "available",
+      availableVersion: "1.0.7-remote.20",
+      downloadedVersion: null,
+    });
+    expect(staleDownload).toEqual(downloading);
+    expect(downloaded).toMatchObject({
+      status: "downloaded",
+      availableVersion: "1.0.7-remote.20",
+      downloadedVersion: "1.0.7-remote.20",
+    });
+    expect(reduceDesktopUpdateStateOnDownloadComplete(downloaded, "1.0.7-remote.18")).toEqual(
+      downloaded,
+    );
+  });
   it("clears transient errors when a check starts", () => {
     const state = reduceDesktopUpdateStateOnCheckStart(
       {
@@ -62,15 +147,17 @@ describe("updateMachine", () => {
       {
         ...createInitialDesktopUpdateState("1.0.0", runtimeInfo),
         enabled: true,
-        status: "downloading",
+        status: "downloaded",
         availableVersion: "1.1.0",
-        downloadPercent: 43,
+        downloadedVersion: "1.1.0",
+        downloadPercent: 100,
       },
       "checksum mismatch",
     );
 
     expect(state.status).toBe("available");
     expect(state.availableVersion).toBe("1.1.0");
+    expect(state.downloadedVersion).toBeNull();
     expect(state.errorContext).toBe("download");
     expect(state.canRetry).toBe(true);
   });
@@ -150,7 +237,7 @@ describe("updateMachine", () => {
         enabled: true,
         status: "error",
         availableVersion: "1.1.0",
-        downloadedVersion: "1.1.0",
+        downloadedVersion: "1.0.0",
         message: "old failure",
         errorContext: "download",
         canRetry: true,

@@ -2,11 +2,12 @@ import type { ModelSelection } from "@synara/contracts";
 
 export function resolveCodexServiceTier(
   modelSelection: ModelSelection | undefined,
-): "fast" | "default" | undefined {
-  if (modelSelection?.provider !== "codex" || modelSelection.options?.fastMode === undefined) {
-    return undefined;
-  }
+): "ultrafast" | "fast" | "default" | undefined {
+  if (modelSelection?.provider !== "codex") return undefined;
+  const { serviceTier, fastMode } = modelSelection.options ?? {};
+  if (serviceTier === "ultrafast") return serviceTier;
 
-  // Omitting the tier preserves Codex's previous value, including Fast mode.
-  return modelSelection.options.fastMode ? "fast" : "default";
+  // An omitted tier preserves the current Codex speed.
+  if (fastMode === undefined) return undefined;
+  return fastMode ? "fast" : "default";
 }

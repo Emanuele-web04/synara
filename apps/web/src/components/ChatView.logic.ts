@@ -3,7 +3,6 @@ import {
   type ComposerComputerControlMode,
 } from "../computerControlMode";
 import {
-  DEFAULT_MODEL_BY_PROVIDER,
   ProjectId,
   ThreadId,
   type AssistantDeliveryMode,
@@ -11,6 +10,7 @@ import {
   type GitWorktreeSetupProgressEvent,
   type ModelSelection,
   type ModelSlug,
+  type OrchestrationThreadActivity,
   type ProviderInstanceId,
   type ProviderApprovalDecision,
   type ProviderInteractionMode,
@@ -20,8 +20,10 @@ import {
   type RuntimeMode,
   type ServerProviderAuthStatus,
   type ThreadId as ThreadIdType,
+  type OrchestrationLatestTurn,
 } from "@synara/contracts";
-import { getDefaultModel, normalizeModelSlug } from "@synara/shared/model";
+import { resolveTurnResumeTarget, type TurnResumeMessage } from "@synara/shared/turnResume";
+import { normalizeModelSlug } from "@synara/shared/model";
 import { approvalSessionGrantWidensSessionPolicy } from "@synara/shared/approvalSessionGrant";
 import { buildSynaraBranchName } from "@synara/shared/git";
 import { isGenericChatThreadTitle } from "@synara/shared/chatThreads";
@@ -61,11 +63,15 @@ import {
 } from "../lib/subagentPresentation";
 import {
   hasLiveTurnTailWork,
+  deriveSubagentTaskEnds,
   isProviderFileEditWorkLogEntry,
   type WorkLogEntry,
 } from "../session-logic";
 import { localSubagentThreadId } from "./ChatView.selectors";
-import { buildModelSelection, type ProviderModelOption } from "../providerModelOptions";
+import type { ComposerCommandKey } from "../composer-logic";
+import { type ProviderModelOption } from "../providerModelOptions";
+import { resolvePromptEffortFromModelSelection } from "../lib/composerSend";
+import { autoRuntimeModeSelectionIssue } from "@synara/shared/runtimeMode";
 
 export const LAST_INVOKED_SCRIPT_BY_PROJECT_KEY = "synara:last-invoked-script-by-project";
 export const DISMISSED_PROVIDER_HEALTH_BANNERS_KEY = "synara:dismissed-provider-health-banners";
@@ -262,6 +268,41 @@ export async function persistModelSelectionBeforeRuntimeMode(input: {
   }
 }
 
+/**
+ * Whether an empty composer's Send becomes Resume. The newest
+ * request never reached the provider, or the latest turn was interrupted (Stop,
+ * quit, crash, restart). A failed turn keeps its banner's Continue task. Live
+ * work, a pending request, a usage-limit wait, queued follow-ups, a held cache
+ * review or a delivery quarantine decide what runs next instead.
+ */
+export function shouldOfferComposerResume(input: {
+  isServerThread: boolean;
+  messages: ReadonlyArray<TurnResumeMessage>;
+  latestTurn: Pick<OrchestrationLatestTurn, "turnId" | "state"> | null;
+  hasLiveWork: boolean;
+  hasPendingRequests: boolean;
+  hasUsageLimitRecovery: boolean;
+  hasQueuedTurns: boolean;
+  hasCacheReview: boolean;
+  deliveryBlocked: boolean;
+}): boolean {
+  if (
+    !input.isServerThread ||
+    // A thread restored without any message has no task to resume.
+    input.messages.length === 0 ||
+    input.hasLiveWork ||
+    input.hasPendingRequests ||
+    input.hasUsageLimitRecovery ||
+    input.hasQueuedTurns ||
+    input.hasCacheReview ||
+    input.deliveryBlocked
+  ) {
+    return false;
+  }
+  const target = resolveTurnResumeTarget(input);
+  return target !== null && (target.kind === "resend" || target.state === "interrupted");
+}
+
 export function shouldRenderProviderHealthBanner(input: {
   threadEntryPoint: ThreadPrimarySurface;
   terminalWorkspaceTerminalTabActive: boolean;
@@ -430,7 +471,7 @@ export function promptStillMatchesActiveHistoryBrowse(input: {
 }
 
 export function shouldHandlePromptHistoryNavigationKey(input: {
-  key: "ArrowDown" | "ArrowUp" | "Enter" | "Tab" | "Slash";
+  key: ComposerCommandKey;
   metaKey: boolean;
   ctrlKey: boolean;
   altKey: boolean;
@@ -798,29 +839,6 @@ export function resolveThreadDetailHydration(input: {
   return input.detailSyncState === "failed" ? "failed" : "loading";
 }
 
-/**
- * Fallback model selection for a draft thread before the first server turn exists.
- * An explicit project default wins; otherwise the user's default provider is used
- * (pi and omp have no default model, so they are skipped), then codex. The model
- * comes from the project default only when it matches the chosen provider,
- * otherwise the provider's own default.
- */
-export function resolveDraftFallbackModelSelection(input: {
-  projectDefault: ModelSelection | null | undefined;
-  settingsDefaultProvider: ProviderKind;
-}): ModelSelection {
-  const settingsProvider =
-    input.settingsDefaultProvider === "pi" || input.settingsDefaultProvider === "omp"
-      ? null
-      : input.settingsDefaultProvider;
-  const provider = input.projectDefault?.provider ?? settingsProvider ?? "codex";
-  const model =
-    (provider === input.projectDefault?.provider ? input.projectDefault.model : null) ??
-    getDefaultModel(provider) ??
-    DEFAULT_MODEL_BY_PROVIDER.codex;
-  return buildModelSelection(provider, model);
-}
-
 /** Placeholder title for a thread that has not been sent yet (header, open-thread tabs). */
 export function resolveDraftThreadTitle(entryPoint: DraftThreadState["entryPoint"]): string {
   return entryPoint === "terminal" ? "New terminal" : "New thread";
@@ -903,6 +921,114 @@ export function threadHasProviderLockingActivity(
     thread.session !== null ||
     threadHasProviderLockingMessages(thread)
   );
+}
+
+type ProviderLockingThread = Pick<
+  Thread,
+  "messages" | "sidechatSourceThreadId" | "latestTurn" | "session" | "modelSelection"
+>;
+
+/**
+ * A send whose provider or account differs from the one an already-running
+ * thread uses. It must hand the thread off first: Hand off checks background
+ * tasks and records the switch, which a plain settings save would skip.
+ */
+export function turnNeedsProviderHandoff(input: {
+  readonly thread: ProviderLockingThread;
+  readonly modelSelection: ModelSelection;
+}): boolean {
+  const current = input.thread.modelSelection;
+  const next = input.modelSelection;
+  return (
+    threadHasProviderLockingActivity(input.thread) &&
+    (next.provider !== current.provider ||
+      (next.instanceId ?? next.provider) !== (current.instanceId ?? current.provider))
+  );
+}
+
+/**
+ * A message sent right after a handoff was stamped before the target started.
+ * Move it after the handoff row, even when the server clock runs ahead.
+ */
+export function createdAtAfterProviderHandoff(input: {
+  readonly activities:
+    | ReadonlyArray<{ readonly kind: string; readonly createdAt: string }>
+    | undefined;
+  readonly createdAt: string;
+}): string {
+  const handoffCreatedAt = input.activities?.findLast(
+    (activity) => activity.kind === "provider.handoff",
+  )?.createdAt;
+  return new Date(
+    Math.max(Date.now(), Date.parse(handoffCreatedAt ?? input.createdAt) + 1),
+  ).toISOString();
+}
+
+/**
+ * The model selection an access-mode change may save with it. A provider or
+ * account picked in the composer over a thread that already runs on another
+ * one is a pending Hand off, which only Send performs; saving it here would
+ * switch the thread's provider without one.
+ */
+export function accessModeModelSelectionToPersist(input: {
+  readonly thread: ProviderLockingThread;
+  readonly selectedModelSelection: ModelSelection;
+}): ModelSelection | undefined {
+  return turnNeedsProviderHandoff({
+    thread: input.thread,
+    modelSelection: input.selectedModelSelection,
+  })
+    ? undefined
+    : input.selectedModelSelection;
+}
+
+/**
+ * Auto picked for a pending provider switch that the thread's current model
+ * cannot run. It can only be chosen once Send has handed the thread off.
+ */
+export function autoWaitsForProviderHandoff(input: {
+  readonly thread: ProviderLockingThread;
+  readonly selectedModelSelection: ModelSelection;
+}): boolean {
+  return (
+    accessModeModelSelectionToPersist(input) === undefined &&
+    autoRuntimeModeSelectionIssue({
+      runtimeMode: "auto",
+      modelSelection: input.thread.modelSelection,
+    }) !== null
+  );
+}
+
+/**
+ * A queued turn follows the thread when its provider changed after the turn
+ * was queued (a Hand off while the queue was paused). Sending the queued
+ * provider would quietly switch the thread back.
+ */
+export function retargetQueuedTurnToThreadProvider<T extends QueuedComposerTurn>(
+  queuedTurn: T,
+  thread: ProviderLockingThread,
+): T {
+  if (!turnNeedsProviderHandoff({ thread, modelSelection: queuedTurn.modelSelection })) {
+    return queuedTurn;
+  }
+  const { providerOptionsForDispatch: _queuedProviderOptions, ...rest } = queuedTurn;
+  // Auto is provider-specific too. A model that cannot run it would make the
+  // server reject the turn on every retry, so fall back to asking for approval.
+  const runtimeMode =
+    autoRuntimeModeSelectionIssue({
+      runtimeMode: queuedTurn.runtimeMode,
+      modelSelection: thread.modelSelection,
+    }) === null
+      ? queuedTurn.runtimeMode
+      : "approval-required";
+  return {
+    ...rest,
+    modelSelection: thread.modelSelection,
+    selectedProvider: thread.modelSelection.provider,
+    selectedModel: thread.modelSelection.model,
+    selectedPromptEffort: resolvePromptEffortFromModelSelection(thread.modelSelection),
+    runtimeMode,
+  } as T;
 }
 
 export function revokeBlobPreviewUrl(previewUrl: string | undefined): void {
@@ -1428,14 +1554,30 @@ export type WorkingLabel =
   | "Loading"
   | "Thinking"
   | "Checking message delivery…"
-  | `Starting ${string}…`;
+  | `Starting ${string}…`
+  | WaitingOnUserWorkingLabel;
 
+/** Labels for a turn stopped until the user acts; they never shimmer. */
+export type WaitingOnUserWorkingLabel = "Waiting for approval" | "Waiting for your answer";
+
+export function isWaitingOnUserWorkingLabel(
+  label: WorkingLabel | undefined,
+): label is WaitingOnUserWorkingLabel {
+  return label === "Waiting for approval" || label === "Waiting for your answer";
+}
+
+// Delivery checks, the local send and provider startup come first: the turn is
+// not running yet, so nothing can be waiting on the user. Once it runs, a
+// pending approval or question stops it, and the indicator says so instead of
+// "Thinking".
 export function resolveWorkingLabel(input: {
   isSendBusy: boolean;
   turnTakenOver: boolean;
   isConnecting?: boolean;
   isSettlingTurnDispatch?: boolean;
   providerName?: string;
+  awaitingApproval?: boolean;
+  awaitingUserInput?: boolean;
 }): WorkingLabel {
   if (input.isSettlingTurnDispatch) return "Checking message delivery…";
   if (input.isSendBusy && !input.turnTakenOver) {
@@ -1444,6 +1586,8 @@ export function resolveWorkingLabel(input: {
   if (input.isConnecting && input.providerName) {
     return `Starting ${input.providerName}…`;
   }
+  if (input.awaitingApproval) return "Waiting for approval";
+  if (input.awaitingUserInput) return "Waiting for your answer";
   return "Thinking";
 }
 
@@ -2175,12 +2319,58 @@ export function enrichSubagentWorkEntries(
   workEntries: ReadonlyArray<WorkLogEntry>,
   threads: ReadonlyArray<Thread>,
   parentThreadId: ThreadIdType | null,
+  activities: ReadonlyArray<OrchestrationThreadActivity> = [],
 ): WorkLogEntry[] {
   if (workEntries.length === 0) {
     return [];
   }
 
   const threadById = new Map(threads.map((thread) => [thread.id, thread] as const));
+  const confirmedTasks = new Map<
+    string,
+    { toolUseId: string; turnId: OrchestrationThreadActivity["turnId"]; confirmed: boolean }
+  >();
+  for (const activity of activities) {
+    if (!activity.payload || typeof activity.payload !== "object") continue;
+    const payload = activity.payload as Record<string, unknown>;
+    if (typeof payload.taskId !== "string") continue;
+    if (activity.kind === "task.started") {
+      if (typeof payload.toolUseId === "string" && activity.turnId !== null) {
+        confirmedTasks.set(payload.taskId, {
+          toolUseId: payload.toolUseId,
+          turnId: activity.turnId,
+          confirmed: false,
+        });
+      } else {
+        confirmedTasks.delete(payload.taskId);
+      }
+      continue;
+    }
+    const previous = confirmedTasks.get(payload.taskId);
+    if (
+      activity.kind === "task.completed" ||
+      (activity.kind === "task.updated" && payload.status !== "running")
+    ) {
+      if (previous) previous.confirmed = false;
+    } else if (
+      activity.kind === "task.updated" &&
+      payload.reconcilesStop === true &&
+      typeof payload.toolUseId === "string" &&
+      activity.turnId !== null
+    ) {
+      if (
+        previous &&
+        (previous.toolUseId !== payload.toolUseId || previous.turnId !== activity.turnId)
+      )
+        continue;
+      confirmedTasks.set(payload.taskId, {
+        toolUseId: payload.toolUseId,
+        turnId: activity.turnId,
+        confirmed: true,
+      });
+    }
+  }
+  const taskEnds = confirmedTasks.size > 0 ? deriveSubagentTaskEnds(activities) : undefined;
 
   return workEntries.map((entry) => {
     if ((entry.subagents?.length ?? 0) === 0) {
@@ -2194,7 +2384,20 @@ export function enrichSubagentWorkEntries(
         threadById,
         threads,
       });
-      const status = deriveSubagentStatus(matchedThread);
+      const confirmation = confirmedTasks.get(subagent.providerThreadId ?? subagent.threadId);
+      const taskEnd = entry.toolCallId ? taskEnds?.get(entry.toolCallId) : undefined;
+      // Only native replay of this exact launch can outlive a synthetic child's
+      // local shutdown marker. A linked child's own runtime stays authoritative.
+      const confirmedRunning =
+        confirmation?.confirmed === true &&
+        confirmation.toolUseId === entry.toolCallId &&
+        confirmation.turnId === entry.turnId &&
+        normalizeSubagentStatusKind(subagent.rawStatus) === "running" &&
+        !(taskEnd && Date.parse(taskEnd.endedAt) >= Date.parse(entry.createdAt)) &&
+        (!matchedThread || matchedThread.id.startsWith("subagent:") || !matchedThread.session);
+      const status = confirmedRunning
+        ? { isActive: true, label: humanizeSubagentStatus("running") ?? undefined }
+        : deriveSubagentStatus(matchedThread);
       const fallbackStatusLabel = humanizeSubagentRawStatus(subagent.rawStatus);
       const terminalStatusLabel = status.isActive
         ? undefined
@@ -2230,4 +2433,26 @@ export function enrichSubagentWorkEntries(
       subagents,
     };
   });
+}
+
+/**
+ * Keeps the composer menu's highlighted item valid: no menu means no highlight, an
+ * item that still exists keeps its highlight, and anything else falls back to the
+ * first item. Lives here so the rule is testable without rendering the chat.
+ */
+export function resolveComposerHighlightedItemId<Item extends { readonly id: string }>(input: {
+  readonly menuOpen: boolean;
+  readonly highlightedItemId: string | null;
+  readonly items: readonly Item[];
+}): string | null {
+  if (!input.menuOpen) {
+    return null;
+  }
+  if (
+    input.highlightedItemId !== null &&
+    input.items.some((item) => item.id === input.highlightedItemId)
+  ) {
+    return input.highlightedItemId;
+  }
+  return input.items[0]?.id ?? null;
 }

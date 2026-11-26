@@ -70,6 +70,7 @@ import {
   type ComputerBackendActionResult,
   type ComputerBrowserCallResult,
   type ComputerCaptureRequest,
+  type ComputerClipboardPayload,
   type ComputerStreamFrame,
   type ComputerMenuTarget,
   type ComputerResolvedTarget,
@@ -1531,6 +1532,7 @@ export class ComputerManager {
     actionPoint?: ComputerPoint,
     threadId?: string,
     settle = true,
+    followOpenedWindow?: (capture: ComputerCapturedWindow) => boolean,
   ): Promise<ComputerActionObservation | undefined> {
     return this.withComputerCall(async () => {
       // A name only when the call did not already take one: an observed
@@ -1546,7 +1548,7 @@ export class ComputerManager {
         }
       }
       return timedComputerLeg("observe", () =>
-        this.captureActionObservation(windowIdHint, actionPoint, threadId),
+        this.captureActionObservation(windowIdHint, actionPoint, threadId, followOpenedWindow),
       );
     });
   }
@@ -1608,6 +1610,7 @@ export class ComputerManager {
     windowIdHint: string | undefined,
     actionPoint: ComputerPoint | undefined,
     threadId: string | undefined,
+    followOpenedWindow: ((capture: ComputerCapturedWindow) => boolean) | undefined,
   ): Promise<ComputerActionObservation | undefined> {
     if (windowIdHint !== undefined) {
       // An action's own observation must not become a way to photograph a
@@ -1625,6 +1628,7 @@ export class ComputerManager {
             windowId: windowIdHint,
           },
           threadId,
+          followOpenedWindow,
         );
       } catch {
         try {
@@ -1653,6 +1657,7 @@ export class ComputerManager {
               windowId: pointWindowId,
             },
             threadId,
+            followOpenedWindow,
           );
         } catch {
           // The window vanished between the listing and the capture. It was
@@ -1667,6 +1672,7 @@ export class ComputerManager {
           agentFocusOnly: true,
         }),
         threadId,
+        followOpenedWindow,
       );
     } catch {
       return undefined;
@@ -1686,16 +1692,20 @@ export class ComputerManager {
    * answers it truthfully: a window that was not there before is the outcome,
    * so photograph that instead.
    *
-   * Checked against the pre-action window set before the gateway decides
-   * whether to reuse a delivered frame. This is best effort — the action already
-   * happened, and a perception failure must never turn its success into an
-   * error.
+   * The gateway permits this fallback only when the original target matches
+   * its latest delivered frame. A changed or previously unseen target keeps
+   * its own pixels. This is best effort — the action already happened, and a
+   * perception failure must never turn its success into an error.
    */
   private async observeActionCapture(
     capture: ComputerCapturedWindow,
     _threadId?: string,
+    followOpenedWindow?: (capture: ComputerCapturedWindow) => boolean,
   ): Promise<ComputerActionObservation> {
     const observation = capture;
+    // The caller owns delivered-frame comparison; the manager captures the
+    // target once and never guesses whether its pixels were already seen.
+    if (followOpenedWindow?.(capture) === false) return observation;
     const appeared = await this.windowOpenedByAction(capture.windowId);
     if (appeared === undefined) return observation;
     // A denied window the action opened — a password prompt, a security
@@ -3462,22 +3472,40 @@ export class ComputerManager {
    * but it still goes through the keyboard-target path, so it lands exactly
    * where computer_type_text would and nowhere else.
    *
-   * `clipboardRestored` reports whether the previous contents went back. A
-   * clipboard holding an image or other non-text content cannot be saved or
-   * restored and is replaced; a failed restore is reported rather than
-   * silently leaving the pasted text behind.
+   * Native preservation retains every representation without returning it to
+   * the model. Restoration must not overwrite a newer human clipboard write.
    */
   async paste(
     threadId: string | undefined,
-    text: string,
+    content: string | ComputerClipboardPayload,
     windowId?: string,
   ): Promise<ComputerActionResult & { readonly clipboardRestored: boolean }> {
     return this.withDesktopControl(threadId, async () => {
-      const read = this.backend.readClipboard?.bind(this.backend);
-      const write = this.backend.writeClipboard?.bind(this.backend);
-      if (!read || !write) throw clipboardUnsupportedError();
-      const previous = await timedComputerLeg("dispatch", () => read().catch(() => undefined));
-      await timedComputerLeg("dispatch", () => write(text));
+      const payload = typeof content === "string" ? { text: content } : content;
+      // Validate the destination before temporarily touching the user's clipboard.
+      await timedComputerLeg("resolve", () => this.prepareKeyboardTarget(windowId, threadId));
+      const prepare = this.backend.prepareClipboardPaste?.bind(this.backend);
+      let restore: () => Promise<boolean>;
+      if (prepare) {
+        restore = await timedComputerLeg("dispatch", () => prepare(payload));
+      } else {
+        const read = this.backend.readClipboard?.bind(this.backend);
+        const write = this.backend.writeClipboard?.bind(this.backend);
+        if (!read || !write || !("text" in payload)) throw clipboardUnsupportedError();
+        const previous = await timedComputerLeg("dispatch", () =>
+          read().catch(() => {
+            throw new ComputerBackendError(
+              "Cannot preserve the current clipboard; no paste was sent. Use direct text input.",
+            );
+          }),
+        );
+        await timedComputerLeg("dispatch", () => write(payload.text));
+        restore = async () => {
+          if ((await read()) !== payload.text) return false;
+          await write(previous);
+          return true;
+        };
+      }
       let restored = false;
       let result: ComputerBackendActionResult | void;
       try {
@@ -3491,7 +3519,7 @@ export class ComputerManager {
         // The restore runs whether or not the shortcut dispatched: the payload
         // is already on the clipboard either way, and leaving it there leaks
         // the agent's text into the next paste the human makes.
-        if (previous !== undefined) {
+        await withoutDesktopCancellation(async () => {
           await timedComputerLeg(
             "settle",
             () =>
@@ -3499,17 +3527,15 @@ export class ComputerManager {
                 setTimeout(resolve, COMPUTER_PASTE_RESTORE_MS);
               }),
           );
-          restored = await write(previous).then(
-            () => true,
+          restored = await restore().then(
+            (value) => value,
             () => false,
           );
-        }
+        });
       }
       return {
         ...this.actionResult(threadId, "computer_paste", undefined, result, windowId),
-        // True only when what the user copied is back in place: a clipboard
-        // with no text had nothing to restore, and a failed restore reports
-        // false rather than claim their contents are safe.
+        // False also covers a newer human copy, which must remain untouched.
         clipboardRestored: restored,
       };
     });
@@ -4946,11 +4972,15 @@ export class ComputerManager {
     try {
       return resolve(state.root);
     } catch (error) {
+      let targetError: unknown = error;
       // A tree served from the recent cache can miss a control that only just
       // appeared. Pay for one fresh walk before declaring it absent; on a
       // genuinely-missing target the extra walk is a rare error-path cost.
       // Other failure shapes (ambiguity, bad target) retrying cannot fix.
-      if (error instanceof ComputerTargetError && error.code === "computer_target_not_found") {
+      if (
+        targetError instanceof ComputerTargetError &&
+        targetError.code === "computer_target_not_found"
+      ) {
         state = await this.backend.getState({
           includeTree: true,
           ...(target.windowId ? { windowId: target.windowId } : {}),
@@ -4959,24 +4989,24 @@ export class ComputerManager {
           if (state.root) return resolve(state.root);
         } catch (freshError) {
           // The miss is confirmed against fresh state; report its candidates.
-          if (freshError instanceof ComputerTargetError) error = freshError;
+          if (freshError instanceof ComputerTargetError) targetError = freshError;
         }
       }
       // A truncated tree may simply not contain the control: name the narrow
       // query so the miss is recoverable instead of a dead end.
       if (
-        error instanceof ComputerTargetError &&
-        error.code === "computer_target_not_found" &&
+        targetError instanceof ComputerTargetError &&
+        targetError.code === "computer_target_not_found" &&
         state.root?.truncated === true
       ) {
         throw new ComputerTargetError({
-          code: error.code,
-          message: `${error.message} The accessibility tree was truncated; use computer_get_state with label_contains to narrow the list and check whether the control is present.`,
-          candidates: error.candidates,
+          code: targetError.code,
+          message: `${targetError.message} The accessibility tree was truncated; use computer_get_state with label_contains to narrow the list and check whether the control is present.`,
+          candidates: targetError.candidates,
           notFound: true,
         });
       }
-      throw error;
+      throw targetError;
     }
   }
 

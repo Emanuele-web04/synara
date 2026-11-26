@@ -1,3 +1,5 @@
+import { AutomationComputerPicker } from "~/components/automation/AutomationComputerPicker";
+import type { WorkspaceAutomationDraft } from "~/lib/hosts/automationWorkspace";
 // FILE: -automations.list.tsx
 // Purpose: The automation list pieces shared by the Automations page and the rail layout's
 //          Automations panel: the list row, its subtitle and unread rules, the countdown
@@ -46,6 +48,7 @@ import {
   projectModelSelection,
   runStatusLabel,
 } from "./-automations.shared";
+import { getFormatLocale, useTranslation, t } from "~/i18n";
 
 // Sidebar summaries carry every field these surfaces read (id, projectId, title,
 // sidechatSourceThreadId) and do not rebuild on streamed message/activity deltas
@@ -85,6 +88,8 @@ export function AutomationListRow({
   /** The automation open in the content area (panel rows only). */
   readonly active?: boolean;
 }) {
+  const { t } = useTranslation();
+
   const dimmed = dimmedProp ?? false;
   const isPanel = (densityProp ?? "page") === "panel";
   const active = activeProp ?? false;
@@ -144,8 +149,8 @@ export function AutomationListRow({
       {onDelete ? (
         <button
           type="button"
-          aria-label="Delete automation"
-          title="Delete"
+          aria-label={t("automation:list_deleteAriaLabel")}
+          title={t("computer:detail_delete")}
           onClick={(event) => {
             event.stopPropagation();
             onDelete();
@@ -170,16 +175,17 @@ export function automationRowSubtitle(
   definition: AutomationDefinition,
   latestRun: AutomationRun | null,
   now: number,
+  formatLocale = getFormatLocale(),
 ): string {
-  const segments = [formatCadenceLong(definition.schedule)];
+  const segments = [formatCadenceLong(definition.schedule, formatLocale)];
   if (isLiveRun(latestRun)) {
     segments.push(runStatusLabel(latestRun.status));
     return segments.join(" · ");
   }
   const attention = latestRun === null ? null : automationAttentionLabel(latestRun);
   if (definition.enabled) {
-    const nextRun = formatNextRun(definition.nextRunAt, now);
-    if (nextRun) segments.push(`Next run ${nextRun}`);
+    const nextRun = formatNextRun(definition.nextRunAt, now, formatLocale);
+    if (nextRun) segments.push(t("automation:nextRun", { time: nextRun }));
   } else {
     const stopped = stoppedReasonLabel(definition);
     if (stopped) {
@@ -187,7 +193,7 @@ export function automationRowSubtitle(
       return segments.join(" · ");
     }
     if (attention === null && automationLifecycleState(definition) === "done") {
-      segments.push("Done");
+      segments.push(t("git:detail_done"));
     }
   }
   if (attention) segments.push(attention);
@@ -200,12 +206,12 @@ function stoppedReasonLabel(definition: AutomationDefinition): string | null {
   switch (definition.disabledReason) {
     case "failures":
       return definition.consecutiveFailureCount === 1
-        ? "Stopped after a failed run"
-        : `Stopped after ${definition.consecutiveFailureCount} failed runs`;
+        ? t("automation:stoppedAfterAFailedRun")
+        : t("automation:stoppedAfterFailedRuns", { value0: definition.consecutiveFailureCount });
     case "max-iterations":
-      return "Stopped at run limit";
+      return t("automation:stoppedAtRunLimit");
     case "completion":
-      return "Stop condition met";
+      return t("automation:stopConditionMet");
     default:
       return null;
   }
@@ -231,19 +237,26 @@ export function AutomationCreateDialog({
   onOpenChange,
   createAutomation,
   busy,
+  initialDraft,
 }: {
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
   readonly createAutomation: (input: AutomationCreateInput, onCreated: () => void) => void;
   readonly busy: boolean;
+  readonly initialDraft?: WorkspaceAutomationDraft | undefined;
 }) {
   const { settings } = useAppSettings();
   const projects = useStore((state) => state.projects);
   const threads = useStore(selectAllThreads);
   const fallbackProjectId = projects[0]?.id ?? "";
-  const [form, setForm] = useState<AutomationFormState>(() =>
-    formFromDefinition(null, fallbackProjectId, projectModelSelection(projects, fallbackProjectId)),
-  );
+  const [form, setForm] = useState<AutomationFormState>(() => ({
+    ...formFromDefinition(
+      null,
+      fallbackProjectId,
+      projectModelSelection(projects, fallbackProjectId),
+    ),
+    ...initialDraft,
+  }));
   const [warnings, setWarnings] = useState<readonly AutomationDraftWarning[]>([]);
   const [acknowledgedWarningIds, setAcknowledgedWarningIds] = useState<
     ReadonlySet<AutomationDraftWarningId>
@@ -254,11 +267,14 @@ export function AutomationCreateDialog({
   if (open !== wasOpen) {
     setWasOpen(open);
     if (open) {
-      const nextForm = formFromDefinition(
-        null,
-        fallbackProjectId,
-        projectModelSelection(projects, fallbackProjectId),
-      );
+      const nextForm = {
+        ...formFromDefinition(
+          null,
+          fallbackProjectId,
+          projectModelSelection(projects, fallbackProjectId),
+        ),
+        ...initialDraft,
+      };
       setForm(nextForm);
       setWarnings(buildAutomationFormWarnings(nextForm));
       setAcknowledgedWarningIds(new Set());
@@ -306,6 +322,9 @@ export function AutomationCreateDialog({
       onFormChange={updateForm}
       onSubmit={submit}
       busy={busy}
+      computerPicker={
+        <AutomationComputerPicker form={form} disabled={busy} onMoved={() => onOpenChange(false)} />
+      }
     />
   );
 }

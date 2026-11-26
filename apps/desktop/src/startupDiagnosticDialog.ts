@@ -1,5 +1,6 @@
 import { dialog, clipboard, type MessageBoxOptions, type MessageBoxReturnValue } from "electron";
 import type { BetaDiagnostics } from "./betaDiagnostics";
+import { t } from "./i18n";
 
 /** Preserve every recovery choice while letting Beta users copy the queued report ID. */
 export async function showDiagnosticStartupDialog(
@@ -12,8 +13,8 @@ export async function showDiagnosticStartupDialog(
     const status = diagnostics?.getReportStatus(id);
     const result = await dialog.showMessageBox({
       ...options,
-      detail: `${options.detail ?? ""}\n\nDiagnostic ID: ${id} (${status === "sent" ? "report sent" : status === "queued" ? "queued locally" : "upload not confirmed"})`,
-      buttons: [...options.buttons, "Copy diagnostic ID"],
+      detail: `${options.detail ?? ""}\n\n${t("desktop:diagnosticID", { id, status: t(status === "sent" ? "desktop:reportSent" : status === "queued" ? "desktop:queuedLocally" : "desktop:uploadNotConfirmed") })}`,
+      buttons: [...options.buttons, t("desktop:copyDiagnosticID")],
       cancelId: options.cancelId ?? options.buttons.length - 1,
     });
     if (result.response !== options.buttons.length) return result;

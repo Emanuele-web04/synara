@@ -19,6 +19,23 @@ function renderDialog(onSave: (value: EditProjectValue) => void) {
   );
 }
 
+function renderFoldersDialog(
+  onSave: (value: EditProjectValue) => void | Promise<void>,
+  onOpenChange: (open: boolean) => void = () => {},
+) {
+  return render(
+    <EditProjectDialog
+      open
+      cwd="/tmp/ws-alpha"
+      folderName="ws-alpha"
+      initialValue={{ name: "", appearance: null, additionalFolders: ["/tmp/ws-api"] }}
+      editFolders
+      onOpenChange={onOpenChange}
+      onSave={onSave}
+    />,
+  );
+}
+
 describe("EditProjectDialog", () => {
   afterEach(() => {
     document.body.innerHTML = "";
@@ -38,6 +55,64 @@ describe("EditProjectDialog", () => {
         name: "Alpha",
         appearance: { kind: "icon", icon: "rocket", color: "blue" },
       });
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("adds and removes extra folders while the primary folder stays fixed", async () => {
+    const onSave = vi.fn();
+    const screen = await renderFoldersDialog(onSave);
+    try {
+      await expect
+        .element(page.getByRole("button", { name: "Remove ws-alpha" }))
+        .not.toBeInTheDocument();
+      await page.getByRole("textbox", { name: "Additional folder path" }).fill("/tmp/ws-docs");
+      await page.getByRole("button", { name: "Add folder" }).click();
+      await page.getByRole("button", { name: "Remove ws-api" }).click();
+      await page.getByRole("button", { name: "Save" }).click();
+
+      expect(onSave).toHaveBeenCalledWith({
+        name: "",
+        appearance: null,
+        additionalFolders: ["/tmp/ws-docs"],
+      });
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("refuses a folder nested inside the primary folder", async () => {
+    const onSave = vi.fn();
+    const screen = await renderFoldersDialog(onSave);
+    try {
+      await page.getByRole("textbox", { name: "Additional folder path" }).fill("/tmp/ws-alpha/src");
+      await page.getByRole("button", { name: "Add folder" }).click();
+
+      await expect
+        .element(page.getByRole("alert"))
+        .toHaveTextContent("src is inside ws-alpha. Add only one of them.");
+      await expect
+        .element(page.getByRole("textbox", { name: "Additional folder path" }))
+        .toHaveValue("/tmp/ws-alpha/src");
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("stays open and shows why a save was refused", async () => {
+    const onOpenChange = vi.fn();
+    const screen = await renderFoldersDialog(
+      () => Promise.reject(new Error("Project directory does not exist: /tmp/ws-api")),
+      onOpenChange,
+    );
+    try {
+      await page.getByRole("button", { name: "Save" }).click();
+
+      await expect
+        .element(page.getByRole("alert"))
+        .toHaveTextContent("Project directory does not exist: /tmp/ws-api");
+      expect(onOpenChange).not.toHaveBeenCalledWith(false);
     } finally {
       await screen.unmount();
     }

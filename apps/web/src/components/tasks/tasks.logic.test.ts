@@ -6,6 +6,7 @@ import {
   applyTodoEvent,
   buildTaskSections,
   deriveTaskStatus,
+  taskStatusPresentation,
   describeTaskMeta,
   formatDueLabel,
   NEEDS_ANSWER_DETAIL,
@@ -229,12 +230,13 @@ describe("describeTaskMeta", () => {
       "Asked you a question",
     );
     expect(describeTaskMeta(taskStatus("review"), null)?.tone).toBe("review");
-    expect(describeTaskMeta(taskStatus("todo"), { label: "Today", overdue: false })?.tone).toBe(
-      "strong",
-    );
-    expect(describeTaskMeta(taskStatus("todo"), { label: "Yesterday", overdue: true })?.tone).toBe(
-      "failure",
-    );
+    expect(
+      describeTaskMeta(taskStatus("todo"), { label: "Today", overdue: false, isToday: true })?.tone,
+    ).toBe("strong");
+    expect(
+      describeTaskMeta(taskStatus("todo"), { label: "Yesterday", overdue: true, isToday: false })
+        ?.tone,
+    ).toBe("failure");
     expect(describeTaskMeta(taskStatus("todo"), null)).toBeNull();
     expect(describeTaskMeta(taskStatus("done"), null)).toBeNull();
   });
@@ -266,10 +268,21 @@ describe("due dates", () => {
     expect(resolveDuePreset("nextWeek", new Date(2026, 8, 28))).toBe("2026-10-05");
   });
 
-  it("labels nearby days by name and flags overdue ones", () => {
-    expect(formatDueLabel("2026-09-27", now)).toEqual({ label: "Today", overdue: false });
-    expect(formatDueLabel("2026-09-28", now)).toEqual({ label: "Tomorrow", overdue: false });
-    expect(formatDueLabel("2026-09-26", now)).toEqual({ label: "Yesterday", overdue: true });
+  it("labels due days without changing overdue or today emphasis", () => {
+    const dueToday = formatDueLabel("2026-09-27", now);
+    expect(dueToday).toEqual({ label: "Today", overdue: false, isToday: true });
+    expect(describeTaskMeta(taskStatus("todo"), dueToday)?.tone).toBe("strong");
+    expect(formatDueLabel("2026-09-28", now)).toEqual({
+      label: "Tomorrow",
+      overdue: false,
+      isToday: false,
+    });
+    expect(formatDueLabel("2026-09-26", now)).toEqual({
+      label: "Yesterday",
+      overdue: true,
+      isToday: false,
+    });
+    expect(formatDueLabel("2026-09-29", now).label).toBe("Tue");
     expect(formatDueLabel("2026-09-20", now).overdue).toBe(true);
   });
 });
@@ -349,5 +362,26 @@ describe("unlinkChatInput", () => {
       threadId: null,
       expectedThreadId: threadId,
     });
+  });
+});
+
+it("presents task status while preserving provider errors and status identity", () => {
+  const approval = deriveTaskStatus({
+    todo: delegated,
+    thread: thread({ hasPendingApprovals: true }),
+    hasDraftThread: false,
+  });
+  const failed = deriveTaskStatus({
+    todo: delegated,
+    thread: thread({
+      session: { ...thread().session!, status: "error", lastError: "common:finished" },
+    }),
+    hasDraftThread: false,
+  });
+  expect(approval.detail).toBe("Waiting for your approval");
+  expect(taskStatusPresentation(failed).detail).toBe("common:finished");
+  expect(taskStatusPresentation(approval)).toEqual({
+    label: "Needs you",
+    detail: "Waiting for your approval",
   });
 });

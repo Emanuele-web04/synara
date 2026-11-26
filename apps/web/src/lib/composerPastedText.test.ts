@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
+import { t, getFormatLocale } from "~/i18n";
 
 import {
   appendPastedTextsToPrompt,
   createPastedTextDraft,
   extractTrailingPastedTexts,
+  formatPastedTextCountLabel,
   pastedTextTitle,
   shouldCollapsePastedText,
 } from "./composerPastedText";
@@ -82,4 +84,18 @@ describe("appendPastedTextsToPrompt / extractTrailingPastedTexts", () => {
     expect(extracted.promptText).toBe("do it");
     expect(extracted.pastedTexts.map((entry) => entry.text)).toEqual([pastedText]);
   });
+});
+
+it("formats pasted-text UI counts without changing pasted content", () => {
+  expect(
+    formatPastedTextCountLabel({ lineCount: 25, charCount: 10000 }, t, getFormatLocale()),
+  ).toBe("25 lines");
+  expect(formatPastedTextCountLabel({ lineCount: 1, charCount: 10000 }, t, getFormatLocale())).toBe(
+    "10,000 chars",
+  );
+  const draft = makeDraft("localized", "workspace:today");
+  expect(pastedTextTitle(draft.text, t("chat:pastedText"))).toBe("workspace:today");
+  expect(
+    extractTrailingPastedTexts(appendPastedTextsToPrompt("", [draft])).pastedTexts[0]?.text,
+  ).toBe("workspace:today");
 });

@@ -2,13 +2,14 @@
 // Purpose: Keep browser annotations to one compact row, with overflow available on demand.
 // Layer: Chat attachment presentation
 
-import { pluralize } from "@synara/shared/text";
+import { pluralize } from "~/i18n/pluralize";
 
 import type { BrowserAnnotationDraft } from "~/lib/browserAnnotations";
 import { cn } from "~/lib/utils";
 import { COMPOSER_ATTACHMENT_CHIP_CLASS_NAME } from "../composerInlineChip";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { BrowserAnnotationChip } from "./BrowserAnnotationChip";
+import { useTranslation, t } from "~/i18n";
 
 export const MAX_VISIBLE_BROWSER_ANNOTATIONS = 2;
 
@@ -19,7 +20,7 @@ interface BrowserAnnotationStripProps {
 }
 
 function overflowLabel(count: number): string {
-  return `+${count} ${pluralize(count, "other")}`;
+  return t("computer:symbol2", { value0: count, value1: pluralize(count, "other") });
 }
 
 export function BrowserAnnotationStrip({
@@ -27,6 +28,8 @@ export function BrowserAnnotationStrip({
   onRemove,
   className,
 }: BrowserAnnotationStripProps) {
+  const { t } = useTranslation();
+
   if (annotations.length === 0) {
     return null;
   }
@@ -60,10 +63,10 @@ export function BrowserAnnotationStrip({
                   COMPOSER_ATTACHMENT_CHIP_CLASS_NAME,
                   "h-6 shrink-0 px-2 transition-colors hover:bg-[var(--color-background-button-secondary-hover)]",
                 )}
-                aria-label={`Show ${hiddenAnnotations.length} more browser ${pluralize(
-                  hiddenAnnotations.length,
-                  "annotation",
-                )}`}
+                aria-label={t("computer:showMoreBrowser", {
+                  value0: hiddenAnnotations.length,
+                  value1: pluralize(hiddenAnnotations.length, "annotation"),
+                })}
                 data-testid="browser-annotation-overflow"
               >
                 {overflowLabel(hiddenAnnotations.length)}
@@ -78,7 +81,8 @@ export function BrowserAnnotationStrip({
           >
             <div className="min-w-0 py-1">
               <p className="px-2 pb-1.5 text-ui-sm font-medium text-muted-foreground">
-                {hiddenAnnotations.length} more {pluralize(hiddenAnnotations.length, "annotation")}
+                {hiddenAnnotations.length} {t("common:more2")}{" "}
+                {pluralize(hiddenAnnotations.length, "annotation")}
               </p>
               <div
                 className="max-h-52 overflow-y-auto overscroll-contain pr-0.5"

@@ -37,6 +37,30 @@ const SPACE_ICON_LABELS: Record<SpaceIconName, string> = {
   backpack: "Backpack",
 };
 
+export const SPACE_ICON_LABEL_KEYS: Record<SpaceIconValue, string> = {
+  bag: "common:bag",
+  home: "common:home",
+  "code-brackets": "common:code",
+  rocket: "common:rocket",
+  "light-bulb": "common:idea",
+  "color-palette": "common:palette",
+  book: "common:book",
+  lab: "common:lab",
+  heart: "common:heart",
+  star: "common:star",
+  globe: "common:globe",
+  cloud: "common:cloud",
+  hammer: "common:hammer",
+  "chart-2": "common:chart",
+  gamecontroller: "common:games",
+  "camera-1": "common:camera",
+  target: "common:target",
+  tree: "common:tree",
+  school: "common:school",
+  backpack: "common:backpack",
+  [DEFAULT_VOID_SPACE_ICON]: "common:blackHole",
+};
+
 export interface SpaceIconOption {
   readonly name: SpaceIconValue;
   readonly label: string;

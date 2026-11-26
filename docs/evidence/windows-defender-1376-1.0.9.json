@@ -1,0 +1,140 @@
+{
+  "collectedAt": "2026-11-01",
+  "issue": "https://github.com/Emanuele-web04/synara/issues/1376",
+  "run": "https://github.com/Emanuele-web04/synara/actions/runs/41333122864",
+  "reportedDownloadBlock": {
+    "source": "Third-party user's screenshot supplied by the requester; the affected user is not the requester.",
+    "filename": "Synara-1.0.9-x64.exe",
+    "message": "Virus detected",
+    "browser": null,
+    "windowsVersion": null,
+    "antivirusProduct": null,
+    "threatName": null,
+    "downloadedSha256": null,
+    "requesterCanObtainEnvironmentDetails": false,
+    "privateAttachmentIncluded": false
+  },
+  "officialArtifact": {
+    "name": "Synara-1.0.9-x64.exe",
+    "url": "https://github.com/Emanuele-web04/synara/releases/download/v1.0.9/Synara-1.0.9-x64.exe",
+    "sourceCommit": "ebd0d22b39ce3a0f7c6051dddc6090e9b85dc7c3",
+    "bytes": 260335126,
+    "sha256": "d8a0d6bd3bbc6e9128cbf40d0b63262b3a516221c25e017452bc6b4c94ebabc5"
+  },
+  "nativeGuard": {
+    "artifact": "defender-1.0.9-cloud-connectivity",
+    "result": "passed",
+    "engine": "1.1.26100.4",
+    "definitions": "1.463.76.0",
+    "MAPSReporting": 2,
+    "SubmitSamplesConsent": 1,
+    "DisableBlockAtFirstSeen": false,
+    "mapsExitCode": 0,
+    "mapsResult": "ValidateMapsConnection successfully established a connection to MAPS",
+    "scanExitCode": 0,
+    "explicitCleanScan": true,
+    "expectedHashSurvived": true,
+    "mockedContractTestsPassedOnWindows": 10,
+    "evidence": [
+      "guard/maps-connection.txt",
+      "guard/maps-connection-exit.txt",
+      "guard/results.json",
+      "guard/expected-installers.json",
+      "guard/Synara-1.0.9-x64.exe-scan.txt",
+      "guard/after-status.json",
+      "guard/after-preferences.json"
+    ]
+  },
+  "browserObservation": {
+    "artifact": "defender-1.0.9-native-edge-windows-2022",
+    "startedAt": "2026-11-01T17:47:55.314Z",
+    "operatingSystem": "Windows Server 2022 build 20348.5761",
+    "edgeVersion": "156.0.4314.42",
+    "smartScreenEnabled": true,
+    "potentiallyUnwantedAppsToggleEnabled": false,
+    "securityStateVerification": "Manual inspection of edge-security.png; automatic probe field remains false.",
+    "configuredEdgePolicies": 0,
+    "warning": "Synara-1.0.9-x64.exe isn't commonly downloaded",
+    "temporaryDownloadBytes": 260335126,
+    "keepOrProtectionBypassAttempted": false,
+    "executionAttempted": false,
+    "finalDisposition": "Pending reputation warning; closing Edge cancelled download.",
+    "finalInstallerPresent": false,
+    "browserDownloadedSha256": null,
+    "defenderEventCollectionSucceeded": true,
+    "defenderDetectionOrRemediationEvents": 0,
+    "defenderDetectionInventoryAfter": [],
+    "evidence": [
+      "browser-result.json",
+      "downloads-before-close.png",
+      "downloads-before-close.json",
+      "edge-security.png",
+      "edge-policy.json",
+      "edge-policy-registry.json",
+      "edge-version.json",
+      "defender-events.json",
+      "after-detections.json"
+    ]
+  },
+  "chromeObservation": {
+    "run": "https://github.com/Emanuele-web04/synara/actions/runs/41335794530",
+    "artifact": "defender-1.0.9-native-chrome-initial-vs-latest-windows-2022",
+    "phase": "initial-definitions",
+    "startedAt": "2026-11-01T18:17:37.622Z",
+    "operatingSystem": "Windows Server 2022 build 20348.5761",
+    "chromeVersion": "156.0.8078.48",
+    "safeBrowsing": "Standard protection, verified in chrome-security.png.",
+    "configuredChromePolicies": {
+      "DefaultBrowserSettingEnabled": false
+    },
+    "engine": "1.1.26100.4",
+    "definitions": "1.463.76.0",
+    "definitionsStableDuringObservation": true,
+    "mapsExitCode": 0,
+    "downloadHistory": {
+      "state": 1,
+      "dangerType": 0,
+      "interruptReason": 0,
+      "opened": 0
+    },
+    "finalDisposition": "matching-file-retained",
+    "finalInstallerBytes": 260335126,
+    "browserDownloadedSha256": "d8a0d6bd3bbc6e9128cbf40d0b63262b3a516221c25e017452bc6b4c94ebabc5",
+    "matchingHashBeforeAndAfterClose": true,
+    "internetZoneId": 3,
+    "protectionBypassed": false,
+    "executionAttempted": false,
+    "defenderEventCollectionSucceeded": true,
+    "defenderDetectionOrRemediationEvents": 0,
+    "subsequentGuardQualification": {
+      "outcome": "failure",
+      "error": "Update-MpSignature: The remote procedure call failed.",
+      "laterBrowserPhase": "skipped",
+      "guardSha256": "9c9b9f4991f52d8337b9012907fb141a1a0e753974c00ce4fca6f45f591eae2f",
+      "guardVersion": "Before bounded retry commit 25349a3431e47278892e7b6867afe8d0af4a210f; hash matches CRLF script.",
+      "scanResults": []
+    },
+    "evidence": [
+      "initial-definitions/browser-result.json",
+      "initial-definitions/download-files-before-close.json",
+      "initial-definitions/downloads-before-close.png",
+      "initial-definitions/chrome-security.png",
+      "initial-definitions/chrome-policy-registry.json",
+      "initial-definitions/signature-comparison.json",
+      "initial-definitions/maps-connection-exit.txt",
+      "initial-definitions/defender-events.json",
+      "initial-definitions/after-detections.json",
+      "job-outcomes.json",
+      "production-guard-sha256.json",
+      "latest-production-guard/results.json"
+    ]
+  },
+  "limits": [
+    "The completed native scan and MAPS validation do not prove per-installer cloud classification or SmartScreen acceptance.",
+    "The Edge temporary file was not hash-qualified; no final hash or quarantine conclusion follows from its disappearance after browser closure.",
+    "The observed Edge reputation warning differs from the third-party screenshot's Virus detected message and does not resolve that download block; its browser, Windows version and antivirus product remain unknown.",
+    "This evidence qualifies official 1.0.9 bytes under the recorded conditions, not a future integrated build or signed release.",
+    "Chrome completed the initial download without reproducing Virus detected. The subsequent pre-retry guard RPC failure and skipped later phase leave the planned definition-version comparison incomplete."
+  ],
+  "separateCandidateEvidence": "windows-defender-1376-candidate-runtime.json"
+}

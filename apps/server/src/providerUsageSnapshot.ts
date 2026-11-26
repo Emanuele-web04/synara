@@ -1,7 +1,8 @@
 // FILE: providerUsageSnapshot.ts
 // Purpose: Read provider-specific local usage archives for recent usage snapshots.
 
-import { createReadStream, type Dirent, type Stats } from "node:fs";
+import { createHash, type Hash } from "node:crypto";
+import type { Dirent, Stats } from "node:fs";
 import fs from "node:fs/promises";
 import nodePath from "node:path";
 
@@ -28,6 +29,21 @@ const PROVIDER_USAGE_FILE_READ_CONCURRENCY = 16;
 const CODEX_SESSION_READ_CHUNK_BYTES = 64 * 1024;
 const MAX_CODEX_SESSION_LINE_BYTES = 1024 * 1024;
 const MAX_CLAUDE_TRANSCRIPT_LINE_BYTES = 1024 * 1024;
+// Reads reuse one buffer of this size per transcript. A month of transcripts can be
+// gigabytes, and a fresh buffer per read left that much garbage behind each snapshot.
+const CLAUDE_TRANSCRIPT_READ_CHUNK_BYTES = 64 * 1024;
+// Both Claude samplers read a `usage` object (`message.usage` or `toolUseResult.usage`).
+// Claude Code writes transcripts with JSON.stringify, which emits that key verbatim, so
+// a record without these bytes yields no sample. Most transcript bytes are tool output
+// and prompts (over 90% of a measured 4 GB month). Testing the raw bytes first spares
+// decoding and parsing them only to discard the result, which was most of the backend's
+// allocation in the first minute after launch.
+const CLAUDE_USAGE_KEY_BYTES = Buffer.from('"usage"');
+// Usage samples kept across refreshes in the per-transcript cache. A sample plus its
+// dedupe key costs roughly 200 bytes, so this bounds the cache near 20 MB. Newest
+// transcripts are retained first; transcripts past the cap are re-read on every
+// refresh instead of retained, which only costs time, never correctness.
+const MAX_CACHED_CLAUDE_USAGE_SAMPLES = 100_000;
 
 type UsageSnapshot = Exclude<ServerGetProviderUsageSnapshotResult, null>;
 
@@ -50,7 +66,57 @@ interface ClaudeUsageSample {
   model: string | null;
 }
 
+interface ClaudeTranscriptFile {
+  readonly path: string;
+  readonly ino: number;
+  readonly size: number;
+  readonly mtimeMs: number;
+}
+
+/**
+ * What one transcript contributed on its last read. `offset` sits just past the last
+ * newline that was parsed, so a later read resumes there when the transcript has only
+ * grown. A final record without its newline yet is parsed into `tailSamples` for the
+ * current snapshot but not committed, and is read again once it is complete.
+ */
+interface ClaudeTranscriptCacheEntry {
+  readonly ino: number;
+  readonly size: number;
+  readonly mtimeMs: number;
+  readonly offset: number;
+  readonly prefixDigest: string;
+  readonly lineCount: number;
+  readonly samples: ReadonlyArray<ClaudeUsageSample>;
+  readonly tailSamples: ReadonlyArray<ClaudeUsageSample>;
+  readonly seenKeys: ReadonlySet<string>;
+}
+
 const usageSnapshotCache = new Map<string, CachedUsageSnapshot>();
+// Entries are replaced, never mutated, so overlapping refreshes cannot corrupt them.
+const claudeTranscriptCache = new Map<string, ClaudeTranscriptCacheEntry>();
+const EMPTY_KEYS: ReadonlySet<string> = new Set();
+// Archive reads are plain promises that outlive the request that started them. A first
+// snapshot on a heavy user's machine reads for several seconds, and those reads kept a
+// backend that was asked to quit alive until they finished.
+let usageScanController = new AbortController();
+
+/**
+ * Server shutdown: abandons in-flight usage archive reads and refuses new ones. Their
+ * partial results are neither cached nor returned. The controller stays aborted on
+ * purpose: a usage request that reaches the server while it is shutting down would
+ * otherwise start a fresh multi-second read that holds the process open, which is what
+ * the cancellation exists to prevent.
+ */
+export function stopProviderUsageScans(): void {
+  usageScanController.abort();
+}
+
+/** Server start: allows reads again in a process where an earlier server stopped them. */
+export function resumeProviderUsageScans(): void {
+  if (usageScanController.signal.aborted) {
+    usageScanController = new AbortController();
+  }
+}
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
@@ -121,10 +187,11 @@ async function safeStat(path: string): Promise<Stats | null> {
 
 // Bounds archive reads so a cold stats load does useful parallel work without
 // flooding the filesystem with thousands of simultaneous readFile calls.
-async function mapWithConcurrency<T, R>(
+export async function mapWithConcurrency<T, R>(
   items: ReadonlyArray<T>,
   concurrency: number,
   mapper: (item: T) => Promise<R>,
+  signal?: AbortSignal,
 ): Promise<R[]> {
   const results: Array<{ index: number; value: R }> = [];
   let nextIndex = 0;
@@ -133,6 +200,7 @@ async function mapWithConcurrency<T, R>(
   await Promise.all(
     Array.from({ length: workerCount }, async () => {
       while (true) {
+        signal?.throwIfAborted();
         const index = nextIndex;
         nextIndex += 1;
         if (index >= items.length) {
@@ -487,19 +555,22 @@ function readClaudeToolResultSample(input: {
 // Claude Code stores transcripts under `<CLAUDE_CONFIG_DIR>/projects`, defaulting to
 // `~/.claude/projects`. Honor the override so the Profile reads the SAME transcripts
 // the active Claude provider does (the adapter inherits `process.env`).
-function resolveClaudeProjectsRoot(homeDir: string): string {
+export function resolveClaudeProjectsRoot(homeDir: string): string {
   const configDir = process.env.CLAUDE_CONFIG_DIR?.trim();
   return nodePath.join(configDir || nodePath.join(homeDir, ".claude"), "projects");
 }
 
 async function listRecentClaudeTranscriptFiles(
   projectsRoot: string,
+  nowMs: number,
+  signal?: AbortSignal,
   maxFiles: number = MAX_RECENT_USAGE_FILES,
-): Promise<ReadonlyArray<string>> {
+): Promise<ReadonlyArray<ClaudeTranscriptFile>> {
   const candidates: string[] = [];
   const projectEntries = await safeReadDir(projectsRoot);
 
   for (const projectEntry of projectEntries) {
+    signal?.throwIfAborted();
     if (!projectEntry.isDirectory()) {
       continue;
     }
@@ -513,7 +584,39 @@ async function listRecentClaudeTranscriptFiles(
     }
   }
 
-  return listRecentFiles(candidates, maxFiles);
+  // A transcript last written before the 30d window holds no sample inside it, so it
+  // is not opened at all.
+  const cutoffMs = nowMs - LOOKBACK_30D_MS;
+  const files = await mapWithConcurrency(
+    candidates,
+    PROVIDER_USAGE_FILE_READ_CONCURRENCY,
+    async (path): Promise<ClaudeTranscriptFile | null> => {
+      const stats = await safeStat(path);
+      return stats && stats.isFile() && stats.mtimeMs >= cutoffMs
+        ? { path, ino: stats.ino, size: stats.size, mtimeMs: stats.mtimeMs }
+        : null;
+    },
+    signal,
+  );
+
+  return files
+    .filter((file): file is ClaudeTranscriptFile => file !== null)
+    .toSorted((left, right) => right.mtimeMs - left.mtimeMs)
+    .slice(0, maxFiles);
+}
+
+type FileHandle = Awaited<ReturnType<typeof fs.open>>;
+
+interface ClaudeTranscriptScan {
+  // Samples from newline-terminated records, with the dedupe keys they claimed.
+  readonly samples: ClaudeUsageSample[];
+  readonly dedupeKeys: ReadonlyArray<string>;
+  // Samples from a final record that has no newline yet.
+  readonly tailSamples: ClaudeUsageSample[];
+  readonly nextOffset: number;
+  readonly prefixDigest: string;
+  readonly nextLineIndex: number;
+  readonly complete: boolean;
 }
 
 /**
@@ -521,22 +624,48 @@ async function listRecentClaudeTranscriptFiles(
  * into one file, and a snapshot reads PROVIDER_USAGE_FILE_READ_CONCURRENCY of them at
  * once. Reading one into a string costs its full size in the heap plus a second copy for
  * the line split, so a few large transcripts are enough to exhaust old space and abort the
- * backend. Stream chunks and cap individual records so malformed or tool-heavy lines cannot
- * recreate the same problem inside a line reader.
+ * backend. Read fixed-size chunks into one reused buffer and cap individual records so
+ * malformed or tool-heavy lines cannot recreate the same problem inside a line reader.
+ *
+ * Scans bytes [start, end) and reports the offset just past the last newline, the same
+ * append-tail contract as `readAppendedLines` in claudeWorkflowRuntime.ts. That helper
+ * reads the whole appended range into one string and skips files over 5 MB, so it cannot
+ * serve unbounded transcripts; this reads in chunks instead.
  */
-export async function readClaudeUsageSamples(
-  path: string,
-): Promise<ReadonlyArray<ClaudeUsageSample>> {
+async function scanClaudeTranscript(input: {
+  readonly handle: FileHandle;
+  readonly path: string;
+  readonly start: number;
+  readonly end: number;
+  readonly lineIndex: number;
+  readonly seenKeys: ReadonlySet<string>;
+  readonly prefixHash?: Hash;
+  readonly signal?: AbortSignal | undefined;
+}): Promise<ClaudeTranscriptScan> {
   const samples: ClaudeUsageSample[] = [];
-  const seenKeys = new Set<string>();
-  const stream = createReadStream(path);
+  const tailSamples: ClaudeUsageSample[] = [];
+  const newKeys = new Set<string>();
+  // JSON.parse allocates a fresh copy of every session id and model name; share one.
+  const strings = new Map<string, string>();
+  const intern = (value: string): string => {
+    const existing = strings.get(value);
+    if (existing !== undefined) {
+      return existing;
+    }
+    strings.set(value, value);
+    return value;
+  };
   let lineChunks: Buffer[] = [];
   let lineBytes = 0;
-  let lineIndex = 0;
+  let lineIndex = input.lineIndex;
+  let nextOffset = input.start;
   let skippingOversizedLine = false;
+  let complete = true;
+  const hash = input.prefixHash ?? createHash("sha256");
+  let completePrefixHash = hash.copy();
 
-  const collectLine = (line: Buffer, index: number): void => {
-    if (line.length === 0) {
+  const collectLine = (line: Buffer, index: number, terminated: boolean): void => {
+    if (line.length === 0 || line.indexOf(CLAUDE_USAGE_KEY_BYTES) === -1) {
       return;
     }
     const contents = line.toString("utf8");
@@ -556,21 +685,36 @@ export async function readClaudeUsageSamples(
       return;
     }
 
-    const fallbackKey = `${path}:${index}`;
-    const assistantSample = readClaudeAssistantSample({ record, fallbackKey });
-    if (assistantSample && !seenKeys.has(assistantSample.dedupeKey)) {
-      seenKeys.add(assistantSample.dedupeKey);
-      samples.push(assistantSample.sample);
-    }
-
-    const toolResultSample = readClaudeToolResultSample({ record, fallbackKey });
-    if (toolResultSample && !seenKeys.has(toolResultSample.dedupeKey)) {
-      seenKeys.add(toolResultSample.dedupeKey);
-      samples.push(toolResultSample.sample);
+    const fallbackKey = `${input.path}:${index}`;
+    for (const candidate of [
+      readClaudeAssistantSample({ record, fallbackKey }),
+      readClaudeToolResultSample({ record, fallbackKey }),
+    ]) {
+      if (
+        !candidate ||
+        input.seenKeys.has(candidate.dedupeKey) ||
+        newKeys.has(candidate.dedupeKey)
+      ) {
+        continue;
+      }
+      const sample: ClaudeUsageSample = {
+        sessionId: intern(candidate.sample.sessionId),
+        timestampMs: candidate.sample.timestampMs,
+        totalTokens: candidate.sample.totalTokens,
+        model: candidate.sample.model === null ? null : intern(candidate.sample.model),
+      };
+      if (terminated) {
+        newKeys.add(candidate.dedupeKey);
+        samples.push(sample);
+      } else {
+        tailSamples.push(sample);
+      }
     }
   };
 
-  const appendLineChunk = (chunk: Buffer): void => {
+  // `retain` copies a piece that must outlive the read buffer: the unfinished record at
+  // the end of a read, which the next read overwrites.
+  const appendLineChunk = (chunk: Buffer, retain = false): void => {
     if (skippingOversizedLine || chunk.length === 0) {
       return;
     }
@@ -580,13 +724,19 @@ export async function readClaudeUsageSamples(
       skippingOversizedLine = true;
       return;
     }
-    lineChunks.push(chunk);
+    lineChunks.push(retain ? Buffer.from(chunk) : chunk);
     lineBytes += chunk.length;
   };
 
   const finishLine = (): void => {
     if (!skippingOversizedLine) {
-      collectLine(Buffer.concat(lineChunks, lineBytes), lineIndex);
+      // collectLine reads the bytes synchronously, so a line inside one read chunk
+      // can be a view of that chunk instead of a copy.
+      collectLine(
+        lineChunks.length === 1 ? lineChunks[0]! : Buffer.concat(lineChunks, lineBytes),
+        lineIndex,
+        true,
+      );
     }
     lineChunks = [];
     lineBytes = 0;
@@ -594,37 +744,260 @@ export async function readClaudeUsageSamples(
     skippingOversizedLine = false;
   };
 
-  try {
-    for await (const chunk of stream) {
-      let lineStart = 0;
-      for (let index = 0; index < chunk.length; index += 1) {
-        if (chunk[index] !== 0x0a) {
-          continue;
+  if (input.end > input.start) {
+    const buffer = Buffer.allocUnsafe(
+      Math.min(CLAUDE_TRANSCRIPT_READ_CHUNK_BYTES, input.end - input.start),
+    );
+    let position = input.start;
+    try {
+      while (position < input.end) {
+        if (input.signal?.aborted) {
+          complete = false;
+          break;
         }
-        appendLineChunk(chunk.subarray(lineStart, index));
-        finishLine();
-        lineStart = index + 1;
+        const { bytesRead } = await input.handle.read(
+          buffer,
+          0,
+          Math.min(buffer.length, input.end - position),
+          position,
+        );
+        if (bytesRead === 0) {
+          break;
+        }
+        const chunk = buffer.subarray(0, bytesRead);
+        // Commit a digest only through the last complete record. A partial tail
+        // is parsed again later and must not become part of the cached prefix.
+        const lastNewline = chunk.lastIndexOf(0x0a);
+        if (lastNewline >= 0) {
+          hash.update(chunk.subarray(0, lastNewline + 1));
+          completePrefixHash = hash.copy();
+          hash.update(chunk.subarray(lastNewline + 1));
+        } else {
+          hash.update(chunk);
+        }
+        let lineStart = 0;
+        for (
+          let index = chunk.indexOf(0x0a);
+          index !== -1;
+          index = chunk.indexOf(0x0a, lineStart)
+        ) {
+          appendLineChunk(chunk.subarray(lineStart, index));
+          finishLine();
+          lineStart = index + 1;
+          nextOffset = position + lineStart;
+        }
+        appendLineChunk(chunk.subarray(lineStart), true);
+        position += bytesRead;
       }
-      appendLineChunk(chunk.subarray(lineStart));
-    }
 
-    // Match readFile/split behavior for a final record that has not been newline-terminated.
-    if (lineBytes > 0 && !skippingOversizedLine) {
-      collectLine(Buffer.concat(lineChunks, lineBytes), lineIndex);
+      // Match readFile/split behavior for a final record that has not been newline-terminated.
+      if (complete && lineBytes > 0 && !skippingOversizedLine) {
+        collectLine(Buffer.concat(lineChunks, lineBytes), lineIndex, false);
+      }
+    } catch {
+      // A transcript that vanishes or fails partway through yields what was read by then,
+      // which is the same outcome as a truncated archive. It is not cached.
+      complete = false;
     }
-  } catch {
-    // A transcript that vanishes or fails partway through yields what was read by then,
-    // which is the same outcome as a truncated archive.
-  } finally {
-    stream.destroy();
   }
 
-  return samples;
+  return {
+    samples,
+    dedupeKeys: [...newKeys],
+    tailSamples,
+    nextOffset,
+    prefixDigest: completePrefixHash.digest("hex"),
+    nextLineIndex: lineIndex,
+    complete,
+  };
+}
+
+function cachedClaudeSamples(entry: ClaudeTranscriptCacheEntry): ReadonlyArray<ClaudeUsageSample> {
+  return entry.tailSamples.length === 0 ? entry.samples : entry.samples.concat(entry.tailSamples);
+}
+
+// Growth and inode identity cannot distinguish append from an in-place rewrite.
+// Verify the committed prefix in bounded chunks before reusing parsed samples;
+// unchanged transcripts still take the metadata-only cache path below.
+async function hashClaudeTranscriptPrefix(
+  handle: FileHandle,
+  offset: number,
+  signal?: AbortSignal,
+): Promise<Hash | null> {
+  const hash = createHash("sha256");
+  const buffer = Buffer.allocUnsafe(Math.min(CLAUDE_TRANSCRIPT_READ_CHUNK_BYTES, offset));
+  let position = 0;
+  while (position < offset) {
+    if (signal?.aborted) return null;
+    const { bytesRead } = await handle.read(
+      buffer,
+      0,
+      Math.min(buffer.length, offset - position),
+      position,
+    );
+    if (bytesRead === 0) return null;
+    hash.update(buffer.subarray(0, bytesRead));
+    position += bytesRead;
+  }
+  return hash;
+}
+
+export async function readClaudeUsageSamples(
+  path: string,
+): Promise<ReadonlyArray<ClaudeUsageSample>> {
+  let handle: FileHandle;
+  try {
+    handle = await fs.open(path, "r");
+  } catch {
+    return [];
+  }
+  try {
+    const { size } = await handle.stat();
+    const scan = await scanClaudeTranscript({
+      handle,
+      path,
+      start: 0,
+      end: size,
+      lineIndex: 0,
+      seenKeys: EMPTY_KEYS,
+    });
+    return scan.tailSamples.length === 0 ? scan.samples : scan.samples.concat(scan.tailSamples);
+  } catch {
+    return [];
+  } finally {
+    await handle.close().catch(() => undefined);
+  }
+}
+
+/**
+ * Reads a transcript through the per-file cache: unchanged files are not opened, grown
+ * files are parsed from the stored offset only, and shrunk, replaced, or rewritten
+ * files are parsed from the start.
+ */
+async function readCachedClaudeUsageSamples(
+  file: ClaudeTranscriptFile,
+  signal?: AbortSignal,
+): Promise<ReadonlyArray<ClaudeUsageSample>> {
+  const cached = claudeTranscriptCache.get(file.path);
+  if (
+    cached &&
+    cached.ino === file.ino &&
+    cached.size === file.size &&
+    cached.mtimeMs === file.mtimeMs
+  ) {
+    return cachedClaudeSamples(cached);
+  }
+
+  let handle: FileHandle;
+  try {
+    handle = await fs.open(file.path, "r");
+  } catch {
+    claudeTranscriptCache.delete(file.path);
+    return [];
+  }
+
+  try {
+    const stats = await handle.stat();
+    let base: ClaudeTranscriptCacheEntry | null = null;
+    let prefixHash: Hash | undefined;
+    if (cached && cached.ino === stats.ino && stats.size > cached.size) {
+      const candidateHash = await hashClaudeTranscriptPrefix(handle, cached.offset, signal);
+      if (candidateHash?.copy().digest("hex") === cached.prefixDigest) {
+        base = cached;
+        prefixHash = candidateHash;
+      }
+    }
+    const scan = await scanClaudeTranscript({
+      handle,
+      path: file.path,
+      start: base?.offset ?? 0,
+      end: stats.size,
+      lineIndex: base?.lineCount ?? 0,
+      seenKeys: base?.seenKeys ?? EMPTY_KEYS,
+      ...(prefixHash ? { prefixHash } : {}),
+      signal,
+    });
+
+    let seenKeys: ReadonlySet<string> = new Set(scan.dedupeKeys);
+    if (base) {
+      const merged = new Set(base.seenKeys);
+      for (const key of scan.dedupeKeys) {
+        merged.add(key);
+      }
+      seenKeys = merged;
+    }
+    const entry: ClaudeTranscriptCacheEntry = {
+      ino: stats.ino,
+      size: stats.size,
+      mtimeMs: stats.mtimeMs,
+      offset: scan.nextOffset,
+      prefixDigest: scan.prefixDigest,
+      lineCount: scan.nextLineIndex,
+      samples: base ? base.samples.concat(scan.samples) : scan.samples,
+      tailSamples: scan.tailSamples,
+      seenKeys,
+    };
+    if (scan.complete) {
+      claudeTranscriptCache.set(file.path, entry);
+    } else {
+      claudeTranscriptCache.delete(file.path);
+    }
+    return cachedClaudeSamples(entry);
+  } catch {
+    claudeTranscriptCache.delete(file.path);
+    return [];
+  } finally {
+    await handle.close().catch(() => undefined);
+  }
+}
+
+// Drops transcripts that fell out of the listing, then keeps the newest transcripts
+// until MAX_CACHED_CLAUDE_USAGE_SAMPLES is reached.
+function pruneClaudeTranscriptCache(files: ReadonlyArray<ClaudeTranscriptFile>): void {
+  const retainedPaths = new Set<string>();
+  let retainedSamples = 0;
+  for (const file of files) {
+    const entry = claudeTranscriptCache.get(file.path);
+    if (!entry) {
+      continue;
+    }
+    const sampleCount = entry.samples.length + entry.tailSamples.length;
+    if (retainedSamples + sampleCount > MAX_CACHED_CLAUDE_USAGE_SAMPLES) {
+      continue;
+    }
+    retainedSamples += sampleCount;
+    retainedPaths.add(file.path);
+  }
+  for (const path of claudeTranscriptCache.keys()) {
+    if (!retainedPaths.has(path)) {
+      claudeTranscriptCache.delete(path);
+    }
+  }
+}
+
+/** Usage samples from every Claude transcript written in the last 30 days. */
+export async function readRecentClaudeUsageSamples(
+  projectsRoot: string,
+  nowMs: number = Date.now(),
+  signal?: AbortSignal,
+): Promise<ReadonlyArray<ClaudeUsageSample>> {
+  const transcriptFiles = await listRecentClaudeTranscriptFiles(projectsRoot, nowMs, signal);
+  const samplesByFile = await mapWithConcurrency(
+    transcriptFiles,
+    PROVIDER_USAGE_FILE_READ_CONCURRENCY,
+    (file) => readCachedClaudeUsageSamples(file, signal),
+    signal,
+  );
+  // A cancelled read is partial: report nothing rather than undercount.
+  signal?.throwIfAborted();
+  pruneClaudeTranscriptCache(transcriptFiles);
+  return samplesByFile.flat();
 }
 
 async function loadCodexUsageSnapshot(input: {
   homeDir: string;
   homePath?: string;
+  signal?: AbortSignal;
 }): Promise<UsageSnapshot | null> {
   const codexHomeDir =
     input.homePath?.trim() || process.env.CODEX_HOME || nodePath.join(input.homeDir, ".codex");
@@ -639,6 +1012,7 @@ async function loadCodexUsageSnapshot(input: {
       sessionFiles,
       PROVIDER_USAGE_FILE_READ_CONCURRENCY,
       readCodexSessionSummary,
+      input.signal,
     )
   ).filter((summary): summary is CodexSessionSummary => summary !== null);
 
@@ -674,21 +1048,15 @@ async function loadCodexUsageSnapshot(input: {
   };
 }
 
-async function loadClaudeUsageSnapshot(input: { homeDir: string }): Promise<UsageSnapshot | null> {
-  const projectsRoot = resolveClaudeProjectsRoot(input.homeDir);
-  const transcriptFiles = await listRecentClaudeTranscriptFiles(projectsRoot);
-  if (transcriptFiles.length === 0) {
-    return null;
-  }
-
-  const usageSamples = (
-    await mapWithConcurrency(
-      transcriptFiles,
-      PROVIDER_USAGE_FILE_READ_CONCURRENCY,
-      readClaudeUsageSamples,
-    )
-  ).flat();
-
+async function loadClaudeUsageSnapshot(input: {
+  homeDir: string;
+  signal?: AbortSignal;
+}): Promise<UsageSnapshot | null> {
+  const usageSamples = await readRecentClaudeUsageSamples(
+    resolveClaudeProjectsRoot(input.homeDir),
+    Date.now(),
+    input.signal,
+  );
   if (usageSamples.length === 0) {
     return null;
   }
@@ -724,15 +1092,17 @@ async function loadProviderUsageSnapshot(input: {
   provider: ProviderKind;
   homeDir: string;
   homePath?: string;
+  signal: AbortSignal;
 }): Promise<ServerGetProviderUsageSnapshotResult> {
   switch (input.provider) {
     case "codex":
       return loadCodexUsageSnapshot({
         homeDir: input.homeDir,
         ...(input.homePath ? { homePath: input.homePath } : {}),
+        signal: input.signal,
       });
     case "claudeAgent":
-      return loadClaudeUsageSnapshot({ homeDir: input.homeDir });
+      return loadClaudeUsageSnapshot({ homeDir: input.homeDir, signal: input.signal });
     default:
       return null;
   }
@@ -754,9 +1124,28 @@ async function getCachedProviderUsageSnapshot(input: {
     return existing.pending;
   }
 
-  const pending = loadProviderUsageSnapshot(input)
+  const { signal } = usageScanController;
+  if (signal.aborted) {
+    // The server is shutting down: answer from what is cached and start nothing.
+    return existing?.value ?? null;
+  }
+  const pending: Promise<ServerGetProviderUsageSnapshotResult> = loadProviderUsageSnapshot({
+    ...input,
+    signal,
+  })
     .catch(() => null)
     .then((value) => {
+      if (signal.aborted) {
+        // Keep what was cached before this read instead of a partial result.
+        if (usageSnapshotCache.get(cacheKey)?.pending === pending) {
+          usageSnapshotCache.set(cacheKey, {
+            expiresAtMs: existing?.expiresAtMs ?? 0,
+            value: existing?.value ?? null,
+            pending: null,
+          });
+        }
+        return existing?.value ?? null;
+      }
       usageSnapshotCache.set(cacheKey, {
         expiresAtMs: Date.now() + USAGE_CACHE_TTL_MS,
         value,

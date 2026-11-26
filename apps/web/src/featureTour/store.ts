@@ -1,7 +1,8 @@
 import { Schema } from "effect";
 import { create } from "zustand";
 
-export const FEATURE_TOUR_STORAGE_KEY = "synara:feature-tour:since-0.9.2:v1";
+// The spotlight app tour replaced the "since 0.9.2" slides, so everyone sees it once.
+export const FEATURE_TOUR_STORAGE_KEY = "synara:app-tour:v1";
 export const FeatureTourSeenSchema = Schema.Array(Schema.String);
 export const EMPTY_FEATURE_TOUR_SEEN: readonly string[] = [];
 

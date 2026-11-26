@@ -5,7 +5,7 @@
 
 import { ThreadId } from "@synara/contracts";
 import { Deferred, Effect, Fiber } from "effect";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { makeProviderLifecycleCoordinator } from "./providerLifecycleCoordinator.ts";
 
@@ -107,6 +107,56 @@ describe("makeProviderLifecycleCoordinator", () => {
       }),
     );
   });
+
+  for (const mode of ["urgent", "retirement", "legacy-urgent"] as const) {
+    it(`bounds a contended ${mode} operation without changing legacy urgent fallback`, async () => {
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const coordinator = makeProviderLifecycleCoordinator();
+          coordinator.adoptCurrent(threadId, "current");
+          const started = yield* Deferred.make<void>();
+          const release = yield* Deferred.make<void>();
+          const holder = yield* coordinator
+            .runCurrent(threadId, () =>
+              Deferred.succeed(started, undefined).pipe(Effect.andThen(Deferred.await(release))),
+            )
+            .pipe(Effect.forkChild);
+          yield* Deferred.await(started);
+          let calls = 0;
+          const operation = Effect.sync(() => {
+            calls += 1;
+            return "completed";
+          });
+          const timeout = Effect.fail("contended" as const);
+          const now = Date.now();
+          const clock = vi
+            .spyOn(Date, "now")
+            .mockReturnValueOnce(now)
+            .mockReturnValue(now + 6000);
+          const result = yield* (
+            mode === "retirement"
+              ? coordinator.run(threadId, () => operation, undefined, timeout)
+              : coordinator.runCurrentUrgent(
+                  threadId,
+                  () => operation,
+                  mode === "urgent" ? timeout : undefined,
+                )
+          ).pipe(
+            Effect.result,
+            Effect.ensuring(Effect.sync(() => clock.mockRestore())),
+            Effect.ensuring(Deferred.succeed(release, undefined)),
+          );
+          yield* Fiber.join(holder);
+          expect(result._tag).toBe(mode === "legacy-urgent" ? "Success" : "Failure");
+          expect(calls).toBe(mode === "legacy-urgent" ? 1 : 0);
+          expect(coordinator.currentGeneration(threadId)).toBe("current");
+          expect(yield* coordinator.runCurrent(threadId, () => Effect.succeed("reacquired"))).toBe(
+            "reacquired",
+          );
+        }),
+      );
+    });
+  }
 
   it("retires the generation for a stopped thread", async () => {
     await Effect.runPromise(

@@ -5,11 +5,13 @@
 
 import type { ComputerWindow } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
+import { t } from "~/i18n";
 
 import {
   computerToolName,
   describeComputerToolCall,
   isComputerToolName,
+  localizedComputerPermissions,
 } from "./computerToolPresentation";
 
 const SAFARI: ComputerWindow = {
@@ -36,6 +38,40 @@ describe("computerToolName", () => {
 });
 
 describe("describeComputerToolCall", () => {
+  it("describes a requested English source through a source translator", () => {
+    const input = {
+      toolName: "computer_wait",
+      args: { duration_ms: 2_000, app: "Settings", text: "/repo/Settings" },
+    };
+    const sourceTranslate: typeof t = (message, values) => t(message, { ...values, lng: "en" });
+    const source = describeComputerToolCall(input, sourceTranslate);
+    expect(source?.summary).toBe("Wait for 2 seconds in Settings");
+    expect(source?.tool).toBe("computer_wait");
+    expect(source?.params).toContainEqual({ name: "Text", value: "/repo/Settings" });
+    const nested = {
+      toolName: "computer_inspect",
+      args: { tool: "computer_zoom", arguments: { x: 10, y: 20, window_id: "win-7" } },
+      windows: [{ ...SAFARI, title: "Settings" }],
+    };
+    expect(describeComputerToolCall(nested, sourceTranslate)?.summary).toBe(
+      "Zoom into a window at (10, 20) in Safari — Settings",
+    );
+  });
+
+  it("describes generated action labels without translating target names or payloads", () => {
+    const input = {
+      toolName: "mcp__synara__computer_click",
+      args: { label: "Settings", window_id: "win-7", text: "Settings" },
+      windows: [{ ...SAFARI, title: "Settings" }],
+    };
+    const described = describeComputerToolCall(input);
+    expect(described?.tool).toBe("computer_click");
+    expect(described?.summary).toBe("Click on “Settings” in Safari — Settings");
+    expect(
+      localizedComputerPermissions(["screenRecording", "accessibility", "screenRecording"]),
+    ).toBe("Accessibility and Screen Recording");
+  });
+
   it("says verb, coordinate and window instead of the raw call", () => {
     const described = describeComputerToolCall({
       toolName: "mcp__synara__computer_click",

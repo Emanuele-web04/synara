@@ -21,6 +21,43 @@ import {
 } from "./taskCompletion.logic";
 import type { Thread } from "../types";
 
+describe("notification copy", () => {
+  it("builds authored completion and attention text while preserving titles, summaries and keys", () => {
+    const completion = {
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      projectId: ProjectId.makeUnsafe("project-1"),
+      title: "Settings",
+      turnId: TurnId.makeUnsafe("turn-1"),
+      completedAt: "2026-04-05T10:00:04.000Z",
+      assistantSummary: null,
+    };
+    const attention = {
+      kind: "approval",
+      threadId: completion.threadId,
+      projectId: completion.projectId,
+      title: "Settings",
+      createdAt: completion.completedAt,
+      requestId: "request-1",
+      requestKind: "command",
+    } as const;
+    expect(buildTaskCompletionCopy(completion)).toEqual({
+      title: "Settings",
+      body: "Finished working.",
+    });
+    expect(
+      buildTaskCompletionCopy({ ...completion, title: "", assistantSummary: "Input needed" }).body,
+    ).toBe("Input needed");
+    expect(buildInputNeededCopy(attention)).toEqual({
+      title: "Input needed",
+      body: "Settings: Command approval requested.",
+    });
+    expect(buildInputNeededCopy({ ...attention, summary: "Settings" }).body).toBe(
+      "Settings: Settings",
+    );
+    expect(completedThreadNotificationKey(completion)).toBe("thread-1:turn-1");
+  });
+});
+
 function makeThread(overrides: Partial<Thread>): Thread {
   return {
     id: "thread-1" as ThreadId,
@@ -411,6 +448,20 @@ describe("collectCompletedThreadCandidates", () => {
         ).toEqual([]);
       },
     );
+
+    it("releases a held completion when only the server background count reaches zero", () => {
+      const held = wokenTurnThread({
+        activities: [movedToBackground("agent-a")],
+        pendingBackgroundTaskCount: 1,
+      });
+      const released = { ...held, pendingBackgroundTaskCount: 0 };
+      const options = { waitForSubagents: true };
+
+      expect(collectCompletedThreadCandidates(previous, [held], options)).toEqual([]);
+      expect(collectCompletedThreadCandidates([held], [released], options)).toEqual([
+        expect.objectContaining({ turnId: held.latestTurn?.turnId }),
+      ]);
+    });
 
     it("does not alert for a subagent's own thread", () => {
       const parentThreadId = ThreadId.makeUnsafe("parent-thread");
@@ -898,36 +949,96 @@ describe("shouldShowThreadNotificationToast", () => {
 });
 
 describe("buildTaskCompletionCopy", () => {
-  it("keeps compact context while stripping assistant Markdown", () => {
-    expect(
-      buildCollectedTaskCompletionCopy(
-        "Sì, esattamente così:\n- menu principale con `Model`, **Effort** e Speed\n- slider dentro [Advanced](https://example.com)",
-      ),
-    ).toEqual({
+  it.each([
+    [
+      "keeps compact context while stripping assistant Markdown",
+      "Sì, esattamente così:\n- menu principale con `Model`, **Effort** e Speed\n- slider dentro [Advanced](https://example.com)",
+      "Sì, esattamente così: · menu principale con Model, Effort e Speed · slider dentro Advanced",
+    ],
+    [
+      "preserves technical underscores and cleans an unclosed code fence",
+      "Updated `apps/web/src/foo_bar.ts`.\n```ts\nconst result_value = true;",
+      "Updated apps/web/src/foo_bar.ts. const result_value = true;",
+    ],
+    [
+      "does not reinterpret Markdown-shaped syntax inside fenced code",
+      "Result:\n```python\ndef __init__(self):\n  return x - y\n```",
+      "Result: def __init__(self): return x - y",
+    ],
+    [
+      "recognizes CRLF fenced blocks without swallowing following prose",
+      "Result:\r\n```ts\r\nconst foo__bar__ = true;\r\n```\r\n**Done**",
+      "Result: const foo__bar__ = true; Done",
+    ],
+    [
+      "only normalizes list markers at the start of a line",
+      "Computed 7 * 6 = 42; auth - tests pass.",
+      "Computed 7 * 6 = 42; auth - tests pass.",
+    ],
+    [
+      "preserves spaced multiplication operators",
+      "Computed 2 * 3 * 4 = 24.",
+      "Computed 2 * 3 * 4 = 24.",
+    ],
+    [
+      "removes GFM task-list markers with their list prefix",
+      "- [x] Tests passed\n- [ ] Release pending",
+      "· Tests passed · Release pending",
+    ],
+    [
+      "preserves numeric prefixes longer than Markdown ordered-list markers",
+      "1234567890. tests passed",
+      "1234567890. tests passed",
+    ],
+    [
+      "consumes balanced parentheses in Markdown link destinations",
+      "Read the [docs](https://example.com/a_(b)) for details.",
+      "Read the docs for details.",
+    ],
+    [
+      "preserves bracketed status text that is not a valid reference definition",
+      "[status]: all tests passed",
+      "[status]: all tests passed",
+    ],
+    [
+      "handles bracket-heavy generated output without recursive rescanning",
+      "[".repeat(16_000),
+      `${"[".repeat(119)}…`,
+    ],
+    [
+      "keeps separate triple-backtick inline spans independent",
+      "Use ```foo``` now.\nThen ```bar``` next.",
+      "Use foo now. Then bar next.",
+    ],
+    [
+      "preserves shorter backtick runs inside multi-backtick code spans",
+      "Use ``foo ` bar`` now.",
+      "Use foo ` bar now.",
+    ],
+    [
+      "preserves Markdown-shaped syntax inside code spans that cross line breaks",
+      "Use `foo\n__bar__` now.",
+      "Use foo __bar__ now.",
+    ],
+    [
+      "does not treat intraword double underscores as emphasis",
+      "Updated foo__bar__ successfully.",
+      "Updated foo__bar__ successfully.",
+    ],
+    [
+      "does not treat double underscores beside Unicode identifier characters as emphasis",
+      "Updated café__menu__ and 变量__名称__.",
+      "Updated café__menu__ and 变量__名称__.",
+    ],
+    [
+      "renders escaped Markdown punctuation literally",
+      "Use \\*literal\\*, \\_name\\_, and \\[raw\\].",
+      "Use *literal*, _name_, and [raw].",
+    ],
+  ])("%s", (_label, assistantText, expectedBody) => {
+    expect(buildCollectedTaskCompletionCopy(assistantText)).toEqual({
       title: "Polish notifications",
-      body: "Sì, esattamente così: · menu principale con Model, Effort e Speed · slider dentro Advanced",
-    });
-  });
-
-  it("preserves technical underscores and cleans an unclosed code fence", () => {
-    expect(
-      buildCollectedTaskCompletionCopy(
-        "Updated `apps/web/src/foo_bar.ts`.\n```ts\nconst result_value = true;",
-      ),
-    ).toEqual({
-      title: "Polish notifications",
-      body: "Updated apps/web/src/foo_bar.ts. const result_value = true;",
-    });
-  });
-
-  it("does not reinterpret Markdown-shaped syntax inside fenced code", () => {
-    expect(
-      buildCollectedTaskCompletionCopy(
-        "Result:\n```python\ndef __init__(self):\n  return x - y\n```",
-      ),
-    ).toEqual({
-      title: "Polish notifications",
-      body: "Result: def __init__(self): return x - y",
+      body: expectedBody,
     });
   });
 
@@ -941,54 +1052,6 @@ describe("buildTaskCompletionCopy", () => {
     });
   });
 
-  it("recognizes CRLF fenced blocks without swallowing following prose", () => {
-    expect(
-      buildCollectedTaskCompletionCopy(
-        "Result:\r\n```ts\r\nconst foo__bar__ = true;\r\n```\r\n**Done**",
-      ),
-    ).toEqual({
-      title: "Polish notifications",
-      body: "Result: const foo__bar__ = true; Done",
-    });
-  });
-
-  it("only normalizes list markers at the start of a line", () => {
-    expect(buildCollectedTaskCompletionCopy("Computed 7 * 6 = 42; auth - tests pass.")).toEqual({
-      title: "Polish notifications",
-      body: "Computed 7 * 6 = 42; auth - tests pass.",
-    });
-  });
-
-  it("preserves spaced multiplication operators", () => {
-    expect(buildCollectedTaskCompletionCopy("Computed 2 * 3 * 4 = 24.")).toEqual({
-      title: "Polish notifications",
-      body: "Computed 2 * 3 * 4 = 24.",
-    });
-  });
-
-  it("removes GFM task-list markers with their list prefix", () => {
-    expect(buildCollectedTaskCompletionCopy("- [x] Tests passed\n- [ ] Release pending")).toEqual({
-      title: "Polish notifications",
-      body: "· Tests passed · Release pending",
-    });
-  });
-
-  it("preserves numeric prefixes longer than Markdown ordered-list markers", () => {
-    expect(buildCollectedTaskCompletionCopy("1234567890. tests passed")).toEqual({
-      title: "Polish notifications",
-      body: "1234567890. tests passed",
-    });
-  });
-
-  it("consumes balanced parentheses in Markdown link destinations", () => {
-    expect(
-      buildCollectedTaskCompletionCopy("Read the [docs](https://example.com/a_(b)) for details."),
-    ).toEqual({
-      title: "Polish notifications",
-      body: "Read the docs for details.",
-    });
-  });
-
   it.each([
     ["full", "Read [the guide][docs].\n[docs]: https://example.com", "Read the guide."],
     ["collapsed", "Read [the guide][].\n[the guide]: https://example.com", "Read the guide."],
@@ -997,64 +1060,6 @@ describe("buildTaskCompletionCopy", () => {
     expect(buildCollectedTaskCompletionCopy(assistantText)).toEqual({
       title: "Polish notifications",
       body: expectedBody,
-    });
-  });
-
-  it("preserves bracketed status text that is not a valid reference definition", () => {
-    expect(buildCollectedTaskCompletionCopy("[status]: all tests passed")).toEqual({
-      title: "Polish notifications",
-      body: "[status]: all tests passed",
-    });
-  });
-
-  it("handles bracket-heavy generated output without recursive rescanning", () => {
-    expect(buildCollectedTaskCompletionCopy("[".repeat(16_000))).toEqual({
-      title: "Polish notifications",
-      body: `${"[".repeat(119)}…`,
-    });
-  });
-
-  it("keeps separate triple-backtick inline spans independent", () => {
-    expect(buildCollectedTaskCompletionCopy("Use ```foo``` now.\nThen ```bar``` next.")).toEqual({
-      title: "Polish notifications",
-      body: "Use foo now. Then bar next.",
-    });
-  });
-
-  it("preserves shorter backtick runs inside multi-backtick code spans", () => {
-    expect(buildCollectedTaskCompletionCopy("Use ``foo ` bar`` now.")).toEqual({
-      title: "Polish notifications",
-      body: "Use foo ` bar now.",
-    });
-  });
-
-  it("preserves Markdown-shaped syntax inside code spans that cross line breaks", () => {
-    expect(buildCollectedTaskCompletionCopy("Use `foo\n__bar__` now.")).toEqual({
-      title: "Polish notifications",
-      body: "Use foo __bar__ now.",
-    });
-  });
-
-  it("does not treat intraword double underscores as emphasis", () => {
-    expect(buildCollectedTaskCompletionCopy("Updated foo__bar__ successfully.")).toEqual({
-      title: "Polish notifications",
-      body: "Updated foo__bar__ successfully.",
-    });
-  });
-
-  it("does not treat double underscores beside Unicode identifier characters as emphasis", () => {
-    expect(buildCollectedTaskCompletionCopy("Updated café__menu__ and 变量__名称__.")).toEqual({
-      title: "Polish notifications",
-      body: "Updated café__menu__ and 变量__名称__.",
-    });
-  });
-
-  it("renders escaped Markdown punctuation literally", () => {
-    expect(
-      buildCollectedTaskCompletionCopy("Use \\*literal\\*, \\_name\\_, and \\[raw\\]."),
-    ).toEqual({
-      title: "Polish notifications",
-      body: "Use *literal*, _name_, and [raw].",
     });
   });
 
@@ -1299,25 +1304,6 @@ describe("collectInputNeededThreadCandidates", () => {
         ],
       ).map((candidate) => candidate.requestId),
     ).toEqual([ApprovalRequestId.makeUnsafe("retryable-input")]);
-  });
-});
-
-describe("buildInputNeededCopy", () => {
-  it("describes approvals succinctly", () => {
-    expect(
-      buildInputNeededCopy({
-        kind: "approval",
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        projectId: ProjectId.makeUnsafe("project-1"),
-        title: "Polish notifications",
-        createdAt: "2026-04-05T10:00:04.000Z",
-        requestId: ApprovalRequestId.makeUnsafe("approval-request-1"),
-        requestKind: "command",
-      }),
-    ).toEqual({
-      title: "Input needed",
-      body: "Polish notifications: Command approval requested.",
-    });
   });
 });
 

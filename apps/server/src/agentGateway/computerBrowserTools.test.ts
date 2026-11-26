@@ -12,6 +12,7 @@ import { ComputerManager } from "../computer/ComputerManager.ts";
 import { desktopDeliveryMode } from "../computer/DesktopOperationQueue.ts";
 import { isModelDesktopObservationActive } from "../computer/modelDesktopObservation.ts";
 import { FakeComputerBackend } from "../computer/FakeComputerBackend.ts";
+import { ComputerApprovalExpiredError } from "../computer/ComputerApprovalGate.ts";
 import type { McpToolCallResult } from "./protocol.ts";
 import type { ToolContext } from "./toolRuntime.ts";
 import {
@@ -116,6 +117,37 @@ function bindingResult(tabs: ReadonlyArray<Record<string, unknown>>) {
 }
 
 describe("computer_browser_* gateway tools", () => {
+  it("reports expired visibility consent without dispatching a browser launch", async () => {
+    const { backend, manager, call } = await setup({
+      backend: new FakeComputerBackend({ browser: true, agentDialect: "macos" }),
+      authorizeAction: async () => true,
+      resolveForegroundAuthorization: async () => ({ userRequestedVisibleUse: false }),
+      requestForegroundConsent: async () => {
+        throw new ComputerApprovalExpiredError();
+      },
+    });
+    const audit = vi.spyOn(manager, "recordComputerAudit");
+    try {
+      const result = await call("computer_browser_prepare", { allow_launch: true, windowed: true });
+      expect(result.isError).toBe(true);
+      expect(JSON.parse(textOf(result))).toMatchObject({
+        error: {
+          code: "approval_expired",
+          effect: "not-dispatched",
+          retryable: true,
+        },
+      });
+      expect(backend.callsFor("browser.browser_prepare")).toHaveLength(0);
+      expect(audit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          effect: "not-dispatched",
+          code: "approval_expired",
+        }),
+      );
+    } finally {
+      await manager.dispose();
+    }
+  });
   it("authorizes fresh browser observations only while the model state call runs", async () => {
     const { backend, call } = await setup({ authorizeAction: async () => true });
     const scopes: boolean[] = [];
@@ -274,7 +306,7 @@ describe("computer_browser_* gateway tools", () => {
       requestForegroundConsent: async () => {
         order.push("foreground");
         granted = true;
-        return true;
+        return "authorized" as const;
       },
     });
     const result = await call("computer_browser_prepare", {
@@ -288,7 +320,7 @@ describe("computer_browser_* gateway tools", () => {
   });
 
   it("never shows the visible-use card on Linux, which refuses visible launches", async () => {
-    const consent = vi.fn(async () => true);
+    const consent = vi.fn(async () => "authorized" as const);
     const authorizeAction = vi.fn(async () => true);
     const { backend, call } = await setup({
       authorizeAction,

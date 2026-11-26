@@ -167,6 +167,11 @@ async function removeEmptyLockDirectory(targetPath: string): Promise<boolean> {
   }
 }
 
+function isDirectoryRenameContention(cause: unknown): boolean {
+  const code = errnoCode(cause);
+  return code === "EEXIST" || code === "ENOTEMPTY";
+}
+
 async function tryPublishOwnedDirectory(
   targetPath: string,
   owner: DatabaseLifecycleLockOwner,
@@ -177,13 +182,16 @@ async function tryPublishOwnedDirectory(
     await fs.rename(stagingPath, targetPath);
     published = true;
   } catch (cause) {
-    if (!(await pathExists(targetPath))) throw cause;
+    // A competing owner can release after rename rejects, before lstat observes it.
+    if (!isDirectoryRenameContention(cause) && !(await pathExists(targetPath))) throw cause;
     if (await removeEmptyLockDirectory(targetPath)) {
       try {
         await fs.rename(stagingPath, targetPath);
         published = true;
       } catch (retryCause) {
-        if (!(await pathExists(targetPath))) throw retryCause;
+        if (!isDirectoryRenameContention(retryCause) && !(await pathExists(targetPath))) {
+          throw retryCause;
+        }
       }
     }
   } finally {
@@ -305,7 +313,15 @@ async function reapDeadOwner(
   const guard = await acquireReaperGuard(dbPath, lockPath);
 
   try {
-    const currentOwner = await readOwner(lockPath);
+    let currentOwner: DatabaseLifecycleLockOwner;
+    try {
+      currentOwner = await readOwner(lockPath);
+    } catch (cause) {
+      // Another reaper may have retired this exact stale lock immediately
+      // before we acquired the guard. Restart acquisition against current state.
+      if (errnoCode(cause) === "ENOENT") return;
+      throw cause;
+    }
     if (
       currentOwner.token !== observedOwner.token ||
       ownerProcessState(currentOwner.pid) !== "dead"

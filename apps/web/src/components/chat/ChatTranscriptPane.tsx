@@ -6,6 +6,7 @@
 import { type MessageId, type ThreadId, type TurnId } from "@synara/contracts";
 import { type LegendListRef } from "@legendapp/list/react";
 import {
+  memo,
   useEffect,
   useMemo,
   useCallback,
@@ -48,12 +49,14 @@ import {
   CHAT_COLUMN_GUTTER_CLASS_NAME,
 } from "./composerPickerStyles";
 import { ImportedHistoryButton, useImportedHistory } from "~/projectImport/ImportedHistoryButton";
+import { useTranslation } from "~/i18n";
 
 interface ChatTranscriptPaneProps {
   activeThreadId: string;
   activeTurnId?: TurnId | null;
   activeTurnInProgress: boolean;
-  subagentsRunning?: boolean;
+  /** Subagent rows with a child still at work, shown at the end of their answer. */
+  liveSubagentRunEntryIds?: ReadonlySet<string>;
   /** What the transcript's subagent cards read from the chat (child threads, controls). */
   subagentRun?: Omit<SubagentRunContextValue, "visibility"> | null;
   /** The newest card with subagents at work; drives the floating "N running" chip. */
@@ -107,6 +110,8 @@ interface ChatTranscriptPaneProps {
   onMessagesTouchMove: TouchEventHandler<HTMLDivElement>;
   onMessagesTouchStart: TouchEventHandler<HTMLDivElement>;
   onMessagesWheel: WheelEventHandler<HTMLDivElement>;
+  onEmbeddedScrollIntent?: ((upward: boolean) => void) | undefined;
+  onSendVisualChoice?: ComponentProps<typeof MessagesTimeline>["onSendVisualChoice"];
   onIsAtEndChange: (isAtEnd: boolean) => void;
   onNavigate?: () => void;
   onCloseAgentActivityDetail?: () => void;
@@ -114,7 +119,6 @@ interface ChatTranscriptPaneProps {
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
   onOpenThread: (threadId: ThreadId) => void;
   onOpenAutomation?: ComponentProps<typeof MessagesTimeline>["onOpenAutomation"];
-  onStopBackgroundTask?: ComponentProps<typeof MessagesTimeline>["onStopBackgroundTask"];
   computerControlEnabled?: ComponentProps<typeof MessagesTimeline>["computerControlEnabled"];
   onEnableComputerControl?: ComponentProps<typeof MessagesTimeline>["onEnableComputerControl"];
   onRevertUserMessage: (messageId: MessageId) => void;
@@ -159,11 +163,11 @@ interface ChatTranscriptPaneProps {
   findHighlightStore?: ThreadFindHighlightStore | null;
 }
 
-export function ChatTranscriptPane({
+export const ChatTranscriptPane = memo(function ChatTranscriptPane({
   activeThreadId,
   activeTurnId,
   activeTurnInProgress,
-  subagentsRunning,
+  liveSubagentRunEntryIds,
   subagentRun,
   runningSubagentRun,
   subagentThread,
@@ -210,6 +214,8 @@ export function ChatTranscriptPane({
   onMessagesTouchMove,
   onMessagesTouchStart,
   onMessagesWheel,
+  onEmbeddedScrollIntent,
+  onSendVisualChoice,
   onIsAtEndChange,
   onNavigate,
   onCloseAgentActivityDetail,
@@ -217,7 +223,6 @@ export function ChatTranscriptPane({
   onOpenTurnDiff,
   onOpenThread,
   onOpenAutomation,
-  onStopBackgroundTask,
   computerControlEnabled,
   onEnableComputerControl,
   onRevertUserMessage,
@@ -256,6 +261,8 @@ export function ChatTranscriptPane({
   onResolveWorktreeSetup,
   findHighlightStore: findHighlightStoreProp,
 }: ChatTranscriptPaneProps) {
+  const { t } = useTranslation();
+
   // The composer floats over the transcript's bottom edge, so the scroll-to-bottom
   // affordance rides above it on the same inset the transcript content uses.
   const scrollButtonFrameStyle: CSSProperties | undefined =
@@ -393,7 +400,7 @@ export function ChatTranscriptPane({
           <SubagentRunContext.Provider value={subagentRunContextValue}>
             <MessagesTimeline
               key={activeThreadId}
-              {...(onStopBackgroundTask ? { onStopBackgroundTask } : {})}
+              heightCacheScope={activeThreadId}
               subagentThread={subagentThread ?? null}
               historyHeader={
                 importedHistory.nextCursor || importedHistory.error || importedHistory.loading ? (
@@ -410,7 +417,7 @@ export function ChatTranscriptPane({
               {...(onResolveWorktreeSetup ? { onResolveWorktreeSetup } : {})}
               activeTurnId={activeTurnId ?? null}
               activeTurnInProgress={activeTurnInProgress}
-              subagentsRunning={subagentsRunning === true}
+              {...(liveSubagentRunEntryIds ? { liveSubagentRunEntryIds } : {})}
               collapseFinishedTurns={collapseFinishedTurns !== false}
               activeTurnStartedAt={activeTurnStartedAt}
               listRef={listRef}
@@ -458,6 +465,9 @@ export function ChatTranscriptPane({
               onMessagesClickCapture={onMessagesClickCapture}
               onMessagesMouseUp={onMessagesMouseUp}
               onMessagesWheel={onMessagesWheel}
+              onEmbeddedScrollIntent={onEmbeddedScrollIntent}
+              onSendVisualChoice={onSendVisualChoice}
+              threadId={activeThreadId}
               onMessagesPointerDown={onMessagesPointerDown}
               onMessagesPointerUp={onMessagesPointerUp}
               onMessagesPointerCancel={onMessagesPointerCancel}
@@ -521,7 +531,7 @@ export function ChatTranscriptPane({
               type="button"
               onClick={onScrollToBottom}
               data-scroll-anchor-ignore
-              aria-label="Scroll to bottom"
+              aria-label={t("common:terminal_scrollToBottom")}
               aria-hidden={!scrollButtonVisible}
               tabIndex={scrollButtonVisible ? 0 : -1}
               className={cn(
@@ -578,4 +588,4 @@ export function ChatTranscriptPane({
       </div>
     </div>
   );
-}
+});

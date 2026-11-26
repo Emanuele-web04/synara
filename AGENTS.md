@@ -1,6 +1,7 @@
 # Synara agent instructions
 
 Synara is a multi-provider coding-agent workspace with web, server, CLI, and desktop surfaces. Prioritize correctness, reliability, and predictable performance during streaming, reconnects, cancellation, and recovery. Do not treat the project as a disposable early prototype or use this file as permission for unrelated rewrites.
+This project is open source, so take extra care with the code and configuration you ship. Keep secrets and private data out of commits and release artifacts.
 
 ## Contracts and ownership
 
@@ -36,10 +37,22 @@ Synara ships two desktop apps from the same `main`: **Synara** (Stable) and **Sy
 - Before committing, pushing, or opening/updating a PR, review the diff for UI changes and exclude any that lack explicit authorization. Tests, screenshots, and passing checks do not substitute for authorization. Report authorized UI changes clearly in the completion summary and PR description.
 - Keep end-follow while the reader remains at the bottom, including tool/work growth between assistant messages and the final settled layout. User navigation away from the bottom releases follow. Generic work, buffering, reconnecting, pending approvals, and tool-only activity must not rearm a detached reader or retrigger message-arrival auto-stick behavior.
 - Keep the common transcript path simple. Introduce virtualization only with measured need; never couple virtualizer measurement to a bottom-stick/height-follow feedback loop. Cover scrolling and measurement changes with focused transcript tests.
+- Do not use Tailwind `group-has-*`, `peer-has-*`, or `has-*` stacked with `*:`/`**:`. One such rule makes Chrome restyle the whole document whenever rows mount; use a descendant subject (`[&:has(x)_input]:`), a CSS variable, or a named variant in [index.css](apps/web/src/index.css). `apps/web/src/hasSelectorVariants.test.ts` fails when they are added.
 - Reuse [disclosureMotion.ts](apps/web/src/lib/disclosureMotion.ts) and its existing disclosure components for open/close transitions, including reduced-motion behavior. Do not duplicate timing constants or bespoke toggle animations.
 - Reuse before you build. Before adding a dialog, sheet, input, button, row, hook, store, or helper function, search the codebase for one that already does the job and use it, extending it with a prop or variant when it almost fits. When a second surface needs the same shape as an existing one, extract the shared piece (as [AnnouncementSheet.tsx](apps/web/src/components/AnnouncementSheet.tsx) does for one-time announcements) and switch both to it instead of copying markup or logic. Write something from scratch only when nothing comparable exists, and say so in the completion report.
 - Keep menus compact. Variants of one action (handoff targets, copy variants, fork targets, hub moves) share a single parent row that opens a submenu instead of each taking a top-level line. Imperative context menus get this from `children` on `ContextMenuItem` via [contextMenuGroup.ts](apps/web/src/lib/contextMenuGroup.ts), which renders a native submenu on desktop and a flyout in the browser; React menus use `MenuSub` from [menu.tsx](apps/web/src/components/ui/menu.tsx). A group with a single entry stays a plain row.
 - UI text must follow the font size the user chose in Settings. Use the `text-ui` tokens defined in the `@theme` block of [index.css](apps/web/src/index.css) and driven by [useAppTypography.ts](apps/web/src/hooks/useAppTypography.ts): `text-ui` for body copy, `text-ui-sm`/`text-ui-xs` for secondary text, `text-ui-lg` for emphasized lines and small panel titles, and `text-chat*` for transcript content. Inherit the UI font family. Do not use fixed Tailwind sizes such as `text-sm`, `text-xs`, or `text-[11px]`, or the long `text-[length:var(--app-font-size-…)]` form. Only dialog titles and large headings may use a fixed size; `apps/web/src/uiFontSize.test.ts` fails when fixed sizes are added.
+
+## Test isolation
+
+Test files run in parallel worker processes, and the web unit suite runs in random order (`--sequence.shuffle`). A test must pass in any order and leave nothing behind for the next test or file:
+
+- Reproduce an order failure with the seed Vitest prints: `--sequence.seed=<seed>`. Fix the leak; never pin an order, add a retry or widen a timeout.
+- Restore what you change before the next test: stores to their full initial state (`useStore.setState(useStore.getInitialState(), true)`), spies with `vi.restoreAllMocks()`, globals with `vi.unstubAllGlobals()`, env with `vi.unstubAllEnvs()`, and stubbed storage or maps cleared in `beforeEach`.
+- `vi.clearAllMocks()` keeps implementations. A test that changes a mock's implementation (`mockReturnValue`, `mockImplementation`) must have it re-set in `beforeEach`.
+- Create temp directories, servers, ports and databases per test file, never shared across files, and close them in `afterEach`/`afterAll`.
+- A test that defines a non-configurable global (for example, the WebMCP bridge) belongs in its own file.
+- Never leave an empty `describe`; delete the shell together with its last test.
 
 ## Local instance isolation
 
@@ -52,6 +65,8 @@ For browser development, an inherited `SYNARA_AUTH_TOKEN` must match the client 
 Write replies and completion reports as a TL;DR: the result first, then only what the reader needs to act. Prefer dense information over prose: use tables for measurements, comparisons, and per-case results, and short bullets for findings and open decisions. Cut narration of steps taken, restated requests, and closing recaps. Keep failures, unverified behavior, and required decisions; shorten the wording, never the facts.
 
 ## Verification and completion
+
+Migration changes require an independent review of data preservation, replay safety, and backup/recovery.
 
 Keep unrelated formatter changes out of logic commits. If those formatting changes are necessary, place them in a separate format-only commit.
 

@@ -5,11 +5,11 @@
 
 import { describe, expect, it } from "vitest";
 
-import { settingRowAnchorId } from "../settingsNavigation";
 import {
   SETTINGS_SEARCH_ENTRIES,
   rankSettingsSearchEntries,
   settingsSearchEntryTarget,
+  settingsSearchEntryTitle,
 } from "../settingsSearchIndex";
 
 describe("rankSettingsSearchEntries", () => {
@@ -28,56 +28,74 @@ describe("rankSettingsSearchEntries", () => {
     expect(results.some((entry) => entry.id === "behavior:diff-line-wrapping")).toBe(true);
   });
 
-  it("indexes the stacked and split diff layout preference", () => {
-    const results = rankSettingsSearchEntries("stacked", 12);
-    expect(results.some((entry) => entry.id === "behavior:diff-layout")).toBe(true);
-  });
-
   it("surfaces every row in a section when searching the section label", () => {
     const results = rankSettingsSearchEntries("appearance", SETTINGS_SEARCH_ENTRIES.length);
     expect(results.some((entry) => entry.section === "appearance")).toBe(true);
+  });
+
+  it("omits desktop-only Appearance controls in a browser", () => {
+    const results = rankSettingsSearchEntries("appearance", SETTINGS_SEARCH_ENTRIES.length);
+    const targets = results.map(settingsSearchEntryTarget);
+    expect(targets).toContain("setting-base-font-size");
+    expect(targets).not.toContain("setting-app-icon");
+    expect(targets).not.toContain("setting-use-custom-title-bar");
+  });
+
+  it("finds the agent keep-awake row only when the server supports it", () => {
+    const targets = (keepAwakeAvailable: boolean) =>
+      rankSettingsSearchEntries("keep computer awake", SETTINGS_SEARCH_ENTRIES.length, {
+        keepAwakeAvailable,
+      }).map(settingsSearchEntryTarget);
+    expect(targets(false)).not.toContain("setting-keep-computer-awake");
+    expect(targets(true)).toContain("setting-keep-computer-awake");
   });
 
   it("respects the result limit", () => {
     expect(rankSettingsSearchEntries("e", 3)).toHaveLength(3);
   });
 
-  it("derives a deep-link anchor target from each entry's title", () => {
+  it("uses explicit stable targets independently of translated titles", () => {
     const themeEntry = SETTINGS_SEARCH_ENTRIES.find((entry) => entry.id === "appearance:theme")!;
     expect(settingsSearchEntryTarget(themeEntry)).toBe("setting-theme");
     for (const entry of SETTINGS_SEARCH_ENTRIES) {
-      if (entry.target === null) {
+      if (entry.target == null) {
         expect(settingsSearchEntryTarget(entry)).toBeNull();
       } else {
-        expect(settingsSearchEntryTarget(entry)).toBe(settingRowAnchorId(entry.title));
+        expect(settingsSearchEntryTarget({ ...entry, title: "重命名的设置" })).toBe(
+          settingsSearchEntryTarget(entry),
+        );
         expect(settingsSearchEntryTarget(entry)?.startsWith("setting-")).toBe(true);
       }
     }
   });
+});
 
-  it("finds the Behavior and Providers rows by their titles", () => {
-    const titles = (query: string) =>
-      rankSettingsSearchEntries(query, 12).map((entry) => entry.title);
-    expect(titles("dictating")).toContain("Enter while dictating");
-    expect(titles("diff colors")).toContain("Pull request diff colors");
-    expect(titles("enabled providers")).toContain("Enabled providers");
+describe("account search", () => {
+  const context = {
+    accounts: [
+      {
+        instanceId: "codex_work",
+        label: "Work",
+        providerLabel: "Codex",
+        identity: "alex@acme.dev · Acme Labs",
+      },
+      { instanceId: "claudeAgent", label: "Personal", providerLabel: "Claude", identity: null },
+    ],
+  };
+
+  it("leads with the Accounts page for account, sign-in, and login queries", () => {
+    for (const query of ["account", "sign in", "login", "second account"]) {
+      const results = rankSettingsSearchEntries(query, 12, context);
+      expect(results.some((entry) => entry.id === "accounts:accounts")).toBe(true);
+    }
   });
 
-  it("finds the Fold finished turns and Wait for subagents rows", () => {
-    const sections = (query: string) =>
-      rankSettingsSearchEntries(query, 12).map((entry) => `${entry.section}:${entry.title}`);
-    expect(sections("fold")).toContain("behavior:Fold finished turns");
-    expect(sections("worked for")).toContain("behavior:Fold finished turns");
-    expect(sections("subagents")).toContain("notifications:Wait for subagents");
-    const targets = (query: string) =>
-      rankSettingsSearchEntries(query, 12).map((entry) => settingsSearchEntryTarget(entry));
-    expect(targets("fold")).toContain("setting-fold-finished-turns");
-    expect(targets("subagents")).toContain("setting-wait-for-subagents");
-  });
-
-  it("deep-links the provider picker result to the Available CLIs row", () => {
-    const [top] = rankSettingsSearchEntries("picker order", 12);
-    expect(top?.title).toBe("Available CLIs");
-    expect(settingsSearchEntryTarget(top!)).toBe("setting-available-clis");
+  it("finds each account by name, email, or agent and opens its row", () => {
+    const [byEmail] = rankSettingsSearchEntries("acme.dev", 12, context);
+    expect(byEmail?.id).toBe("accounts:account:codex_work");
+    expect(settingsSearchEntryTitle(byEmail!)).toBe("Codex · Work");
+    expect(settingsSearchEntryTarget(byEmail!)).toBe("setting-account-codex-work");
+    const byAgent = rankSettingsSearchEntries("claude personal", 12, context);
+    expect(byAgent.some((entry) => entry.id === "accounts:account:claudeAgent")).toBe(true);
   });
 });

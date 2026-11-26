@@ -16,10 +16,19 @@ Work through these checks in order:
 5. Re-download the current installer from the [official download page](/install).
 6. Reinstall over the current application without deleting workspace data.
 
-On macOS, use the Arm64 build for Apple Silicon and the x64 build for Intel. On Linux, ensure the AppImage is executable:
+On macOS, use the Arm64 build for Apple Silicon and the x64 build for Intel. On Linux, match the
+AppImage to your CPU (`uname -m`: `x86_64` uses the Intel build, `aarch64` uses ARM64), make it
+executable, and install FUSE 2 if the AppImage cannot mount itself:
 
 ```bash
 chmod +x Synara*.AppImage
+```
+
+If your distribution has no FUSE 2 package, run the bundle without mounting it:
+
+```bash
+./Synara*.AppImage --appimage-extract
+./squashfs-root/synara
 ```
 
 <Callout type="warn" title="Do not delete data as a first step">
@@ -83,6 +92,16 @@ Fully quit every Synara process, then relaunch. Do not expose or forward Synaraâ
 
 An update failure does not prove that local task data was deleted. Avoid combining an update recovery with manual data-directory cleanup.
 
+## A downloaded update is waiting
+
+Synara continues checking on its normal four-hour schedule while a downloaded update waits for installation. **Check for Updates** also checks immediately. If a newer compatible release is available, Synara downloads it and replaces the pending version; a failed check keeps the already verified download. Installation waits until checking and downloading finish.
+
+## Update a Mac from an iPhone or iPad
+
+In companion builds that support remote updates, open **Settings â†’ Connections**, select the Mac, then open **Software Update**. You can check, download, and choose **Restart & Install** for the downloaded version. This requires an approved connection to the packaged Synara Remote app on macOS; older desktop builds must first be updated on the Mac.
+
+Finish running chats, queued tasks, approvals, and development servers before installing. The Mac refuses a remote restart when it detects that work is still active or cannot establish that it is idle. Confirm the displayed version and the temporary connection interruption. The app reconnects after Synara restarts; check **Installed version** to confirm completion. A dropped connection alone does not prove installation succeeded. There is no need to delete local data or pair again for an ordinary update.
+
 ## Synara opens but providers changed after an update
 
 The application update and provider CLI updates are independent. After updating Synara:
@@ -121,3 +140,23 @@ Do not use a successful website build as evidence that the packaged desktop runt
 ## Still failing
 
 Continue with [Diagnostics](/docs/troubleshooting/diagnostics), then prepare a focused report using [Report a problem](/docs/troubleshooting/report-a-problem).
+
+## macOS requirement in 1.0.9
+
+The app bundle and updater enforce macOS 13 or later, matching the bundled native tools. On an older system, update macOS before attempting this release. See [installation requirements](/docs/getting-started/installation#macos-minimum-in-109).
+
+## Offline database compaction in 1.1.0
+
+If normal shutdown maintenance cannot reclaim a large legacy database, close every Synara process and every external SQLite client first. Run the installed CLI command with the database's absolute path:
+
+```sh
+synara-compact-database "$HOME/.synara/userdata/state.sqlite"
+```
+
+For Beta, explicitly select `$HOME/.synara-beta/userdata/state.sqlite`; custom homes require their actual path. The command never discovers another channel's database. On PowerShell, use a quoted path such as `"$env:USERPROFILE\.synara\userdata\state.sqlite"`.
+
+Compaction holds Synara's lifecycle lock, refuses pending migration recovery and verifies a private copy's integrity, row counts and identity before replacement. It preserves retained rows and migration backups. Allow about 125% of live-page space plus 64 MiB on the same volume; insufficient space requires freeing space, not deleting application history to force success.
+
+Keep all clients closed until completion. Cancellation before replacement preserves logical data, although WAL checkpointing may already have changed physical bytes. A failure after replacement explicitly reports that the compact database was installed; preserve it for inspection. Windows does not promise directory-entry durability across sudden power loss. This is maintenance, not emergency disk-recovery or universal completion-time assurance.
+
+Source evidence for 1.1.0: application source `d80787e3e4d8829a35a64b111e6fcbe5f51cf037`; `docs/releases/1.1.0-source-audit.md`, `docs/core-concepts.md`, `docs/providers.md`, `docs/internationalization.md` and `docs/sqlite-space-reclamation.md`.

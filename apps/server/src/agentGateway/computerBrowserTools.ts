@@ -26,7 +26,6 @@
  *   boundary is Synara's own filesystem policy on top of that.
  */
 import { realpath } from "node:fs/promises";
-import { isAbsolute, sep } from "node:path";
 import { Effect } from "effect";
 
 import type { ComputerBrowserToolName } from "@synara/contracts";
@@ -37,6 +36,8 @@ import {
   type ComputerBrowserCallResult,
 } from "../computer/ComputerBackend.ts";
 import { CuaActionError } from "../computer/CuaComputerBackend.ts";
+import { ComputerApprovalExpiredError } from "../computer/ComputerApprovalGate.ts";
+import { boundedWorkspacePath } from "./computerWorkspacePath.ts";
 import type { ComputerManager } from "../computer/ComputerManager.ts";
 import { withModelDesktopObservation } from "../computer/modelDesktopObservation.ts";
 import {
@@ -168,27 +169,6 @@ function browserResultToMcp(result: ComputerBrowserCallResult): McpToolCallResul
     ...(result.isError === true ? { isError: true } : {}),
     ...(structuredContent !== undefined ? { structuredContent } : {}),
   };
-}
-
-/**
- * Canonicalize one model-supplied filesystem path and prove it resolves inside
- * the workspace. The canonical path is what gets dispatched — a symlink
- * cannot widen the approved set, and the driver's own canonicality check
- * then passes by construction.
- */
-async function boundedWorkspacePath(
-  raw: unknown,
-  workspaceRoot: string,
-  field: string,
-): Promise<string> {
-  if (typeof raw !== "string" || raw.length === 0 || !isAbsolute(raw))
-    throw new ToolInputError(`"${field}" must be an absolute path.`);
-  const canonical = await realpath(raw).catch(() => {
-    throw new ToolInputError(`"${field}" does not resolve to an existing path.`);
-  });
-  if (canonical !== workspaceRoot && !canonical.startsWith(workspaceRoot + sep))
-    throw new ToolInputError(`"${field}" resolves outside the active workspace.`);
-  return canonical;
 }
 
 /**
@@ -451,27 +431,29 @@ export function makeAgentGatewayComputerBrowserTools(
     const authorization = await Promise.resolve()
       .then(() => options.resolveForegroundAuthorization?.(context))
       .catch(() => COMPUTER_FOREGROUND_NOT_AUTHORIZED);
-    if (
-      authorization?.userRequestedVisibleUse !== true &&
-      !(
-        consent !== undefined &&
-        options.requestForegroundConsent !== undefined &&
-        (await options.requestForegroundConsent(
-          "computer_browser_prepare",
-          consent.args,
-          context,
-          consent.signal,
-        ))
-      )
-    ) {
-      throw new CuaActionError(
-        "Showing a browser window was not allowed for this task (declined, cancelled or " +
-          "unanswered). Keep windowed false to work in the background, and do not ask " +
-          "again in this turn.",
-        "not-dispatched",
-        COMPUTER_FOREGROUND_NOT_REQUESTED_CODE,
-      );
-    }
+    if (authorization?.userRequestedVisibleUse === true) return;
+    const outcome =
+      consent !== undefined && options.requestForegroundConsent !== undefined
+        ? await options.requestForegroundConsent(
+            "computer_browser_prepare",
+            consent.args,
+            context,
+            consent.signal,
+          )
+        : ("declined" as const);
+    if (outcome === "authorized") return;
+    throw new CuaActionError(
+      outcome === "cancelled"
+        ? "The approval prompt for showing a browser window closed before the " +
+            "user answered — nothing was declined. You may show a fresh prompt once " +
+            "more if windowed is still needed; otherwise keep windowed false to work " +
+            "in the background."
+        : "Showing a browser window was not allowed for this task (declined or cancelled). " +
+            "Keep windowed false to work in the background, and do not ask " +
+            "again in this turn.",
+      "not-dispatched",
+      COMPUTER_FOREGROUND_NOT_REQUESTED_CODE,
+    );
   };
 
   /**
@@ -717,9 +699,26 @@ export function makeAgentGatewayComputerBrowserTools(
                   ],
                   isError: true as const,
                 }
-              : error instanceof ComputerBackendError || error instanceof ToolInputError
-                ? mcpToolResultError(error.message)
-                : mcpToolResultError(errorText(error));
+              : error instanceof ComputerApprovalExpiredError
+                ? {
+                    content: [
+                      {
+                        type: "text" as const,
+                        text: JSON.stringify({
+                          error: {
+                            code: error.code,
+                            effect: error.effect,
+                            retryable: error.retryable,
+                            message: error.message,
+                          },
+                        }),
+                      },
+                    ],
+                    isError: true as const,
+                  }
+                : error instanceof ComputerBackendError || error instanceof ToolInputError
+                  ? mcpToolResultError(error.message)
+                  : mcpToolResultError(errorText(error));
           return Effect.succeed(failure);
         }),
       );

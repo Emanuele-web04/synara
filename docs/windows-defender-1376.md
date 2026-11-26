@@ -1,6 +1,160 @@
 # Windows Defender investigation: issue #1376
 
-Evidence collected on 2026-09-30 for [issue #1376](https://github.com/Emanuele-web04/synara/issues/1376), from main `529ad049cb106c998010f5400189515008997aa4`. The original installer detection was independently reproduced on disposable GitHub-hosted Windows Server 2022 runners. This is not a confirmed malware verdict, false-positive determination, or shipped artifact fix; Windows 11 browser behavior remains unqualified.
+Initial evidence was collected on 2026-09-30 for [issue #1376](https://github.com/Emanuele-web04/synara/issues/1376), from main `529ad049cb106c998010f5400189515008997aa4`. That investigation independently reproduced the 0.9.2 installer detection on disposable GitHub-hosted Windows Server 2022 runners. The 1.0.9 recurrence below is a separate investigation; neither establishes a malware verdict or Microsoft's false-positive determination.
+
+## 2026-11-01: reported recurrence on 1.0.9
+
+The requester supplied a third-party user's screenshot showing exactly
+`Synara-1.0.9-x64.exe` and **`Virus detected`**. The affected user is not the
+requester. Browser, Windows version, antivirus product/threat name, downloaded
+hash, and engine/definition versions remain unknown; the requester cannot obtain
+these details. The private screenshot is not included in this repository. Windows
+11 is established only for the historical 0.9.2 report, not this recurrence.
+
+The official `Synara-1.0.9-x64.exe` is **260335126 bytes**, SHA-256
+`d8a0d6bd3bbc6e9128cbf40d0b63262b3a516221c25e017452bc6b4c94ebabc5`, from tag commit
+`ebd0d22b39ce3a0f7c6051dddc6090e9b85dc7c3`.
+
+| Qualification                                                                                           | Engine / definitions          | Cloud settings (MAPS / samples / disable first sight) | Result                                 |
+| ------------------------------------------------------------------------------------------------------- | ----------------------------- | ----------------------------------------------------- | -------------------------------------- |
+| [1.0.9 release](https://github.com/Emanuele-web04/synara/actions/runs/40203308105)                      | `1.1.26090.9` / `1.461.199.0` | `0 / 2 / true`                                        | Scan passed                            |
+| [Fresh default-settings comparison](https://github.com/Emanuele-web04/synara/actions/runs/41331725970)  | `1.1.26100.4` / `1.463.73.0`  | `0 / 2 / true`                                        | Same official hash passed              |
+| [Fresh cloud-enabled comparison](https://github.com/Emanuele-web04/synara/actions/runs/41331725970)     | `1.1.26100.4` / `1.463.73.0`  | `2 / 1 / false`                                       | Same official hash passed              |
+| [Updated guard with MAPS validation](https://github.com/Emanuele-web04/synara/actions/runs/41333122864) | `1.1.26100.4` / `1.463.76.0`  | `2 / 1 / false`                                       | Same official hash passed; MAPS exit 0 |
+
+These runs expose a release qualification gap: active antivirus and real-time
+protection did not require cloud protection. The cloud-enabled comparison verified
+preferences but did not run `-ValidateMapsConnection`. The guard now also requires
+cloud protection, safe sample submission, block at first sight, and successful MAPS
+connectivity before scanning; see the [release policy](release.md#3-azure-trusted-signing-setup-windows).
+Automatic safe sample submission applies only to the disposable GitHub-hosted
+public-release runner, never the user's machine.
+
+The [native guard run](https://github.com/Emanuele-web04/synara/actions/runs/41333122864)
+passed on the exact official installer bytes. `-ValidateMapsConnection` returned
+exit 0 and `ValidateMapsConnection successfully established a connection to MAPS`;
+the scan explicitly found no threats and the expected hash survived. The ten
+mocked guard contract tests also passed on Windows; they remain distinct from this
+real Defender scan.
+
+The same run observed a **SmartScreen download reputation warning** in native
+Edge `156.0.4314.42` on Windows Server 2022 build `20348.5761`. The official download
+URL produced a **260335126-byte `.crdownload`**, while the Downloads page stated
+`Synara-1.0.9-x64.exe isn't commonly downloaded`. Inspection of `edge-security.png`
+confirmed SmartScreen enabled and the potentially unwanted apps toggle off;
+`edge://policy` and the registry capture showed no configured policies. The
+probe's automatic `browserSecurityStateVerified=false` field was not used as a
+verdict; the security-state conclusion comes from reviewing the captured controls.
+
+No **Keep**, **Unblock**, **Open**, or **Run** action was taken. Closing Edge cancelled
+the pending download, leaving no final installer or final-file hash. This does not
+establish quarantine, a matching browser-delivered hash, or browser acceptance.
+Defender event collection succeeded with no detection/remediation events, and the
+post-attempt detection inventory was empty. The [1.0.9 evidence index](evidence/windows-defender-1376-1.0.9.json)
+records the separate scanner and browser results and their source artifacts.
+
+The first browser phase of the [native Chrome run](https://github.com/Emanuele-web04/synara/actions/runs/41335794530)
+completed the official download in Chrome `156.0.8078.48` on Windows Server 2022
+build `20348.5761`. The **260335126-byte** final file matched the official SHA-256
+before and after browser closure and retained its Internet-zone marker (`ZoneId=3`).
+Download history recorded complete, no danger or interruption, and never opened.
+The captured security controls show **Standard protection** selected; the only
+configured Chrome policy was `DefaultBrowserSettingEnabled=false`. Defender
+remained active with engine `1.1.26100.4` and definitions `1.463.76.0` unchanged,
+MAPS validation returned exit 0, and event collection found no detections or
+remediations. No protection bypass or execution was attempted. These were the
+first observed runner definitions, not reconstructed historical user definitions.
+
+The subsequent guard phase in that run failed at `Update-MpSignature` with
+`The remote procedure call failed.`; the later browser phase was skipped. Thus,
+the successful initial download does not establish a completed comparison across
+definition versions. The recorded guard hash matches the version **before** the
+bounded update retry. The guard now allows at most three attempts per source and
+falls back to direct MMPC updates after exhausted default-source attempts or stale
+definitions. It preserves each error and still requires a successful update call
+and every existing qualification check. Nineteen mocked contract tests pass on
+Windows in the latest candidate run below; live fallback recovery remains separate
+from these contract tests and this Chrome result.
+
+The [earlier build-only candidate run](https://github.com/Emanuele-web04/synara/actions/runs/41336992485)
+passed real Defender scanning, MAPS validation, and packaged dependency/startup
+smoke. It tested **258686811 bytes**, SHA-256
+`51167f9f9e2aea0227581fc80a99bcccbefa86e90be3a0ef992474cb002b55ca`, from source
+`df70c58bd713b2f67f8d5394f787782d6b13c6f6`; this is an unpublished candidate,
+separate from the official `d8a0d6…abc5` installer above. Definitions advanced from
+`1.463.33.0` to `1.463.76.0` without a recorded update error. The run also passed the
+then-current 14 mocked contracts, but did not exercise live RPC recovery or the
+new direct fallback.
+
+A [second attempt on that same candidate](https://github.com/Emanuele-web04/synara/actions/runs/41337351655)
+used the preceding guard and failed before scanning: the first default update
+returned an RPC error, and the next two reported that definition updates completed
+with errors. All three errors were retained and `results.json` was empty. This
+motivated the direct fallback; it is not a failed installer scan.
+
+The [third attempt](https://github.com/Emanuele-web04/synara/actions/runs/41338137765)
+still stopped before MMPC or scanning: an intermediate state snapshot failed in
+`Get-MpPreference` with `0x800106ba` while the service was unavailable. Commit
+`f86ed905b` removes that intervening read after exhausted default updates, so the
+guard can reach the mandatory direct update. Its negative control covers
+unavailable state APIs until MMPC succeeds.
+
+The [fourth attempt](https://github.com/Emanuele-web04/synara/actions/runs/41338964132)
+passed the final guard, all **19 mocked contracts**, and packaged startup on the
+same earlier `51167f…b55ca` candidate. Defender platform `4.18.26100.4` was already
+installed before qualification; definitions advanced from `1.463.33.0` to
+`1.463.76.0` with no update errors. This proves healthy live qualification, not
+recovery from a live RPC failure or execution of the direct fallback.
+
+That run also exercised the packaged runtime under Electron `43.4.1` / Node
+`24.18.1`: Pi's lazy API/client propagated a **synthetic HTTP 400 with networking
+blocked**; Codemode ran its actual worker and QuickJS WASM; Photon used its actual
+worker without recorded errors; the MCP child completed initialization/list/call
+and exited. The isolated compaction CLI reduced **16805888 → 16384 bytes** with
+integrity and cleanup checks. These are offline packaged-runtime checks, not live
+provider success.
+
+The [new combined build](https://github.com/Emanuele-web04/synara/actions/runs/41337355328)
+completed packaging, quality checks, and all three server shards. Its preceding
+guard failed after three default-source update errors, so it preserved a verified
+checkpoint rather than qualifying the installer. This new unpublished candidate
+is **258698471 bytes**, SHA-256
+`be7ceb4a1b128bafafb72f08368a34583d34d9dac49d5b833d95faa05168bc25`, from source
+`9dffe5f0581b4b27874763995b46e493334ab577`. It is distinct from both the older
+`51167f…b55ca` candidate and the official `d8a0d6…abc5` release.
+
+The [Windows Server 2025 qualification](https://github.com/Emanuele-web04/synara/actions/runs/41340891133)
+then exercised the final guard on those exact new bytes and **recovered from real
+update failures**. The default source failed three times (one RPC error, then two
+definition-update errors); MMPC failed once and succeeded on its second attempt.
+All four errors survived in evidence. The platform advanced from `4.18.26090.9`
+to `4.18.26100.4` while definitions remained `1.463.76.0`. The 19 mocked contracts,
+MAPS validation, clean scan with unchanged hash, packaged startup, and the same
+offline Pi worker/MCP/compaction checks all passed. This establishes live fallback
+recovery on that Server 2025 runner and candidate; the earlier healthy run alone
+did not establish it.
+
+The [matching Windows Server 2022 run](https://github.com/Emanuele-web04/synara/actions/runs/41341037041)
+also passed on the same `be7ceb…bc25` bytes: all 19 contracts, MAPS, clean scan,
+unchanged installer hash, packaged startup, and the offline Pi/MCP/compaction
+checks. Its default update completed without errors, so it did not exercise the
+fallback. Platform `4.18.26090.9` remained unchanged; the engine advanced from
+`1.1.26090.9` to `1.1.26100.4` and definitions from `1.461.211.0` to `1.463.76.0`.
+Cloud settings remained `2 / 1 / false` and the detection inventory was empty.
+Thus the Server 2022 production runner is qualified independently, while the
+Server 2025 run supplies the observed live recovery. The [candidate evidence index](evidence/windows-defender-1376-candidate-runtime.json)
+keeps every artifact, operating-system scope, and historical failure separate.
+The candidate source predates later main changes, which were checked separately
+in local integration; neither this diagnostic qualification nor those checks are
+a published release or a reproduction of the third-party download block.
+
+No current Defender antivirus detection was reproduced. The observed Edge reputation
+warning differs from the third-party screenshot's **`Virus detected`** message.
+Chrome completed this download without reproducing that message either.
+This guard repair therefore remains unconfirmed as a fix for the reported 1.0.9
+block; the antivirus or browser component responsible and its cause remain unresolved.
+The sections below preserve the separate September 2026 investigation and its
+historical results.
 
 ## Verified evidence
 

@@ -64,7 +64,7 @@ function parseVersion(version: string): readonly [number, number, number] {
  * Three-way version comparison. Returns a negative number when `a < b`, zero
  * when equal, and a positive number when `a > b`. Suitable for `Array.sort`.
  */
-function compareVersions(a: string, b: string): number {
+export function compareVersions(a: string, b: string): number {
   const [majorA, minorA, patchA] = parseVersion(a);
   const [majorB, minorB, patchB] = parseVersion(b);
   if (majorA !== majorB) return majorA - majorB;

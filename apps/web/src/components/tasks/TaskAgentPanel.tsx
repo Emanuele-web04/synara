@@ -17,19 +17,21 @@ import type { PendingApproval } from "../../session-logic";
 import { TaskActionButton, TaskActionRow, TaskPillButton, TaskWell } from "./TaskCardPrimitives";
 import {
   describeAgentLocation,
+  taskStatusPresentation,
   formatAgentActivity,
   NEEDS_ANSWER_DETAIL,
   type TaskRowModel,
 } from "./tasks.logic";
 import { useOpenChat } from "./useOpenChat";
 import { useTaskAgentActions, useTaskAgentThread } from "./useTaskAgent";
+import { useTranslation } from "~/i18n";
 
-const APPROVAL_ASK: Record<PendingApproval["requestKind"], string> = {
-  command: "wants to run a command",
-  "file-read": "wants to read a file",
-  "file-change": "wants to change a file",
-  permissions: "wants more permissions",
-  tool: "wants to use a tool",
+const APPROVAL_ASK_KEYS: Record<PendingApproval["requestKind"], string> = {
+  command: "common:task_approval_command",
+  "file-read": "common:task_approval_fileRead",
+  "file-change": "common:task_approval_fileChange",
+  permissions: "common:task_approval_permissions",
+  tool: "common:task_approval_tool",
 };
 
 export function TaskAgentPanel({
@@ -45,6 +47,8 @@ export function TaskAgentPanel({
   projectCwdById: ReadonlyMap<string, string>;
   onUpdate: (input: TodoUpdateInput) => void;
 }) {
+  const { t, formatLocale } = useTranslation();
+
   const { todo, status } = row;
   const summary = row.thread;
   const openChat = useOpenChat(threadId);
@@ -78,7 +82,11 @@ export function TaskAgentPanel({
   const headline = (text: string, className?: string) => (
     <div
       className="flex min-w-0 items-center gap-2"
-      title={`${agentName} · ${model}${location ? ` · in ${fullPath ?? location}` : ""}`}
+      title={t("common:symbol10", {
+        value0: agentName,
+        value1: model,
+        value2: location ? ` · in ${fullPath ?? location}` : "",
+      })}
     >
       <ProviderIcon provider={provider} className="size-3.5 shrink-0" />
       <span className={cn("min-w-0 text-ui-sm text-foreground", className)}>{text}</span>
@@ -86,12 +94,17 @@ export function TaskAgentPanel({
   );
 
   return (
-    <section aria-label={`${agentName} · ${model}`} className="flex flex-col gap-2">
+    <section
+      aria-label={t("common:symbol9", { value0: agentName, value1: model })}
+      className="flex flex-col gap-2"
+    >
       {status.kind === "running" || status.kind === "starting" ? (
         <>
           <TaskWell>
             {headline(
-              status.kind === "running" ? `${agentName} is working on it` : "Starting…",
+              status.kind === "running"
+                ? t("common:task_agentWorking", { agent: agentName })
+                : t("common:card_starting"),
               "shimmer",
             )}
             {recentActivity.map((entry) => (
@@ -99,7 +112,7 @@ export function TaskAgentPanel({
                 key={entry.id}
                 className="min-w-0 truncate pl-5.5 text-ui-xs text-muted-foreground"
               >
-                {entry.toolTitle ?? entry.label}
+                {entry.displayToolTitle ?? entry.toolTitle ?? entry.label}
               </span>
             ))}
           </TaskWell>
@@ -108,10 +121,10 @@ export function TaskAgentPanel({
                 interrupts whatever turn is active. */}
             {status.kind === "running" ? (
               <TaskPillButton disabled={isStopping} onClick={() => void stop()}>
-                Stop
+                {t("chat:stop")}
               </TaskPillButton>
             ) : null}
-            <TaskPillButton onClick={openChat}>Open chat</TaskPillButton>
+            <TaskPillButton onClick={openChat}>{t("common:openChat")}</TaskPillButton>
           </TaskActionRow>
         </>
       ) : null}
@@ -127,7 +140,7 @@ export function TaskAgentPanel({
       ) : approval ? (
         <>
           <TaskWell>
-            {headline(`${agentName} ${APPROVAL_ASK[approval.requestKind]}`)}
+            {headline(t(APPROVAL_ASK_KEYS[approval.requestKind], { agent: agentName }))}
             {approval.detail ? (
               <span className="line-clamp-3 font-mono text-ui-xs break-all text-muted-foreground">
                 {approval.detail}
@@ -140,7 +153,7 @@ export function TaskAgentPanel({
               onClick={openChat}
               className="mr-auto text-ui-sm text-muted-foreground outline-none hover:text-foreground focus-visible:underline"
             >
-              More choices
+              {t("common:moreChoices")}
             </button>
             <TaskPillButton
               disabled={respondingKey === approval.requestId}
@@ -153,7 +166,7 @@ export function TaskAgentPanel({
                 )
               }
             >
-              Deny
+              {t("common:deny")}
             </TaskPillButton>
             <TaskActionButton
               disabled={respondingKey === approval.requestId}
@@ -166,7 +179,7 @@ export function TaskAgentPanel({
                 )
               }
             >
-              Allow
+              {t("common:allow")}
             </TaskActionButton>
           </TaskActionRow>
         </>
@@ -174,18 +187,20 @@ export function TaskAgentPanel({
 
       {asksQuestion ? (
         <>
-          <TaskWell>{headline(`${agentName} asked you a question`)}</TaskWell>
+          <TaskWell>{headline(t("common:task_agentAskedQuestion", { agent: agentName }))}</TaskWell>
           <TaskActionRow>
-            <TaskActionButton onClick={openChat}>Answer in the chat</TaskActionButton>
+            <TaskActionButton onClick={openChat}>{t("common:answerInTheChat")}</TaskActionButton>
           </TaskActionRow>
         </>
       ) : null}
 
       {awaitsOk ? (
         <>
-          <TaskWell>{headline(`${agentName} is waiting for your OK`)}</TaskWell>
+          <TaskWell>
+            {headline(t("common:task_agentWaitingApproval", { agent: agentName }))}
+          </TaskWell>
           <TaskActionRow>
-            <TaskActionButton onClick={openChat}>Open chat</TaskActionButton>
+            <TaskActionButton onClick={openChat}>{t("common:openChat")}</TaskActionButton>
           </TaskActionRow>
         </>
       ) : null}
@@ -193,7 +208,10 @@ export function TaskAgentPanel({
       {status.kind === "review" ? (
         <>
           <TaskWell>
-            {headline(formatAgentActivity(status, summary) ?? "Finished", "text-muted-foreground")}
+            {headline(
+              formatAgentActivity(status, summary, t, formatLocale) ?? t("common:finished"),
+              "text-muted-foreground",
+            )}
             {latestReply ? (
               <div className="max-h-72 overflow-y-auto">
                 <ChatMarkdown
@@ -205,8 +223,8 @@ export function TaskAgentPanel({
             ) : null}
           </TaskWell>
           <TaskActionRow>
-            <TaskPillButton onClick={openChat}>Open chat</TaskPillButton>
-            <TaskActionButton onClick={markDone}>Mark as done</TaskActionButton>
+            <TaskPillButton onClick={openChat}>{t("common:openChat")}</TaskPillButton>
+            <TaskActionButton onClick={markDone}>{t("common:markAsDone")}</TaskActionButton>
           </TaskActionRow>
         </>
       ) : null}
@@ -214,14 +232,16 @@ export function TaskAgentPanel({
       {status.kind === "stopped" ? (
         <>
           <TaskWell>
-            {headline(status.label, "text-status-failure")}
+            {headline(taskStatusPresentation(status, t).label, "text-status-failure")}
             {status.detail ? (
-              <span className="pl-5.5 text-ui-xs text-muted-foreground">{status.detail}</span>
+              <span className="pl-5.5 text-ui-xs text-muted-foreground">
+                {taskStatusPresentation(status, t).detail}
+              </span>
             ) : null}
           </TaskWell>
           <TaskActionRow>
-            <TaskPillButton onClick={openChat}>Open chat</TaskPillButton>
-            <TaskPillButton onClick={markDone}>Mark as done</TaskPillButton>
+            <TaskPillButton onClick={openChat}>{t("common:openChat")}</TaskPillButton>
+            <TaskPillButton onClick={markDone}>{t("common:markAsDone")}</TaskPillButton>
           </TaskActionRow>
         </>
       ) : null}

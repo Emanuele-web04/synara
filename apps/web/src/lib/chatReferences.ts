@@ -3,6 +3,7 @@
 //          thread's composer draft so panels outside ChatView can talk to the chatbox.
 // Layer: Web UI utility
 
+import { t } from "~/i18n";
 import { CHAT_ASSISTANT_SELECTION_TEXT_MAX_CHARS, type ThreadId } from "@synara/contracts";
 
 import { useComposerDraftStore } from "../composerDraftStore";
@@ -55,20 +56,35 @@ export function fenceCodeSnippet(snippet: string): string {
 // `lines 3-9`, or `lines 21:5-23:8`. Columns are appended only when both ends
 // are known, so a single highlighted word reads as `line 21:5-12` instead of
 // referencing the whole line. Returns null when there is no line info.
-export function formatSelectionLabel(reference: ChatFileReference): string | null {
+export function formatSelectionLabel(
+  reference: ChatFileReference,
+  translate?: typeof t,
+): string | null {
   if (typeof reference.startLine !== "number") {
     return null;
   }
   const endLine = reference.endLine ?? reference.startLine;
   const { startColumn, endColumn } = reference;
   if (typeof startColumn !== "number" || typeof endColumn !== "number") {
-    return formatLineRangeLabel(reference.startLine, endLine);
+    return translate
+      ? translate(
+          reference.startLine === endLine ? "workspace:selectionLine" : "workspace:selectionLines",
+          {
+            location:
+              reference.startLine === endLine
+                ? reference.startLine
+                : `${reference.startLine}-${endLine}`,
+          },
+        )
+      : formatLineRangeLabel(reference.startLine, endLine);
   }
   if (reference.startLine === endLine) {
     const columns = startColumn === endColumn ? `${startColumn}` : `${startColumn}-${endColumn}`;
-    return `line ${reference.startLine}:${columns}`;
+    const location = `${reference.startLine}:${columns}`;
+    return translate ? translate("workspace:selectionLine", { location }) : `line ${location}`;
   }
-  return `lines ${reference.startLine}:${startColumn}-${endLine}:${endColumn}`;
+  const location = `${reference.startLine}:${startColumn}-${endLine}:${endColumn}`;
+  return translate ? translate("workspace:selectionLines", { location }) : `lines ${location}`;
 }
 
 // `@path` mention token plus a parenthetical location suffix (e.g.

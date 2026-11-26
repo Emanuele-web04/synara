@@ -5,7 +5,7 @@ description: Install, authenticate, verify, and run the Pi coding agent through 
 
 Synara integrates the Pi coding-agent runtime and its model registry. Pi owns provider credentials, models, extensions, skills, commands, and session behavior; Synara supplies the durable task, working environment, transcript, review surfaces, Agent Gateway connection, and Git lifecycle around it.
 
-Synara runs its bundled Pi SDK for tasks. The standalone `pi --version` reports the CLI version, which can differ from the SDK in Synara. Extensions must be compatible with the SDK version shipped with Synara.
+Pi is optional. Synara loads the SDK from the Pi CLI you select in provider settings or the `pi` executable it finds on the server's `PATH`. Use a Pi installation you trust because its SDK runs inside the Synara server. Extensions must be compatible with that installation's Pi version.
 
 ## Install
 
@@ -41,6 +41,8 @@ For supported subscription providers, use:
 /login
 ```
 
+For the current ChatGPT subscription login, use `/login openai`. Those models appear under `openai/` in Synara. The older `openai-codex` login is separate; do not rename or copy its credential into the `openai` entry.
+
 Pi can also use provider API keys from environment variables or its credential store. For example, an Anthropic key can be supplied before launch:
 
 ```bash
@@ -69,7 +71,7 @@ This verifies the package, provider credentials, model registry, and working dir
 
 ### Enable Pi
 
-Open provider settings and confirm that Synara detects `pi`.
+Open provider settings and confirm that Synara detects `pi`. If you have more than one installation, select the executable for the account you want to use.
 
 </Step>
 <Step>
@@ -119,7 +121,9 @@ Pi extensions and packages execute with the permissions of your user account. Re
 
 ## Updating
 
-Update Pi and its unpinned packages from Pi itself:
+Update the Pi installation selected in Synara, then fully quit and reopen Synara before refreshing Pi models.
+
+Update the standalone Pi CLI and its unpinned packages from Pi itself:
 
 ```bash
 pi update
@@ -131,11 +135,15 @@ To update only the CLI:
 pi update --self
 ```
 
-You can also update the global npm package through the package manager that installed it. Restart Synara after changing the runtime.
+You can also update the global npm package through the package manager that installed it.
+
+Pi 1.0.3 renamed the Azure provider to `azure`. Synara keeps `azure-openai-responses` as a runtime alias so existing Pi credentials, `models.json` overrides, and saved model selections continue using their original key. New `azure` profiles keep their own credentials. Synara does not rewrite either profile; moving a profile to the new ID is optional and follows the [upstream migration instructions](https://github.com/earendil-works/pi/releases/tag/v1.0.3). Azure remains unavailable for isolated Pi accounts because its SDK routing can read process-level configuration.
+
+Pi 1.3 moved Kimi Code to Chat Completions. Synara routes the old official `https://api.kimi.com/coding` endpoint to `/coding/v1` when using that protocol, keeping existing credentials, model selections, and config files intact. Custom endpoints and explicit Anthropic protocol definitions keep their configured routing.
 
 ## Model catalog refresh
 
-Pi discovery uses its native OpenRouter authentication to expose models it can execute. OpenCode Zen entries are refreshed with their protocol and capability metadata, and the bundled Pi SDK recognizes GLM 5.3 Flash and GPT-6 Astra. Availability still depends on the configured provider and account.
+Pi discovery uses its native OpenRouter authentication to expose models it can execute. OpenCode Zen entries are refreshed with their protocol and capability metadata, and the Pi SDK loaded from the installed `pi` CLI recognizes GLM 5.3 Flash and GPT-6 Astra. Availability still depends on the configured provider and account.
 
 Discovery shares cached results and bounds retries. The currently selected provider takes priority over background prefetch; a discovery failure remains visible rather than being treated as proof that a static fallback is current.
 
@@ -153,6 +161,12 @@ Discovery shares cached results and bounds retries. The currently selected provi
 Run Pi directly and use `/login`, or configure a supported provider API key. Confirm `/model` shows at least one authenticated model before refreshing Synara.
 
 If Anthropic authentication works but Fable 5.1 is missing, refresh Pi in Synara and start a new task. Synara can repair the known Anthropic catalog entry, but it cannot grant model access that the configured account or provider rejects.
+
+### ChatGPT models appear in Pi but not in Synara
+
+Confirm both applications use the same Pi executable and agent directory. Restart Synara if you updated that installation, then refresh Pi models and look for `openai/` after `/login openai` or `openai-codex/` for the legacy login.
+
+If Pi itself reports an expired or invalid login, authenticate again in that same profile and refresh Synara. A working current login does not need to be deleted or repeated just to upgrade Synara.
 
 ### The model catalog differs between projects
 

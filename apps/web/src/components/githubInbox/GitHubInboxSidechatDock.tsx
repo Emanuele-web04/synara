@@ -19,6 +19,7 @@ import { GITHUB_INBOX_DOCK_HOST_ID, type RightDockThreadState } from "~/rightDoc
 import { useStore } from "~/store";
 import { createSidebarThreadSummariesSelector } from "~/storeSelectors";
 import type { GitHubInboxSelection } from "./githubInbox.logic";
+import { useTranslation } from "~/i18n";
 
 const acceptAnyDockWidth = () => true;
 
@@ -41,6 +42,8 @@ export function GitHubInboxSidechatDock({
   /** A new side chat about the selected item, beside the one shown. */
   onNewSidechat: () => void;
 }) {
+  const { t } = useTranslation();
+
   const closePane = useRightDockStore((store) => store.closePane);
   const setDockOpen = useRightDockStore((store) => store.setDockOpen);
   // Tab labels need only titles, so the coarse summary selector keeps streaming tokens in the
@@ -66,7 +69,10 @@ export function GitHubInboxSidechatDock({
     {
       kind: "sidechat",
       Icon: ChatBubbleIcon,
-      label: `Ask about ${selection.kind === "issue" ? "issue" : "PR"} #${selection.number}`,
+      label: t("git:askAbout", {
+        value0: selection.kind === "issue" ? t("settings:issue") : t("chat:pR"),
+        value1: selection.number,
+      }),
     },
   ];
 
@@ -79,7 +85,7 @@ export function GitHubInboxSidechatDock({
       shouldAcceptWidth={acceptAnyDockWidth}
       addMenuKinds={[]}
       launcherItems={launcherItems}
-      addAction={{ label: "New side chat", onClick: onNewSidechat }}
+      addAction={{ label: t("git:newSideChat"), onClick: onNewSidechat }}
       motionKey={GITHUB_INBOX_DOCK_HOST_ID}
       {...(paneLabelOverrides ? { paneLabelOverrides } : {})}
       onClosePane={(paneId) => closePane(GITHUB_INBOX_DOCK_HOST_ID, paneId)}

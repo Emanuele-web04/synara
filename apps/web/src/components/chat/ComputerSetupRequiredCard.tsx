@@ -18,6 +18,7 @@ import type {
 import { computerStaleGrantAdvice, listComputerPermissions } from "@synara/shared/computerGrants";
 
 import { ComputerActionCard } from "./ComputerActionCard";
+import { useTranslation } from "~/i18n";
 
 export function ComputerSetupRequiredCard({
   missing,
@@ -67,6 +68,8 @@ export function ComputerSetupRequiredCard({
   readonly onSetUp?: () => void;
   readonly onRecheck?: () => void;
 }) {
+  const { t } = useTranslation();
+
   const ready =
     !statusError &&
     (status
@@ -88,20 +91,20 @@ export function ComputerSetupRequiredCard({
     ? resolveComputerAvailabilityView(status.availability, status.health)
     : undefined;
   const title = statusError
-    ? "Computer status is unavailable"
+    ? t("computer:computerStatusIsUnavailable")
     : ready
-      ? "Computer control is ready"
+      ? t("computer:computerControlIsReady")
       : missingLabels
-        ? `Computer control needs ${missingLabels}`
-        : (availabilityView?.title ?? "Computer control needs setup");
+        ? t("computer:computerControlNeeds", { value0: missingLabels })
+        : (availabilityView?.title ?? t("computer:computerControlNeedsSetup"));
   const description = statusError
     ? statusError
     : ready
-      ? "Send a message and the agent will pick up where it left off."
+      ? t("computer:sendAMessageAndTheAgentWillPickUp")
       : missingLabels
-        ? "Choose Set up to request missing permissions or open System Settings. Allow access for this Synara app, then return here to recheck."
+        ? t("computer:chooseSetUpToRequestMissingPermissionsOrOpen")
         : (availabilityView?.description ??
-          "Choose Set up to check permissions and prepare computer control.");
+          t("computer:chooseSetUpToCheckPermissionsAndPrepareComputer"));
   const canSetUp =
     !ready &&
     !statusError &&
@@ -122,9 +125,13 @@ export function ComputerSetupRequiredCard({
       metaFontSizePx={metaFontSizePx}
       action={
         onSetUp && canSetUp
-          ? { label: isPending ? "Setting up…" : "Set up", disabled: isPending, onClick: onSetUp }
+          ? {
+              label: isPending ? t("computer:settingUp") : t("computer:setUp"),
+              disabled: isPending,
+              onClick: onSetUp,
+            }
           : statusError && onRecheck
-            ? { label: "Recheck", onClick: onRecheck }
+            ? { label: t("computer:recheck"), onClick: onRecheck }
             : undefined
       }
     >

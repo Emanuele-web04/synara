@@ -1,4 +1,7 @@
-import { describe, expect, it } from "vitest";
+// FILE: AcpSessionRuntime.test.ts
+// Purpose: Cover ACP request setup, lifecycle ownership, and notification handling.
+
+import { describe, expect, it, vi } from "vitest";
 
 import * as OfficialAcp from "@agentclientprotocol/sdk";
 import { Deferred, Duration, Effect, Exit, Fiber, Layer, Queue, Scope, Sink, Stream } from "effect";
@@ -19,6 +22,36 @@ import {
   teardownAcpChildProcess,
 } from "./AcpSessionRuntime.ts";
 import * as AcpErrors from "./AcpErrors.ts";
+import * as processTeardown from "../supervisedProcessTeardown.ts";
+
+it("disposes process tracking and leaves ACP unspawned when Windows tracking is unavailable", async () => {
+  const spawn = vi.fn(() => Effect.die(new Error("Unexpected ACP spawn")));
+  const dispose = vi.fn();
+  const preparation = vi.spyOn(processTeardown, "prepareProviderProcessTeardown").mockReturnValue({
+    waitUntilReady: async () => false,
+    teardownProcessTree: processTeardown.teardownProviderProcessTree,
+    dispose,
+  });
+  try {
+    const runtimeLayer = AcpSessionRuntime.layer({
+      spawn: { command: "unstarted-acp-agent", args: [] },
+      cwd: process.cwd(),
+      clientInfo: { name: "synara-test", version: "0.0.0" },
+    }).pipe(
+      Layer.provide(
+        Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, ChildProcessSpawner.make(spawn)),
+      ),
+    );
+
+    await expect(
+      Effect.runPromise(Effect.service(AcpSessionRuntime).pipe(Effect.provide(runtimeLayer))),
+    ).rejects.toThrow("Windows could not verify process tracking");
+    expect(spawn).not.toHaveBeenCalled();
+    expect(dispose).toHaveBeenCalledOnce();
+  } finally {
+    preparation.mockRestore();
+  }
+});
 
 it.each(["overflow", "scope close"])(
   "releases a stalled SDK notification handler on %s",

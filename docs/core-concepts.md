@@ -8,7 +8,7 @@ work** — its conversation, provider session, working environment, tool activit
 | Concept          | Meaning                                                             |
 | ---------------- | ------------------------------------------------------------------- |
 | Workspace        | The complete Synara application and the projects available in it    |
-| Project          | A local folder, preferably a Git repository                         |
+| Project          | A folder on its execution computer, preferably a Git repository     |
 | Task             | One durable unit of work inside a project                           |
 | Goal             | An explicit persistent objective attached to one task               |
 | Turn             | One user instruction followed by the provider's work and response   |
@@ -26,11 +26,21 @@ is cancelled, the task and its prompt remain available for retry. Pressing Send 
 message for the same task is still being sent shows a notice and keeps the new text in the
 composer; it is not sent twice.
 
+Empty chats show an animated ASCII background by default. Turn it off in **Settings →
+Appearance → ASCII background**. With reduced motion enabled, the field stays still; deliberate
+clicks can still trigger a ripple. The composer keeps its own surface over the pattern. The
+decoration pauses while its chat is hidden.
+
 ## The main surfaces
 
 - **Sidebar** — projects, spaces, tasks, and activity requiring attention. The rail
   is a fixed column of icon tabs for Home, Spaces, Tasks, Code review, Automations, Hubs, and
   Settings, with the thread panel beside it and the route shown as a card inset from the window.
+  The Activity view (the bell, `mod+alt+u`) leads with **Priority**: every chat waiting on an
+  answer, then unseen finished or failed work, then running chats, with no cap. Rows keep their
+  place while you work through them, and read rows stay until **Clear read from Priority** in
+  the Activity options or until the view reopens. Other chats follow under Today, Yesterday,
+  and Earlier.
   Open saved threads appear as tabs across the top of the chat. Unsent drafts stay out of
   the tab strip until they become saved threads on the first send. Saved tabs remain
   available to return to while an unsent draft is on screen, including in the editor view.
@@ -39,9 +49,15 @@ composer; it is not sent twice.
   chats stay out of message results. Every search word must match the message body;
   the server returns at most 50 hits with short excerpts. Message matching ignores ASCII letter case.
   Archiving the open thread or marking it **Done** opens the most recently used unfinished chat
-  across projects, ordered by its last human message (or creation time). If none remains, New
-  thread reopens an unsent draft. Actions on other threads keep the current chat open.
+  in the active Space, ordered by its last human message (or creation time). The **Chats** list
+  and a Hub's own folder belong to no Space, so their chats count in every Space. A Hub thread in
+  a linked repository follows that repository's Space. With **Void** selected, only projects not
+  filed in any Space count. If none remains, New thread reopens an unsent draft.
+  Actions on other threads keep the current chat open.
   Both Archive and Done offer an **Undo** toast; undoing an action on the open thread returns to it.
+  Connected-computer rows expose **Pin**, **Archive**, and **Done/Undo** on hover or keyboard focus,
+  including in Priority. The controls replace the remote badge while visible and always act on
+  that chat’s owning computer; disconnected rows cannot make changes.
 - **Code review** — pull requests and issues from the GitHub repositories of your projects, with a
   detail pane and three actions on every item (see [Code review](#code-review))
 - **Tasks** (Stable and Beta) — a to-do list for anything you need to do, with or without
@@ -79,10 +95,18 @@ composer; it is not sent twice.
   A definitive provider failure leaves a **Task interrupted** notice attached to its turn,
   including when no final assistant reply arrives. The notice survives reopening and session
   recovery; a ready connection does not mean the task finished or is being retried. An explicitly
-  announced provider retry remains active and shows **Provider retrying**. **Continue task** sends
-  a new instruction in the same conversation to verify prior operations and resume remaining work;
-  **Change model** opens the existing composer picker before sending. Earlier failure notices stay
-  in the transcript after later turns. User cancellation keeps its interrupted meaning.
+  announced provider retry remains active and shows **Provider retrying**. **Continue task** starts
+  a new turn in the same conversation that asks the agent to verify prior operations and resume
+  remaining work; that instruction goes to the provider only, so the chat gains no message.
+  **Change model** opens the existing composer picker before continuing. Earlier failure notices
+  stay in the transcript after later turns. User cancellation keeps its interrupted meaning.
+  After an interruption (Stop, quitting the app, a crash, or a restart), an empty composer's send
+  button becomes **Resume task** (filled play icon), and Enter does the same. It continues the
+  interrupted turn the same way, or sends the newest message again as written when it never
+  reached the provider (for example after **Unblock** abandoned a failed send). A resent message
+  keeps the plan it implements and its `/computer` access; the click counts as fresh consent, so
+  Resume from a remote device resends without computer access. A Stop double-click cannot
+  trigger it.
 - **Composer** — objectives, attachments, provider selection, model selection, and task controls
 - **Terminal** — a real shell opened in the task's working directory
 - **Browser** — a shared live page surface for previews, semantic automation, and page-declared
@@ -94,16 +118,51 @@ You do not need every surface open at once. Bring each one in when it answers a 
 running, what changed, whether the UI works, or whether the task is safe to ship.
 
 Desktop quit requests ask for confirmation even when no chats are running. On macOS,
-⌘Q quits the application after confirmation; ⌘W confirms closing the window while the
-application and its running chats stay active. Quitting with no open window uses a
-native confirmation. With an open window and running chats, the quit dialog lists the work that
+⌘Q quits the application after confirmation. Cmd/Ctrl+W closes the focused terminal or
+workspace view, or the active open chat tab when available. If no surface handles the chord,
+macOS ⌘W confirms closing the window while the application and its running chats stay active.
+Quitting with no open window uses a native confirmation. With an open window and running chats, the quit dialog lists the work that
 will stop and offers to resume it automatically on the next launch. On macOS and Linux, a SIGINT
 or SIGTERM from a terminal or a script, such as `bun run canary:stop`, shuts the app down without
 asking.
 
+After an unexpected server shutdown, Synara automatically continues ordinary chats that
+were actively running, using their saved conversation and provider selection. The continuation
+asks the agent to verify existing operations before repeating them. It goes to the provider
+only, without a chat message; chats resumed after a confirmed quit continue the same way. Chats waiting for approval
+or an answer, chats still starting, archived chats, native subagents, delegated tasks, goals,
+and managed Hub or automation work are excluded from this fallback; their existing recovery or manual controls
+still apply. This starts a guarded continuation, not a replay of an in-flight tool call.
+
+To keep working on another provider account, add and sign in to it under **Settings → Providers**,
+then use **Hand off thread → Continue in a new thread** and select that account. The new thread
+carries the conversation history and uses the destination account's own credentials. A started
+thread's model picker cannot change its account in place.
+
 ## Projects
 
-A project is the folder Synara works with.
+A project is the folder Synara works with. When remote connections are available, **Create project**
+lets you name it, choose a computer, and browse a source folder on that computer. A new chat's
+**Run on** picker chooses its computer; the project picker then shows that computer's folders.
+Existing chats and drafts keep their original computer when you open work elsewhere.
+
+Connected computers share the same Projects, Chats, Pinned, and Activity lists. A remote row names
+its computer; opening it changes the selected chat without switching the whole app. Empty remote
+folders stay in the project picker until they have a chat, are pinned, or are the active new project.
+Projects with the same name or path on different computers remain separate physical folders.
+
+The selected computer also owns chat creation from keyboard shortcuts and search, and terminal
+creation from the desktop menu. If that connection is unavailable, these actions ask you to
+reconnect instead of creating work locally. Window appearance, zoom, and app keybindings belong
+to the controlling app; project-script shortcuts stay with the project on its computer. Opening
+Keybindings from a remote chat takes you to the controlling app's settings.
+
+Wherever a project appears (sidebar rows, pinned rail shortcuts, hover cards, search, pickers, and the
+Edit project preview), its glyph is the project's local favicon when one is available, with a folder
+as the fallback. An emoji, icon, or folder color chosen in Edit project takes priority over the
+detected favicon. The folder opens and closes with its sidebar row; a pinned row, or a row showing
+any other glyph, adds a chevron for that state. Detected logos must be image files inside the project;
+links to files outside it are ignored, and logo documents cannot run scripts.
 
 The project picker shows registered projects and local folders. Creating a task worktree does not
 add another project entry. If the current draft already uses an unregistered folder, the picker keeps
@@ -122,20 +181,21 @@ Non-Git folders can still be useful for simpler work, but they do not provide th
 review guarantees.
 
 A project can also span several folders, such as a frontend, an API, and a shared package that
-change together. Add them under **Source folders** when you create the project. One folder is the
-primary folder: it is the project's working directory and keeps every single-folder behavior. The
-agent can read and edit the other folders too.
+change together. Add them under **Source folders** when you create the project, or later from
+**Edit project**. One folder is the primary folder: it is the project's working directory and keeps
+every single-folder behavior. The agent can read and edit the other folders too.
 
-Multi-folder projects have two limits for now:
+Multi-folder projects have these limits for now:
 
-- Chats run in Local mode. Worktree mode would isolate only the primary folder while the others
-  are edited live, so Synara refuses it.
-- Only Codex and Claude can be granted the extra folders. Other providers refuse the chat instead
+- Worktree mode isolates only the primary folder. The chat works in a worktree of the primary
+  folder, while the other folders are edited directly.
+- Codex, Claude and Antigravity can be granted the extra folders. Other providers refuse the chat instead
   of silently working without them.
+- **Edit project** adds and removes the other folders; the primary folder moves only with
+  **Change project path**. A running chat picks up the new folder set on its next turn.
 
-The folder set is fixed when the project is created. Git actions, checkpoint diffs, and file undo
-cover only the primary folder. Edits in additional folders must be reviewed and
-recovered in those folders separately.
+Git actions, checkpoint diffs, and file undo cover only the primary folder. Edits in additional
+folders must be reviewed and recovered in those folders separately.
 
 ## Tasks and turns
 
@@ -154,13 +214,18 @@ task when the work needs a different owner, branch, or review boundary.
 
 Finished work folds into a compact **Worked for** disclosure above the final answer. Expand it
 to read the tools and full narration; turning off finished-turn folding keeps the work visible.
-Active turns show **Working for** with a live duration. These labels use the chat font size and
+Active turns show **Working for** with a live duration. The running call sits in the working
+indicator, while the rest of the current run stays in the transcript as a summary you can expand
+to read its commands, reasoning, and details. These labels use the chat font size and
 keep the divider below the label, without model badges or completion icons.
 **Stopped by you** requires a request explicitly marked as user Stop, followed by an interrupted
 outcome for that turn. Agent, automatic, steering, and historical interruptions without that actor
 say **Interrupted**; provider failures retain their reason even after Stop intent. Background commands
 keep one row as they run and settle; a completion that wakes the provider starts a separate **Resumed**
 response with its own live and settled duration, even when the provider reuses the launch's turn ID.
+For Claude tasks, a terminal task report wins over late progress and background snapshots. The task
+becomes live again only when Claude explicitly starts or resumes it; a new user message does not
+require stopping genuinely independent background work.
 
 **Stop** settles the turn once the provider accepts the interrupt and no provider turn is still
 running, even if the provider had already finished and its final events are still arriving.
@@ -169,6 +234,56 @@ again. An assistant item that ends without any text does not add an empty respon
 
 Chat code blocks above 250,000 characters display their complete source as plain text,
 using the same highlighting limit as file previews. Find, Copy code, and soft wrap remain available.
+
+### Inline visuals
+
+In Synara and Synara Beta, an agent can answer with a visual inside its reply: headline numbers, a bar or
+line chart, a table, a side-by-side comparison, a checklist or step list, a note, a small
+calculator, follow-up choices, or tabs that combine them. Ask for one ("show this as a chart") and
+the agent calls the `synara_show_visual` tool, then places the visual in its answer like a
+paragraph, with text before and after it. This works with every provider that has Synara's thread
+tools (see [Providers](providers.md)).
+
+Most visuals are component specs: the agent sends data, and Synara draws it with its own
+components, so a visual matches the app, the current light or dark theme, custom theme colors, and
+the chat font size. Bar charts can compare before and after on each row, with the change in
+percent. Tables sort when you click a column header and fold after ten rows.
+Calculators recompute as you move a slider or type a value. Checklists can be ticked. Clicking a
+follow-up choice sends it as your next message, or adds it to the composer for review if it already holds text, attachments, or context. What you change in a visual is kept while you scroll. Anything the components cannot draw,
+such as a diagram, the agent sends as a self-contained HTML page instead; the rest of this section
+covers those pages.
+
+While a turn runs, a visual its answer has not placed yet waits for that answer, so the reply
+does not jump. A visual the agent never places appears above the answer, under **Worked for**,
+when the turn settles. Expanding or collapsing **Worked for**, or the turn settling, never
+reloads a visual.
+
+An HTML page has no border, caption, or card of its own. It sits on the chat background, spans the
+reply column, and lines up with the reply text; its title is the name screen readers announce.
+Plain headings, tables, buttons, inputs, and selects inside a page already look like Synara,
+with a visible keyboard focus ring. The tool also tells agents to draw at natural size: text that
+never scales with the column, SVG at its own size, and charts sized to their data. That guidance
+shapes the page; Synara does not rewrite it. Pages follow theme and font size changes without
+reloading.
+
+Scripts in a visual run in a sandboxed frame with its own origin. They cannot read Synara's
+pages, your session, or your files, or open windows or dialogs, and the page's fetches and remote
+scripts, fonts, and images are blocked. WebRTC entry points are removed before page scripts.
+A visual that tries to navigate
+stops and offers **Reload**: the desktop app refuses the navigation before the request. HTML
+execution is disabled in plain browsers; use native component specs there instead. HTML pages
+cannot open external links through the host. Hover
+a page to copy its source or reload it. Each page is limited to 256 KiB and each component spec to
+64 KiB, and a turn can show at most six visuals. A turn you stop after it showed a visual ends with the stop line below that
+visual.
+
+The transcript keeps following the end while a visual grows if you were at the end; scrolling
+up, including over a visual, leaves you where you are. A visual that is no longer available
+(for example after its thread was deleted) shows **Visual unavailable.** Deleting a thread
+deletes its visuals, and undoing a turn removes that turn's visuals from the conversation.
+Visuals are not included in thread exports; an exported answer shows the `synara-visual` block
+that placed one. Far-off HTML pages are unloaded as you scroll, so an interactive page restarts
+when you come back to it.
 
 If a connection drops while sending, Synara shows **Checking message delivery…** while it checks the original
 command's durable receipt. An accepted message is retained without resending it to the provider.
@@ -185,22 +300,40 @@ Thread runtime errors appear above the transcript. Use **Show details** to read 
 or **Copy error** to copy every line. **Unblock thread** is available for provider-delivery
 quarantine; it abandons the ambiguous delivery rather than resending it. The error banner does
 not offer a generic Retry because an error message alone cannot prove that resending is safe.
+A Stop that was still being delivered when the server exited does not block the thread: the
+provider session it was sent to belonged to that server process, so the next start settles the
+Stop without resending it and clears a block an earlier version left for that reason.
 
 Messages queued above the composer while a turn runs are sent one by one after it completes.
 If you press Stop, or the turn fails or hits a usage limit, the queue pauses instead: it
 stays visible with **Queue paused** and the reason. **Resume** sends the queue in order;
+if the provider session stopped, it starts the session again once the server connection is open.
 **Edit** moves the next queued message back into the composer. Sending a new message
 yourself goes first, and the queue resumes once that turn completes. The pause is per
 thread and survives a reload. A message already shown in the conversation was accepted by
 the server rather than queued here, and the server still sends it after a Stop.
 
+Send waits for selected images to finish preparing. If preparation fails while a send is waiting,
+the message stays unsent and its text and successfully prepared attachments remain in the composer.
+Select a readable image before retrying; a failed intake does not block later valid sends.
+
 Turn off **Settings → General → Move sent messages to top** to keep new messages at the bottom
 of the conversation and follow replies as they stream.
+
+**Settings → Providers → Resume after usage limits** is off by default. When enabled, a supported provider's definitive failed turn with a known future reset can schedule a server-owned continuation in the same task. The failed turn remains in the transcript. The task shows its reset time, and **Stop** cancels that recovery episode. The owning computer must be running; desktop, web, and iOS clients can disconnect. A restarted host restores pending waits. It cannot wake a sleeping or powered-off computer. A Stop issued while a send is still being accepted also prevents that send from scheduling a recovery later.
+
+The continuation checks the saved conversation and workspace before repeating operations. Already accepted user messages take priority. Manual sends, Stop, pause, archive/delete, goal changes, model/account/route changes, or disabling the setting cancel the pending recovery; re-enabling does not restore cancelled waits. Unknown resets, an uncertain delivery, and providers still performing their own retry remain under existing manual or native recovery controls. Unsent composer drafts stay on their client.
 
 For work that should continue across several turns, set a deliberate
 [thread goal](https://www.trysynara.com/docs/features/thread-goals). A goal can continue after a
 clean turn, but queued user work, approvals, questions, interruptions, failures, and pause rules
 remain in control.
+
+Hosts advertise `orchestration.thread-goal-visible-start` when they accept
+`goalStartBehavior: "start-with-message"`. Native clients use it only for a new,
+idle goal outside Plan mode, so the visible message and first turn request are
+committed together. Older hosts keep the existing goal path; this optional capability does
+not change the required protocol revision or require re-pairing.
 
 Use a [thread fork](https://www.trysynara.com/docs/workflows/forks) when a new task should inherit
 the conversation or split from one exact turn. Use a
@@ -290,6 +423,10 @@ A task runs in one of two common environments.
 A worktree is another working directory attached to the same Git repository. It shares repository
 history while keeping files and branch state separate.
 
+When a managed worktree copies changes from an existing checkout, untracked nested repositories and
+linked worktrees stay in the source checkout. Relative symbolic links remain relative in the new
+checkout.
+
 Read the [Git worktrees guide](https://www.trysynara.com/docs/workflows/worktrees) before starting
 several tasks in the same repository.
 
@@ -332,6 +469,15 @@ Synara supplies the shared workspace around it:
 Each task owns a provider session. Available models and controls can differ because Synara discovers
 capabilities from the installed runtime and account.
 
+Provider quota warnings live under **Environment → Usage**, on the active account's row. Approaching
+limits update that row and mark the Environment toggle. Editor and embedded chats keep the composer
+warning when they have no Environment panel. The rate-limit warning setting applies to both
+surfaces. Blocking limits remain visible near the composer and in activity history. New allowed
+updates and elapsed reset times clear the current warning.
+
+Codex's opt-in unstable-feature startup notice stays in native diagnostics. Actionable runtime and
+configuration errors remain visible.
+
 ## Handoffs
 
 A [provider handoff](https://www.trysynara.com/docs/workflows/handoffs) lets another supported
@@ -363,6 +509,10 @@ Create PR can include uncommitted changes and create a feature branch from the d
 When you supply a PR title, Synara also uses it as the commit message unless a separate commit
 message was supplied. Providing both the title and description skips text generation for this flow.
 
+By default, the description of a pull request Synara creates ends with a "Created with Synara"
+link. Turn this off with **Add Synara attribution** in Settings. Synara never adds it twice and
+never edits an existing pull request; commits and branch names are not changed.
+
 Failed commit, push, and PR actions show the failed step and a copyable error until dismissed.
 Each action keeps its own error details when you switch workspaces and start another action.
 Codex text generation stops on a terminal `ERROR: ... 401 Unauthorized` diagnostic; transport
@@ -373,6 +523,28 @@ follow a successful commit or push, so inspect the current branch before retryin
 
 Synara's checkpoint and revert controls can help recover task work, but committed Git history remains
 the strongest boundary for important changes.
+
+For providers whose live changes Synara captures from Git, an individual **Turn** diff can show
+its latest completed file-tool snapshot before the turn finishes. It updates when the next snapshot
+is published, survives reconnects, preserves Ignore whitespace, and switches to the final checkpoint
+after capture succeeds, including interrupted turns with a captured exact baseline. A failed terminal
+capture retains the last preview; later events cannot recapture work for the settled turn.
+It does not read uncaptured worktree edits on demand. Codex cumulative turn patches can also appear
+before completion: Synara applies the exact journal revision to its captured turn-start baseline in
+a private Git index, preserving Ignore whitespace without reading later checkout edits. A missing
+baseline, mismatched patch, compacted payload or older event without integrity metadata remains
+unavailable until a fresh complete update or final checkpoint. **All turns** still uses completed
+checkpoints; a live preview is not proof that a turn finished.
+
+Turn and thread diffs, their changed-file lists and file Undo leave out history the task only moved
+onto: a merged, pulled, rebased or checked-out branch, or a reset to an existing commit. Synara
+records `HEAD` and a worktree reflog anchor on each checkpoint. It omits a path only when it was
+clean at both ends and its final content matches a change brought in by existing history. When a
+merge or rebase produces new commits, its incoming branch must have changed that path since the
+common ancestor. Local edits, conflict resolutions, commits made during the turn and uncommitted
+work a reset discarded stay visible. If Git history between the anchors is unavailable or
+ambiguous, Synara keeps the full diff and refuses file Undo when the patch overlaps changes
+between the recorded HEADs. Older checkpoints without a recorded HEAD keep the full diff.
 
 File Undo and thread revert refuse to change a workspace while another thread has an active or
 pending turn in that same Git checkout. Symlinks and nested folders share this protection;
@@ -388,6 +560,10 @@ after cancellation cleanup finishes, which can extend beyond the preparation bud
 check after cleanup recognizes a checkpoint published just before cancellation. Initial and later
 baseline notices share one message or turn identity. A stored initial notice suppresses redundant
 later notices; concurrently published native notices may retain the latest owner's detail in that row.
+Missing-baseline status stays on
+Environment's Changes row for the latest turn instead of repeating among tool calls; actual capture
+and revert failures remain in the transcript. The stored diagnostic and missing-checkpoint state
+are preserved.
 
 Synara never reconstructs the initial state from files the provider may already have changed.
 Native provider turns, including native child turns, may begin without Synara's pre-send preparation;
@@ -398,6 +574,31 @@ and Hub output discovery is unavailable for turns without a prepared Hub baselin
 also refuses an earlier turn when a later managed checkpoint has no initial baseline, before changing
 files or checkpoint refs. The worker is named `HubOutputReactor`; legacy `studio.*` RPC and
 activity keys remain unchanged for client and persisted-history compatibility.
+
+### Linked pull requests
+
+A chat keeps a list of the pull requests linked to it, each with where the link came from:
+
+- **Created**: the Create PR action (linked by the server, so a closed window cannot drop it), or
+  an agent's `gh pr create` that Synara recognized in the command output.
+- **Agent**: the agent called `synara_set_thread_pull_request` for a PR it created, took over, or
+  pushed to. Agents link every PR of a stack and do not link PRs they only read or review.
+- **User**: you linked it from the Environment panel, or pushed to its branch with a git action.
+- **Checkout**: the chat was started from a checked-out PR, or from another chat's workspace
+  together with that chat's current PR.
+- **Branch**: Synara found a PR on the chat's branch at the end of a turn.
+
+Linking adds to the list; it never replaces another PR. Branch discovery only manages its own
+links, so a PR linked any other way stays with the chat after the branch changes, and the
+sidebar badge keeps showing it. The current PR is the open one (the most recently linked open
+PR for a stack), otherwise the most recently linked one. The server refreshes the state of open
+linked PRs (every few minutes, faster for active chats) and stops once a PR is merged or closed;
+a failed refresh keeps the last known state.
+
+The Environment panel's pull request section shows the current PR and lists the other linked
+PRs. **Link pull request…** links a PR by URL or number, and **Unlink from this chat** removes a
+link without closing or changing the PR on GitHub. An unlinked PR is not re-added automatically
+by branch discovery or command recognition.
 
 ## Hubs
 
@@ -442,6 +643,9 @@ scaling beyond one task.
 - `mod+\` — split the current view
 - `mod+1` through `mod+9` — open a numbered sidebar thread. Hold `mod` to show the
   default numbers in the classic and Activity views.
+- `mod+alt+a` — open the next chat that needs you: one waiting on an answer first, then
+  unseen work. Repeated presses advance through that urgency order and wrap after the last
+  actionable chat, independently of Priority's held row order.
 
 Every split chat has an **X** in its header to close it. Closing an ordinary pane keeps
 the remaining chats and preserves focus on a surviving chat. Closing a forked Side
@@ -481,6 +685,36 @@ Regular Markdown links remain relative to the document directory. Code, escaped
 Wiki syntax, embeds, and heading/block links are left literal; this is basic file
 navigation rather than full Obsidian support.
 
+### Sending files to a connected computer
+
+A photo or file is uploaded to the computer that owns the conversation before
+its message is sent. The message references that managed upload; a path on the
+controlling device is not a path on the destination computer. Changing the
+selected computer does not retarget an upload or its cancellation.
+
+Desktop remote workspaces use the controlling window for authenticated file
+transfers. Workspace frames receive only the requested resource bytes, without
+native credentials or a broader filesystem grant. Image previews load near the
+viewport and release their temporary bytes after scrolling away.
+
+### Images in chat replies
+
+Images stay at their original positions in the reply. When a completed reply
+references an eligible local image, the host can retain a private attachment
+snapshot with that message. This snapshot remains available after the original
+file or worktree is removed; it uses the conversation's computer and attachment
+storage, rather than uploading the image to a public service.
+
+Local references without a retained snapshot still need their original file.
+Relative paths are resolved on the conversation's host, using its workspace and
+registered Git worktrees. Recovery grants access to one canonical file, not its
+parent directory. Symlinks cannot widen the relative-reference boundary.
+
+Use **Retry** on a failed image preview after the file becomes available or the
+host reconnects. Retrying renews an expired file grant when needed. Image previews
+do not poll in the background. A missing original cannot be recovered when no
+snapshot was retained; older replies may therefore still need the original file.
+
 ### Terminal panels
 
 Each chat has one main-view terminal panel and can have multiple independent
@@ -489,6 +723,10 @@ with its own shell session. Switching tabs preserves their sessions; closing or
 exiting one terminal leaves the others running. Dock tabs and session identities
 are restored after reload. Terminals have no nested tabs, groups, splits, or bottom
 drawer. Opening the main-view terminal again focuses its existing session.
+The right dock remembers its resized width per chat across thread switches,
+panel tab changes, closing and reopening the dock, and reloads. When a smaller
+window cannot fit that width beside the composer, the dock temporarily uses its
+opening width and restores the saved resize when space returns.
 Project actions open a fresh session in the right dock with the requested working
 directory and environment, keeping the center chat unchanged, including in split
 chats. They replace only the selected idle dock terminal; its busy command must

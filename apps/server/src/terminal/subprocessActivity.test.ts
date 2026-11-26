@@ -1,6 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { inspectSubprocessActivity } from "./subprocessActivity";
+import * as processRunner from "../processRunner";
+
+import { captureProcessChildrenMap, inspectSubprocessActivity } from "./subprocessActivity";
 import type { ProcessChildrenMap } from "./processTreeKiller";
 
 function buildChildrenMap(
@@ -112,4 +114,40 @@ describe("inspectSubprocessActivity", () => {
       hasRunningSubprocess: false,
     });
   });
+});
+
+// Real child output makes the snapshot owner enforce its normal capture budget.
+describe("captureProcessChildrenMap", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it.each([
+    { bytes: 300_000, complete: true },
+    { bytes: 9 * 1024 * 1024, complete: false },
+  ])(
+    "keeps tail activity only for a complete $bytes-byte process table",
+    async ({ bytes, complete }) => {
+      const runProcess = processRunner.runProcess;
+      vi.spyOn(processRunner, "runProcess").mockImplementation((_command, _args, options) =>
+        runProcess(
+          process.execPath,
+          [
+            "-e",
+            `const row = '100 1 node unrelated.js\\n'; process.stdout.write(row.repeat(Math.ceil(${bytes} / row.length)) + '300 200 node active-build.js\\n')`,
+          ],
+          options,
+        ),
+      );
+
+      const snapshot = await captureProcessChildrenMap();
+      if (!complete) {
+        expect(snapshot).toBeNull();
+        return;
+      }
+      expect(snapshot).not.toBeNull();
+      expect(inspectSubprocessActivity(200, snapshot!)).toMatchObject({
+        hasRunningSubprocess: true,
+        hasNonProviderSubprocess: true,
+      });
+    },
+  );
 });

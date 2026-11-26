@@ -5,6 +5,7 @@ import {
   WS_PROTOCOL_MIN_REVISION,
   WS_PROJECT_FILE_WATCH_CAPABILITY,
   WS_SERVER_CAPABILITIES,
+  WS_THREAD_GOAL_VISIBLE_START_CAPABILITY,
 } from "@synara/contracts";
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
@@ -33,8 +34,10 @@ describe("WebSocket compatibility bootstrap", () => {
     expect(result.capabilities).toContain("orchestration.thread-detail-snapshot");
     expect(result.capabilities).toContain("projects.github-provisioning");
     expect(result.capabilities).toContain(WS_PROJECT_FILE_WATCH_CAPABILITY);
+    expect(result.capabilities).toContain(WS_THREAD_GOAL_VISIBLE_START_CAPABILITY);
     expect(WS_CLIENT_REQUIRED_CAPABILITIES).not.toContain("projects.github-provisioning");
     expect(WS_CLIENT_REQUIRED_CAPABILITIES).not.toContain(WS_PROJECT_FILE_WATCH_CAPABILITY);
+    expect(WS_CLIENT_REQUIRED_CAPABILITIES).not.toContain(WS_THREAD_GOAL_VISIBLE_START_CAPABILITY);
   });
 
   it("rejects revision-two clients after the pull request list moved to githubInbox.list", async () => {

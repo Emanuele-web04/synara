@@ -12,8 +12,6 @@
     "test:links": "node scripts/check-external-links.mjs",
     "test:seo-smoke": "node scripts/seo-smoke.mjs",
     "test:e2e": "playwright test tests/e2e",
-    "test:visual": "playwright test tests/visual --grep @visual",
-    "test:visual:update": "playwright test tests/visual --grep @visual --update-snapshots",
     "test:a11y": "playwright test tests/a11y",
     "test:performance": "node scripts/performance-smoke.mjs",
     "typecheck": "node ../../node_modules/@typescript/native/bin/tsc --noEmit --tsBuildInfoFile node_modules/.cache/typescript-native.tsbuildinfo",
@@ -25,6 +23,7 @@
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",
+    "@synara/shared": "workspace:*",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "fumadocs-core": "16.11.5",

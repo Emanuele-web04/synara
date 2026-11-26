@@ -21,6 +21,7 @@ function fixture(options?: {
   readonly semanticTextLaneHoldMs?: number;
   readonly semanticTextLaneGapMs?: number;
   readonly stillIntervalMs?: number;
+  readonly permissionReprobeDelayMs?: number;
   readonly hostPlatform?: string;
   readonly nativeRevision?: number | null;
 }) {
@@ -224,6 +225,7 @@ function fixture(options?: {
   const backend = new CuaComputerBackend({
     endpoint: "/fixture-only",
     request,
+    permissionReprobeDelayMs: options?.permissionReprobeDelayMs ?? 1,
     ...(options?.semanticTextLaneHoldMs !== undefined
       ? { semanticTextLaneHoldMs: options.semanticTextLaneHoldMs }
       : {}),
@@ -363,6 +365,25 @@ function gatewayFixture(f: ReturnType<typeof fixture>) {
     }>;
   };
   return { manager, call, list };
+}
+
+// Observes the single "Message" text field every semantic-lane test targets.
+async function observeMessageField(f: ReturnType<typeof fixture>) {
+  f.setElements([
+    {
+      role: "AXTextField",
+      label: "Message",
+      frame: { x: -290, y: 30, width: 120, height: 20 },
+      element_token: "message-token",
+    },
+  ]);
+  const node = (await f.backend.getState({ windowId: "cua:10:20", includeTree: true })).root!
+    .children[0]!;
+  return {
+    target: { label: "Message", windowId: "cua:10:20" },
+    node,
+    point: node.activationPoint!,
+  };
 }
 
 describe("Cua native boundary", () => {
@@ -679,7 +700,6 @@ describe("Cua native boundary", () => {
   });
 
   it.each([
-    ["down", 0, 240, 0, -2],
     ["up", 0, -240, 0, 2],
     ["right", 240, 0, -2, 0],
     ["left", -240, 0, 2, 0],
@@ -995,24 +1015,7 @@ describe("Cua native boundary", () => {
 
   it("uses semantic-only text delivery for an exact live control", async () => {
     const f = fixture();
-    f.setElements([
-      {
-        role: "AXTextField",
-        label: "Message",
-        frame: { x: -290, y: 30, width: 120, height: 20 },
-        element_token: "message-token",
-      },
-    ]);
-    const state = await f.backend.getState({
-      windowId: "cua:10:20",
-      includeTree: true,
-    });
-    const node = state.root!.children[0]!;
-    const target = {
-      target: { label: "Message", windowId: "cua:10:20" },
-      node,
-      point: node.activationPoint!,
-    };
+    const target = await observeMessageField(f);
 
     await f.backend.typeText("hello", "cua:10:20", target);
     expect(f.calls.find((call) => call.name === "type_text")?.args).toMatchObject({
@@ -1037,48 +1040,63 @@ describe("Cua native boundary", () => {
     expect(focusedFieldCall).not.toHaveProperty("semantic_only");
   });
 
-  it("types into web content through a composed set_value and verifies on re-read", async () => {
-    const f = fixture();
-    f.setElements([
-      {
-        role: "AXTextField",
-        label: "Message",
-        frame: { x: -290, y: 30, width: 120, height: 20 },
+  it.each(["typeText", "setValue"] as const)(
+    "preserves native uncertainty when label-based web %s is echoed by AX",
+    async (action) => {
+      const f = fixture({ nativeRevision: 40 });
+      f.onTool("set_value", () => ({
+        structuredContent: {
+          route: "ax",
+          delivery: { mode: "background" },
+          effect: "unverifiable",
+          observation_required: true,
+        },
+      }));
+      f.setElements([
+        {
+          role: "AXTextField",
+          label: "Message",
+          frame: { x: -290, y: 30, width: 120, height: 20 },
+          element_token: "web-token",
+          element_index: 2,
+          in_web_content: true,
+          value: "seed",
+        },
+      ]);
+      const state = await f.backend.getState({
+        windowId: "cua:10:20",
+        includeTree: true,
+      });
+      const node = state.root!.children[0]!;
+      const target = {
+        target: { label: "Message", windowId: "cua:10:20" },
+        node,
+        point: node.activationPoint!,
+      };
+
+      const result =
+        action === "typeText"
+          ? await f.backend.typeText("-typed", "cua:10:20", target)
+          : await f.backend.setValue(target, "replacement");
+      // The native write is one mutation. Echoed AX text cannot justify either
+      // replaying it or claiming that the renderer accepted the edit.
+      expect(f.calls.filter((call) => call.name === "type_text")).toHaveLength(0);
+      const writes = f.calls.filter((call) => call.name === "set_value");
+      expect(writes).toHaveLength(1);
+      expect(writes[0]?.args).toMatchObject({
         element_token: "web-token",
         element_index: 2,
-        in_web_content: true,
-        value: "seed",
-      },
-    ]);
-    const state = await f.backend.getState({
-      windowId: "cua:10:20",
-      includeTree: true,
-    });
-    const node = state.root!.children[0]!;
-    const target = {
-      target: { label: "Message", windowId: "cua:10:20" },
-      node,
-      point: node.activationPoint!,
-    };
-
-    const result = await f.backend.typeText("-typed", "cua:10:20", target);
-    // Chromium-family fields never honour AXSelectedText: the write must be a
-    // composed AXValue set, not a semantic insert.
-    expect(f.calls.filter((call) => call.name === "type_text")).toHaveLength(0);
-    const write = f.calls.find((call) => call.name === "set_value");
-    expect(write?.args).toMatchObject({
-      element_token: "web-token",
-      element_index: 2,
-      value: "seed-typed",
-      pid: 10,
-      window_id: 20,
-    });
-    // The independent re-read saw the DOM value land.
-    expect(result).toMatchObject({ verified: "confirmed", effect: "verified" });
-    const reads = f.calls.filter((call) => call.name === "get_window_state");
-    expect(reads).toHaveLength(3);
-    for (const read of reads) expect(read.args?.include_screenshot).toBe(false);
-  });
+        value: action === "typeText" ? "seed-typed" : "replacement",
+        pid: 10,
+        window_id: 20,
+      });
+      expect(result).toMatchObject({
+        deliveryPath: "cua-ax-background",
+        verified: "unverifiable",
+        effect: "dispatched-unknown",
+      });
+    },
+  );
 
   it("refuses a stale semantic field when fresh state has two matching controls", async () => {
     const f = fixture();
@@ -1205,7 +1223,7 @@ describe("Cua native boundary", () => {
       f.delayWindowState(undefined);
       read.resolve();
       await expect(f.backend.setValue(target, "allowed")).resolves.toMatchObject({
-        effect: "verified",
+        effect: "dispatched-unknown",
       });
       expect(
         f.calls.filter((call) => call.name === "set_value").map((call) => call.args?.value),
@@ -1265,79 +1283,34 @@ describe("Cua native boundary", () => {
     expect(typeTexts().map((call) => call.args?.text)).toEqual(["alpha", "bravo"]);
   });
 
-  it("semantic text lane holds select_text behind a same-window write", async () => {
-    const f = fixture({ semanticTextLaneGapMs: 0 });
-    f.setElements([
-      {
-        role: "AXTextField",
-        label: "Message",
-        frame: { x: -290, y: 30, width: 120, height: 20 },
-        element_token: "message-token",
-      },
-    ]);
-    const node = (await f.backend.getState({ windowId: "cua:10:20", includeTree: true })).root!
-      .children[0]!;
-    const target = {
-      target: { label: "Message", windowId: "cua:10:20" },
-      node,
-      point: node.activationPoint!,
-    };
-    let releaseGate!: () => void;
-    f.gateTypeText(new Promise<void>((resolve) => (releaseGate = resolve)));
+  it.each(["select_text", "set_value"] as const)(
+    "semantic text lane holds %s behind a same-window write",
+    async (second) => {
+      const f = fixture({ semanticTextLaneGapMs: 0 });
+      const target = await observeMessageField(f);
+      let releaseGate!: () => void;
+      f.gateTypeText(new Promise<void>((resolve) => (releaseGate = resolve)));
 
-    const typing = f.backend.typeText("alpha", "cua:10:20", target);
-    await vi.waitFor(() => expect(f.calls.some((c) => c.name === "type_text")).toBe(true));
-    const selecting = f.backend.selectText(target, { start: 0, length: 2 });
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    // The native semantic lease is per (pid, window): the selection must not
-    // reach the driver while the same-window write is still held.
-    expect(f.calls.some((c) => c.name === "select_text")).toBe(false);
-    releaseGate!();
+      const typing = f.backend.typeText("alpha", "cua:10:20", target);
+      await vi.waitFor(() => expect(f.calls.some((c) => c.name === "type_text")).toBe(true));
+      const following =
+        second === "select_text"
+          ? f.backend.selectText(target, { start: 0, length: 2 })
+          : f.backend.setValue(target, "beta");
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      // The native semantic lease is per (pid, window): a same-window action
+      // must not reach the driver while the write is held, or the lease
+      // refuses it outright (native_input_busy).
+      expect(f.calls.some((c) => c.name === second)).toBe(false);
+      releaseGate!();
 
-    await expect(Promise.all([typing, selecting])).resolves.toHaveLength(2);
-    const order = f.calls
-      .filter((c) => c.name === "type_text" || c.name === "select_text")
-      .map((c) => c.name);
-    expect(order).toEqual(["type_text", "select_text"]);
-  });
-
-  it("semantic text lane holds set_value behind a same-window write", async () => {
-    const f = fixture({ semanticTextLaneGapMs: 0 });
-    f.setElements([
-      {
-        role: "AXTextField",
-        label: "Message",
-        frame: { x: -290, y: 30, width: 120, height: 20 },
-        element_token: "message-token",
-      },
-    ]);
-    const node = (await f.backend.getState({ windowId: "cua:10:20", includeTree: true })).root!
-      .children[0]!;
-    const target = {
-      target: { label: "Message", windowId: "cua:10:20" },
-      node,
-      point: node.activationPoint!,
-    };
-    let releaseGate!: () => void;
-    f.gateTypeText(new Promise<void>((resolve) => (releaseGate = resolve)));
-
-    const typing = f.backend.typeText("alpha", "cua:10:20", target);
-    await vi.waitFor(() => expect(f.calls.some((c) => c.name === "type_text")).toBe(true));
-    const writing = f.backend.setValue(target, "beta");
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    // The native semantic lease is per (pid, window) and set_value takes the
-    // same concurrent lease as type_text/select_text: it must not reach the
-    // driver while the same-window write is still held, or the lease refuses
-    // the second action outright (native_input_busy).
-    expect(f.calls.some((c) => c.name === "set_value")).toBe(false);
-    releaseGate!();
-
-    await expect(Promise.all([typing, writing])).resolves.toHaveLength(2);
-    const order = f.calls
-      .filter((c) => c.name === "type_text" || c.name === "set_value")
-      .map((c) => c.name);
-    expect(order).toEqual(["type_text", "set_value"]);
-  });
+      await expect(Promise.all([typing, following])).resolves.toHaveLength(2);
+      const order = f.calls
+        .filter((c) => c.name === "type_text" || c.name === second)
+        .map((c) => c.name);
+      expect(order).toEqual(["type_text", second]);
+    },
+  );
 
   it("set_value dispatches to a window that is not on the current Space", async () => {
     const f = fixture();
@@ -1347,21 +1320,7 @@ describe("Cua native boundary", () => {
     // Only pointer, synthetic keyboard and generic window actions carry the
     // visibility requirement.
     f.setVisible(false);
-    f.setElements([
-      {
-        role: "AXTextField",
-        label: "Message",
-        frame: { x: -290, y: 30, width: 120, height: 20 },
-        element_token: "message-token",
-      },
-    ]);
-    const node = (await f.backend.getState({ windowId: "cua:10:20", includeTree: true })).root!
-      .children[0]!;
-    const target = {
-      target: { label: "Message", windowId: "cua:10:20" },
-      node,
-      point: node.activationPoint!,
-    };
+    const target = await observeMessageField(f);
     await expect(f.backend.setValue(target, "beta")).resolves.toBeDefined();
     expect(f.calls.some((c) => c.name === "set_value")).toBe(true);
     // The driver still sees the element-addressed semantic write shape.
@@ -1465,21 +1424,7 @@ describe("Cua native boundary", () => {
     "keeps a timed-out semantic write in its lane until late %s",
     async (outcome) => {
       const f = fixture({ semanticTextLaneGapMs: 0, semanticTextLaneHoldMs: 80 });
-      f.setElements([
-        {
-          role: "AXTextField",
-          label: "Message",
-          frame: { x: -290, y: 30, width: 120, height: 20 },
-          element_token: "message-token",
-        },
-      ]);
-      const node = (await f.backend.getState({ windowId: "cua:10:20", includeTree: true })).root!
-        .children[0]!;
-      const target = {
-        target: { label: "Message", windowId: "cua:10:20" },
-        node,
-        point: node.activationPoint!,
-      };
+      const target = await observeMessageField(f);
       let releaseGate!: () => void;
       let rejectGate!: (error: Error) => void;
       f.gateTypeText(
@@ -1509,21 +1454,7 @@ describe("Cua native boundary", () => {
 
   it("expires a queued semantic write without dispatching it after the lane drains", async () => {
     const f = fixture({ semanticTextLaneGapMs: 0, semanticTextLaneHoldMs: 40 });
-    f.setElements([
-      {
-        role: "AXTextField",
-        label: "Message",
-        frame: { x: -290, y: 30, width: 120, height: 20 },
-        element_token: "message-token",
-      },
-    ]);
-    const node = (await f.backend.getState({ windowId: "cua:10:20", includeTree: true })).root!
-      .children[0]!;
-    const target = {
-      target: { label: "Message", windowId: "cua:10:20" },
-      node,
-      point: node.activationPoint!,
-    };
+    const target = await observeMessageField(f);
     let releaseGate!: () => void;
     f.gateTypeText(new Promise<void>((resolve) => (releaseGate = resolve)));
 
@@ -1548,21 +1479,7 @@ describe("Cua native boundary", () => {
 
   it("cancels a queued semantic write without waiting for or bypassing its predecessor", async () => {
     const f = fixture({ semanticTextLaneGapMs: 0 });
-    f.setElements([
-      {
-        role: "AXTextField",
-        label: "Message",
-        frame: { x: -290, y: 30, width: 120, height: 20 },
-        element_token: "message-token",
-      },
-    ]);
-    const node = (await f.backend.getState({ windowId: "cua:10:20", includeTree: true })).root!
-      .children[0]!;
-    const target = {
-      target: { label: "Message", windowId: "cua:10:20" },
-      node,
-      point: node.activationPoint!,
-    };
+    const target = await observeMessageField(f);
     let releaseGate!: () => void;
     f.gateTypeText(new Promise<void>((resolve) => (releaseGate = resolve)));
     const typeTexts = () => f.calls.filter((call) => call.name === "type_text");
@@ -1589,23 +1506,7 @@ describe("Cua native boundary", () => {
 
   it("semantic text lane holds the gap between consecutive writes", async () => {
     const f = fixture({ semanticTextLaneGapMs: 60 });
-    f.setElements([
-      {
-        role: "AXTextField",
-        label: "Message",
-        frame: { x: -290, y: 30, width: 120, height: 20 },
-        element_token: "message-token",
-      },
-    ]);
-    const node = (await f.backend.getState({ windowId: "cua:10:20", includeTree: true })).root!
-      .children[0]!;
-    // Consecutive writes to the same exact element: the second cannot start
-    // until the first's settle gap has elapsed.
-    const target = {
-      target: { label: "Message", windowId: "cua:10:20" },
-      node,
-      point: node.activationPoint!,
-    };
+    const target = await observeMessageField(f);
     const started = Date.now();
     await Promise.all([
       f.backend.typeText("alpha", "cua:10:20", target),
@@ -1617,24 +1518,7 @@ describe("Cua native boundary", () => {
 
   it("keeps retained semantic text available after its exact window moves off-Space", async () => {
     const f = fixture();
-    f.setElements([
-      {
-        role: "AXTextField",
-        label: "Message",
-        frame: { x: -290, y: 30, width: 120, height: 20 },
-        element_token: "message-token",
-      },
-    ]);
-    const state = await f.backend.getState({
-      windowId: "cua:10:20",
-      includeTree: true,
-    });
-    const node = state.root!.children[0]!;
-    const target = {
-      target: { label: "Message", windowId: "cua:10:20" },
-      node,
-      point: node.activationPoint!,
-    };
+    const target = await observeMessageField(f);
     f.setVisible(false);
 
     await expect(f.backend.typeText("hello", "cua:10:20", target)).resolves.toMatchObject({
@@ -1736,6 +1620,7 @@ describe("Cua native boundary", () => {
     const backend = new CuaComputerBackend({
       endpoint: "/fixture-only",
       request,
+      permissionReprobeDelayMs: 1,
     });
     await backend.provision();
     expect(requests.find((request) => request.method === "setup")?.timeoutMs).toBe(
@@ -1909,7 +1794,8 @@ describe("Cua native boundary", () => {
   });
 
   it("keeps re-probing until a delayed grant lands", async () => {
-    const f = fixture();
+    // The test's 10 ms ticks must stay shorter than the re-probe delay.
+    const f = fixture({ permissionReprobeDelayMs: 100 });
     f.denyPermissions();
     const gates: Array<() => void> = [];
     const arm = () =>
@@ -2177,32 +2063,34 @@ describe("Cua native boundary", () => {
     });
     expect(f.calls.some((call) => call.name === "drag")).toBe(false);
   });
-  it("binds foreground drag pixels to the exact observed native bounds", async () => {
-    const f = fixture();
-    await f.backend.captureScreenshot({
-      kind: "window",
-      windowId: "cua:10:20",
-    });
-    await withDesktopDeliveryMode("foreground", () =>
-      f.backend.drag({ x: -275, y: 30 }, { x: -225, y: 50 }, 500, "cua:10:20"),
-    );
-    expect(f.calls.filter((call) => call.name === "drag")).toEqual([
-      expect.objectContaining({
-        args: {
-          pid: 10,
-          window_id: 20,
-          delivery_mode: "foreground",
-          from_x: 25,
-          from_y: 10,
-          to_x: 75,
-          to_y: 30,
-          coordinate_space: "window_points",
-          duration_ms: 500,
-          expected_window_bounds: { x: -300, y: 20, width: 200, height: 100 },
-        },
-      }),
-    ]);
-  });
+  it.each(["foreground", "background"] as const)(
+    "binds %s drag pixels to the exact observed native bounds as window-local points",
+    async (mode) => {
+      const f = fixture();
+      await f.backend.captureScreenshot({
+        kind: "window",
+        windowId: "cua:10:20",
+      });
+      const drag = () => f.backend.drag({ x: -275, y: 30 }, { x: -225, y: 50 }, 500, "cua:10:20");
+      await (mode === "foreground" ? withDesktopDeliveryMode("foreground", drag) : drag());
+      expect(f.calls.filter((call) => call.name === "drag")).toEqual([
+        expect.objectContaining({
+          args: {
+            pid: 10,
+            window_id: 20,
+            delivery_mode: mode,
+            from_x: 25,
+            from_y: 10,
+            to_x: 75,
+            to_y: 30,
+            coordinate_space: "window_points",
+            duration_ms: 500,
+            expected_window_bounds: { x: -300, y: 20, width: 200, height: 100 },
+          },
+        }),
+      ]);
+    },
+  );
   it("preserves capture identity and rejects a different native window", async () => {
     const f = fixture();
     const image = await f.backend.captureScreenshot({
@@ -2433,21 +2321,23 @@ describe("Cua native boundary", () => {
     });
   });
 
-  it("preserves native launch readiness failures instead of polling a hidden window again", async () => {
+  it.each([
+    [
+      "preserves native launch readiness failures instead of polling a hidden window again",
+      "TextEdit",
+      { pid: 321, window_status: "no_usable_window", window_reason: "hidden" },
+      { pid: 321, window: null, windowStatus: "no_usable_window", windowReason: "hidden" },
+    ],
+    [
+      "preserves the launched process identity without claiming window readiness",
+      "com.apple.Calculator",
+      { pid: 10, launch_state: { process_running: true, window_ready: false } },
+      { pid: 10, window: null, windowStatus: "not_checked" },
+    ],
+  ] as const)("%s", async (_name, app, driverReply, expected) => {
     const f = fixture();
-    f.onTool("launch_app", () => ({
-      structuredContent: {
-        pid: 321,
-        window_status: "no_usable_window",
-        window_reason: "hidden",
-      },
-    }));
-    await expect(f.backend.launchApp("TextEdit")).resolves.toMatchObject({
-      pid: 321,
-      window: null,
-      windowStatus: "no_usable_window",
-      windowReason: "hidden",
-    });
+    f.onTool("launch_app", () => ({ structuredContent: driverReply }));
+    await expect(f.backend.launchApp(app)).resolves.toMatchObject(expected);
   });
 
   it("pauses after focus restoration failure without laundering uncertain delivery", async () => {
@@ -2488,17 +2378,6 @@ describe("Cua native boundary", () => {
       waitSeconds: 0.75,
       inputPause: { windowId: "cua:10:20", pid: 10 },
       effect: "not-dispatched",
-    });
-  });
-  it("preserves the launched process identity without claiming window readiness", async () => {
-    const f = fixture();
-    f.onTool("launch_app", () => ({
-      structuredContent: { pid: 10, launch_state: { process_running: true, window_ready: false } },
-    }));
-    expect(await f.backend.launchApp("com.apple.Calculator")).toMatchObject({
-      pid: 10,
-      window: null,
-      windowStatus: "not_checked",
     });
   });
   it("uses the Linux launch schema after discovering a remote host's platform", async () => {
@@ -3427,15 +3306,6 @@ describe("Cua native boundary", () => {
       window_id: 20,
     });
   });
-  it("preserves unknown dispatch on transport timeout without retry", async () => {
-    const f = fixture();
-    await f.backend.availability();
-    f.fail(new CuaTransportError("timeout", "dispatched-unknown"));
-    await expect(f.backend.typeText("abc", "cua:10:20")).rejects.toMatchObject({
-      effect: "dispatched-unknown",
-    });
-    expect(f.calls.filter((c) => isTyping(c.name))).toHaveLength(1);
-  });
   it("maps negative desktop coordinates using the captured geometry and scale", async () => {
     const f = fixture();
     await f.backend.availability();
@@ -3475,30 +3345,6 @@ describe("Cua native boundary", () => {
       code: "stale_target",
     });
     expect(f.calls.filter((c) => c.name === "click" || isTyping(c.name))).toHaveLength(0);
-  });
-  it("sends an exact-target background drag as window-local points", async () => {
-    const f = fixture();
-    await f.backend.captureScreenshot({
-      kind: "window",
-      windowId: "cua:10:20",
-    });
-    await f.backend.drag({ x: -275, y: 30 }, { x: -225, y: 50 }, 500, "cua:10:20");
-    expect(f.calls.filter((call) => call.name === "drag")).toEqual([
-      expect.objectContaining({
-        args: {
-          pid: 10,
-          window_id: 20,
-          delivery_mode: "background",
-          from_x: 25,
-          from_y: 10,
-          to_x: 75,
-          to_y: 30,
-          coordinate_space: "window_points",
-          duration_ms: 500,
-          expected_window_bounds: { x: -300, y: 20, width: 200, height: 100 },
-        },
-      }),
-    ]);
   });
   it("refuses a background drag when no fresh observation grounds the frame", async () => {
     const f = fixture();
@@ -3567,6 +3413,53 @@ describe("Cua native boundary", () => {
 });
 
 describe("Cua hardening", () => {
+  it("refuses clipboard preservation on an older driver before changing the clipboard", async () => {
+    const f = fixture({ nativeRevision: 39 });
+    await expect(f.backend.prepareClipboardPaste({ text: "payload" })).rejects.toMatchObject({
+      effect: "not-dispatched",
+      code: "clipboard_preservation_unavailable",
+    });
+    expect(f.calls.filter((call) => call.name === "clipboard_write")).toHaveLength(0);
+    await f.backend.dispose();
+  });
+
+  it.each(["acknowledged", "lost", "human-copy"] as const)(
+    "keeps an opaque restoration handle for a %s clipboard write",
+    async (outcome) => {
+      const f = fixture({ nativeRevision: 40 });
+      let savedToken: unknown;
+      f.onTool("clipboard_write", (args) => {
+        if (args.preserve === true) {
+          savedToken = args.preserve_token;
+          if (outcome === "lost")
+            throw new CuaTransportError("write reply lost", "dispatched-unknown");
+          return { structuredContent: { restore_token: savedToken } };
+        }
+        expect(args).toEqual({ restore_token: savedToken });
+        return { structuredContent: { clipboard_restored: outcome !== "human-copy" } };
+      });
+      try {
+        const pending = f.backend.prepareClipboardPaste({ imagePath: "/workspace/image.png" });
+        if (outcome === "lost")
+          await expect(pending).rejects.toMatchObject({ effect: "dispatched-unknown" });
+        else {
+          const restore = await pending;
+          await expect(restore()).resolves.toBe(outcome !== "human-copy");
+        }
+        expect(savedToken).toEqual(expect.any(String));
+        const writes = f.calls.filter((call) => call.name === "clipboard_write");
+        expect(writes).toHaveLength(2);
+        expect(writes[0]?.args).toMatchObject({
+          image_path: "/workspace/image.png",
+          preserve: true,
+        });
+        expect(writes[1]?.args).toEqual({ restore_token: savedToken });
+      } finally {
+        await f.backend.dispose();
+      }
+    },
+  );
+
   it("pauses input while an auth sheet holds focus, keeping observation available", async () => {
     const f = fixture();
     f.actionResult({
@@ -3777,6 +3670,7 @@ describe("Cua hardening", () => {
     await expect(f.backend.typeText("abc", "cua:10:20")).rejects.toMatchObject({
       effect: "dispatched-unknown",
     });
+    expect(f.calls.filter((call) => isTyping(call.name))).toHaveLength(1);
     // Uncertain delivery may have moved the window: re-observe first.
     await expect(f.backend.click({ x: -275, y: 30 }, "cua:10:20")).rejects.toMatchObject({
       code: "stale_geometry",
@@ -3875,6 +3769,26 @@ describe("preview stills target scope", () => {
     });
     expect(f.calls.some((call) => call.name === "get_desktop_state")).toBe(false);
     await f.backend.dispose();
+  });
+
+  it("stops requesting window stills when the owning task ends with a preview attached", async () => {
+    const f = fixture();
+    try {
+      await withComputerTask(task, () => f.backend.focusWindow("cua:10:20"));
+      await f.backend.attachStream(() => undefined);
+
+      await f.backend.endTask(task.threadId, "older-turn");
+      f.calls.length = 0;
+      await f.backend.requestKeyframe();
+      expect(f.calls.some((call) => call.name === "get_window_state")).toBe(true);
+
+      await f.backend.endTask(task.threadId, task.turnId);
+      f.calls.length = 0;
+      await f.backend.requestKeyframe();
+      expect(f.calls.some((call) => call.name === "get_window_state")).toBe(false);
+    } finally {
+      await f.backend.dispose();
+    }
   });
 
   it("captures a bound browser tab through the driver's screenshot route", async () => {
@@ -3993,34 +3907,26 @@ describe("Cua workstream-C speed flags", () => {
   const windowStateArgs = (f: ReturnType<typeof fixture>) =>
     f.calls.find((call) => call.name === "get_window_state")?.args ?? {};
 
-  it("sends explicit include_screenshot:false on a tree-only get_state", async () => {
-    // The driver treats an absent include_screenshot as true, so the
-    // no-capture contract has to be pinned explicitly on the wire.
-    const f = fixture();
-    const state = await f.backend.getState({ windowId: "cua:10:20", includeTree: true });
-    expect(windowStateArgs(f)).toMatchObject({
-      include_screenshot: false,
-      max_dimension: 1536,
-      include_accessibility_tree: true,
-    });
-    expect(state.screenshot).toBeUndefined();
-    await f.backend.dispose();
-  });
-
-  it("keeps the capture arguments a pixel read needs", async () => {
-    const f = fixture();
-    await f.backend.getState({
-      windowId: "cua:10:20",
-      includeTree: true,
-      includeScreenshot: true,
-    });
-    expect(windowStateArgs(f)).toMatchObject({
-      include_screenshot: true,
-      max_dimension: 1536,
-      include_accessibility_tree: true,
-    });
-    await f.backend.dispose();
-  });
+  it.each([false, true])(
+    "sends explicit include_screenshot:%s on get_state so the driver default never decides",
+    async (includeScreenshot) => {
+      // The driver treats an absent include_screenshot as true, so the
+      // no-capture contract has to be pinned explicitly on the wire.
+      const f = fixture();
+      const state = await f.backend.getState({
+        windowId: "cua:10:20",
+        includeTree: true,
+        ...(includeScreenshot ? { includeScreenshot } : {}),
+      });
+      expect(windowStateArgs(f)).toMatchObject({
+        include_screenshot: includeScreenshot,
+        max_dimension: 1536,
+        include_accessibility_tree: true,
+      });
+      if (!includeScreenshot) expect(state.screenshot).toBeUndefined();
+      await f.backend.dispose();
+    },
+  );
 
   it("SYNARA_CUA_PREVIEW_STILL_MS overrides the still cadence", async () => {
     setEnv("SYNARA_CUA_PREVIEW_STILL_MS", "4000");

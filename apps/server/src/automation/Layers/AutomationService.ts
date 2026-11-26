@@ -34,6 +34,7 @@ import {
   automationOwnsItsThread,
   automationRequiresTargetThread,
 } from "@synara/shared/automationMode";
+import { isTerminalAutomationRunStatus } from "@synara/shared/automationRunLifecycle";
 import { buildTemporaryWorktreeBranchName } from "@synara/shared/git";
 import { providerStartOptionsFromServerSettings } from "@synara/shared/serverSettings";
 import { autoRuntimeModeSelectionIssue } from "@synara/shared/runtimeMode";
@@ -63,7 +64,10 @@ import {
 import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
 import { runWorktreeSetupScript } from "../../worktreeSetup.ts";
 import type { ProjectionTurn } from "../../persistence/Services/ProjectionTurns.ts";
-import { ServerSettingsService } from "../../serverSettings.ts";
+import {
+  ServerSettingsService,
+  withoutNewThreadDefaultsOnlyChanges,
+} from "../../serverSettings.ts";
 import {
   GROUPS_BETA_ONLY_MESSAGE,
   isServerGroupsEnabled,
@@ -216,15 +220,6 @@ export function resolveAutomationCompletionTextGenerationInputForSettings(
   );
 }
 
-/** Statuses a run can no longer leave; reconciliation never overwrites these. */
-const TERMINAL_RUN_STATUSES: ReadonlySet<AutomationRunStatus> = new Set([
-  "succeeded",
-  "failed",
-  "cancelled",
-  "interrupted",
-  "skipped",
-]);
-
 function isAutomationAvailable(definition: AutomationDefinition): boolean {
   return (
     (!definition.managedByProject && definition.schedule.type !== "project-event") ||
@@ -236,10 +231,6 @@ function assertAutomationAvailable(definition: AutomationDefinition) {
   return isAutomationAvailable(definition)
     ? Effect.void
     : Effect.fail(new AutomationServiceError({ message: GROUPS_BETA_ONLY_MESSAGE }));
-}
-
-function isTerminalRunStatus(status: AutomationRunStatus): boolean {
-  return TERMINAL_RUN_STATUSES.has(status);
 }
 
 function isoNow(): string {
@@ -2215,7 +2206,7 @@ export const AutomationServiceLive = Layer.effect(
       ),
     );
 
-    yield* serverSettings.streamChanges.pipe(
+    yield* withoutNewThreadDefaultsOnlyChanges(serverSettings.streamChanges).pipe(
       Stream.runForEach(() =>
         enqueuePendingCompletionEvaluations().pipe(
           Effect.catch((error) =>
@@ -2437,7 +2428,7 @@ export const AutomationServiceLive = Layer.effect(
           return;
         }
         const run = runOption.value;
-        if (isTerminalRunStatus(run.status)) {
+        if (isTerminalAutomationRunStatus(run.status)) {
           return;
         }
 

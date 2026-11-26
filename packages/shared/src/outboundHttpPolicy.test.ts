@@ -60,6 +60,17 @@ describe("outbound HTTP URL policy", () => {
     expect(() => assertExactLoopbackIpAddress("127.0.0.2")).toThrowError(OutboundPolicyError);
     expect(() => assertExactLoopbackIpAddress("192.168.1.5")).toThrowError(OutboundPolicyError);
   });
+
+  it("permits the loopback IPv4 subnet only under the explicit MCP policy", () => {
+    expect(
+      normalizeOutboundOrigin("http://127.42.0.7/mcp", { allowLoopbackHttp: "ipv4-subnet" }),
+    ).toBe("http://127.42.0.7");
+    expect(() => assertExactLoopbackIpAddress("127.42.0.7", true)).not.toThrow();
+    expect(() => assertExactLoopbackIpAddress("192.168.1.1", true)).toThrow();
+    expect(() =>
+      normalizeOutboundOrigin("http://localhost.example.com", { allowLoopbackHttp: "ipv4-subnet" }),
+    ).toThrow();
+  });
 });
 
 describe("isPublicIpAddress", () => {

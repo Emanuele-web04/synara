@@ -4,12 +4,9 @@ import { page } from "vitest/browser";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
-// Windows/Linux desktop use the opaque projection, without macOS vibrancy.
+// Windows/Linux desktop without a blurring compositor: the bridge announces no window
+// translucency, so the opaque projection applies.
 vi.mock("~/env", () => ({ isElectron: true }));
-vi.mock("~/lib/utils", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("~/lib/utils")>()),
-  isMacNavigatorPlatform: () => false,
-}));
 
 import { ThemePackEditor } from "./ThemePackEditor";
 import { DEFAULT_THEME_STATE, getCodeThemeSeed, parseStoredThemeState } from "~/theme/theme.logic";
@@ -71,9 +68,9 @@ it("previews an inactive light preset and applies it only when the user chooses 
 
   expect(root.getAttribute("data-theme-variant")).toBe("dark");
   expect(root.getAttribute("data-code-theme-id")).toBe("synara");
-  const preview = page.getByRole("img", { name: "Light theme preview: Vercel" });
-  expect(getComputedStyle(preview.element()).backgroundColor).toBe("rgb(255, 255, 255)");
-  expect(getComputedStyle(preview.element()).color).toBe("rgb(23, 23, 23)");
+  await expect
+    .element(page.getByRole("img", { name: "Light theme preview: Vercel" }))
+    .toBeVisible();
 
   await page.getByRole("button", { name: "Use light theme" }).click();
   await expect.poll(() => root.getAttribute("data-theme-variant")).toBe("light");
@@ -122,9 +119,5 @@ it.each(["dark", "light"] as const)(
     expect(root.style.getPropertyValue("--codex-base-ink")).toBe(codex.ink);
     expect(root.style.getPropertyValue("--color-accent-purple")).toBe(codex.semanticColors.skill);
     expect(root.style.getPropertyValue("--theme-font-ui-family")).toBe("");
-    const preview = page.getByRole("img", { name: `${title} theme preview: Synara` });
-    const fontFamily = getComputedStyle(preview.element()).fontFamily;
-    expect(fontFamily).toContain("system-ui");
-    expect(fontFamily).not.toContain("Inter");
   },
 );

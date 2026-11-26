@@ -85,6 +85,7 @@ export interface ServerDerivedPaths {
   readonly providerEventLogPath: string;
   readonly terminalLogsDir: string;
   readonly environmentIdPath: string;
+  readonly hostIdentityPath: string;
 }
 
 /**
@@ -103,7 +104,10 @@ export interface ServerConfigShape extends ServerDerivedPaths {
   readonly staticDir: string | undefined;
   readonly devUrl: URL | undefined;
   readonly publicUrl: URL | undefined;
+  readonly sshForwardPort?: number | undefined;
   readonly allowInsecureRemote: boolean;
+  // Trusted operator rollout interlock; never supplied by a client request.
+  readonly remoteBillingPolicyRequired?: boolean;
   readonly noBrowser: boolean;
   readonly authToken: string | undefined;
   readonly desktopShutdownToken?: string | undefined;
@@ -170,6 +174,7 @@ export const deriveServerPaths = Effect.fn(function* (
     providerEventLogPath: join(providerLogsDir, "events.log"),
     terminalLogsDir: join(logsDir, "terminals"),
     environmentIdPath: join(stateDir, "environment-id"),
+    hostIdentityPath: join(secretsDir, "host-identity.json"),
   };
 });
 
@@ -291,6 +296,7 @@ export class ServerConfig extends ServiceMap.Service<ServerConfig, ServerConfigS
           devUrl,
           publicUrl: undefined,
           allowInsecureRemote: false,
+          remoteBillingPolicyRequired: false,
           noBrowser: false,
           // Tests must never write to the real ~/.Trash — default the trash
           // target inside the scoped base dir unless overridden.

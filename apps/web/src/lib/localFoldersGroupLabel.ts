@@ -1,24 +1,29 @@
+import { t } from "~/i18n";
 import { isMacPlatform, isWindowsPlatform } from "./utils";
 
 function isWindowsAbsolutePath(value: string): boolean {
   return /^[a-z]:[\\/]/i.test(value) || value.startsWith("\\\\");
 }
 
-export function getLocalFoldersGroupLabel(homeDir: string | null, platform: string): string {
+export function getLocalFoldersGroupLabel(
+  homeDir: string | null,
+  platform: string,
+  translate: typeof t = t,
+): string {
   if (homeDir && isWindowsAbsolutePath(homeDir)) {
-    return "Folders on this PC";
+    return translate("workspace:foldersOnPc");
   }
   if (/^\/Users(?:\/|$)/.test(homeDir ?? "")) {
-    return "Folders on this Mac";
+    return translate("workspace:foldersOnMac");
   }
   if (homeDir?.startsWith("/")) {
-    return "Folders on this System";
+    return translate("workspace:foldersOnSystem");
   }
   if (isWindowsPlatform(platform)) {
-    return "Folders on this PC";
+    return translate("workspace:foldersOnPc");
   }
   if (isMacPlatform(platform)) {
-    return "Folders on this Mac";
+    return translate("workspace:foldersOnMac");
   }
-  return "Folders on this System";
+  return translate("workspace:foldersOnSystem");
 }

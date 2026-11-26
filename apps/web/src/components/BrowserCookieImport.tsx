@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { BrowserCookieImportResult, BrowserVaultMethods, ThreadId } from "@synara/contracts";
 import { Button } from "./ui/button";
 import { DisclosureRegion } from "./ui/DisclosureRegion";
+import { useTranslation } from "~/i18n";
 
 export interface BrowserCookieDestination {
   threadId: ThreadId;
@@ -47,6 +48,8 @@ export function BrowserCookieImport({
   api: BrowserVaultMethods;
   destination: BrowserCookieDestination;
 }) {
+  const { t } = useTranslation();
+
   const [open, setOpen] = useState(false);
   const [sources, setSources] = useState<Choice[]>([]);
   const [profiles, setProfiles] = useState<Choice[]>([]);
@@ -163,14 +166,14 @@ export function BrowserCookieImport({
           else void load();
         }}
       >
-        Import browser cookies
+        {t("computer:importBrowserCookies")}
       </Button>
       <DisclosureRegion open={open}>
         <div className="space-y-3 pt-3 text-ui leading-snug">
           <label className="block space-y-1">
-            <span>Import scope</span>
+            <span>{t("computer:importScope")}</span>
             <select
-              aria-label="Cookie import scope"
+              aria-label={t("computer:cookieImportScope")}
               className="h-8 w-full rounded-md border bg-background px-2"
               value={scope}
               disabled={busy}
@@ -181,21 +184,23 @@ export function BrowserCookieImport({
               }}
             >
               {destination.origin ? (
-                <option value="site">This site: {destination.origin}</option>
+                <option value="site">
+                  {t("computer:thisSite")} {destination.origin}
+                </option>
               ) : null}
-              <option value="profile">All sites in this profile</option>
+              <option value="profile">{t("computer:allSitesInThisProfile")}</option>
             </select>
           </label>
           <p className="text-ui leading-snug text-muted-foreground">
             {scope === "profile"
-              ? "Imports all compatible cookies from the selected profile. Every imported signed-in session becomes available across Synara browser tabs and agent workflows."
-              : "Imports this site, its subdomains, and matching parent domains. Imported sessions are shared across Synara browser tabs and agent workflows."}
+              ? t("computer:importsAllCompatibleCookiesFromTheSelectedProfileEvery")
+              : t("computer:importsThisSiteItsSubdomainsAndMatchingParentDomains")}
           </p>
           <div className="grid grid-cols-2 gap-3">
             <label className="min-w-0 space-y-1">
-              <span>Browser</span>
+              <span>{t("computer:browser")}</span>
               <select
-                aria-label="Cookie source browser"
+                aria-label={t("computer:cookieSourceBrowser")}
                 className="h-8 w-full rounded-md border bg-background px-2"
                 value={source}
                 disabled={busy}
@@ -211,9 +216,9 @@ export function BrowserCookieImport({
               </select>
             </label>
             <label className="min-w-0 space-y-1">
-              <span>Profile</span>
+              <span>{t("computer:nav_profile")}</span>
               <select
-                aria-label="Cookie source profile"
+                aria-label={t("computer:cookieSourceProfile")}
                 className="h-8 w-full rounded-md border bg-background px-2"
                 value={profile}
                 disabled={busy}
@@ -239,10 +244,7 @@ export function BrowserCookieImport({
                 disabled={busy}
                 onChange={(event) => setConfirmed(event.target.checked)}
               />
-              <span>
-                I allow Synara and its agents to use all imported signed-in sessions from this
-                profile.
-              </span>
+              <span>{t("computer:iAllowSynaraAndItsAgentsToUseAll")}</span>
             </label>
           </DisclosureRegion>
           {status ? (
@@ -259,10 +261,10 @@ export function BrowserCookieImport({
               }}
             >
               {busy
-                ? "Working..."
+                ? t("computer:working")
                 : scope === "profile"
-                  ? "Import all sites"
-                  : "Import for this site"}
+                  ? t("computer:importAllSites")
+                  : t("computer:importForThisSite")}
             </Button>
           </div>
         </div>

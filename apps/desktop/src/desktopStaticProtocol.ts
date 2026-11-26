@@ -9,18 +9,29 @@ export type DesktopStaticProtocolResponse = { path: string } | { error: -6 };
 
 type PathExists = (path: string) => boolean;
 
+// Backend resources belong to the HTTP bridge, never the packaged SPA fallback.
+function isBackendResourcePath(pathname: string): boolean {
+  const normalized = Path.posix.normalize(pathname.replaceAll("\\", "/"));
+  return ["/api", "/attachments", "/ws", "/v2"].some(
+    (prefix) => normalized === prefix || normalized.startsWith(`${prefix}/`),
+  );
+}
+
 export function createDesktopStaticProtocolResolver(
   staticRoot: string,
   pathExists: PathExists = existsSync,
-): (requestUrl: string) => DesktopStaticProtocolResponse {
+): (requestUrl: string, requestMethod?: string) => DesktopStaticProtocolResponse {
   const staticRootResolved = Path.resolve(staticRoot);
   const staticRootPrefix = `${staticRootResolved}${Path.sep}`;
   const fallbackIndex = Path.join(staticRootResolved, "index.html");
 
-  return (requestUrl) => {
+  return (requestUrl, requestMethod = "GET") => {
+    if (requestMethod !== "GET" && requestMethod !== "HEAD") return { error: -6 };
     try {
       const url = new URL(requestUrl);
+      if (isBackendResourcePath(url.pathname)) return { error: -6 };
       const rawPath = decodeURIComponent(url.pathname);
+      if (isBackendResourcePath(rawPath)) return { error: -6 };
       const normalizedPath = Path.posix.normalize(rawPath).replace(/^\/+/, "");
       const isAssetRequest = Path.extname(url.pathname).length > 0;
 

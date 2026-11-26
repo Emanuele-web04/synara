@@ -143,7 +143,7 @@ function drainProviderModelDiscoveryQueue(): void {
     // Let React Query settle and enqueue an interactive follow-up before the
     // next speculative catalog takes the slot. Promise settlement alone is
     // earlier than the refresh caller's continuation, even on success.
-    if ([...foregroundModelDiscoveryOwners].some((key) => queryKeysMatch(key, task.queryKey))) {
+    if (hasForegroundProviderModelDiscovery(task.queryKey)) {
       setTimeout(releaseSlot, 0);
     } else {
       releaseSlot();
@@ -161,6 +161,10 @@ function drainProviderModelDiscoveryQueue(): void {
       (value) => finishTask(() => task.resolve(value)),
       (reason) => finishTask(() => task.reject(reason)),
     );
+}
+
+export function hasForegroundProviderModelDiscovery(queryKey: readonly unknown[]): boolean {
+  return [...foregroundModelDiscoveryOwners].some((key) => queryKeysMatch(key, queryKey));
 }
 
 export function prioritizeProviderModelDiscovery(
@@ -191,7 +195,7 @@ export function prioritizeProviderModelDiscovery(
   if (!owner) return;
   return () => {
     foregroundModelDiscoveryOwners.delete(owner);
-    if ([...foregroundModelDiscoveryOwners].some((key) => queryKeysMatch(key, queryKey))) return;
+    if (hasForegroundProviderModelDiscovery(queryKey)) return;
     for (const task of providerModelDiscoveryQueue) {
       if (queryKeysMatch(task.queryKey, queryKey) && task.priority === "foreground") {
         task.priority = "background";
@@ -214,9 +218,7 @@ function serializeProviderModelDiscovery<T>(
       providerModelDiscoveryQueue.splice(taskIndex, 1);
       reject(abortReason(signal));
     };
-    const effectivePriority = [...foregroundModelDiscoveryOwners].some((key) =>
-      queryKeysMatch(key, queryKey),
-    )
+    const effectivePriority = hasForegroundProviderModelDiscovery(queryKey)
       ? "foreground"
       : priority;
     providerModelDiscoveryQueue.push({

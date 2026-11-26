@@ -1,28 +1,66 @@
 // FILE: SidebarActivityView.browser.tsx
-// Purpose: Browser regressions for Activity paging, stateful actions, scope fallback, and live PR data.
+// Purpose: Browser regressions for Activity rows (reply preview, PR pill), paging, stateful
+//          actions, scope fallback, and live PR data.
 // Layer: Sidebar Activity UI test
 
 import "../index.css";
 
-import { ProjectId, ThreadId, type OrchestrationThreadPullRequest } from "@synara/contracts";
-import { useState, type PointerEvent as ReactPointerEvent } from "react";
+import {
+  ProjectId,
+  ThreadId,
+  type OrchestrationThreadPullRequest,
+  type OrchestrationThreadPullRequestLink,
+} from "@synara/contracts";
+import {
+  useState,
+  type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode,
+} from "react";
 import { page, userEvent } from "vitest/browser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
 import type { Project, SidebarThreadSummary } from "../types";
-import { DEFAULT_PROJECT_ICON, type ProjectAppearance } from "../lib/projectAppearance";
-import type { ThreadStatusPill } from "./Sidebar.logic";
+import { type ProjectAppearance } from "../lib/projectAppearance";
+import { resolveThreadStatusPill, type ThreadStatusPill } from "./Sidebar.logic";
 import { SidebarActivityView } from "./SidebarActivityView";
-import type { ActivityScopeSelection } from "./SidebarActivityView.logic";
+import type { ActivityGroupMode, ActivityScopeSelection } from "./SidebarActivityView.logic";
+import type { WorkspaceNavigation, WorkspaceSidebarActions } from "../lib/hosts/workspaceFrame";
+import type { WorkspaceSession } from "../lib/hosts/workspaceSessions";
+import { workspaceActivityRows, type WorkspaceThreadEntry } from "../lib/hosts/workspaceSidebar";
+import { SidebarProvider } from "./ui/sidebar";
+import { toastManager } from "./ui/toast";
+
+const remoteFixture = vi.hoisted(() => ({
+  available: new Map<WorkspaceSession, WorkspaceNavigation>(),
+  sessions: [] as WorkspaceSession[],
+  open: vi.fn(),
+  href: "/",
+}));
+vi.mock("../lib/hosts/workspaceSessions", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../lib/hosts/workspaceSessions")>()),
+  readAvailableWorkspaceNavigation: (session: WorkspaceSession) =>
+    remoteFixture.available.get(session),
+  readWorkspaceSessions: () => remoteFixture.sessions,
+}));
+vi.mock("../lib/hosts/workspaceCommands", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../lib/hosts/workspaceCommands")>()),
+  openWorkspacePath: remoteFixture.open,
+}));
+vi.mock("@tanstack/react-router", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@tanstack/react-router")>()),
+  useLocation: ({ select }: { select: (location: { href: string }) => unknown }) =>
+    select({ href: remoteFixture.href }),
+}));
 
 const projectFavicon = `data:image/svg+xml,${encodeURIComponent(
   '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><circle cx="8" cy="8" r="8" fill="red"/></svg>',
 )}`;
 
 vi.mock("~/lib/wsHttpUrl", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../lib/wsHttpUrl")>()),
-  resolveWsHttpUrl: () => projectFavicon,
+  ...(await importOriginal<typeof import("~/lib/wsHttpUrl")>()),
+  resolveExecutionResource: () => projectFavicon,
 }));
 
 const PROJECT_A = ProjectId.makeUnsafe("activity-project-a");
@@ -79,16 +117,52 @@ function makeThread(
   };
 }
 
+function makeOpenPullRequest(number: number): OrchestrationThreadPullRequest {
+  return {
+    number,
+    title: "Fix paddings",
+    url: `https://github.com/acme/synara/pull/${number}`,
+    baseBranch: "main",
+    headBranch: "synara/frontend-consistency-fixes-for-every-settings-screen",
+    state: "open",
+  };
+}
+
+function makePullRequestLink(
+  pullRequest: OrchestrationThreadPullRequest,
+  linkedAt: string,
+): OrchestrationThreadPullRequestLink {
+  return { pullRequest, source: "user", linkedAt };
+}
+
 function renderActivity(input: {
   threads: readonly SidebarThreadSummary[];
   projects?: readonly Project[];
   activeThreadId?: ThreadId | null;
+  visualActiveThreadId?: ThreadId | null;
   pinnedThreadIdSet?: ReadonlySet<ThreadId>;
   settledOverrideByThreadId?: ReadonlyMap<ThreadId, boolean>;
   prByThreadId?: ReadonlyMap<ThreadId, OrchestrationThreadPullRequest | null>;
+  externalRows?: ReadonlyMap<
+    ThreadId,
+    {
+      hostName: string;
+      onOpen: () => void;
+      status: ThreadStatusPill | null;
+      entry?: WorkspaceThreadEntry;
+    }
+  >;
   onVisibleThreadIdsChange?: (threadIds: readonly ThreadId[]) => void;
+  renderThreadHoverCard?: (thread: SidebarThreadSummary, anchorId: string) => ReactNode;
   onOpenThread?: (threadId: ThreadId) => void;
+  onOpenThreadPullRequest?: (
+    event: ReactMouseEvent<HTMLElement>,
+    thread: SidebarThreadSummary,
+    pr: OrchestrationThreadPullRequest,
+  ) => void;
   onSetThreadSettled?: (threadId: ThreadId, settled: boolean) => void;
+  onToggleThreadPinned?: (threadId: ThreadId) => void;
+  onArchiveThread?: (threadId: ThreadId) => void;
   onReturnSnoozedThread?: (threadId: ThreadId) => void;
   onMarkThreadRead?: (threadId: ThreadId, completedAt?: string) => void;
   onRenameThread?: (threadId: ThreadId) => void;
@@ -97,6 +171,8 @@ function renderActivity(input: {
   onProjectContextMenu?: (projectId: ProjectId, position: { x: number; y: number }) => void;
   resolveThreadStatus?: (thread: SidebarThreadSummary) => ThreadStatusPill | null;
   threadsHydrated?: boolean;
+  /** Turns on agent-created child nesting, with the fold state kept in the harness. */
+  nestChildThreads?: boolean;
   /** Controlled scope (the sidebar's role); omitted, the harness keeps it in local state. */
   scope?: {
     selection: ActivityScopeSelection;
@@ -109,36 +185,176 @@ function renderActivity(input: {
 function ActivityHarness(input: Parameters<typeof renderActivity>[0]) {
   const projects = input.projects ?? [makeProject(PROJECT_A, "Project A")];
   const [localScope, setLocalScope] = useState<ActivityScopeSelection>(null);
+  const [groupMode, setGroupMode] = useState<ActivityGroupMode>("time");
+  const [collapsedParentIds, setCollapsedParentIds] = useState<ReadonlySet<ThreadId>>(
+    () => new Set(),
+  );
   return (
     <SidebarActivityView
       threads={input.threads}
       projectById={new Map(projects.map((project) => [project.id, project]))}
+      externalRows={input.externalRows}
       activeThreadId={input.activeThreadId ?? null}
+      {...(input.visualActiveThreadId === undefined
+        ? {}
+        : { visualActiveThreadId: input.visualActiveThreadId })}
       pinnedThreadIdSet={input.pinnedThreadIdSet ?? new Set()}
       settledOverrideByThreadId={input.settledOverrideByThreadId ?? new Map()}
       threadsHydrated={input.threadsHydrated ?? true}
       scopeSelection={input.scope ? input.scope.selection : localScope}
       onScopeSelectionChange={input.scope ? input.scope.onChange : setLocalScope}
+      groupMode={groupMode}
+      onChangeGroupMode={setGroupMode}
       prByThreadId={input.prByThreadId ?? new Map()}
       threadJumpLabelByThreadId={new Map()}
       onVisibleThreadIdsChange={input.onVisibleThreadIdsChange ?? (() => {})}
       resolveThreadStatus={input.resolveThreadStatus ?? (() => null)}
       onOpenThread={input.onOpenThread ?? (() => {})}
-      onOpenThreadPullRequest={() => {}}
+      onOpenThreadPullRequest={input.onOpenThreadPullRequest ?? (() => {})}
       onSetThreadSettled={input.onSetThreadSettled ?? (() => {})}
       onReturnSnoozedThread={input.onReturnSnoozedThread ?? (() => {})}
-      onToggleThreadPinned={() => {}}
-      onArchiveThread={() => {}}
+      onToggleThreadPinned={input.onToggleThreadPinned ?? (() => {})}
+      onArchiveThread={input.onArchiveThread ?? (() => {})}
       onMarkThreadRead={input.onMarkThreadRead ?? (() => {})}
       onRenameThread={input.onRenameThread ?? (() => {})}
       onThreadRenamePointerUp={input.onThreadRenamePointerUp ?? (() => {})}
       onThreadContextMenu={input.onThreadContextMenu ?? (() => {})}
       onProjectContextMenu={input.onProjectContextMenu ?? (() => {})}
-      renderThreadHoverCard={() => null}
+      renderThreadHoverCard={input.renderThreadHoverCard ?? (() => null)}
       onCreateChat={() => {}}
       onAddProject={() => {}}
+      childThreadNesting={
+        input.nestChildThreads
+          ? {
+              collapsedParentIds,
+              onToggleCollapsed: (threadId) =>
+                setCollapsedParentIds((current) => {
+                  const next = new Set(current);
+                  if (!next.delete(threadId)) next.add(threadId);
+                  return next;
+                }),
+            }
+          : null
+      }
     />
   );
+}
+
+/** The status pill the sidebar really resolves, so Priority tiers follow live thread state. */
+function realThreadStatus(thread: SidebarThreadSummary): ThreadStatusPill | null {
+  return resolveThreadStatusPill({
+    thread,
+    hasPendingApprovals: thread.hasPendingApprovals,
+    hasPendingUserInput: thread.hasPendingUserInput,
+  });
+}
+
+/** Section labels ("# Label") and row ids in document order. */
+function activityLayout(): string[] {
+  return [
+    ...document.querySelectorAll(
+      '[data-slot="activity-section-label"], [data-testid^="activity-thread-"]',
+    ),
+  ].map((element) =>
+    element.getAttribute("data-slot") === "activity-section-label"
+      ? `# ${element.textContent}`
+      : element.getAttribute("data-testid")!.replace("activity-thread-", ""),
+  );
+}
+
+function makeRemoteEntry(
+  environmentId: string,
+  overrides: Partial<WorkspaceThreadEntry["thread"]> = {},
+  children: readonly WorkspaceThreadEntry["thread"][] = [],
+) {
+  const actions = {
+    renameThread: vi.fn(async () => {}),
+    setThreadPinned: vi.fn(async () => {}),
+    archiveThread: vi.fn(async () => {}),
+    setThreadSettled: vi.fn(async (_threadId: ThreadId, _settled: boolean) => true),
+    returnSnoozedThread: vi.fn(async () => {}),
+    renameProject: vi.fn(),
+    setProjectPinned: vi.fn(async () => {}),
+  } satisfies WorkspaceSidebarActions;
+  const thread: WorkspaceThreadEntry["thread"] = {
+    ...makeThread(71, {
+      id: ThreadId.makeUnsafe("same-remote-thread"),
+      lastVisitedAt: "2026-08-02T09:00:00.000Z",
+    }),
+    status: {
+      label: "Completed",
+      colorClass: "text-emerald-600",
+      dotClass: "bg-emerald-500",
+      pulse: false,
+    },
+    ...overrides,
+  };
+  const navigation: WorkspaceNavigation = {
+    sidebar: actions,
+    navigate: vi.fn(),
+    newChat: vi.fn<WorkspaceNavigation["newChat"]>(),
+    createChat: vi.fn<WorkspaceNavigation["createChat"]>(),
+    openTerminal: vi.fn(),
+    browseFolders: vi.fn<WorkspaceNavigation["browseFolders"]>(),
+    createProject: vi.fn<WorkspaceNavigation["createProject"]>(),
+    openProject: vi.fn<WorkspaceNavigation["openProject"]>(),
+    recover: vi.fn(),
+  };
+  const session: WorkspaceSession = {
+    host: {
+      hostId: environmentId,
+      hostName: `Computer ${environmentId}`,
+      wsPath: `/ws/remote/${environmentId}`,
+      executionScope: {
+        environmentId,
+        accountAuthority: "https://account.example.test",
+        userId: "fixture-owner",
+        organizationId: "fixture-org",
+        channel: "beta",
+      },
+    },
+    navigation,
+    summary: {
+      state: "open",
+      path: "/previous-chat",
+      projects: [{ ...makeProject(PROJECT_A, "Project A"), section: "projects" }],
+      threads: [thread, ...children],
+    },
+  };
+  remoteFixture.available.set(session, navigation);
+  remoteFixture.sessions.push(session);
+  return {
+    entry: { key: environmentId, thread, session } satisfies WorkspaceThreadEntry,
+    session,
+    actions,
+  };
+}
+
+function remoteActivityInput(sessions: readonly WorkspaceSession[]) {
+  const activity = workspaceActivityRows(sessions);
+  const onOpen = vi.fn();
+  return {
+    threads: activity.threads,
+    projects: [...activity.projectById.values()],
+    externalRows: new Map(
+      [...activity.remoteById].map(([id, entry]) => [
+        id,
+        {
+          entry,
+          hostName: entry.session!.host.hostName,
+          status: entry.thread.status,
+          onOpen,
+        },
+      ]),
+    ),
+    onOpen,
+  };
+}
+
+function actionButton(row: HTMLElement, label: string): HTMLButtonElement {
+  const button = row.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
+  expect(button).not.toBeNull();
+  return button!;
 }
 
 describe("SidebarActivityView", () => {
@@ -147,8 +363,445 @@ describe("SidebarActivityView", () => {
   });
   afterEach(() => {
     vi.restoreAllMocks();
+    remoteFixture.available.clear();
+    remoteFixture.sessions = [];
+    remoteFixture.open.mockClear();
+    remoteFixture.href = "/";
     document.body.innerHTML = "";
   });
+
+  it("folds agent-created children under their creator and ranks the family by its most urgent child", async () => {
+    const parent = makeThread(1, { title: "Refactor sidebar nesting" });
+    const agentChild = (index: number, overrides: Partial<SidebarThreadSummary>) =>
+      makeThread(index, {
+        creationSource: "synara_mcp",
+        sourceThreadId: parent.id,
+        ...overrides,
+      });
+    const running = agentChild(2, { title: "Audit Activity feed", hasLiveTailWork: true });
+    const waiting = agentChild(3, { title: "Fix pinned row indent", hasPendingApprovals: true });
+    const done = agentChild(4, { title: "Check Windows paths" });
+    await render(
+      <SidebarProvider>
+        {renderActivity({
+          threads: [parent, running, waiting, done],
+          resolveThreadStatus: realThreadStatus,
+          nestChildThreads: true,
+        })}
+      </SidebarProvider>,
+    );
+
+    // The waiting child lifts its parent into Priority; children never get their own rows.
+    await vi.waitFor(() => expect(activityLayout()).toEqual(["# Priority", "activity-thread-1"]));
+    const childRowIds = () =>
+      [...document.querySelectorAll('[data-testid^="activity-child-thread-"]')].map((element) =>
+        element.getAttribute("data-testid")!.replace("activity-child-thread-activity-thread-", ""),
+      );
+    expect(childRowIds()).toEqual(["2", "3"]);
+
+    // Quiet children wait behind "+1 done".
+    await page.getByRole("button", { name: "+1 done" }).click();
+    await vi.waitFor(() => expect(childRowIds()).toEqual(["2", "3", "4"]));
+
+    // Folding hides the children; the chip and summary carry the urgent one.
+    await page.getByRole("button", { name: "Hide 3 child threads" }).click();
+    await vi.waitFor(() => expect(childRowIds()).toEqual([]));
+    await expect.element(page.getByRole("button", { name: "Show 3 child threads" })).toBeVisible();
+    await expect.element(page.getByText("1 needs you")).toBeVisible();
+  });
+
+  it.each(["working", "unread"] as const)(
+    "keeps a %s child in Priority when its creator is Done",
+    async (state) => {
+      const parent = makeThread(1);
+      const child = makeThread(2, {
+        creationSource: "synara_mcp",
+        sourceThreadId: parent.id,
+        ...(state === "working"
+          ? { hasLiveTailWork: true }
+          : { lastVisitedAt: "2026-08-02T09:00:00.000Z" }),
+      });
+      const mounted = await render(
+        <SidebarProvider>
+          {renderActivity({
+            threads: [parent, child],
+            settledOverrideByThreadId: new Map([[parent.id, true]]),
+            resolveThreadStatus: realThreadStatus,
+            nestChildThreads: true,
+          })}
+        </SidebarProvider>,
+      );
+      await vi.waitFor(() => expect(activityLayout()).toContain("# Priority"));
+      await expect
+        .element(mounted.getByTestId(`activity-child-thread-${child.id}`), { timeout: 3000 })
+        .toBeVisible();
+    },
+  );
+
+  it("reveals an open child when its creator is in the closed Done section", async () => {
+    const parent = makeThread(1);
+    const child = makeThread(2, { creationSource: "synara_mcp", sourceThreadId: parent.id });
+    const mounted = await render(
+      <SidebarProvider>
+        {renderActivity({
+          threads: [parent, child],
+          activeThreadId: child.id,
+          settledOverrideByThreadId: new Map([[parent.id, true]]),
+          nestChildThreads: true,
+        })}
+      </SidebarProvider>,
+    );
+    await expect
+      .element(mounted.getByTestId(`activity-child-thread-${child.id}`), { timeout: 3000 })
+      .toBeVisible();
+  });
+
+  it("keeps remote pinned rows in the feed without sending them to local actions", async () => {
+    const local = makeThread(70, { lastVisitedAt: "2026-08-02T09:00:00.000Z" });
+    const remote = makeThread(71, {
+      id: ThreadId.makeUnsafe('workspace:["remote-env","thread-71"]'),
+      projectId: PROJECT_B,
+      lastVisitedAt: "2026-08-02T09:00:00.000Z",
+    });
+    const onRemoteOpen = vi.fn();
+    const onOpenThread = vi.fn();
+    const onMarkThreadRead = vi.fn();
+    const onRenameThread = vi.fn();
+    const onThreadContextMenu = vi.fn();
+    const onVisibleThreadIdsChange = vi.fn();
+    const renderThreadHoverCard = vi.fn(() => null);
+    const mounted = await render(
+      renderActivity({
+        threads: [local, remote],
+        renderThreadHoverCard,
+        projects: [makeProject(PROJECT_A, "Project A"), makeProject(PROJECT_B, "Project B")],
+        pinnedThreadIdSet: new Set([remote.id]),
+        externalRows: new Map([
+          [remote.id, { hostName: "Studio Mac", onOpen: onRemoteOpen, status: null }],
+        ]),
+        onOpenThread,
+        onMarkThreadRead,
+        onRenameThread,
+        onThreadContextMenu,
+        onVisibleThreadIdsChange,
+      }),
+    );
+
+    expect(page.getByRole("button", { name: "Pinned" })).toBeVisible();
+    const remoteRow = page.getByTestId(`activity-thread-${remote.id}`);
+    expect(remoteRow).toHaveAttribute("draggable", "false");
+    // The computer is named by the hover card and the accessible label, not the project line;
+    // the globe follows the title.
+    expect(remoteRow).toHaveAttribute("aria-label", expect.stringContaining("Studio Mac"));
+    const remoteContent = remoteRow.element().parentElement!;
+    expect(remoteContent.textContent).not.toContain("Studio Mac");
+    const remoteFooter = remoteContent.querySelector<HTMLElement>(
+      '[data-slot="activity-thread-footer"]',
+    )!;
+    expect(remoteFooter.textContent).toBe("Project B");
+    expect(remoteFooter.querySelector('[data-slot="remote-thread-marker"]')).toBeNull();
+    expect(remoteContent.querySelector('[data-slot="remote-thread-marker"]')).not.toBeNull();
+    // Remote rows open the same hover card as local ones.
+    expect(remoteRow.element().closest("[data-thread-hover-anchor]")).not.toBeNull();
+    expect(renderThreadHoverCard).toHaveBeenCalledWith(
+      expect.objectContaining({ id: remote.id }),
+      expect.any(String),
+    );
+    expect(remoteRow.element().parentElement?.querySelectorAll("button")).toHaveLength(1);
+    await remoteRow.click();
+    expect(onRemoteOpen).toHaveBeenCalledOnce();
+    expect(onOpenThread).not.toHaveBeenCalled();
+    remoteRow.element().dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+    remoteRow.element().dispatchEvent(new MouseEvent("contextmenu", { bubbles: true }));
+    expect(onRenameThread).not.toHaveBeenCalled();
+    expect(onThreadContextMenu).not.toHaveBeenCalled();
+
+    await page.getByRole("button", { name: "Activity options" }).click();
+    await page.getByRole("menuitem", { name: "Mark all as read" }).click();
+    expect(onMarkThreadRead).toHaveBeenCalledOnce();
+    expect(onMarkThreadRead).toHaveBeenCalledWith(local.id, local.latestTurn?.completedAt);
+    await vi.waitFor(() =>
+      expect(onVisibleThreadIdsChange).toHaveBeenLastCalledWith([remote.id, local.id]),
+    );
+    await mounted.unmount();
+  });
+
+  it("routes remote Priority actions to their own host even when raw thread IDs collide", async () => {
+    const first = makeRemoteEntry("mini");
+    const second = makeRemoteEntry("book");
+    const input = remoteActivityInput([first.session, second.session]);
+    const local = {
+      onSetThreadSettled: vi.fn(),
+      onMarkThreadRead: vi.fn(),
+      onToggleThreadPinned: vi.fn(),
+      onArchiveThread: vi.fn(),
+      onRenameThread: vi.fn(),
+    };
+    const mounted = await render(renderActivity({ ...input, ...local }));
+    await expect.element(page.getByText("Priority", { exact: true })).toBeVisible();
+
+    for (const [index, owner] of [first, second].entries()) {
+      const row = page.getByTestId(`activity-thread-${input.threads[index]!.id}`).element();
+      row.focus();
+      const wrapper = row.parentElement!;
+      actionButton(wrapper, "Pin thread").click();
+      actionButton(wrapper, "Archive thread").click();
+      actionButton(wrapper, "Done").click();
+      await vi.waitFor(() => {
+        expect(owner.actions.setThreadPinned).toHaveBeenCalledExactlyOnceWith(
+          owner.entry.thread.id,
+          true,
+        );
+        expect(owner.actions.archiveThread).toHaveBeenCalledExactlyOnceWith(owner.entry.thread.id);
+        expect(owner.actions.setThreadSettled).toHaveBeenCalledExactlyOnceWith(
+          owner.entry.thread.id,
+          true,
+        );
+      });
+      expect(remoteFixture.open).toHaveBeenCalledWith(owner.session, "/previous-chat");
+      for (const label of ["Pin thread", "Archive thread", "Done"]) {
+        actionButton(wrapper, label).dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+        actionButton(wrapper, label).dispatchEvent(
+          new PointerEvent("pointerup", { bubbles: true, pointerType: "touch" }),
+        );
+      }
+      expect(document.querySelector('[role="dialog"]')).toBeNull();
+    }
+    expect(input.onOpen).not.toHaveBeenCalled();
+    for (const callback of Object.values(local)) expect(callback).not.toHaveBeenCalled();
+    await mounted.unmount();
+  });
+
+  it("opens a remote row's menu from the keyboard with Shift+F10", async () => {
+    const owner = makeRemoteEntry("mini");
+    const mounted = await render(renderActivity(remoteActivityInput([owner.session])));
+    try {
+      const button = page
+        .getByRole("button", { name: /Activity thread 71, Computer mini/ })
+        .element() as HTMLElement;
+      button.focus();
+      button.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "F10", shiftKey: true, bubbles: true }),
+      );
+      await expect.element(page.getByRole("menuitem", { name: "Rename chat" })).toBeVisible();
+      await userEvent.keyboard("{Escape}");
+    } finally {
+      await mounted.unmount();
+    }
+  });
+
+  it("disables offline remote actions and rejects an action from a stale captured session", async () => {
+    const owner = makeRemoteEntry("offline");
+    remoteFixture.available.delete(owner.session);
+    const input = remoteActivityInput([owner.session]);
+    const mounted = await render(renderActivity(input));
+    const row = page.getByTestId(`activity-thread-${input.threads[0]!.id}`).element();
+    row.focus();
+    for (const label of ["Pin thread", "Archive thread", "Done"]) {
+      const action = actionButton(row.parentElement!, label);
+      expect(action.disabled).toBe(true);
+      action.click();
+    }
+    for (const action of Object.values(owner.actions)) expect(action).not.toHaveBeenCalled();
+    expect(input.onOpen).not.toHaveBeenCalled();
+    expect(remoteFixture.open).not.toHaveBeenCalled();
+    await mounted.unmount();
+
+    remoteFixture.available.set(owner.session, owner.session.navigation!);
+    const fresh = await render(renderActivity(input));
+    const liveRow = page.getByTestId(`activity-thread-${input.threads[0]!.id}`).element();
+    liveRow.focus();
+    remoteFixture.available.delete(owner.session);
+    for (const label of ["Pin thread", "Archive thread", "Done"])
+      actionButton(liveRow.parentElement!, label).click();
+    for (const action of Object.values(owner.actions)) expect(action).not.toHaveBeenCalled();
+    expect(remoteFixture.open).not.toHaveBeenCalled();
+    await fresh.unmount();
+  });
+
+  it("keeps a remote optimistic Done state undoable before its projection arrives", async () => {
+    const owner = makeRemoteEntry("mini", { settledOverride: true });
+    const input = remoteActivityInput([owner.session]);
+    const mounted = await render(
+      renderActivity({
+        ...input,
+        settledOverrideByThreadId: new Map([[input.threads[0]!.id, true]]),
+        pinnedThreadIdSet: new Set([input.threads[0]!.id]),
+      }),
+    );
+    const row = page.getByTestId(`activity-thread-${input.threads[0]!.id}`).element();
+    row.focus();
+    actionButton(row.parentElement!, "Undo").click();
+    await vi.waitFor(() =>
+      expect(owner.actions.setThreadSettled).toHaveBeenCalledExactlyOnceWith(
+        owner.entry.thread.id,
+        false,
+      ),
+    );
+    await mounted.unmount();
+  });
+
+  it.each(["active", "another-host", "child-active"] as const)(
+    "keeps controller Done undo after its remote row unmounts (route: %s)",
+    async (route) => {
+      const childId = ThreadId.makeUnsafe("remote-child");
+      const owner = makeRemoteEntry("mini", {}, [
+        {
+          ...makeThread(72, {
+            id: childId,
+            parentThreadId: ThreadId.makeUnsafe("same-remote-thread"),
+          }),
+          status: null,
+        },
+      ]);
+      const other = makeRemoteEntry("book");
+      const environment = route === "another-host" ? "book" : "mini";
+      const path = route === "child-active" ? `/${childId}` : `/${owner.entry.thread.id}`;
+      remoteFixture.href = `/remote?${new URLSearchParams({ environment, path })}`;
+      const input = remoteActivityInput([owner.session, other.session]);
+      const addToast = vi.spyOn(toastManager, "add");
+      const mounted = await render(renderActivity(input));
+      const row = page.getByTestId(`activity-thread-${input.threads[0]!.id}`).element();
+      row.focus();
+      actionButton(row.parentElement!, "Done").click();
+      await vi.waitFor(() =>
+        expect(addToast).toHaveBeenCalledWith(
+          expect.objectContaining({
+            timeout: 0,
+            data: expect.objectContaining({
+              allowCrossThreadVisibility: true,
+              dismissAfterVisibleMs: 8_000,
+              archiveUndo: expect.objectContaining({ message: "Marked as done" }),
+            }),
+          }),
+        ),
+      );
+      const undo = addToast.mock.calls[0]![0].data!.archiveUndo!.onUndo;
+      await mounted.unmount();
+      await expect(Promise.resolve(undo())).resolves.toBe(true);
+      expect(owner.actions.setThreadSettled).toHaveBeenNthCalledWith(
+        1,
+        owner.entry.thread.id,
+        true,
+      );
+      expect(owner.actions.setThreadSettled).toHaveBeenNthCalledWith(
+        2,
+        owner.entry.thread.id,
+        false,
+      );
+      expect(other.actions.setThreadSettled).not.toHaveBeenCalled();
+      if (route === "active")
+        expect(remoteFixture.open).toHaveBeenCalledExactlyOnceWith(
+          owner.session,
+          `/${owner.entry.thread.id}`,
+        );
+      else expect(remoteFixture.open).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["offline", "frame-replaced"] as const)(
+    "keeps Done undo unsuccessful without targeting another owner (%s)",
+    async (state) => {
+      const owner = makeRemoteEntry("mini");
+      const other = makeRemoteEntry("book");
+      const input = remoteActivityInput([owner.session]);
+      const addToast = vi.spyOn(toastManager, "add");
+      const mounted = await render(renderActivity(input));
+      const row = page.getByTestId(`activity-thread-${input.threads[0]!.id}`).element();
+      row.focus();
+      actionButton(row.parentElement!, "Done").click();
+      await vi.waitFor(() => expect(addToast).toHaveBeenCalled());
+      const undo = addToast.mock.calls[0]![0].data!.archiveUndo!.onUndo;
+      await mounted.unmount();
+      remoteFixture.available.delete(owner.session);
+      const replacement = state === "frame-replaced" ? makeRemoteEntry("mini") : null;
+      await expect(Promise.resolve(undo())).resolves.toBe(false);
+      expect(owner.actions.setThreadSettled).toHaveBeenCalledExactlyOnceWith(
+        owner.entry.thread.id,
+        true,
+      );
+      expect(other.actions.setThreadSettled).not.toHaveBeenCalled();
+      if (replacement) expect(replacement.actions.setThreadSettled).not.toHaveBeenCalled();
+      expect(remoteFixture.open).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["unconfirmed", "stale-frame"] as const)(
+    "does not offer Undo for a stale or unconfirmed remote Done (%s)",
+    async (state) => {
+      const owner = makeRemoteEntry("mini");
+      let confirm!: (confirmed: boolean) => void;
+      owner.actions.setThreadSettled.mockImplementationOnce(
+        () =>
+          new Promise<boolean>((resolve) => {
+            confirm = resolve;
+          }),
+      );
+      const input = remoteActivityInput([owner.session]);
+      const addToast = vi.spyOn(toastManager, "add");
+      const mounted = await render(renderActivity(input));
+      const row = page.getByTestId(`activity-thread-${input.threads[0]!.id}`).element();
+      row.focus();
+      actionButton(row.parentElement!, "Done").click();
+      expect(addToast).not.toHaveBeenCalled();
+      if (state === "stale-frame") remoteFixture.available.delete(owner.session);
+      confirm(state === "stale-frame");
+      await new Promise<void>((resolve) => globalThis.setTimeout(resolve, 0));
+      expect(addToast).not.toHaveBeenCalled();
+      await mounted.unmount();
+    },
+  );
+
+  it("returns a remote snoozed chat through its owner without marking a local chat Done", async () => {
+    const owner = makeRemoteEntry("mini", { snoozedUntil: "2026-08-02T13:00:00.000Z" });
+    const input = remoteActivityInput([owner.session]);
+    const onReturnSnoozedThread = vi.fn();
+    const onSetThreadSettled = vi.fn();
+    const onMarkThreadRead = vi.fn();
+    const mounted = await render(
+      renderActivity({ ...input, onReturnSnoozedThread, onSetThreadSettled, onMarkThreadRead }),
+    );
+    await page.getByRole("button", { name: "Snoozed", exact: true }).click();
+    const row = page.getByTestId(`activity-thread-${input.threads[0]!.id}`).element();
+    row.focus();
+    actionButton(row.parentElement!, "Return now").click();
+    await vi.waitFor(() =>
+      expect(owner.actions.returnSnoozedThread).toHaveBeenCalledExactlyOnceWith(
+        owner.entry.thread.id,
+      ),
+    );
+    expect(owner.actions.setThreadSettled).not.toHaveBeenCalled();
+    expect(onReturnSnoozedThread).not.toHaveBeenCalled();
+    expect(onSetThreadSettled).not.toHaveBeenCalled();
+    expect(onMarkThreadRead).not.toHaveBeenCalled();
+    await mounted.unmount();
+  });
+
+  it.each([false, true])(
+    "selects a hidden child's root without marking that root read (child open: %s)",
+    async (childOpen) => {
+      const root = makeThread(301, { lastVisitedAt: "2026-08-02T09:00:00.000Z" });
+      const mounted = await render(
+        renderActivity({
+          threads: [root],
+          activeThreadId: childOpen ? ThreadId.makeUnsafe("open-subagent") : root.id,
+          visualActiveThreadId: root.id,
+          resolveThreadStatus: () => ({
+            label: "Completed",
+            colorClass: "text-emerald-600",
+            dotClass: "bg-emerald-500",
+            pulse: false,
+          }),
+        }),
+      );
+      const row = mounted.getByTestId(`activity-thread-${root.id}`).element();
+      expect(row.getAttribute("aria-current")).toBe("page");
+      const unreadDot = row.parentElement?.querySelector('[aria-label="Unread completion"]');
+      if (childOpen) expect(unreadDot).not.toBeNull();
+      else expect(unreadDot).toBeNull();
+      await mounted.unmount();
+    },
+  );
 
   it("keeps a snoozed pin out of normal rows and returns it through its own section", async () => {
     const thread = makeThread(40, { snoozedUntil: "2026-08-02T13:00:00.000Z" });
@@ -186,59 +839,271 @@ describe("SidebarActivityView", () => {
     await mounted.unmount();
   });
 
-  it.each([
-    { name: "favicon", appearance: null },
-    { name: "emoji", appearance: { kind: "emoji", emoji: "🚀" } },
-    { name: "icon", appearance: { kind: "icon", icon: "rocket", color: "blue" } },
-    { name: "color", appearance: { kind: "icon", icon: DEFAULT_PROJECT_ICON, color: "red" } },
-  ] satisfies ReadonlyArray<{ name: string; appearance: ProjectAppearance | null }>)(
-    "keeps the $name project identity and worktree indicator in recent rows",
-    async ({ name, appearance }) => {
-      const thread = makeThread(0, {
-        envMode: "worktree",
-        worktreePath: "/tmp/activity-worktree",
-        branch: "feature/sidebar-icons",
-      });
-      const mounted = await render(
-        renderActivity({
-          threads: [thread],
-          projects: [{ ...makeProject(PROJECT_A, "Project A"), appearance }],
-        }),
-      );
-      await vi.waitFor(() => {
-        const row = page.getByTestId(`activity-thread-${thread.id}`).element();
-        if (name === "favicon") {
-          const image = row.querySelector<HTMLImageElement>("img");
-          expect(image?.naturalWidth).toBeGreaterThan(0);
-        } else if (appearance?.kind === "emoji") {
-          expect(row.textContent).toContain(appearance.emoji);
-          expect(row.querySelector("img")).toBeNull();
-        } else if (appearance?.kind === "icon") {
-          // The default project icon is the shared Hugeicons folder (an svg); every other
-          // choice is a masked Central asset named after the icon.
-          const glyph =
-            appearance.icon === DEFAULT_PROJECT_ICON
-              ? row.querySelector<SVGElement>('[data-slot="hugeicon"]')
-              : [...row.querySelectorAll<HTMLElement>('[data-slot="central-icon"]')].find(
-                  (element) => element.style.maskImage.includes(`/${appearance.icon}.svg`),
-                );
-          expect(glyph).toBeDefined();
-          const reference = document.createElement("span");
-          reference.style.color = `var(--project-${appearance.color})`;
-          document.body.appendChild(reference);
-          const expectedColor = getComputedStyle(reference).color;
-          reference.remove();
-          expect(getComputedStyle(glyph!).color).toBe(expectedColor);
-          expect(row.querySelector("img")).toBeNull();
-        }
-        expect(row.querySelector('[aria-label="Worktree"]')?.getAttribute("aria-hidden")).not.toBe(
-          "true",
-        );
-      });
-      await expect.element(mounted.getByRole("img", { name: "Worktree" })).toBeVisible();
+  it("keeps the project identity and the branch on the project line, and marks a worktree beside the title", async () => {
+    const appearance: ProjectAppearance = { kind: "emoji", emoji: "🚀" };
+    const thread = makeThread(0, { branch: "feature/sidebar-icons" });
+    const worktree = makeThread(1, {
+      envMode: "worktree",
+      worktreePath: "/tmp/activity-worktree",
+      branch: "feature/worktree",
+    });
+    const mounted = await render(
+      renderActivity({
+        threads: [thread, worktree],
+        projects: [{ ...makeProject(PROJECT_A, "Project A"), appearance }],
+      }),
+    );
+    const wrapperOf = (row: SidebarThreadSummary) =>
+      page.getByTestId(`activity-thread-${row.id}`).element().parentElement!;
+    const footerOf = (row: SidebarThreadSummary) =>
+      wrapperOf(row).querySelector<HTMLElement>('[data-slot="activity-thread-footer"]')!;
+    const wrapper = () => wrapperOf(thread);
+    const footer = () => footerOf(thread);
+    await vi.waitFor(() => {
+      const line = footer();
+      expect(line.querySelector('[aria-label="Worktree"]')).toBeNull();
+      expect(line.textContent).toContain(appearance.emoji);
+      expect(line.querySelector("img")).toBeNull();
+    });
+    expect(footer().textContent).toContain("Project A");
+    expect(footer().textContent).toContain("feature/sidebar-icons");
+    // A worktree keeps the project's glyph on its project line and is marked once, beside
+    // the title, as on the project list's thread rows.
+    const worktreeLine = footerOf(worktree);
+    expect(worktreeLine.querySelector('[aria-label="Worktree"]')).toBeNull();
+    expect(worktreeLine.innerHTML).toBe(
+      footer().innerHTML.replace("feature/sidebar-icons", "feature/worktree"),
+    );
+    const worktreeTitle = wrapperOf(worktree).querySelector<HTMLElement>(
+      '[data-slot="activity-thread-title"]',
+    )!;
+    const worktreeGlyphs = wrapperOf(worktree).querySelectorAll('[aria-label="Worktree"]');
+    expect(worktreeGlyphs).toHaveLength(1);
+    expect(worktreeGlyphs[0]!.parentElement).toBe(worktreeTitle.parentElement);
+    expect(wrapper().querySelector('[aria-label="Worktree"]')).toBeNull();
+    // Nothing sits above the title; the project line sits below the reply.
+    const title = wrapper().querySelector<HTMLElement>('[data-slot="activity-thread-title"]')!;
+    expect(title.parentElement).toBe(title.parentElement!.parentElement!.firstElementChild);
+    expect(title.textContent).not.toContain("Project A");
+    await mounted.unmount();
+  });
+
+  it("counts several PRs in the row's state color and lists them instead of opening one", async () => {
+    const merged: OrchestrationThreadPullRequest = {
+      ...makeOpenPullRequest(96),
+      title: "Review iOS PRs",
+      state: "merged",
+    };
+    const open = { ...makeOpenPullRequest(97), title: "Widget snapshot fix" };
+    const closed: OrchestrationThreadPullRequest = {
+      ...makeOpenPullRequest(95),
+      title: "Abandoned attempt",
+      state: "closed",
+    };
+    const several = makeThread(820, {
+      title: "Several PRs",
+      pullRequests: [
+        makePullRequestLink(merged, "2026-08-02T08:00:00.000Z"),
+        makePullRequestLink(closed, "2026-08-02T09:00:00.000Z"),
+        makePullRequestLink(open, "2026-08-02T07:00:00.000Z"),
+      ],
+    });
+    const single = makeThread(821, {
+      title: "One PR",
+      pullRequests: [makePullRequestLink(makeOpenPullRequest(2186), "2026-08-02T08:00:00.000Z")],
+    });
+    const onOpenThread = vi.fn();
+    // Like the sidebar's handler, which takes the press over to open the PR pane.
+    const onOpenThreadPullRequest = vi.fn((event: ReactMouseEvent<HTMLElement>) => {
+      event.preventDefault();
+      event.stopPropagation();
+    });
+    const onRenameThread = vi.fn();
+    const mounted = await render(
+      <div className="w-80">
+        {renderActivity({
+          threads: [several, single],
+          // The row's own PR, with its live state, decides the glyph and color.
+          prByThreadId: new Map([
+            [several.id, merged],
+            [single.id, makeOpenPullRequest(2186)],
+          ]),
+          onOpenThread,
+          onOpenThreadPullRequest,
+          onRenameThread,
+        })}
+      </div>,
+    );
+    try {
+      const countChip = page.getByRole("button", { name: "3 pull requests" });
+      const countElement = countChip.element() as HTMLElement;
+      expect(countElement.textContent).toBe("3");
+      expect(countElement.closest('[data-slot="activity-thread-footer"]')).not.toBeNull();
+      countElement.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+      expect(onRenameThread).not.toHaveBeenCalled();
+
+      // A press lists every PR (its own first, then open, then newest); none opens by itself.
+      await countChip.click();
+      const items = page.getByRole("menuitem");
+      await expect
+        .poll(() => items.elements().map((item) => item.textContent))
+        .toEqual(["#96 Review iOS PRs", "#97 Widget snapshot fix", "#95 Abandoned attempt"]);
+      expect(onOpenThreadPullRequest).not.toHaveBeenCalled();
+      await page.getByRole("menuitem", { name: "#97 Widget snapshot fix" }).click();
+      expect(onOpenThreadPullRequest).toHaveBeenCalledOnce();
+      expect(onOpenThreadPullRequest.mock.calls[0]?.slice(1)).toEqual([several, open]);
+      expect(onOpenThread).not.toHaveBeenCalled();
+      expect(onRenameThread).not.toHaveBeenCalled();
+      await expect.poll(() => items.elements().length).toBe(0);
+
+      // One PR keeps its #number and opens directly.
+      const singleChip = page.getByRole("button", { name: "Open pull request #2186" });
+      expect(singleChip.element().textContent).toBe("#2186");
+      await singleChip.click();
+      expect(onOpenThreadPullRequest).toHaveBeenCalledTimes(2);
+      expect(onOpenThreadPullRequest.mock.calls[1]?.slice(1)).toEqual([
+        single,
+        makeOpenPullRequest(2186),
+      ]);
+    } finally {
       await mounted.unmount();
-    },
-  );
+    }
+  });
+
+  it("names a plain checkout by its folder and keeps the PR whole before the branch", async () => {
+    const local = makeThread(810, {
+      title: "Local checkout",
+      branch: "synara/frontend-consistency-fixes-for-every-settings-screen",
+    });
+    const chat = makeThread(811, { title: "Plain chat", projectId: PROJECT_B });
+    const chatWithPr = makeThread(812, { title: "Chat with a PR", projectId: PROJECT_B });
+    const mounted = await render(
+      <div className="w-60">
+        {renderActivity({
+          threads: [local, chat, chatWithPr],
+          projects: [
+            makeProject(PROJECT_A, "Project A"),
+            { ...makeProject(PROJECT_B, "Chats"), kind: "chat" },
+          ],
+          prByThreadId: new Map([
+            [local.id, makeOpenPullRequest(2186)],
+            [chatWithPr.id, makeOpenPullRequest(2187)],
+          ]),
+        })}
+      </div>,
+    );
+    try {
+      const footer = (thread: SidebarThreadSummary) =>
+        page
+          .getByTestId(`activity-thread-${thread.id}`)
+          .element()
+          .parentElement!.querySelector<HTMLElement>('[data-slot="activity-thread-footer"]')!;
+      const localFooter = footer(local);
+      expect(localFooter.textContent).toBe(
+        "Project A#2186synara/frontend-consistency-fixes-for-every-settings-screen",
+      );
+      expect(localFooter.querySelector('[aria-label="Worktree"]')).toBeNull();
+
+      // A chat keeps its folder and name, and its PR.
+      expect(footer(chatWithPr).textContent).toBe("Synara#2187");
+      expect(footer(chat).textContent).toBe("Synara");
+    } finally {
+      await mounted.unmount();
+    }
+  });
+
+  it("previews the latest reply under the title and keeps the PR a target of its own", async () => {
+    const reply =
+      "Fixed 6 off-scale paddings across the settings screens. PR is ready for review, and the snapshot tests were rerun on every platform so nothing else should move.";
+    const unread = makeThread(800, {
+      title: "Design-taste consistency checker",
+      latestReplyPreview: reply,
+      lastVisitedAt: "2026-08-02T09:00:00.000Z",
+    });
+    const seen = makeThread(801, {
+      title: "Codice handle URL pubblico",
+      latestReplyPreview: reply,
+    });
+    const merged: OrchestrationThreadPullRequest = {
+      number: 2171,
+      title: "Public handle URLs",
+      url: "https://github.com/acme/synara/pull/2171",
+      baseBranch: "main",
+      headBranch: "feat/handles",
+      state: "merged",
+    };
+    const silent = makeThread(802, { title: "No reply yet" });
+    const pr: OrchestrationThreadPullRequest = {
+      number: 2186,
+      title: "Fix off-scale paddings",
+      url: "https://github.com/acme/synara/pull/2186",
+      baseBranch: "main",
+      headBranch: "fix/paddings",
+      state: "open",
+    };
+    const onOpenThread = vi.fn();
+    const onOpenThreadPullRequest = vi.fn();
+    const onRenameThread = vi.fn();
+    const mounted = await render(
+      <div className="w-80">
+        {renderActivity({
+          threads: [unread, seen, silent],
+          prByThreadId: new Map([
+            [unread.id, pr],
+            [seen.id, merged],
+          ]),
+          resolveThreadStatus: (thread) =>
+            thread.id === unread.id
+              ? {
+                  label: "Completed",
+                  colorClass: "text-emerald-600",
+                  dotClass: "bg-emerald-500",
+                  pulse: false,
+                }
+              : null,
+          onOpenThread,
+          onOpenThreadPullRequest,
+          onRenameThread,
+        })}
+      </div>,
+    );
+    try {
+      const rowButton = (thread: SidebarThreadSummary) =>
+        page.getByTestId(`activity-thread-${thread.id}`).element() as HTMLButtonElement;
+      const part = (thread: SidebarThreadSummary, selector: string) =>
+        rowButton(thread).parentElement!.querySelector<HTMLElement>(selector);
+
+      const unreadReply = part(unread, "p")!;
+      expect(unreadReply.textContent).toBe(reply);
+      // No reply, no reply line.
+      expect(part(silent, "p")).toBeNull();
+
+      // The PR is plain icon + number in its state's color, yet a button of its own, outside
+      // the row's, named for what it does, with a target reaching past its glyphs.
+      const chip = page.getByRole("button", { name: "Open pull request #2186" });
+      const chipElement = chip.element() as HTMLElement;
+      expect(rowButton(unread).contains(chipElement)).toBe(false);
+      expect(chipElement.getAttribute("title")).toBe("#2186 PR open: Fix off-scale paddings");
+      await chip.click();
+      expect(onOpenThreadPullRequest).toHaveBeenCalledOnce();
+      expect(onOpenThreadPullRequest.mock.calls[0]?.slice(1)).toEqual([unread, pr]);
+      expect(onOpenThread).not.toHaveBeenCalled();
+      chipElement.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+      expect(onRenameThread).not.toHaveBeenCalled();
+
+      // Everywhere else the whole row, reply included, opens the thread.
+      await page.getByTestId(`activity-thread-${unread.id}`).click();
+      expect(onOpenThread).toHaveBeenCalledExactlyOnceWith(unread.id);
+      expect(
+        document.elementFromPoint(
+          unreadReply.getBoundingClientRect().left + 4,
+          unreadReply.getBoundingClientRect().top + 4,
+        ),
+      ).toBe(rowButton(unread));
+    } finally {
+      await mounted.unmount();
+    }
+  });
 
   it("keeps mounted rows and navigation order stable until a human sends a new message", async () => {
     const older = makeThread(500, {
@@ -467,8 +1332,6 @@ describe("SidebarActivityView", () => {
       .parentElement?.querySelector('[aria-label="Unread completion"]');
     expect(completedDot).not.toBeNull();
     expect(completedDot?.parentElement?.dataset.slot).toBe("activity-completion-status");
-    const completedStatusSlot = completedDot?.parentElement;
-    const completedStatusLeft = completedStatusSlot?.getBoundingClientRect().left;
 
     const pinnedRow = page.getByTestId(`activity-thread-${pinned.id}`).element();
     pinnedRow.focus();
@@ -479,10 +1342,6 @@ describe("SidebarActivityView", () => {
     expect(resumedRow.parentElement?.querySelector('button[aria-label="Done"]')).not.toBeNull();
 
     page.getByTestId(`activity-thread-${unseen.id}`).element().focus();
-    await vi.waitFor(() => {
-      expect(getComputedStyle(completedStatusSlot!).opacity).toBe("0");
-    });
-    expect(completedStatusSlot?.getBoundingClientRect().left).toBe(completedStatusLeft);
     page
       .getByTestId(`activity-thread-${unseen.id}`)
       .element()
@@ -629,7 +1488,7 @@ describe("SidebarActivityView", () => {
     await mounted.unmount();
   });
 
-  it("shows unread pins once in open Pinned and suppresses a stale dot on the open thread", async () => {
+  it("moves an unread pin into Priority once and suppresses a stale dot on the open thread", async () => {
     const pinnedUnread = makeThread(300, { lastVisitedAt: "2026-08-02T09:00:00.000Z" });
     const openThread = makeThread(301, { lastVisitedAt: "2026-08-02T09:00:00.000Z" });
     const completedStatus: ThreadStatusPill = {
@@ -647,9 +1506,11 @@ describe("SidebarActivityView", () => {
       }),
     );
 
+    // Priority lists the pin, so Pinned has nothing left to show.
+    await expect.element(page.getByText("Priority", { exact: true })).toBeVisible();
     await expect
       .element(page.getByRole("button", { name: "Pinned", exact: true }))
-      .toHaveAttribute("aria-expanded", "true");
+      .not.toBeInTheDocument();
     expect(
       document.querySelectorAll(`[data-testid="activity-thread-${pinnedUnread.id}"]`),
     ).toHaveLength(1);
@@ -667,6 +1528,193 @@ describe("SidebarActivityView", () => {
     ).toBeNull();
     await mounted.unmount();
   });
+
+  it.each(["persisted", "optimistic"] as const)(
+    "returns a Done pin from Priority to Pinned (%s)",
+    async (mode) => {
+      const pinned = makeThread(930, { hasPendingApprovals: true });
+      const props = {
+        threads: [pinned],
+        pinnedThreadIdSet: new Set([pinned.id]),
+        resolveThreadStatus: realThreadStatus,
+      };
+      const mounted = await render(renderActivity(props));
+      await expect.poll(activityLayout).toEqual(["# Priority", pinned.id]);
+      await mounted.rerender(
+        renderActivity({
+          ...props,
+          threads: [
+            {
+              ...pinned,
+              hasPendingApprovals: false,
+              ...(mode === "persisted" ? { settledAt: "2026-08-02T12:00:00.000Z" } : {}),
+            },
+          ],
+          settledOverrideByThreadId:
+            mode === "optimistic" ? new Map([[pinned.id, true]]) : new Map(),
+        }),
+      );
+      await expect.poll(activityLayout).toEqual([pinned.id]);
+      await expect.element(page.getByRole("button", { name: "Pinned", exact: true })).toBeVisible();
+      await mounted.unmount();
+    },
+  );
+
+  it("shows a preparing first worktree in its project scope while excluding plain drafts and children", async () => {
+    const preparing = makeThread(940, { latestTurn: null, latestHumanMessageAt: null });
+    const draft = makeThread(941, { latestTurn: null, latestHumanMessageAt: null });
+    const child = makeThread(942, { latestTurn: null, parentThreadId: preparing.id });
+    const archived = makeThread(943, { latestTurn: null, archivedAt: "2026-08-02T11:00:00.000Z" });
+    const onChange = vi.fn();
+    const status = (thread: SidebarThreadSummary) =>
+      resolveThreadStatusPill({
+        thread,
+        hasPendingApprovals: false,
+        hasPendingUserInput: false,
+        isPreparingWorktree: thread.id !== draft.id,
+      });
+    const mounted = await render(
+      renderActivity({
+        threads: [preparing, draft, child, archived],
+        resolveThreadStatus: status,
+        scope: { selection: PROJECT_A, onChange },
+      }),
+    );
+    await expect.poll(activityLayout).toEqual(["# Priority", preparing.id]);
+    expect(onChange).not.toHaveBeenCalled();
+    await mounted.unmount();
+  });
+
+  it("lists every chat that needs the user or is running in Priority, with no cap", async () => {
+    const running = Array.from({ length: 6 }, (_, index) =>
+      makeThread(900 + index, { hasLiveTailWork: true }),
+    );
+    const unread = makeThread(910, { lastVisitedAt: "2026-08-02T09:00:00.000Z" });
+    const waiting = makeThread(911, { hasPendingApprovals: true });
+    const idle = makeThread(912);
+    const onVisibleThreadIdsChange = vi.fn();
+    const mounted = await render(
+      renderActivity({
+        threads: [...running, unread, waiting, idle],
+        resolveThreadStatus: realThreadStatus,
+        onVisibleThreadIdsChange,
+      }),
+    );
+    const priorityOrder = [
+      waiting.id,
+      unread.id,
+      ...running.map((thread) => thread.id).toReversed(),
+    ];
+    await vi.waitFor(() => {
+      expect(activityLayout()).toEqual(["# Priority", ...priorityOrder, "# Today", idle.id]);
+      expect(onVisibleThreadIdsChange).toHaveBeenLastCalledWith([...priorityOrder, idle.id]);
+    });
+    await mounted.unmount();
+  });
+
+  it.each(["clear read", "eraser", "grouping roundtrip"] as const)(
+    "holds Priority still while chats change and resets read rows (%s)",
+    async (reset) => {
+      const waiting = makeThread(920, { hasPendingApprovals: true });
+      const unread = makeThread(921, { lastVisitedAt: "2026-08-02T09:00:00.000Z" });
+      const running = makeThread(922, { hasLiveTailWork: true });
+      const idle = makeThread(923);
+      const onOpenThread = vi.fn();
+      const mounted = await render(
+        renderActivity({
+          threads: [waiting, unread, running, idle],
+          resolveThreadStatus: realThreadStatus,
+          onOpenThread,
+        }),
+      );
+      await vi.waitFor(() => {
+        expect(activityLayout()).toEqual([
+          "# Priority",
+          waiting.id,
+          unread.id,
+          running.id,
+          "# Today",
+          idle.id,
+        ]);
+      });
+      await page.getByRole("button", { name: "Activity options" }).click();
+      await expect
+        .element(page.getByRole("menuitem", { name: "Clear read from Priority" }))
+        .toHaveAttribute("aria-disabled", "true");
+      await userEvent.keyboard("{Escape}");
+      await vi.waitFor(() => {
+        expect(document.querySelector('[role="menu"]')).toBeNull();
+      });
+      // Nothing read yet, so Priority's header offers no eraser.
+      expect(
+        page.getByRole("button", { name: "Clear read from Priority" }).elements(),
+      ).toHaveLength(0);
+
+      // The approval is answered and runs, the unread chat is opened, the running one
+      // finishes unseen, and the idle one asks for input: rows keep their places, the
+      // read row stays listed, and the newcomer joins at the end.
+      const answered = { ...waiting, hasPendingApprovals: false, hasLiveTailWork: true };
+      const opened = { ...unread, lastVisitedAt: "2026-08-02T12:00:00.000Z" };
+      const finished = {
+        ...running,
+        hasLiveTailWork: false,
+        lastVisitedAt: "2026-08-02T09:00:00.000Z",
+      };
+      const asking = { ...idle, hasPendingUserInput: true };
+      await mounted.rerender(
+        renderActivity({
+          threads: [answered, opened, finished, asking],
+          resolveThreadStatus: realThreadStatus,
+          onOpenThread,
+        }),
+      );
+      await vi.waitFor(() => {
+        expect(activityLayout()).toEqual([
+          "# Priority",
+          waiting.id,
+          unread.id,
+          running.id,
+          idle.id,
+        ]);
+      });
+
+      if (reset === "eraser") {
+        const eraser = page.getByRole("button", { name: "Clear read from Priority" });
+        // Escape restores focus to Options; leave its hoverable tooltip before
+        // moving to the neighboring eraser instead of clicking through that popup.
+        await userEvent.hover(document.body);
+        await userEvent.tab();
+        await expect.element(eraser).toHaveFocus();
+        await expect
+          .element(page.getByText("Activity options", { exact: true }))
+          .not.toBeInTheDocument();
+        await eraser.click();
+      } else if (reset === "clear read") {
+        await page.getByRole("button", { name: "Activity options" }).click();
+        await page.getByRole("menuitem", { name: "Clear read from Priority" }).click();
+      } else {
+        await page.getByRole("button", { name: "Activity options" }).click();
+        await page.getByRole("menuitemradio", { name: "Project", exact: true }).click();
+        // Radio choices keep the shared menu open; switch back in that same popup.
+        await expect.element(page.getByText("Priority", { exact: true })).not.toBeInTheDocument();
+        await page.getByRole("menuitemradio", { name: "Time", exact: true }).click();
+        await expect
+          .element(page.getByRole("menuitemradio", { name: "Time", exact: true }))
+          .toHaveAttribute("aria-checked", "true");
+      }
+      // The menu interaction has committed. A fresh sort returns read rows to Today.
+      expect(activityLayout()).toEqual([
+        "# Priority",
+        idle.id,
+        running.id,
+        waiting.id,
+        "# Today",
+        unread.id,
+      ]);
+      expect(onOpenThread).not.toHaveBeenCalled();
+      await mounted.unmount();
+    },
+  );
 
   it("reveals a selected Activity row without moving focus or following background updates", async () => {
     const leading = Array.from({ length: 8 }, (_, index) => makeThread(700 + index));

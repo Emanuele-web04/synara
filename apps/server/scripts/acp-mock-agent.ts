@@ -21,6 +21,7 @@ const emitUpstreamAssistantMessageIds =
 const emitReasoningThenToolCall = process.env.SYNARA_ACP_EMIT_REASONING_THEN_TOOL_CALL === "1";
 const emitGenericToolPlaceholders = process.env.SYNARA_ACP_EMIT_GENERIC_TOOL_PLACEHOLDERS === "1";
 const emitAskQuestion = process.env.SYNARA_ACP_EMIT_ASK_QUESTION === "1";
+const emitDevinTaskReplay = process.env.SYNARA_ACP_DEVIN_TASK_REPLAY === "1";
 const failSessionNewOnce = process.env.SYNARA_ACP_FAIL_SESSION_NEW_ONCE === "1";
 const failSetConfigOption = process.env.SYNARA_ACP_FAIL_SET_CONFIG_OPTION === "1";
 const exitOnSetConfigOption = process.env.SYNARA_ACP_EXIT_ON_SET_CONFIG_OPTION === "1";
@@ -29,6 +30,7 @@ const rejectConfigDuringLoadReplay =
 const promptResponseText =
   process.env.SYNARA_ACP_PROMPT_RESPONSE_TEXT ?? process.env.ACP_MOCK_PROMPT_RESPONSE_TEXT;
 const supportsSessionResume = process.env.SYNARA_ACP_SUPPORT_SESSION_RESUME === "1";
+const legacyModesOnly = process.env.SYNARA_ACP_LEGACY_MODES_ONLY === "1";
 const supportsSessionLoad = process.env.SYNARA_ACP_SUPPORT_SESSION_LOAD !== "0";
 const supportsSessionFork = process.env.SYNARA_ACP_SUPPORT_SESSION_FORK === "1";
 const emitAvailableCommands = process.env.SYNARA_ACP_EMIT_AVAILABLE_COMMANDS === "1";
@@ -443,6 +445,71 @@ app.onRequest(OfficialAcp.methods.agent.session.load, ({ client: context, params
         },
       })
       .pipe(
+        Effect.tap(() =>
+          emitDevinTaskReplay
+            ? Effect.gen(function* () {
+                yield* client.sessionUpdate({
+                  sessionId: requestedSessionId,
+                  update: {
+                    sessionUpdate: "agent_message_chunk",
+                    content: { type: "text", text: "historical Devin text" },
+                  },
+                });
+                for (const [agentId, success] of [
+                  ["live-child", undefined],
+                  ["stopped-child", false],
+                  ["completed-child", true],
+                ] as const) {
+                  yield* client.sessionUpdate({
+                    sessionId: requestedSessionId,
+                    update: {
+                      sessionUpdate: "tool_call",
+                      toolCallId: `${agentId}-launch`,
+                      title: agentId,
+                      kind: "other",
+                      status: success === undefined ? "in_progress" : "completed",
+                      _meta: {
+                        "cognition.ai/subagent_started": {
+                          agentId,
+                          task: agentId,
+                          isBackground: true,
+                        },
+                        ...(success === undefined
+                          ? {}
+                          : { "cognition.ai/subagent_completed": { agentId, success } }),
+                      },
+                    },
+                  });
+                  yield* client.sessionUpdate({
+                    sessionId: requestedSessionId,
+                    update: {
+                      sessionUpdate: "tool_call",
+                      toolCallId: `${agentId}-write`,
+                      title: "Child write",
+                      kind: "execute",
+                      status: "in_progress",
+                      _meta: { "cognition.ai/subagent_context": { parentAgentId: agentId } },
+                    },
+                  });
+                }
+                yield* client.sessionUpdate({
+                  sessionId: requestedSessionId,
+                  update: {
+                    sessionUpdate: "tool_call",
+                    toolCallId: "live-shell-tool",
+                    title: "Live shell",
+                    kind: "execute",
+                    status: "in_progress",
+                    _meta: {
+                      "cognition.ai/background": true,
+                      "cognition.ai/backgroundShellId": "live-shell",
+                      "cognition.ai/backgroundCommand": "sleep 60",
+                    },
+                  },
+                });
+              })
+            : Effect.void,
+        ),
         Effect.tap(() => Effect.sync(() => scheduleLoadReplayUpdates(client, requestedSessionId))),
         Effect.as({
           modes: modeState(),
@@ -454,7 +521,7 @@ app.onRequest(OfficialAcp.methods.agent.session.load, ({ client: context, params
 
 app.onRequest(OfficialAcp.methods.agent.session.resume, () => ({
   modes: modeState(),
-  configOptions: configOptions(),
+  ...(legacyModesOnly ? {} : { configOptions: configOptions() }),
 }));
 
 app.onRequest(OfficialAcp.methods.agent.session.fork, () => {
@@ -468,7 +535,17 @@ app.onRequest(OfficialAcp.methods.agent.session.fork, () => {
   };
 });
 
+app.onRequest(OfficialAcp.methods.agent.session.setMode, ({ params }) => {
+  if (!legacyModesOnly) throw OfficialAcp.RequestError.methodNotFound("session/set_mode");
+  if (params.sessionId !== sessionId || !availableModes.some((mode) => mode.id === params.modeId)) {
+    throw OfficialAcp.RequestError.invalidParams(params, "Unknown legacy session or mode");
+  }
+  currentModeId = params.modeId;
+  return {};
+});
+
 app.onRequest(OfficialAcp.methods.agent.session.setConfigOption, ({ params: request }) => {
+  if (legacyModesOnly) throw OfficialAcp.RequestError.methodNotFound("session/set_config_option");
   if (rejectConfigDuringLoadReplay && pendingLoadReplayUpdates > 0) {
     throw OfficialAcp.RequestError.invalidParams(
       { method: "session/set_config_option", params: request },
@@ -528,6 +605,34 @@ app.onRequest(OfficialAcp.methods.agent.session.prompt, ({ client: context, para
   return runEffect(
     Effect.gen(function* () {
       const requestedSessionId = String(request.sessionId ?? sessionId);
+
+      if (emitDevinTaskReplay) {
+        const promptText = request.prompt
+          .filter((part) => part.type === "text")
+          .map((part) => part.text)
+          .join("\n");
+        const agentId = promptText.match(/\b(?:live|stopped|completed)-child\b/u)?.[0] ?? "root";
+        const permission = yield* client.requestPermission({
+          sessionId: requestedSessionId,
+          toolCall: {
+            toolCallId: `${agentId}-write`,
+            kind: "execute",
+            _meta: { unrelatedTransport: true },
+          },
+          options: [
+            { optionId: "allow-once", kind: "allow_once", name: "Allow once" },
+            { optionId: "reject-once", kind: "reject_once", name: "Reject" },
+          ],
+        });
+        yield* client.sessionUpdate({
+          sessionId: requestedSessionId,
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: JSON.stringify(permission.outcome) },
+          },
+        });
+        return { stopReason: "end_turn" as const };
+      }
 
       if (emitInterleavedAssistantToolCalls) {
         const toolCallId = "tool-call-1";

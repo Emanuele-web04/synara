@@ -12,6 +12,7 @@ import {
   ModelSelection,
   NonNegativeInt,
   OrchestrationThreadPullRequest,
+  OrchestrationThreadPullRequestLink,
   PendingClaudeCacheReview,
   ThreadNotes,
   ThreadGoal,
@@ -25,6 +26,8 @@ import {
   ThreadCreationSource,
   ThreadEnvironmentMode,
   ThreadId,
+  UsageLimitRecovery,
+  UsageLimitRecoverySource,
   TurnId,
 } from "@synara/contracts";
 import { Option, Schema, ServiceMap } from "effect";
@@ -79,6 +82,9 @@ export const ProjectionThread = Schema.Struct({
     Schema.withDecodingDefault(() => null),
   ),
   lastKnownPr: Schema.NullOr(OrchestrationThreadPullRequest),
+  // Omission or null preserves the stored links on upsert; null on read means the row predates
+  // links or holds links this build cannot decode (readers fall back to `lastKnownPr`).
+  pullRequests: Schema.optional(Schema.NullOr(Schema.Array(OrchestrationThreadPullRequestLink))),
   latestTurnId: Schema.NullOr(TurnId),
   handoff: Schema.NullOr(ThreadHandoff),
   // Omission preserves an existing review during legacy whole-row upserts;
@@ -109,6 +115,12 @@ export const ProjectionThread = Schema.Struct({
   settledAt: Schema.optional(Schema.NullOr(IsoDateTime)).pipe(
     Schema.withDecodingDefault(() => null),
   ),
+  // A host-owned wait and cancellation fence survive restarts independently of UI clients.
+  usageLimitRecovery: Schema.optional(Schema.NullOr(UsageLimitRecovery)),
+  usageLimitRecoverySource: Schema.optional(Schema.NullOr(UsageLimitRecoverySource)),
+  usageLimitRecoveryCancelledAt: Schema.optional(Schema.NullOr(IsoDateTime)),
+  usageLimitRecoveryCancelledTurnId: Schema.optional(Schema.NullOr(TurnId)),
+  usageLimitRecoveryLastResetAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   snoozedUntil: Schema.optional(Schema.NullOr(IsoDateTime)).pipe(
     Schema.withDecodingDefault(() => null),
   ),

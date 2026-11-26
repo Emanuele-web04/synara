@@ -237,6 +237,11 @@ export function resolveDiffPanelScopePickerValue(input: {
   return null;
 }
 
+/** Each live snapshot and its final checkpoint must have a distinct cached patch. */
+export function resolveTurnDiffCacheScope(summary: Thread["turnDiffSummaries"][number]): string {
+  return `turn:${summary.turnId}:${summary.checkpointRef ?? ""}:${summary.status ?? ""}`;
+}
+
 export function resolveConversationCacheScope(
   conversationCheckpointTurnCount: number | undefined,
 ): string | null {

@@ -40,3 +40,25 @@ The model picker groups providers into tabs and can star a model together with i
 The Mac app includes refreshed Liquid Glass icons. An alternate icon choice is reapplied after quitting and reopening; **Default** removes the custom override and returns to the bundled system-appearance behavior. Applying a custom icon needs a writable app bundle.
 
 Profile Stats includes providers with real turns even when token telemetry is unavailable. Unknown token usage is not reported as a measured zero. Linux zoom shortcuts are handled by the desktop main process.
+
+## Desktop refinements in 1.0.8
+
+On Hyprland, the translucent shell uses compositor blur only when `decoration:blur:enabled` is confirmed enabled. Blur radius follows Hyprland settings. Other Linux sessions keep the existing window backing. Selected Linux icon artwork is installed separately for each app flavor.
+
+## Project logos in 1.0.9
+
+Projects use detected local favicon images across sidebar rows, pinned shortcuts, hover cards, search, pickers and Edit project previews. Your explicit emoji, icon or folder color takes priority; otherwise the fallback is a folder. Logos must stay inside the project and cannot execute scripts. Hub workers no longer offer Snooze or Hub actions, keeping delegated work reachable through its Hub.
+
+The empty-chat ASCII field stays continuous beneath the composer's own surface. Its existing Appearance setting and reduced-motion behavior remain available.
+
+Source evidence for 1.0.9: Synara release `ebd0d22b39ce3a0f7c6051dddc6090e9b85dc7c3`; `docs/releases/1.0.9-source-audit.md`, `docs/providers.md`, `docs/core-concepts.md`, `docs/editor/intelligence.md`, `docs/mcp-connectors.md`, `apps/server/src/persistence/MigrationBackup.ts` and `docs/release.md`.
+
+## Interface languages in 1.1.0
+
+Choose **Settings → General → Language**: English, Spanish or System. System follows supported browser or desktop operating-system preferences, falling back to English. Synara Beta also offers Simplified Chinese; Stable ignores a saved Chinese preference without erasing it. Traditional Chinese is not silently mapped to Simplified Chinese.
+
+Changing language updates application labels and native menus while preserving drafts, code and provider output. If the editor engine has already loaded, use the offered reload action to update its cached labels; unsaved-edit protection remains in effect. macOS controls the language of system permission dialogs independently.
+
+Each chat also remembers its right-panel width. See [runtime recovery](/docs/troubleshooting/tasks-and-runtime#resume-after-usage-limits-in-110) for the new optional provider continuation setting.
+
+Source evidence for 1.1.0: application source `d80787e3e4d8829a35a64b111e6fcbe5f51cf037`; `docs/releases/1.1.0-source-audit.md`, `docs/core-concepts.md`, `docs/providers.md`, `docs/internationalization.md` and `docs/sqlite-space-reclamation.md`.

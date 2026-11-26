@@ -8,6 +8,7 @@ import type {
   ModelCapabilities,
   ProviderKind,
   ProviderModelDescriptor,
+  ProviderOptionDescriptor,
 } from "@synara/contracts";
 import {
   getClaudeContextWindowSuffix,
@@ -85,6 +86,28 @@ export function resolveRuntimeModelDescriptor(input: {
   );
 }
 
+// Older hosts publish Claude effort descriptors without a default. Composer normalization
+// drops the default level, so without it an unset effort reads as the first level.
+function withClaudeEffortDefault(
+  descriptors: ReadonlyArray<ProviderOptionDescriptor>,
+  defaultEffort: string | null,
+): ReadonlyArray<ProviderOptionDescriptor> {
+  if (!defaultEffort) return descriptors;
+  return descriptors.map((descriptor) =>
+    descriptor.type === "select" &&
+    descriptor.id === "effort" &&
+    !descriptor.options.some((option) => option.isDefault) &&
+    descriptor.options.some((option) => option.id === defaultEffort)
+      ? {
+          ...descriptor,
+          options: descriptor.options.map((option) =>
+            option.id === defaultEffort ? { ...option, isDefault: true as const } : option,
+          ),
+        }
+      : descriptor,
+  );
+}
+
 // Reuses static capability flags but lets runtime-discovered models override exposed effort menus.
 export function getRuntimeAwareModelCapabilities(input: {
   provider: ProviderKind;
@@ -94,10 +117,12 @@ export function getRuntimeAwareModelCapabilities(input: {
   const staticCapabilities = getModelCapabilities(input.provider, input.model);
   // Runtime discovery is authoritative when available; the static table is only a startup fallback.
   const supportsFastMode =
-    (input.provider === "codex" || input.provider === "cursor" || input.provider === "devin") &&
-    input.runtimeModel
-      ? input.runtimeModel.supportsFastMode === true
-      : staticCapabilities.supportsFastMode;
+    input.provider === "claudeAgent"
+      ? (input.runtimeModel?.supportsFastMode ?? staticCapabilities.supportsFastMode)
+      : (input.provider === "codex" || input.provider === "cursor" || input.provider === "devin") &&
+          input.runtimeModel
+        ? input.runtimeModel.supportsFastMode === true
+        : staticCapabilities.supportsFastMode;
   const supportsThinkingToggle =
     input.runtimeModel?.supportsThinkingToggle ?? staticCapabilities.supportsThinkingToggle;
   const contextWindowOptions =
@@ -108,10 +133,17 @@ export function getRuntimeAwareModelCapabilities(input: {
     })) ?? staticCapabilities.contextWindowOptions;
   const optionDescriptors =
     input.runtimeModel?.optionDescriptors ?? staticCapabilities.optionDescriptors;
-  const runtimeEfforts = input.runtimeModel?.supportedReasoningEfforts;
+  // Ignore the synthetic choice left in catalogs from the previous adapter.
+  const runtimeEfforts =
+    input.provider === "claudeAgent"
+      ? input.runtimeModel?.supportedReasoningEfforts?.filter(
+          (effort) => effort.value !== "default",
+        )
+      : input.runtimeModel?.supportedReasoningEfforts;
   // Providers with dynamic catalogs, including Droid, expose model-specific effort ladders here.
   if (
-    (input.provider !== "codex" &&
+    (input.provider !== "claudeAgent" &&
+      input.provider !== "codex" &&
       input.provider !== "cursor" &&
       input.provider !== "antigravity" &&
       input.provider !== "grok" &&
@@ -121,7 +153,7 @@ export function getRuntimeAwareModelCapabilities(input: {
       input.provider !== "devin" &&
       input.provider !== "omp") ||
     !runtimeEfforts ||
-    runtimeEfforts.length === 0
+    (runtimeEfforts.length === 0 && input.provider !== "claudeAgent")
   ) {
     return {
       ...staticCapabilities,
@@ -133,8 +165,11 @@ export function getRuntimeAwareModelCapabilities(input: {
   }
 
   const staticDefaultEffort = getDefaultEffort(staticCapabilities);
+  const reportedDefaultEffort = trimOrNull(input.runtimeModel?.defaultReasoningEffort);
   const runtimeDefaultEffort =
-    trimOrNull(input.runtimeModel?.defaultReasoningEffort) ??
+    (input.provider === "claudeAgent" && reportedDefaultEffort === "default"
+      ? null
+      : reportedDefaultEffort) ??
     (staticDefaultEffort && runtimeEfforts.some((effort) => effort.value === staticDefaultEffort)
       ? staticDefaultEffort
       : null);
@@ -161,10 +196,24 @@ export function getRuntimeAwareModelCapabilities(input: {
 
   return {
     ...staticCapabilities,
-    ...(optionDescriptors ? { optionDescriptors } : {}),
+    ...(optionDescriptors
+      ? {
+          optionDescriptors:
+            input.provider === "claudeAgent"
+              ? withClaudeEffortDefault(optionDescriptors, runtimeDefaultEffort)
+              : optionDescriptors,
+        }
+      : {}),
     supportsFastMode,
     supportsThinkingToggle,
     contextWindowOptions,
     reasoningEffortLevels: runtimeOptions,
+    ...(input.provider === "claudeAgent"
+      ? {
+          promptInjectedEffortLevels: staticCapabilities.promptInjectedEffortLevels.filter(
+            (value) => runtimeOptions.some((option) => option.value === value),
+          ),
+        }
+      : {}),
   };
 }

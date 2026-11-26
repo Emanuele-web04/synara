@@ -1,3 +1,4 @@
+import type { ProviderKind, RuntimeMode } from "@synara/contracts";
 import { Effect } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
@@ -8,6 +9,18 @@ export interface GatewayCompletionRow {
   readonly creatorThreadId: string;
   readonly initialMessageId: string;
   readonly resultJson: string | null;
+  readonly createdAt: string;
+}
+
+export interface GatewayCompletionWake {
+  readonly operationId: string;
+  readonly threadId: string;
+  readonly sourceTurnId: string;
+  readonly provider: ProviderKind;
+  readonly instanceId: string | null;
+  readonly runtimeMode: RuntimeMode;
+  readonly latestUserMessageAt: string | null;
+  readonly childThreadIdsJson: string;
   readonly createdAt: string;
 }
 
@@ -72,6 +85,31 @@ export const makeCompletionRepository = Effect.gen(function* () {
     UPDATE agent_gateway_completions SET delivery_state = ${available ? "delivered" : "unavailable"}
     WHERE child_thread_id = ${childThreadId}`.pipe(Effect.asVoid);
 
+  // Only waves whose initial runs all have durable receipts can resume the creator.
+  const pendingWakes = () =>
+    sql<GatewayCompletionWake>`
+    SELECT op.operation_id AS "operationId", op.caller_thread_id AS "threadId",
+      op.caller_turn_id AS "sourceTurnId",
+      json_extract(op.resume_context_json, '$.provider') AS provider,
+      json_extract(op.resume_context_json, '$.instanceId') AS "instanceId",
+      json_extract(op.resume_context_json, '$.runtimeMode') AS "runtimeMode",
+      json_extract(op.resume_context_json, '$.latestUserMessageAt') AS "latestUserMessageAt",
+      json_group_array(completion.child_thread_id) AS "childThreadIdsJson",
+      COALESCE(MAX(json_extract(completion.result_json, '$.completedAt')), op.updated_at) AS "createdAt"
+    FROM agent_gateway_operations AS op
+    JOIN json_each(op.plan_json) AS entry
+    JOIN agent_gateway_completions AS completion
+      ON completion.child_thread_id = json_extract(entry.value, '$.ids.threadId')
+    WHERE op.status = 'completed' AND op.resume_context_json IS NOT NULL
+      AND completion.delivery_state <> 'pending' AND completion.result_json IS NOT NULL
+    GROUP BY op.operation_id
+    HAVING COUNT(*) = op.requested_count
+    ORDER BY op.created_at, op.operation_id
+  `.pipe(Effect.map((rows) => rows));
+  const finishWake = (operationId: string) =>
+    sql`UPDATE agent_gateway_operations SET resume_context_json = NULL
+      WHERE operation_id = ${operationId}`.pipe(Effect.asVoid);
+
   const claimContext = (creatorThreadId: string, eventSequence: number, maxChars: number) =>
     sql.withTransaction(
       Effect.gen(function* () {
@@ -130,6 +168,8 @@ export const makeCompletionRepository = Effect.gen(function* () {
     pending,
     saveResult,
     delivered,
+    pendingWakes,
+    finishWake,
     claimContext,
     settleContext,
   };

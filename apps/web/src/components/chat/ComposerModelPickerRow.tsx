@@ -22,6 +22,7 @@ import {
 } from "../ui/menu";
 import {
   type ComposerModelPickerRow as PickerRow,
+  composerModelDisplayName,
   resolveStarredTraits,
 } from "./ComposerModelPicker.logic";
 import { ComposerPickerMenuSubPopup } from "./ComposerPickerMenuPopup";
@@ -31,6 +32,7 @@ import { ModelStarButton } from "./ModelStarButton";
 import { PICKER_PANEL_ROW_SELECTED_CLASS_NAME } from "./pickerPanelStyles";
 import { getProviderIconClassName } from "./ProviderModelPicker";
 import { resolveRuntimeModelDescriptor } from "./runtimeModelCapabilities";
+import { useTranslation } from "~/i18n";
 
 // Each row resolves its own traits, so a long catalog only recomputes the rows whose
 // inputs changed instead of the whole list on every keystroke.
@@ -50,6 +52,8 @@ export function ComposerModelPickerRow(props: {
   onToggleStar: (entry: StarredModel) => void;
   onUnstarModel: (entry: Pick<StarredModel, "provider" | "instanceId" | "model">) => void;
 }) {
+  const { t } = useTranslation();
+
   const { row } = props;
   const selection = getComposerTraitSelection(
     row.provider,
@@ -61,6 +65,7 @@ export function ComposerModelPickerRow(props: {
       model: row.model,
       runtimeModels: props.runtimeModels,
     }),
+    t,
   );
   const starEntry: StarredModel = row.preset ?? {
     provider: row.provider,
@@ -78,6 +83,7 @@ export function ComposerModelPickerRow(props: {
       ? selection.effortLevels
       : [];
   const RowProviderIcon = PROVIDER_ICON_COMPONENT_BY_PROVIDER[row.provider];
+  const displayName = composerModelDisplayName(row.provider, row.name);
   const rowClassName = cn("pe-1", row.selected && PICKER_PANEL_ROW_SELECTED_CLASS_NAME);
   const starButton = (
     <ModelStarButton
@@ -85,8 +91,8 @@ export function ComposerModelPickerRow(props: {
       iconClassName="size-3.5"
       label={
         starred
-          ? `Remove ${row.name} from starred`
-          : `Star ${row.name} with its current effort and speed`
+          ? t("chat:removeFromStarred", { value0: row.name })
+          : t("chat:starWithItsCurrentEffortAndSpeed", { value0: row.name })
       }
       onToggle={() =>
         row.preset === null && starred ? props.onUnstarModel(row) : props.onToggleStar(starEntry)
@@ -103,7 +109,15 @@ export function ComposerModelPickerRow(props: {
         />
       ) : null}
       <span className={cn("truncate", row.detail !== null && "max-w-[62%] shrink-0")}>
-        {row.name}
+        {displayName === row.name ? (
+          row.name
+        ) : (
+          // Assistive tech has no provider icon to lean on, so it keeps the full name.
+          <>
+            <span aria-hidden="true">{displayName}</span>
+            <span className="sr-only">{row.name}</span>
+          </>
+        )}
       </span>
       <span className={cn("min-w-0 flex-1 truncate", COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME)}>
         {row.detail}
@@ -160,7 +174,11 @@ export function ComposerModelPickerRow(props: {
       </MenuSubTrigger>
       <ComposerPickerMenuSubPopup>
         <MenuGroup>
-          <MenuGroupLabel>{row.provider === "opencode" ? "Variant" : "Effort"}</MenuGroupLabel>
+          <MenuGroupLabel>
+            {row.provider === "opencode"
+              ? t("chat:traitsPicker_variant")
+              : t("chat:traitsPicker_effort")}
+          </MenuGroupLabel>
           <MenuRadioGroup value={selection.effort ?? ""}>
             {effortLevels.map((level) => (
               <MenuRadioItem
@@ -169,7 +187,9 @@ export function ComposerModelPickerRow(props: {
                 onClick={() => onSelectEffort(row, level.value)}
               >
                 {level.label}
-                {level.value === selection.defaultEffort ? " (default)" : ""}
+                {level.value === selection.defaultEffort
+                  ? t("chat:traitsPicker_defaultSuffix")
+                  : ""}
               </MenuRadioItem>
             ))}
           </MenuRadioGroup>
