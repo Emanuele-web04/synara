@@ -10,10 +10,12 @@ import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { useCallback, useMemo, useState } from "react";
 
+import { useAppSettings } from "~/appSettings";
 import { logoutCurrentBrowserSession } from "~/authLogout";
 import { useFeatureTourStore } from "~/featureTour/store";
 import { APP_VERSION } from "~/branding";
 import { resolveAndPersistPreferredEditor } from "~/editorPreferences";
+import { BooleanSettingRow } from "~/components/settings/BooleanSettingRow";
 import { DisclosureChevron } from "~/components/ui/DisclosureChevron";
 import { DisclosureRegion } from "~/components/ui/DisclosureRegion";
 import { Button } from "~/components/ui/button";
@@ -154,6 +156,27 @@ export function AboutSettingsSection(props: { onOpenReleaseHistory: () => void }
   );
 }
 
+/** Whether a desktop quit asks while chats run. Hidden in a browser, which has no quit to ask about. */
+function DesktopQuitSettingsSection() {
+  const binding = useAppSettings();
+
+  if (!window.desktopBridge) return null;
+
+  return (
+    <SettingsSection title="settings:advanced_preferences">
+      <BooleanSettingRow
+        {...binding}
+        id="setting-ask-before-quitting"
+        settingKey="askBeforeQuitting"
+        title="settings:quit_askBeforeQuitting"
+        description="settings:quit_askBeforeQuittingDescription"
+        resetLabel="settings:quit_askBeforeQuittingReset"
+        ariaLabel="settings:quit_askBeforeQuitting"
+      />
+    </SettingsSection>
+  );
+}
+
 export function AdvancedSettingsPanel(props: { active: boolean; resetEpoch: number }) {
   const { t } = useTranslation();
 
@@ -237,6 +260,7 @@ export function AdvancedSettingsPanel(props: { active: boolean; resetEpoch: numb
 
   return (
     <div className="space-y-6">
+      <DesktopQuitSettingsSection />
       {authSessionQuery.data?.authenticated ? (
         <SettingsSection title="settings:session">
           <SettingsRow

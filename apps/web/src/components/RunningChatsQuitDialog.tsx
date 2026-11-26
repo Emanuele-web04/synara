@@ -1,11 +1,12 @@
 // FILE: RunningChatsQuitDialog.tsx
-// Purpose: Confirms desktop quit, including when no chats are running.
+// Purpose: Confirms a desktop quit while chats are running, and lets the person
+//          stop being asked.
 // Layer: Root web overlay
 // Depends on: Base UI alert-dialog primitives, the ⌘P palette surface, the shared running spinner,
-// and the persisted "resume chats after quit" app setting.
+// and the persisted quit app settings.
 
 import { AlertDialog as AlertDialogPrimitive } from "@base-ui/react/alert-dialog";
-import { useId } from "react";
+import { useId, useState } from "react";
 
 import { useAppSettings } from "~/appSettings";
 import { APP_DISPLAY_NAME } from "~/branding";
@@ -50,6 +51,8 @@ const BODY_CLASS =
   "relative rounded-t-[calc(var(--radius-2xl)-1px)] border-b border-[color:var(--color-border-light)] bg-[var(--color-background-surface-under)] px-4 pt-3 pb-3.5";
 const FOOTER_CLASS = "relative flex items-center gap-2 px-3 py-2";
 const KEY_HINT_CLASS = "text-ui-sm font-normal tabular-nums opacity-55";
+const CHECKBOX_CLASS =
+  "flex cursor-pointer select-none items-center gap-2 text-ui font-normal leading-[18px] text-muted-foreground";
 
 export function RunningChatsQuitDialog({
   chats,
@@ -93,6 +96,27 @@ export function RunningChatsQuitDialog({
   );
 }
 
+function QuitCheckbox(props: {
+  readonly id: string;
+  readonly checked: boolean;
+  readonly disabled: boolean;
+  readonly onCheckedChange: (checked: boolean) => void;
+  readonly className: string;
+  readonly label: string;
+}) {
+  return (
+    <label htmlFor={props.id} className={cn(uiFont, CHECKBOX_CLASS, props.className)}>
+      <Checkbox
+        id={props.id}
+        checked={props.checked}
+        disabled={props.disabled}
+        onCheckedChange={(checked) => props.onCheckedChange(checked === true)}
+      />
+      <span className="truncate">{props.label}</span>
+    </label>
+  );
+}
+
 // Mounted only while the dialog is open so the settings subscription costs nothing otherwise.
 function RunningChatsQuitDialogContent({
   chats,
@@ -110,6 +134,10 @@ function RunningChatsQuitDialogContent({
   const { settings, updateSettings } = useAppSettings();
   const resume = settings.resumeChatsAfterQuit;
   const resumeCheckboxId = useId();
+  const quietQuitCheckboxId = useId();
+  // A choice about this quit, not a preference written the moment it is ticked:
+  // ticking it and pressing Stay must not switch the question off for good.
+  const [quietQuit, setQuietQuit] = useState(!settings.askBeforeQuitting);
 
   return (
     <>
@@ -137,30 +165,30 @@ function RunningChatsQuitDialogContent({
             ))}
           </ul>
         ) : null}
+        <QuitCheckbox
+          id={quietQuitCheckboxId}
+          checked={quietQuit}
+          disabled={quitting}
+          onCheckedChange={setQuietQuit}
+          className="mt-3"
+          label={t("workspace:quit_quietLabel")}
+        />
       </div>
       <div className={FOOTER_CLASS}>
         {chats.length > 0 ? (
-          <label
-            htmlFor={resumeCheckboxId}
-            className={cn(
-              uiFont,
-              "flex min-w-0 cursor-pointer select-none items-center gap-2 px-1 text-ui font-normal leading-[18px] text-muted-foreground",
-            )}
-          >
-            <Checkbox
-              id={resumeCheckboxId}
-              checked={resume}
-              disabled={quitting}
-              onCheckedChange={(checked) => {
-                updateSettings({ resumeChatsAfterQuit: checked === true });
-              }}
-            />
-            <span className="truncate">{copy.resumeLabel}</span>
-          </label>
+          <QuitCheckbox
+            id={resumeCheckboxId}
+            checked={resume}
+            disabled={quitting}
+            onCheckedChange={(checked) => {
+              updateSettings({ resumeChatsAfterQuit: checked });
+            }}
+            className="min-w-0 px-1"
+            label={copy.resumeLabel}
+          />
         ) : null}
         <div className="ml-auto flex items-center gap-2">
           <AlertDialogClose
-            autoFocus={chats.length === 0}
             disabled={quitting}
             render={<Button variant="ghost" size="sm" className={cn(uiFont, "gap-1.5")} />}
           >
@@ -168,19 +196,22 @@ function RunningChatsQuitDialogContent({
             <span className={KEY_HINT_CLASS}>{t("common:esc")}</span>
           </AlertDialogClose>
           <Button
-            autoFocus={chats.length > 0}
+            autoFocus
             variant="default"
             size="sm"
             className={cn(uiFont, "gap-1.5")}
             disabled={quitting}
-            onClick={() => onQuit({ resume: chats.length > 0 && resume })}
+            onClick={() => {
+              if (quietQuit !== !settings.askBeforeQuitting) {
+                updateSettings({ askBeforeQuitting: !quietQuit });
+              }
+              onQuit({ resume: chats.length > 0 && resume });
+            }}
           >
             {copy.quitLabel}
-            {chats.length > 0 ? (
-              <span aria-hidden className={KEY_HINT_CLASS}>
-                ↵
-              </span>
-            ) : null}
+            <span aria-hidden className={KEY_HINT_CLASS}>
+              ↵
+            </span>
           </Button>
         </div>
       </div>

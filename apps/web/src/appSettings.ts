@@ -428,6 +428,9 @@ export const AppSettingsSchema = Schema.Struct({
   archiveDeletesOrphanedWorktree: Schema.Boolean.pipe(withDefaults(() => false)),
   // Desktop quit dialog: remember interrupted chats and continue them on the next launch.
   resumeChatsAfterQuit: Schema.Boolean.pipe(withDefaults(() => true)),
+  // Desktop quit dialog: ask before quitting while chats are running. Off means
+  // never ask, and the question itself can turn this off.
+  askBeforeQuitting: Schema.Boolean.pipe(withDefaults(() => true)),
   confirmThreadArchive: Schema.Boolean.pipe(withDefaults(() => false)),
   confirmTerminalTabClose: Schema.Boolean.pipe(withDefaults(() => true)),
   diffWordWrap: Schema.Boolean.pipe(withDefaults(() => false)),

@@ -76,12 +76,34 @@ export async function runAfterDesktopShutdown(
   }
 }
 
+/**
+ * macOS hides an ordinary close instead: the app, its renderer and its running
+ * chats stay alive, and the Dock brings the window back. A quit, a completed
+ * shutdown or an updater-owned close must go through.
+ */
+export function shouldHideMainWindowOnClose(input: {
+  readonly platform: NodeJS.Platform;
+  readonly quitting: boolean;
+  readonly shutdownComplete: boolean;
+  readonly updaterHandoffActive: boolean;
+  readonly updaterInstallPreparing: boolean;
+}): boolean {
+  return (
+    input.platform === "darwin" &&
+    !input.quitting &&
+    !input.shutdownComplete &&
+    !input.updaterHandoffActive &&
+    !input.updaterInstallPreparing
+  );
+}
+
 export function shouldDeferDesktopWindowClose(input: {
   readonly platform: NodeJS.Platform;
   readonly shutdownComplete: boolean;
   readonly updaterHandoffActive: boolean;
 }): boolean {
-  return input.platform === "win32" && !input.shutdownComplete && !input.updaterHandoffActive;
+  const platformDefers = input.platform === "win32" || input.platform === "linux";
+  return platformDefers && !input.shutdownComplete && !input.updaterHandoffActive;
 }
 
 const shutdownsByProcess = new WeakMap<object, Promise<WindowsBackendShutdownResult>>();

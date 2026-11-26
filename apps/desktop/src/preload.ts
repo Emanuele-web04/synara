@@ -12,7 +12,7 @@ import type {
 import { normalizeDesktopWsUrl, resolveDesktopWsUrlFromEnv } from "./desktopWsBridge";
 import { DESKTOP_IPC_CHANNELS } from "./ipcChannels";
 import {
-  parseQuitConfirmationRequest,
+  parseQuitConfirmationReference,
   parseQuitConfirmationResponse,
 } from "./runningChatsQuitGuard";
 
@@ -148,6 +148,22 @@ function recordBrowserActivity(activity: DesktopDiagnosticActivity): void {
   }
 }
 
+/** Subscribes a listener to one quit-confirmation channel and returns its teardown. */
+function subscribeQuitConfirmation(
+  channel: string,
+  listener: (reference: { readonly requestId: string }) => void,
+): () => void {
+  const wrappedListener = (_event: Electron.IpcRendererEvent, payload: unknown) => {
+    const reference = parseQuitConfirmationReference(payload);
+    if (reference) listener(reference);
+  };
+
+  ipcRenderer.on(channel, wrappedListener);
+  return () => {
+    ipcRenderer.removeListener(channel, wrappedListener);
+  };
+}
+
 contextBridge.exposeInMainWorld("desktopBridge", {
   productAnalytics: productAnalyticsBridge,
   ...(betaDiagnosticsBridge ? { betaDiagnostics: betaDiagnosticsBridge } : {}),
@@ -270,22 +286,22 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     };
   },
   setMenuShortcuts: (shortcuts) => ipcRenderer.invoke(IPC.setMenuShortcuts, shortcuts),
-  onQuitConfirmationRequest: (listener) => {
-    const wrappedListener = (_event: Electron.IpcRendererEvent, payload: unknown) => {
-      const request = parseQuitConfirmationRequest(payload);
-      if (request) listener(request);
-    };
-
-    ipcRenderer.on(IPC.quitConfirmationRequest, wrappedListener);
-    return () => {
-      ipcRenderer.removeListener(IPC.quitConfirmationRequest, wrappedListener);
-    };
-  },
+  onQuitConfirmationRequest: (listener) =>
+    subscribeQuitConfirmation(IPC.quitConfirmationRequest, listener),
   replyQuitConfirmation: (response) => {
     const parsed = parseQuitConfirmationResponse(response);
     if (!parsed) return;
     ipcRenderer.send(IPC.quitConfirmationResponse, parsed);
   },
+  beginQuitConfirmation: (reference) => {
+    const parsed = parseQuitConfirmationReference(reference);
+    if (!parsed) return Promise.resolve(false);
+    return ipcRenderer.invoke(IPC.quitConfirmationBegin, parsed);
+  },
+  onQuitConfirmationRepeat: (listener) =>
+    subscribeQuitConfirmation(IPC.quitConfirmationRepeat, listener),
+  onQuitConfirmationWithdrawn: (listener) =>
+    subscribeQuitConfirmation(IPC.quitConfirmationWithdrawn, listener),
   getZoomFactor: () => {
     const factor = ipcRenderer.sendSync(IPC.zoomFactor);
     return typeof factor === "number" && Number.isFinite(factor) && factor > 0 ? factor : 1;

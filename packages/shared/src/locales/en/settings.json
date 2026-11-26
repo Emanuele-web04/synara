@@ -10,6 +10,7 @@
   "wide": "Wide",
   "profile_runs": "runs",
   "advanced_about": "About",
+  "advanced_preferences": "Preferences",
   "grant": "Grant",
   "hooks": "Hooks",
   "large": "Large",
@@ -1324,5 +1325,8 @@
   "signInFlow_tryAgain": "Try again",
   "signInFlow_closesItself": "This window closes by itself in a moment.",
   "signInFlow_unableToClose": "Unable to stop sign-in. Retry closing this window.",
-  "signInFlow_unableToSend": "Unable to send that to the sign-in. Try again."
+  "signInFlow_unableToSend": "Unable to send that to the sign-in. Try again.",
+  "quit_askBeforeQuitting": "Ask before quitting",
+  "quit_askBeforeQuittingDescription": "Show the quit question while chats are running. When this is off, quitting never asks.",
+  "quit_askBeforeQuittingReset": "ask before quitting"
 }

@@ -4,25 +4,20 @@
 // Depends on: Quit confirmation IPC payloads from the renderer.
 
 import type {
-  DesktopQuitConfirmationChat,
-  DesktopQuitConfirmationPresentation,
-  DesktopQuitConfirmationRequest,
+  DesktopQuitConfirmationReference,
   DesktopQuitConfirmationResponse,
 } from "@synara/contracts";
 
-const DEFAULT_READY_TIMEOUT_MS = 3000;
+/** How long the page gets to answer at whichever phase it is in. */
+const DEFAULT_TIMEOUT_MS = 3000;
 
 export function shouldPromptForRunningChatsBeforeQuit(reason: string): boolean {
   return reason === "window-close" || reason === "before-quit";
 }
 
-export function quitConfirmationPresentationForPlatform(): DesktopQuitConfirmationPresentation {
-  return "in-app";
-}
-
-export function parseQuitConfirmationRequest(
+export function parseQuitConfirmationReference(
   payload: unknown,
-): DesktopQuitConfirmationRequest | null {
+): DesktopQuitConfirmationReference | null {
   if (payload == null || typeof payload !== "object") {
     return null;
   }
@@ -30,33 +25,7 @@ export function parseQuitConfirmationRequest(
   if (typeof requestId !== "string" || requestId.trim().length === 0) {
     return null;
   }
-  const presentationRaw = (payload as { readonly presentation?: unknown }).presentation;
-  return {
-    requestId,
-    presentation: presentationRaw === "native" ? "native" : "in-app",
-  };
-}
-
-function parseQuitConfirmationChats(value: unknown): DesktopQuitConfirmationChat[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  const chats: DesktopQuitConfirmationChat[] = [];
-  for (const item of value) {
-    if (item == null || typeof item !== "object") {
-      continue;
-    }
-    const id = (item as { readonly id?: unknown }).id;
-    const title = (item as { readonly title?: unknown }).title;
-    if (typeof id !== "string" || id.trim().length === 0) {
-      continue;
-    }
-    chats.push({
-      id,
-      title: typeof title === "string" ? title : "",
-    });
-  }
-  return chats;
+  return { requestId };
 }
 
 export function parseQuitConfirmationResponse(
@@ -68,23 +37,13 @@ export function parseQuitConfirmationResponse(
   const record = payload as {
     readonly requestId?: unknown;
     readonly phase?: unknown;
-    readonly runningCount?: unknown;
-    readonly chats?: unknown;
     readonly allow?: unknown;
   };
   if (typeof record.requestId !== "string" || record.requestId.trim().length === 0) {
     return null;
   }
   if (record.phase === "ready") {
-    if (typeof record.runningCount !== "number" || !Number.isFinite(record.runningCount)) {
-      return null;
-    }
-    return {
-      requestId: record.requestId,
-      phase: "ready",
-      runningCount: record.runningCount,
-      chats: parseQuitConfirmationChats(record.chats),
-    };
+    return { requestId: record.requestId, phase: "ready" };
   }
   if (record.phase === "decision" && typeof record.allow === "boolean") {
     return {
@@ -106,26 +65,44 @@ export interface RunningChatsQuitGuard {
    * yes, so a later quit must still get to ask.
    */
   readonly allowPending: () => void;
+  /**
+   * A repeated quit confirms the question the page is showing, so the same
+   * interrupt and resume path runs as when the user presses Quit. A repeat that
+   * arrives before the page has acknowledged is armed too: the page still gets
+   * to answer, and the repeat quits anyway if it never does.
+   */
+  readonly repeatQuit: (notify: (requestId: string) => void) => void;
   readonly receiveResponse: (payload: unknown) => void;
+  /**
+   * The page commits to the quit before it stops any chat. False when the
+   * question already expired or was withdrawn, so the page must not stop
+   * anything. A committed question can no longer be cancelled.
+   */
+  readonly beginCommit: (requestId: string) => boolean;
   readonly askRenderer: (input: {
-    readonly send: (request: DesktopQuitConfirmationRequest) => void;
+    readonly send: (request: DesktopQuitConfirmationReference) => void;
     readonly isRendererAvailable: () => boolean;
-    readonly readyTimeoutMs?: number;
-    readonly presentation?: DesktopQuitConfirmationPresentation;
-    readonly presentNativeConfirmation?: (
-      chats: ReadonlyArray<DesktopQuitConfirmationChat>,
-    ) => boolean | Promise<boolean>;
+    /** Called once the page acknowledges that it will show the question. */
+    readonly onReady?: () => void;
+    /** How long the page gets to answer at whichever phase it is in. */
+    readonly timeoutMs?: number;
+    /** Tells the page that a question it may still be showing is no longer open. */
+    readonly withdraw?: (requestId: string) => void;
   }) => Promise<boolean>;
 }
 
 interface PendingQuitConfirmation {
   readonly requestId: string;
-  readonly presentation: DesktopQuitConfirmationPresentation;
-  readonly presentNativeConfirmation:
-    | ((chats: ReadonlyArray<DesktopQuitConfirmationChat>) => boolean | Promise<boolean>)
-    | undefined;
+  readonly withdraw: ((requestId: string) => void) | undefined;
+  readonly onReady: (() => void) | undefined;
+  readonly timeoutMs: number;
   waitingForDecision: boolean;
-  readyTimer: ReturnType<typeof setTimeout> | null;
+  /** How to ask the page to answer a repeat that arrived before it acked, once it does. */
+  notifyRepeat: ((requestId: string) => void) | null;
+  /** Force-quits when the page does not answer the phase it is in. */
+  deadline: ReturnType<typeof setTimeout> | null;
+  /** The page proved it is stopping chats, so the quit can no longer be withdrawn. */
+  committed: boolean;
   readonly resolve: (allow: boolean) => void;
 }
 
@@ -136,57 +113,96 @@ export function makeRunningChatsQuitGuard(
   let inFlight: Promise<boolean> | null = null;
   let pending: PendingQuitConfirmation | null = null;
 
-  const finish = (allow: boolean): void => {
+  const clearDeadline = (current: PendingQuitConfirmation | null): void => {
+    if (current?.deadline) {
+      clearTimeout(current.deadline);
+      current.deadline = null;
+    }
+  };
+
+  const notifyOrQuit = (
+    current: PendingQuitConfirmation,
+    notify: (requestId: string) => void,
+  ): void => {
+    try {
+      notify(current.requestId);
+    } catch {
+      finish(true);
+    }
+  };
+
+  const finish = (allow: boolean, options?: { readonly withdraw?: boolean }): void => {
     const current = pending;
     pending = null;
-    if (current?.readyTimer) {
-      clearTimeout(current.readyTimer);
-    }
+    clearDeadline(current);
     if (allow) {
       allowed = true;
+    }
+    if (options?.withdraw && current) {
+      try {
+        current.withdraw?.(current.requestId);
+      } catch {
+        // A page that cannot hear the withdrawal just keeps a stale dialog.
+      }
     }
     current?.resolve(allow);
   };
 
-  const presentNativeSheet = (
-    current: PendingQuitConfirmation,
-    chats: ReadonlyArray<DesktopQuitConfirmationChat>,
-  ): void => {
-    const presenter = current.presentNativeConfirmation;
-    if (!presenter) {
-      finish(true);
-      return;
-    }
-    const requestId = current.requestId;
-    void Promise.resolve()
-      .then(() => presenter(chats))
-      .then(
-        (allow) => {
-          if (pending?.requestId === requestId) {
-            finish(allow);
-          }
-        },
-        () => {
-          if (pending?.requestId === requestId) {
-            finish(true);
-          }
-        },
-      );
+  // A page that cannot answer must not keep the app alive: the user asked
+  // twice, the page already committed and can no longer report back, or it
+  // never acknowledged at all.
+  const armDeadline = (current: PendingQuitConfirmation): void => {
+    clearDeadline(current);
+    current.deadline = setTimeout(() => {
+      if (pending?.requestId === current.requestId) {
+        finish(true);
+      }
+    }, current.timeoutMs);
   };
 
   return {
     hasAllowedQuit: () => allowed,
     hasPendingAsk: () => pending !== null,
     cancelPending(): void {
-      finish(false);
+      // A committed question is already being honoured: the chats are stopping
+      // and the record is written, so the later decision quits the app.
+      if (pending?.committed) {
+        return;
+      }
+      finish(false, { withdraw: true });
     },
     allowPending(): void {
       const current = pending;
       pending = null;
-      if (current?.readyTimer) {
-        clearTimeout(current.readyTimer);
-      }
+      clearDeadline(current);
       current?.resolve(true);
+    },
+    repeatQuit(notify): void {
+      const current = pending;
+      if (!current) {
+        return;
+      }
+      if (!current.waitingForDecision) {
+        // The page has not acked yet. Ask it as soon as it does, and let the
+        // deadline decide if it never does.
+        current.notifyRepeat = notify;
+        return;
+      }
+      armDeadline(current);
+      notifyOrQuit(current, notify);
+    },
+    beginCommit(requestId: string): boolean {
+      if (pending?.requestId !== requestId) {
+        return false;
+      }
+      // The page acked and is about to stop chats, so an ack deadline that has
+      // not fired yet must not quit out from under it.
+      pending.committed = true;
+      // Nothing else can end a committed ask if its decision is lost — a reload
+      // during the page's bounded resume write leaves no question on screen —
+      // so the deadline moves to the phase it is in now.
+      armDeadline(pending);
+      return true;
     },
     receiveResponse(payload: unknown): void {
       const response = parseQuitConfirmationResponse(payload);
@@ -194,20 +210,24 @@ export function makeRunningChatsQuitGuard(
         return;
       }
       if (response.phase === "decision") {
+        // A committed ask already stopped chats and wrote the resume record, so
+        // the app can no longer stay: ignore a denial and let the deadline quit.
+        if (pending.committed && !response.allow) {
+          return;
+        }
         finish(response.allow);
         return;
       }
-      if (pending.readyTimer) {
-        clearTimeout(pending.readyTimer);
-        pending.readyTimer = null;
-      }
-      if (response.runningCount <= 0 && pending.presentation === "native") {
-        finish(true);
-        return;
-      }
+      clearDeadline(pending);
       pending.waitingForDecision = true;
-      if (pending.presentation === "native") {
-        presentNativeSheet(pending, response.chats);
+      pending.onReady?.();
+      const notifyRepeat = pending.notifyRepeat;
+      if (notifyRepeat) {
+        // The page shows the question now: give it the repeat and the deadline
+        // that force-quits if it cannot answer.
+        pending.notifyRepeat = null;
+        armDeadline(pending);
+        notifyOrQuit(pending, notifyRepeat);
       }
     },
     askRenderer(input): Promise<boolean> {
@@ -223,24 +243,23 @@ export function makeRunningChatsQuitGuard(
 
       inFlight = new Promise<boolean>((resolve) => {
         const requestId = createRequestId();
-        const presentation = input.presentation ?? "in-app";
         pending = {
           requestId,
-          presentation,
-          presentNativeConfirmation: input.presentNativeConfirmation,
+          withdraw: input.withdraw,
+          onReady: input.onReady,
+          timeoutMs: input.timeoutMs ?? DEFAULT_TIMEOUT_MS,
           waitingForDecision: false,
-          readyTimer: setTimeout(() => {
-            if (pending?.requestId === requestId && !pending.waitingForDecision) {
-              finish(true);
-            }
-          }, input.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS),
+          notifyRepeat: null,
+          deadline: null,
+          committed: false,
           resolve: (allow) => {
             inFlight = null;
             resolve(allow);
           },
         };
+        armDeadline(pending);
         try {
-          input.send({ requestId, presentation });
+          input.send({ requestId });
         } catch {
           finish(true);
         }

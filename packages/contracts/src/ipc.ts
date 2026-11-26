@@ -813,29 +813,20 @@ export interface DesktopWindowState {
   isFullscreen: boolean;
 }
 
-/** Main → renderer: ask whether quit should proceed while chats are running. */
-export type DesktopQuitConfirmationPresentation = "native" | "in-app";
-
-export interface DesktopQuitConfirmationRequest {
+/** A reference to one open quit question. */
+export interface DesktopQuitConfirmationReference {
   readonly requestId: string;
-  readonly presentation: DesktopQuitConfirmationPresentation;
-}
-
-export interface DesktopQuitConfirmationChat {
-  readonly id: string;
-  readonly title: string;
 }
 
 /**
- * Renderer → main: first ack that the UI received the request, then the user's
- * Stay / Quit decision. `ready` with `runningCount === 0` is treated as allow.
+ * Renderer → main: first ack that the page is showing the question, then the
+ * user's Stay / Quit decision. The question itself is Synara's own dialog; there
+ * is no native presentation to choose between.
  */
 export type DesktopQuitConfirmationResponse =
   | {
       readonly requestId: string;
       readonly phase: "ready";
-      readonly runningCount: number;
-      readonly chats: ReadonlyArray<DesktopQuitConfirmationChat>;
     }
   | {
       readonly requestId: string;
@@ -1164,10 +1155,27 @@ export interface DesktopBridge {
    * builds that predate it; until a window reports, the menu keeps its defaults.
    */
   setMenuShortcuts?: (shortcuts: DesktopMenuShortcuts) => Promise<void>;
+  /** Main → renderer: ask whether quit should proceed while chats are running. */
   onQuitConfirmationRequest: (
-    listener: (request: DesktopQuitConfirmationRequest) => void,
+    listener: (request: DesktopQuitConfirmationReference) => void,
   ) => () => void;
   replyQuitConfirmation: (response: DesktopQuitConfirmationResponse) => void;
+  /**
+   * Accepts the quit before the page stops any chat; false means the question
+   * expired or was withdrawn.
+   */
+  beginQuitConfirmation: (reference: DesktopQuitConfirmationReference) => Promise<boolean>;
+  /** Calls `listener` when a repeated quit asks the page to answer its open question. */
+  onQuitConfirmationRepeat: (
+    listener: (reference: DesktopQuitConfirmationReference) => void,
+  ) => () => void;
+  /**
+   * Calls `listener` when the app withdrew a quit question it stopped waiting on,
+   * so the page takes it down.
+   */
+  onQuitConfirmationWithdrawn: (
+    listener: (reference: DesktopQuitConfirmationReference) => void,
+  ) => () => void;
   /** Current `webContents` page zoom (1 = 100%). Used to keep macOS traffic-light gutter aligned. */
   getZoomFactor: () => number;
   onZoomFactorChange: (listener: (zoomFactor: number) => void) => () => void;
