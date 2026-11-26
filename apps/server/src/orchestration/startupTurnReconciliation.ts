@@ -301,6 +301,45 @@ function taskPayloadString(record: Record<string, unknown> | null, key: string) 
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
 
+function taskActivityLifecycleRank(kind: string): number {
+  if (kind === "task.started") return 0;
+  return kind === "task.completed" ? 2 : 1;
+}
+
+function compareReconcilableActivities(
+  left: NonNullable<ReconcilableThread["activities"]>[number],
+  right: NonNullable<ReconcilableThread["activities"]>[number],
+): number {
+  if (left.sequence !== undefined && right.sequence !== undefined) {
+    if (left.sequence !== right.sequence) return left.sequence - right.sequence;
+  } else if (left.sequence !== undefined) {
+    return 1;
+  } else if (right.sequence !== undefined) {
+    return -1;
+  }
+  const createdAtComparison = left.createdAt.localeCompare(right.createdAt);
+  if (createdAtComparison !== 0) return createdAtComparison;
+  const rankComparison =
+    taskActivityLifecycleRank(left.kind) - taskActivityLifecycleRank(right.kind);
+  if (rankComparison !== 0) return rankComparison;
+  return String(left.id).localeCompare(String(right.id));
+}
+
+function mergeActivitiesWithFullTaskHistory(
+  detailActivities: NonNullable<ReconcilableThread["activities"]>,
+  fullTaskActivities: NonNullable<ReconcilableThread["activities"]>,
+): NonNullable<ReconcilableThread["activities"]> {
+  if (fullTaskActivities.length === 0) {
+    return detailActivities;
+  }
+  const seenIds = new Set(detailActivities.map((activity) => activity.id));
+  const missing = fullTaskActivities.filter((activity) => !seenIds.has(activity.id));
+  if (missing.length === 0) {
+    return detailActivities;
+  }
+  return [...detailActivities, ...missing].toSorted(compareReconcilableActivities);
+}
+
 /**
  * Tasks still open in a thread's activity log that started before this process:
  * provider runtimes live in-process, so none of them can still be running, and
@@ -611,6 +650,26 @@ export const reconcileRestartStuckTurns: Effect.Effect<
   const now = new Date().toISOString();
   // Work started by this process is live; everything opened before it is not.
   const processStartedAt = new Date(Date.now() - process.uptime() * 1000).toISOString();
+  // `engine.getReadModel()` only carries checkpoint-revert activities, so
+  // scan task-lifecycle rows across live threads via the indexed query to find
+  // background or agent tasks left open by a prior process or clean stop.
+  const readTaskLifecycleActivities = (threadIds: ReadonlyArray<ThreadId>) =>
+    snapshotQuery.listTaskLifecycleActivitiesByThreads(threadIds).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("failed to read restart-orphaned task activities", { cause }).pipe(
+          Effect.tap(() => noteFailure),
+          Effect.as([]),
+        ),
+      ),
+    );
+  const taskActivitiesByThread = new Map(
+    Object.entries(
+      Arr.groupBy(
+        yield* readTaskLifecycleActivities(readModel.threads.map((thread) => thread.id)),
+        (row) => row.threadId,
+      ),
+    ),
+  );
   const threadsNeedingRestartCleanup = readModel.threads.filter(
     (thread) =>
       needsRestartReconciliation(thread) ||
@@ -622,7 +681,10 @@ export const reconcileRestartStuckTurns: Effect.Effect<
       // Native children share their root runtime and have no runtime row of
       // their own. Hydrate their pinned task state before trusting the capped tail.
       (thread.parentThreadId != null && deadRuntimeThreadIds.has(thread.parentThreadId)) ||
-      findRestartOrphanedTasks(thread.activities ?? [], processStartedAt).length > 0,
+      findRestartOrphanedTasks(
+        taskActivitiesByThread.get(thread.id) ?? thread.activities ?? [],
+        processStartedAt,
+      ).length > 0,
   );
   if (threadsNeedingRestartCleanup.length === 0) {
     return;
@@ -652,8 +714,19 @@ export const reconcileRestartStuckTurns: Effect.Effect<
                 ),
               ),
             );
+            // Re-read full task-lifecycle rows under the lease so orphaned
+            // background_tasks_changed notices older than the detail window are
+            // still retired alongside the detail tail's lastProviderSequence.
+            const fullTaskActivities = yield* readTaskLifecycleActivities([thread.id]);
+            const detailWithFullTasks: ReconcilableThread = {
+              ...detail,
+              activities: mergeActivitiesWithFullTaskHistory(
+                detail.activities ?? [],
+                fullTaskActivities,
+              ),
+            };
             const commands = planRestartTurnReconciliation({
-              threads: [detail],
+              threads: [detailWithFullTasks],
               pendingInteractions: pendingInteractions ?? [],
               now,
               retireTasksStartedBefore: processStartedAt,

@@ -15,8 +15,10 @@ import type {
   OrchestrationShellSnapshot,
   OrchestrationThreadDetailSnapshot,
   OrchestrationThread,
+  OrchestrationThreadActivity,
   OrchestrationThreadShell,
   CheckpointRef,
+  EventId,
   ProjectId,
   ProjectKind,
   SpaceId,
@@ -99,6 +101,20 @@ export interface ProjectionThreadTurnDiffContext {
 export interface ProjectionGeneratedImageActivityRecord {
   readonly kind: string;
   readonly payload: unknown;
+}
+
+/**
+ * Narrow task-lifecycle activity row used to find restart-orphaned tasks across
+ * a thread's full history without being truncated by the thread-detail window.
+ */
+export interface ProjectionTaskLifecycleActivity {
+  readonly id: EventId;
+  readonly threadId: ThreadId;
+  readonly turnId: TurnId | null;
+  readonly kind: string;
+  readonly payload: OrchestrationThreadActivity["payload"];
+  readonly sequence?: number;
+  readonly createdAt: string;
 }
 
 export interface ProjectionFullThreadDiffContext {
@@ -289,6 +305,15 @@ export interface ProjectionSnapshotQueryShape {
     ReadonlyArray<ProjectionGeneratedImageActivityRecord>,
     ProjectionRepositoryError
   >;
+
+  /**
+   * Read task-lifecycle activities (`task.started`, `task.updated`,
+   * `task.completed`, and `background_tasks_changed` notices) for the given
+   * threads across their full history, ordered causally per thread.
+   */
+  readonly listTaskLifecycleActivitiesByThreads: (
+    threadIds: ReadonlyArray<ThreadId>,
+  ) => Effect.Effect<ReadonlyArray<ProjectionTaskLifecycleActivity>, ProjectionRepositoryError>;
 
   /**
    * Read the narrow context needed to diff a whole thread through one checkpoint.

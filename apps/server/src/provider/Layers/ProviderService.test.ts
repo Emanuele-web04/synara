@@ -4149,6 +4149,64 @@ routing.layer("ProviderServiceLive routing", (it) => {
       );
     }
 
+    it.effect(
+      "accepts stale-generation task.completed after lifecycle rotation without clobbering the newer binding",
+      () =>
+        Effect.gen(function* () {
+          const provider = yield* ProviderService;
+          const directory = yield* ProviderSessionDirectory;
+          const threadId = asThreadId("thread-stale-task-completed-after-rotation");
+          yield* staleSettlementRouting.codex.waitForRuntimeSubscribers();
+
+          yield* provider.startSession(threadId, {
+            provider: "codex",
+            threadId,
+            cwd: "/tmp/project",
+            runtimeMode: "full-access",
+          });
+          const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+          assert.ok(binding?.lifecycleGeneration);
+          const currentGeneration = binding.lifecycleGeneration;
+          const currentStatus = binding.status;
+
+          staleSettlementRouting.codex.emit({
+            type: "task.completed",
+            eventId: asEventId("stale-task-completed-after-rotation"),
+            provider: "codex",
+            threadId,
+            createdAt: "2026-07-14T14:00:01.000Z",
+            lifecycleGeneration: "retired-generation-before-rotation",
+            payload: {
+              taskId: RuntimeTaskId.makeUnsafe("retired-bg-task"),
+              status: "stopped",
+            },
+          });
+          staleSettlementRouting.codex.emit({
+            type: "content.delta",
+            eventId: asEventId("current-marker-after-task-completed"),
+            provider: "codex",
+            threadId,
+            createdAt: "2026-07-14T14:00:02.000Z",
+            lifecycleGeneration: currentGeneration,
+            payload: { streamKind: "assistant_text", delta: "current" },
+          });
+          yield* waitUntil(
+            () => staleSettlementPersistedEvents.has("current-marker-after-task-completed"),
+            1_000,
+            10,
+            "current marker after stale task.completed",
+          );
+
+          assert.equal(
+            staleSettlementPersistedEvents.get("stale-task-completed-after-rotation")?.type,
+            "task.completed",
+          );
+          const afterBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+          assert.equal(afterBinding?.lifecycleGeneration, currentGeneration);
+          assert.equal(afterBinding?.status, currentStatus);
+        }),
+    );
+
     it.effect("ignores stale terminal events for a newer idle binding", () =>
       Effect.gen(function* () {
         const provider = yield* ProviderService;

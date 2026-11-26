@@ -4294,26 +4294,43 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
     };
 
     // background_tasks_changed is a level snapshot that usually precedes the
-    // task_started of what it announces, so a brand-new background task is
-    // matched to the still-open tool call that launched it by description.
+    // task_started of what it announces. Prefer the explicit parent_task_id
+    // (a subagent's native task id) when present; otherwise match the still-open
+    // tool call that launched it by description or raw Bash command.
     const resolveBackgroundTaskOwner = (
       root: ClaudeSessionContext,
-      task: { readonly task_id: string; readonly description: string },
+      task: {
+        readonly task_id: string;
+        readonly description: string;
+        readonly parent_task_id?: string;
+      },
     ): ClaudeSessionContext => {
       const known = resolveTaskEventOwner(root, task.task_id);
       if (known.run || known.target !== root) {
         return known.target;
+      }
+      const parentTaskId =
+        typeof task.parent_task_id === "string" ? task.parent_task_id.trim() : "";
+      if (parentTaskId.length > 0) {
+        const parentToolUseId = root.subagentToolUseIdByTaskId.get(parentTaskId);
+        const parentRun =
+          parentToolUseId !== undefined ? root.subagentRunHistory.get(parentToolUseId) : undefined;
+        if (parentRun) {
+          return parentRun.context;
+        }
       }
       const description = task.description.trim();
       if (description.length === 0) {
         return root;
       }
       const launchedBy = (context: ClaudeSessionContext) =>
-        Array.from(context.inFlightTools.values()).some(
-          (tool) =>
-            typeof tool.input.description === "string" &&
-            tool.input.description.trim() === description,
-        );
+        Array.from(context.inFlightTools.values()).some((tool) => {
+          const toolDescription =
+            typeof tool.input.description === "string" ? tool.input.description.trim() : "";
+          const toolCommand =
+            typeof tool.input.command === "string" ? tool.input.command.trim() : "";
+          return toolDescription === description || toolCommand === description;
+        });
       if (launchedBy(root)) {
         return root;
       }
@@ -6492,7 +6509,21 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             // Each notice lands on the thread that owns the work: a subagent's
             // background Bash belongs on its child thread, not the main one.
             const ownerByTaskId = new Map(
-              tasks.map((task) => [task.task_id, resolveBackgroundTaskOwner(context, task)]),
+              tasks.map((task) => {
+                const owner = resolveBackgroundTaskOwner(context, task);
+                // Remember non-subagent child ownership before task_started arrives
+                // so a stop or task_updated racing the notice settles on the child thread.
+                if (
+                  owner !== context &&
+                  task.task_type !== "local_agent" &&
+                  owner.subagentRefs?.providerThreadId &&
+                  !context.subagentTaskOwners.has(task.task_id) &&
+                  !context.subagentToolUseIdByTaskId.has(task.task_id)
+                ) {
+                  context.subagentTaskOwners.set(task.task_id, owner.subagentRefs.providerThreadId);
+                }
+                return [task.task_id, owner] as const;
+              }),
             );
             const owners = new Set(announced.map((task) => ownerByTaskId.get(task.task_id)!));
             for (const owner of owners) {
@@ -6875,11 +6906,14 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           }
         }
         // The stopped completions below are published after this bookkeeping is
-        // cleared. Keep each live task's launching tool call, as its own
-        // task_notification would carry, or the parent's card never sees it end.
-        // A live run can be in neither task set: async_launched drops it from
-        // the foreground before background_tasks_changed lists it.
-        const retiredTaskToolUseIds = new Map<string, string | undefined>();
+        // cleared. Keep each live task's launching tool call and owning thread, as
+        // its own task_notification would carry, or the parent/child card never
+        // sees it end. A live run can be in neither task set: async_launched drops
+        // it from the foreground before background_tasks_changed lists it.
+        const retiredTasks = new Map<
+          string,
+          { readonly target: ClaudeSessionContext; readonly toolUseId: string | undefined }
+        >();
         for (const taskId of new Set([
           ...Array.from(context.subagentRuns.values()).flatMap((run) =>
             run.taskId !== undefined ? [run.taskId] : [],
@@ -6887,11 +6921,14 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           ...context.knownBackgroundTaskIds,
           ...context.foregroundTasks.keys(),
         ])) {
-          retiredTaskToolUseIds.set(
-            taskId,
-            resolveTaskEventOwner(context, taskId).run?.toolUseId ??
-              context.foregroundTasks.get(taskId),
-          );
+          const owner = resolveTaskEventOwner(context, taskId);
+          retiredTasks.set(taskId, {
+            // Subagent runs retire on the root (preserving their toolUseId); work
+            // a subagent launched itself (e.g. background Bash) retires on the
+            // child thread where its background notice and start were recorded.
+            target: owner.run ? context : owner.target,
+            toolUseId: owner.run?.toolUseId ?? context.foregroundTasks.get(taskId),
+          });
         }
         // Their launching items carry the state the strip, roster and dock read.
         const retiredBackgroundRuns = Array.from(context.subagentRuns.values())
@@ -6949,22 +6986,23 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         // The live sets still count: a message mid-handling may register a
         // task after the snapshot.
         for (const taskId of new Set([
-          ...retiredTaskToolUseIds.keys(),
+          ...retiredTasks.keys(),
           ...context.knownBackgroundTaskIds,
           ...context.foregroundTasks.keys(),
         ])) {
           if (context.terminalTaskIds.has(taskId)) continue;
           context.terminalTaskIds.add(taskId);
-          const toolUseId =
-            retiredTaskToolUseIds.get(taskId) ?? context.foregroundTasks.get(taskId);
+          const retired = retiredTasks.get(taskId);
+          const target = retired?.target ?? context;
+          const toolUseId = retired?.toolUseId ?? context.foregroundTasks.get(taskId);
           const stamp = yield* makeEventStamp();
-          yield* offerRuntimeEvent(context, {
+          yield* offerRuntimeEvent(target, {
             type: "task.completed",
             eventId: stamp.eventId,
             provider: PROVIDER,
             createdAt: stamp.createdAt,
-            threadId: context.session.threadId,
-            ...(context.taskTurnIds.has(taskId)
+            threadId: target.session.threadId,
+            ...(target === context && context.taskTurnIds.has(taskId)
               ? { turnId: context.taskTurnIds.get(taskId)! }
               : {}),
             payload: {
@@ -6972,7 +7010,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               status: "stopped",
               ...(toolUseId !== undefined ? { toolUseId } : {}),
             },
-            providerRefs: nativeProviderRefs(context),
+            providerRefs: nativeProviderRefs(target),
           });
         }
         for (const { run, launcher } of retiredBackgroundRuns) {

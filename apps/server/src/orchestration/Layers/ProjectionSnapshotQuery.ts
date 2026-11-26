@@ -5,6 +5,7 @@ import {
 } from "../../persistence/messageTextChunks.ts";
 import {
   CheckpointRef,
+  EventId,
   IsoDateTime,
   MessageId,
   NonNegativeInt,
@@ -99,6 +100,7 @@ import {
   type ProjectionManagedWorktreeThread,
   type ProjectionSnapshotCounts,
   type ProjectionSnapshotSequence,
+  type ProjectionTaskLifecycleActivity,
   type ProjectionThreadCheckpointContext,
   type ProjectionThreadShellReadOptions,
   type ProjectionThreadTurnDiffContext,
@@ -211,6 +213,16 @@ const BackgroundTaskActivityDbRowSchema = Schema.Struct({
   createdAt: Schema.String,
 });
 type BackgroundTaskActivityDbRow = typeof BackgroundTaskActivityDbRowSchema.Type;
+const TaskLifecycleActivityDbRowSchema = Schema.Struct({
+  activityId: EventId,
+  threadId: ThreadId,
+  turnId: Schema.NullOr(TurnId),
+  kind: Schema.String,
+  payload: Schema.fromJsonString(Schema.Json),
+  sequence: Schema.NullOr(Schema.Number),
+  createdAt: Schema.String,
+});
+type TaskLifecycleActivityDbRow = typeof TaskLifecycleActivityDbRowSchema.Type;
 // Both text representations are bounded before they reach the JS read model.
 const ThreadLatestReplyDbRowSchema = Schema.Struct({
   threadId: ThreadId,
@@ -784,8 +796,10 @@ function toProjectedProjectShell(row: ProjectionProjectDbRow): OrchestrationProj
   };
 }
 
-// An end sorts after a patch or notice that shares its sequence and timestamp.
+// An end sorts after a patch or notice that shares its sequence and timestamp;
+// a start sorts before both.
 function backgroundTaskActivityLifecycleRank(kind: string): number {
+  if (kind === "task.started") return 0;
   return kind === "task.completed" ? 2 : 1;
 }
 
@@ -2635,6 +2649,66 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
   // history. Rows are ordered in memory (compareBackgroundTaskActivityRows):
   // with an ORDER BY here SQLite prefers the (thread_id, sequence) indexes and
   // walks every activity of the thread (3 ms vs 0.1 ms on a 4.4k-activity one).
+  const listTaskLifecycleActivityRowsByThreads = SqlSchema.findAll({
+    Request: ThreadIdsLookupInput,
+    Result: TaskLifecycleActivityDbRowSchema,
+    execute: ({ threadIds }) =>
+      sql`
+        SELECT
+          activity_id AS "activityId",
+          thread_id AS "threadId",
+          turn_id AS "turnId",
+          kind,
+          payload_json AS "payload",
+          sequence,
+          created_at AS "createdAt"
+        FROM projection_thread_activities
+        WHERE kind IN ('task.started', 'task.updated', 'task.completed', 'runtime.warning')
+          AND thread_id IN ${sql.in(threadIds)}
+          AND (
+            kind <> 'runtime.warning'
+            OR json_extract(payload_json, '$.nativeEventType') = ${BACKGROUND_TASKS_CHANGED_NATIVE_EVENT_TYPE}
+          )
+      `,
+  });
+
+  const listTaskLifecycleActivitiesByThreads: ProjectionSnapshotQueryShape["listTaskLifecycleActivitiesByThreads"] =
+    (threadIds) => {
+      if (threadIds.length === 0) {
+        return Effect.succeed([]);
+      }
+      return listTaskLifecycleActivityRowsByThreads({ threadIds }).pipe(
+        Effect.mapError(
+          toPersistenceSqlOrDecodeError(
+            "ProjectionSnapshotQuery.listTaskLifecycleActivitiesByThreads:query",
+            "ProjectionSnapshotQuery.listTaskLifecycleActivitiesByThreads:decodeRows",
+          ),
+        ),
+        Effect.map((rows): ReadonlyArray<ProjectionTaskLifecycleActivity> => {
+          const rowsByThread = new Map<string, TaskLifecycleActivityDbRow[]>();
+          for (const row of rows) {
+            pushGrouped(rowsByThread, row.threadId, row);
+          }
+          const ordered: ProjectionTaskLifecycleActivity[] = [];
+          for (const threadRows of rowsByThread.values()) {
+            threadRows.sort(compareBackgroundTaskActivityRows);
+            for (const row of threadRows) {
+              ordered.push({
+                id: row.activityId,
+                threadId: row.threadId,
+                turnId: row.turnId,
+                kind: row.kind,
+                payload: row.payload,
+                ...(row.sequence !== null ? { sequence: row.sequence } : {}),
+                createdAt: row.createdAt,
+              });
+            }
+          }
+          return ordered;
+        }),
+      );
+    };
+
   const listBackgroundTaskActivityRowsByThreads = SqlSchema.findAll({
     Request: ThreadIdsLookupInput,
     Result: BackgroundTaskActivityDbRowSchema,
@@ -4477,6 +4551,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
     getThreadCheckpointContext,
     getThreadTurnDiffContext,
     listGeneratedImageActivitiesByTurn,
+    listTaskLifecycleActivitiesByThreads,
     getFullThreadDiffContext,
     getThreadShellById,
     getThreadShellsByIds,
