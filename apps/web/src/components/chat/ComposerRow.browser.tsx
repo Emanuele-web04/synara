@@ -1,5 +1,5 @@
 import "../../index.css";
-import { type CSSProperties, useRef, useState } from "react";
+import { type CSSProperties, type ReactNode, useEffect, useRef, useState } from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { page } from "vitest/browser";
 import { cleanup, render } from "vitest-browser-react";
@@ -220,4 +220,101 @@ it("measures a composer that mounts after the hook without the draft changing", 
   await expect
     .element(page.getByRole("status", { name: "Composer layout" }))
     .toHaveTextContent("block");
+});
+
+// The row editor's usable line width is narrower than the border-box width the hook
+// records as the slot (the cell's inset padding): a line that fits inside the recorded
+// slot still wraps in the row, while the wider block editor measures it unwrapped and
+// accepts it — the disagreement behind the row ↔ block oscillation that crashed startup
+// on a restored draft.
+const MARGINAL_LINE = (
+  <p style={{ margin: 0 }}>
+    <span style={{ display: "inline-block", width: 150, height: 20 }} />
+    <span style={{ display: "inline-block", width: 132, height: 20 }} />
+  </p>
+);
+
+function MarginalLineRow({
+  prediction,
+  prompt = "draft",
+  line,
+  onLayout,
+}: {
+  prediction?: string;
+  prompt?: string;
+  line?: ReactNode;
+  onLayout?: (layout: "row" | "block") => void;
+}) {
+  const formRef = useRef<HTMLFormElement>(null);
+  const row = useComposerSingleRow({ formRef, eligible: true, prompt, prediction });
+  useEffect(() => {
+    onLayout?.(row ? "row" : "block");
+  }, [row, onLayout]);
+  return (
+    <div style={{ width: 400 }}>
+      <form ref={formRef} data-testid="marginal-form" data-layout={row ? "row" : "block"}>
+        <div
+          data-chat-composer-surface=""
+          className={`${COMPOSER_INPUT_SURFACE_CLASS_NAME} ${row ? COMPOSER_SINGLE_ROW_SURFACE_CLASS_NAME : ""}`}
+        >
+          <div className={row ? COMPOSER_SINGLE_ROW_EDITOR_CLASS_NAME : ""}>
+            <div style={{ position: "relative" }}>
+              <div data-testid="composer-editor" style={{ lineHeight: "20px", paddingInline: 10 }}>
+                {prediction ? <p /> : (line ?? MARGINAL_LINE)}
+              </div>
+              {prediction ? (
+                <div data-testid="composer-prediction" style={{ paddingInline: 10 }}>
+                  <span data-prediction-line="">
+                    <span style={{ display: "inline-block", width: 150, height: 20 }} />
+                    <span style={{ display: "inline-block", width: 132, height: 20 }} />
+                  </span>
+                </div>
+              ) : null}
+            </div>
+          </div>
+          {row ? (
+            <>
+              <button type="button" style={{ width: 40 }}>
+                +
+              </button>
+              <button type="button" className="col-start-3 row-start-1" style={{ width: 40 }}>
+                Send
+              </button>
+            </>
+          ) : null}
+        </div>
+      </form>
+    </div>
+  );
+}
+
+it("settles in the block when the row rejects a draft line the wider block editor measures as fitting", async () => {
+  const layouts: Array<"row" | "block"> = [];
+  const onLayout = (layout: "row" | "block") => {
+    if (layouts[layouts.length - 1] !== layout) layouts.push(layout);
+  };
+  const screen = await render(<MarginalLineRow onLayout={onLayout} />);
+  await expect.element(page.getByTestId("marginal-form")).toHaveAttribute("data-layout", "block");
+  // The row measures the line as wrapped (Infinity) and the block measures it inside
+  // the recorded row slot, so without the fix the layout flips on every commit until
+  // React throws "Maximum update depth exceeded" — the 1.6.8 startup crash. The row's
+  // rejection must hold: row once, then block.
+  expect(layouts).toEqual(["row", "block"]);
+
+  // A different draft has not been rejected by the row, so a short line still returns
+  // the composer to the row.
+  await screen.rerender(
+    <MarginalLineRow prompt="hi" line={<p style={{ margin: 0 }}>hi</p>} onLayout={onLayout} />,
+  );
+  await expect.element(page.getByTestId("marginal-form")).toHaveAttribute("data-layout", "row");
+});
+
+it("settles in the block when the row rejects a prediction line the wider block editor measures as fitting", async () => {
+  const layouts: Array<"row" | "block"> = [];
+  const onLayout = (layout: "row" | "block") => {
+    if (layouts[layouts.length - 1] !== layout) layouts.push(layout);
+  };
+  await render(<MarginalLineRow prompt="" prediction="ghost" onLayout={onLayout} />);
+  await expect.element(page.getByTestId("marginal-form")).toHaveAttribute("data-layout", "block");
+  expect(layouts).toEqual(["row", "block"]);
 });
