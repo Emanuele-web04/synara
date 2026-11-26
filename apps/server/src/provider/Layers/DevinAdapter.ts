@@ -114,7 +114,7 @@ import {
 } from "../acp/AcpAdapterSessionSupport.ts";
 import {
   canonicalRequestTypeFromAcpKind,
-  makeAcpAssistantItemEvent,
+  makeAcpTranscriptItemEvent,
   makeAcpContentDeltaEvent,
   makeAcpPlanUpdatedEvent,
   makeAcpRequestOpenedEvent,
@@ -2132,7 +2132,7 @@ export function makeDevinAdapter(
           if (!ctx.activeAssistantItemsWithContent.has(scopedItemId)) continue;
           yield* offerRuntimeEvent(
             ctx.lifecycleGeneration,
-            makeAcpAssistantItemEvent({
+            makeAcpTranscriptItemEvent({
               stamp: yield* makeEventStamp(),
               provider: PROVIDER,
               threadId: ctx.threadId,
@@ -3074,19 +3074,32 @@ export function makeDevinAdapter(
                     }
                     return;
 
+                  case "ReasoningItemCompleted":
                   case "AssistantItemCompleted":
                     {
                       const owner = ctx.assistantItemOwners.get(event.itemId);
+                      const parentAgentId =
+                        event._tag === "ReasoningItemCompleted"
+                          ? readDevinSubagentContext(event.metadata)?.parentAgentId
+                          : owner?.parentAgentId;
+                      const parent = parentAgentId
+                        ? ctx.devinSubagents.get(parentAgentId)
+                        : undefined;
                       const activeTurnId = owner
                         ? owner.turnId
-                        : yield* activeTurnIdForDevinRuntimeEvent(ctx, event._tag);
-                      if (activeTurnId === undefined && !owner) {
+                        : parent
+                          ? parent.turnId
+                          : yield* activeTurnIdForDevinRuntimeEvent(ctx, event._tag);
+                      if (activeTurnId === undefined && !owner && !parent) {
                         return;
                       }
                       const scopedItemId = activeTurnId
                         ? scopeDevinRuntimeItemIdForTurn(activeTurnId, event.itemId)
                         : event.itemId;
-                      if (!ctx.activeAssistantItemsWithContent.has(scopedItemId)) {
+                      if (
+                        event._tag === "AssistantItemCompleted" &&
+                        !ctx.activeAssistantItemsWithContent.delete(scopedItemId)
+                      ) {
                         if (isDevinAcpDebugEnabled()) {
                           yield* Effect.logInfo("devin.acp.empty_assistant_item_suppressed", {
                             threadId: ctx.threadId,
@@ -3096,18 +3109,20 @@ export function makeDevinAdapter(
                         }
                         return;
                       }
-                      ctx.activeAssistantItemsWithContent.delete(scopedItemId);
                       ctx.assistantItemOwners.delete(event.itemId);
                       yield* offerRuntimeEvent(
                         input.lifecycleGeneration,
-                        makeAcpAssistantItemEvent({
+                        makeAcpTranscriptItemEvent({
                           stamp: yield* makeEventStamp(),
                           provider: PROVIDER,
                           threadId: ctx.threadId,
                           turnId: activeTurnId,
                           itemId: scopedItemId,
                           lifecycle: "item.completed",
-                          providerRefs: devinProviderRefsForAgent(ctx, owner?.parentAgentId),
+                          ...(event._tag === "ReasoningItemCompleted"
+                            ? { itemType: "reasoning" }
+                            : {}),
+                          providerRefs: devinProviderRefsForAgent(ctx, parentAgentId),
                         }),
                       );
                     }

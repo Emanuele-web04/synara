@@ -89,7 +89,7 @@ import {
   waitForAcpQueuedTurnEventsDrained,
 } from "../acp/AcpAdapterSessionSupport.ts";
 import {
-  makeAcpAssistantItemEvent,
+  makeAcpTranscriptItemEvent,
   makeAcpContentDeltaEvent,
   makeAcpPlanUpdatedEvent,
   makeAcpRequestOpenedEvent,
@@ -1205,20 +1205,26 @@ export function makeAntigravityAdapter(dependencies: AntigravityAdapterDependenc
                 case "ModeChanged":
                 case "AssistantItemStarted":
                   return;
+                case "ReasoningItemCompleted":
                 case "AssistantItemCompleted": {
                   const turnId = yield* activeTurnIdFor(event._tag);
                   if (turnId === undefined) return;
                   const itemId = scopeAcpRuntimeItemIdForTurn(PROVIDER, turnId, event.itemId);
-                  if (!ctx.activeAssistantItemsWithContent.delete(itemId)) return;
+                  if (
+                    event._tag === "AssistantItemCompleted" &&
+                    !ctx.activeAssistantItemsWithContent.delete(itemId)
+                  )
+                    return;
                   yield* offerRuntimeEvent(
                     ctx.lifecycleGeneration,
-                    makeAcpAssistantItemEvent({
+                    makeAcpTranscriptItemEvent({
                       stamp: yield* makeEventStamp(),
                       provider: PROVIDER,
                       threadId: ctx.threadId,
                       turnId,
                       itemId,
                       lifecycle: "item.completed",
+                      ...(event._tag === "ReasoningItemCompleted" ? { itemType: "reasoning" } : {}),
                     }),
                   );
                   return;

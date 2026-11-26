@@ -18,7 +18,13 @@ const PENDING_EVENT_CAPACITY = 2_048;
  * ChildProcessSpawner: the "child" stdin/stdout are Queue-bridged to the
  * agent's ReadableStream/WritableStream transport.
  */
-function makeInMemoryAgentSpawner() {
+function makeInMemoryAgentSpawner(
+  promptUpdates: ReadonlyArray<OfficialAcp.SessionUpdate> = [],
+  options: {
+    replayUpdates?: ReadonlyArray<OfficialAcp.SessionUpdate>;
+    stopReason?: OfficialAcp.StopReason;
+  } = {},
+) {
   const clientToAgent = Effect.runSync(Queue.unbounded<Uint8Array>());
   const agentToClient = Effect.runSync(Queue.unbounded<Uint8Array>());
 
@@ -40,12 +46,30 @@ function makeInMemoryAgentSpawner() {
   const agentApp = OfficialAcp.agent({ name: "epoch-test-agent" })
     .onRequest(OfficialAcp.methods.agent.initialize, () => ({
       protocolVersion: 1,
-      agentCapabilities: {},
+      agentCapabilities: options.replayUpdates ? { loadSession: true } : {},
       authMethods: [],
     }))
     .onRequest(OfficialAcp.methods.agent.session.new, () => ({
       sessionId: FINAL_SESSION_ID,
-    }));
+    }))
+    .onRequest(OfficialAcp.methods.agent.session.load, async () => {
+      await sendUpdates(options.replayUpdates ?? []);
+      return {};
+    })
+    .onRequest(OfficialAcp.methods.agent.session.prompt, async () => {
+      await sendUpdates(promptUpdates);
+      return { stopReason: options.stopReason ?? "end_turn" };
+    });
+
+  async function sendUpdates(updates: ReadonlyArray<OfficialAcp.SessionUpdate>) {
+    if (!agentConnection) throw new Error("agent connection not established");
+    for (const update of updates) {
+      await agentConnection.client.notify(OfficialAcp.methods.client.session.update, {
+        sessionId: FINAL_SESSION_ID,
+        update,
+      });
+    }
+  }
 
   const connectAgent = () => {
     agentConnection = agentApp.connect(OfficialAcp.ndJsonStream(agentOutput, agentInput));
@@ -280,3 +304,145 @@ it("separates concurrent owner streams without message IDs and completes each se
     }).pipe(Effect.scoped, Effect.provide(layer)),
   );
 }, 15_000);
+
+const thought = (text: string, owner?: string, messageId?: string) => ({
+  sessionUpdate: "agent_thought_chunk" as const,
+  content: { type: "text" as const, text },
+  ...(owner !== undefined ? { _meta: { owner } } : {}),
+  ...(messageId !== undefined ? { messageId } : {}),
+});
+
+const isThought = (
+  event: AcpParsedSessionEvent,
+): event is Extract<AcpParsedSessionEvent, { _tag: "ContentDelta" }> =>
+  event._tag === "ContentDelta" && event.streamKind === "reasoning_text";
+
+it("groups ID-less thoughts into scoped ACP items and settles them at transcript boundaries", async () => {
+  const { spawnerLayer } = makeInMemoryAgentSpawner([
+    thought("Read", "parent"),
+    thought(" the spec", "parent"),
+    {
+      sessionUpdate: "tool_call",
+      toolCallId: "check",
+      title: "Read files",
+      status: "in_progress",
+      kind: "read",
+      content: [],
+    },
+    thought("Child thought", "child"),
+    thought("Parent thought", "parent"),
+    {
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text: "Visible answer." },
+    },
+    thought("Native thought", "parent", "native-thought"),
+    thought("Final thought", "parent"),
+  ]);
+  const layer = AcpSessionRuntime.layer({
+    spawn: { command: "in-memory-acp-agent", args: [] },
+    cwd: process.cwd(),
+    clientInfo: { name: "reasoning-test", version: "0.0.0" },
+    authPolicy: "on-demand",
+    assistantItemScope: (meta) => (typeof meta?.owner === "string" ? meta.owner : undefined),
+    teardownProcessTree: async () => ({ escalated: false, signalErrors: [] }),
+  }).pipe(Layer.provide(spawnerLayer));
+
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const runtime = yield* AcpSessionRuntime;
+      yield* runtime.start();
+      const events: AcpParsedSessionEvent[] = [];
+      yield* runtime.getEvents().pipe(
+        Stream.runForEach((event) => Effect.sync(() => events.push(event))),
+        Effect.forkChild,
+      );
+      yield* runtime.prompt({ prompt: [{ type: "text", text: "First prompt" }] });
+      yield* Effect.promise(() => flushTransport());
+
+      const thoughts = events.filter(isThought);
+      expect(thoughts.map((event) => event.text)).toEqual([
+        "Read",
+        " the spec",
+        "Child thought",
+        "Parent thought",
+        "Native thought",
+        "Final thought",
+      ]);
+      const [first, next, child, parent, native, final] = thoughts.map((event) => event.itemId);
+      expect(first).toBeDefined();
+      expect(next).toBe(first);
+      expect(native).toBe("native-thought");
+      expect(new Set([first, child, parent, native, final]).size).toBe(5);
+
+      const completed = events.filter((event) => event._tag === "ReasoningItemCompleted");
+      expect(completed.map((event) => [event.itemId, event.metadata?.owner])).toEqual([
+        [first, "parent"],
+        [child, "child"],
+        [parent, "parent"],
+        [final, "parent"],
+      ]);
+      expect(events.indexOf(completed[0]!)).toBeLessThan(
+        events.findIndex((event) => event._tag === "ToolCallUpdated"),
+      );
+      expect(events.indexOf(completed[2]!)).toBeLessThan(
+        events.findIndex((event) => event._tag === "AssistantItemStarted"),
+      );
+      expect(
+        events.filter(
+          (event) => event._tag === "ContentDelta" && event.streamKind === "assistant_text",
+        ),
+      ).toEqual([expect.objectContaining({ text: "Visible answer." })]);
+
+      events.length = 0;
+      yield* runtime.prompt({ prompt: [{ type: "text", text: "Second prompt" }] });
+      yield* Effect.promise(() => flushTransport());
+      const secondPrompt = events.find(isThought);
+      expect(secondPrompt?.itemId).toBeDefined();
+      expect(secondPrompt?.itemId).not.toBe(first);
+    }).pipe(Effect.scoped, Effect.provide(layer)),
+  );
+}, 15_000);
+
+it.each(["end_turn", "cancelled"] as const)(
+  "suppresses ID-less history during ACP load and lets a %s prompt settle live reasoning",
+  async (stopReason) => {
+    const { spawnerLayer } = makeInMemoryAgentSpawner([thought("Live thinking.")], {
+      replayUpdates: [thought("History, do not repeat.")],
+      stopReason,
+    });
+    const layer = AcpSessionRuntime.layer({
+      spawn: { command: "in-memory-acp-agent", args: [] },
+      cwd: process.cwd(),
+      clientInfo: { name: "reasoning-replay-test", version: "0.0.0" },
+      authPolicy: "on-demand",
+      resumeSessionId: FINAL_SESSION_ID,
+      loadReplayPolicy: { quietMs: 5, hardTimeoutMs: 100 },
+      teardownProcessTree: async () => ({ escalated: false, signalErrors: [] }),
+    }).pipe(Layer.provide(spawnerLayer));
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const runtime = yield* AcpSessionRuntime;
+        yield* runtime.start();
+        const events: AcpParsedSessionEvent[] = [];
+        yield* runtime.getEvents().pipe(
+          Stream.runForEach((event) => Effect.sync(() => events.push(event))),
+          Effect.forkChild,
+        );
+        const response = yield* runtime.prompt({ prompt: [{ type: "text", text: "Resume" }] });
+        yield* Effect.promise(() => flushTransport());
+
+        expect(response.stopReason).toBe(stopReason);
+        const thoughts = events.filter(isThought);
+        expect(thoughts.map((event) => event.text)).toEqual(["Live thinking."]);
+        expect(thoughts[0]?.itemId).toBeDefined();
+        const closed = events.filter((event) => event._tag === "ReasoningItemCompleted");
+        // Canceled prompts settle as failed through the adapter's terminal turn event.
+        expect(closed.map((event) => event.itemId)).toEqual(
+          stopReason === "cancelled" ? [] : [thoughts[0]?.itemId],
+        );
+      }).pipe(Effect.scoped, Effect.provide(layer)),
+    );
+  },
+  15_000,
+);

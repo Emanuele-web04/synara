@@ -77,6 +77,11 @@ export type AcpParsedSessionEvent =
       readonly itemId: string;
     }
   | {
+      readonly _tag: "ReasoningItemCompleted";
+      readonly itemId: string;
+      readonly metadata?: Record<string, unknown>;
+    }
+  | {
       readonly _tag: "PlanUpdated";
       readonly payload: AcpPlanUpdate;
       readonly rawPayload: unknown;

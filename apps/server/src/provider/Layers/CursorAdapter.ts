@@ -93,7 +93,7 @@ import {
   type AcpSessionStartupTimeouts,
 } from "../acp/AcpSessionRuntime.ts";
 import {
-  makeAcpAssistantItemEvent,
+  makeAcpTranscriptItemEvent,
   makeAcpContentDeltaEvent,
   makeAcpPlanUpdatedEvent,
   makeAcpRequestOpenedEvent,
@@ -1128,7 +1128,7 @@ export function makeCursorAdapter(
                       const turnId = resolveCursorAssistantItemTurnId(ctx, event.itemId);
                       yield* offerRuntimeEvent(
                         input.lifecycleGeneration,
-                        makeAcpAssistantItemEvent({
+                        makeAcpTranscriptItemEvent({
                           stamp: yield* makeEventStamp(),
                           provider: PROVIDER,
                           threadId: ctx.threadId,
@@ -1139,18 +1139,22 @@ export function makeCursorAdapter(
                       );
                     }
                     return;
+                  case "ReasoningItemCompleted":
                   case "AssistantItemCompleted":
                     {
                       const turnId = completeCursorAssistantItemTurnId(ctx, event.itemId);
                       yield* offerRuntimeEvent(
                         input.lifecycleGeneration,
-                        makeAcpAssistantItemEvent({
+                        makeAcpTranscriptItemEvent({
                           stamp: yield* makeEventStamp(),
                           provider: PROVIDER,
                           threadId: ctx.threadId,
                           turnId,
                           itemId: event.itemId,
                           lifecycle: "item.completed",
+                          ...(event._tag === "ReasoningItemCompleted"
+                            ? { itemType: "reasoning" }
+                            : {}),
                         }),
                       );
                     }

@@ -56,6 +56,10 @@ import {
   ProviderService,
   type ProviderServiceShape,
 } from "../../provider/Services/ProviderService.ts";
+import {
+  makeAcpContentDeltaEvent,
+  makeAcpTranscriptItemEvent,
+} from "../../provider/acp/AcpCoreRuntimeEvents.ts";
 import { projectProviderRuntimeActivities } from "../providerRuntimeActivityProjection.ts";
 import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
 import { GitCoreLive } from "../../git/Layers/GitCore.ts";
@@ -4788,6 +4792,82 @@ describe("ProviderRuntimeIngestion", () => {
     });
     // Reasoning is its own row: it never enters the assistant message text.
     expect(thread.messages).toHaveLength(0);
+  });
+
+  it("rebuilds an accepted ACP reasoning item and settles it separately from the answer", async () => {
+    const harness = await createHarness({ startIngestion: false });
+    const base = {
+      provider: "grok" as const,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-acp-reasoning"),
+    };
+    const itemId = "grok:turn-acp-reasoning:acp-reasoning:session:runtime:0";
+    const createdAt = "2026-10-03T10:02:00.000Z";
+    const append = (event: ProviderRuntimeEvent) =>
+      Effect.runPromise(harness.runtimeEventRepository.append(event));
+    const first = await append(
+      makeAcpContentDeltaEvent({
+        ...base,
+        stamp: { eventId: asEventId("acp-thought-start"), createdAt },
+        itemId,
+        streamKind: "reasoning_text",
+        text: "Checking ",
+        rawPayload: {},
+      }),
+    );
+    await Effect.runPromise(
+      harness.runtimeEventRepository.advanceConsumerCursor({
+        consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+        eventSequence: first.sequence,
+        updatedAt: createdAt,
+      }),
+    );
+    await harness.startIngestion();
+    await harness.drain();
+
+    await append(
+      makeAcpContentDeltaEvent({
+        ...base,
+        stamp: { eventId: asEventId("acp-thought-delta"), createdAt: "2026-10-03T10:02:00.300Z" },
+        itemId,
+        streamKind: "reasoning_text",
+        text: "the files.",
+        rawPayload: {},
+      }),
+    );
+    await append(
+      makeAcpTranscriptItemEvent({
+        ...base,
+        stamp: { eventId: asEventId("acp-thought-end"), createdAt: "2026-10-03T10:02:01.000Z" },
+        itemId,
+        itemType: "reasoning",
+        lifecycle: "item.completed",
+      }),
+    );
+    await append(
+      makeAcpContentDeltaEvent({
+        ...base,
+        stamp: { eventId: asEventId("acp-answer-delta"), createdAt: "2026-10-03T10:02:02.000Z" },
+        itemId: "answer",
+        text: "Visible answer.",
+        rawPayload: {},
+      }),
+    );
+    await harness.drain();
+
+    const thread = await harness.readProjectedThread();
+    expect(
+      thread?.activities.filter(
+        (activity) => activity.id === `provider-reasoning:thread-1:${itemId}`,
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        createdAt,
+        sequence: first.sequence,
+        payload: expect.objectContaining({ status: "completed", detail: "Checking the files." }),
+      }),
+    ]);
+    expect(thread?.messages.map((message) => message.text)).toEqual(["Visible answer."]);
   });
 
   it("never publishes Codex raw reasoning, with or without a summary", async () => {

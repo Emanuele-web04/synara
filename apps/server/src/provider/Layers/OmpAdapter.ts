@@ -92,7 +92,7 @@ import {
 } from "../acp/AcpAdapterSessionSupport.ts";
 import { type AcpSessionRuntimeShape } from "../acp/AcpSessionRuntime.ts";
 import {
-  makeAcpAssistantItemEvent,
+  makeAcpTranscriptItemEvent,
   makeAcpContentDeltaEvent,
   makeAcpPlanUpdatedEvent,
   makeAcpRequestOpenedEvent,
@@ -1164,6 +1164,7 @@ export function makeOmpAdapter(
                       // Content deltas open the visible message; empty starts only add noise.
                     }
                     return;
+                  case "ReasoningItemCompleted":
                   case "AssistantItemCompleted":
                     {
                       // A completion queued behind the prompt response belongs to
@@ -1174,41 +1175,20 @@ export function makeOmpAdapter(
                         ctx.resumeReplayReady === undefined && ctx.activeTurnId === undefined
                           ? ctx.lastSettledTurnId
                           : undefined;
-                      if (lateTurnId !== undefined) {
-                        const lateScopedItemId = scopeOmpRuntimeItemIdForTurn(
-                          lateTurnId,
-                          event.itemId,
-                        );
-                        if (!ctx.lastSettledAssistantItemsWithContent.has(lateScopedItemId)) {
-                          if (isOmpAcpDebugEnabled()) {
-                            yield* Effect.logInfo("omp.acp.empty_assistant_item_suppressed", {
-                              threadId: ctx.threadId,
-                              turnId: lateTurnId,
-                              itemId: lateScopedItemId,
-                            });
-                          }
-                          return;
-                        }
-                        ctx.lastSettledAssistantItemsWithContent.delete(lateScopedItemId);
-                        yield* offerRuntimeEvent(
-                          input.lifecycleGeneration,
-                          makeAcpAssistantItemEvent({
-                            stamp: yield* makeEventStamp(),
-                            provider: PROVIDER,
-                            threadId: ctx.threadId,
-                            turnId: lateTurnId,
-                            itemId: lateScopedItemId,
-                            lifecycle: "item.completed",
-                          }),
-                        );
-                        return;
-                      }
-                      const activeTurnId = yield* activeTurnIdForOmpRuntimeEvent(ctx, event._tag);
+                      const activeTurnId =
+                        lateTurnId ?? (yield* activeTurnIdForOmpRuntimeEvent(ctx, event._tag));
                       if (activeTurnId === undefined) {
                         return;
                       }
                       const scopedItemId = scopeOmpRuntimeItemIdForTurn(activeTurnId, event.itemId);
-                      if (!ctx.activeAssistantItemsWithContent.has(scopedItemId)) {
+                      const assistantItems =
+                        lateTurnId !== undefined
+                          ? ctx.lastSettledAssistantItemsWithContent
+                          : ctx.activeAssistantItemsWithContent;
+                      if (
+                        event._tag === "AssistantItemCompleted" &&
+                        !assistantItems.delete(scopedItemId)
+                      ) {
                         if (isOmpAcpDebugEnabled()) {
                           yield* Effect.logInfo("omp.acp.empty_assistant_item_suppressed", {
                             threadId: ctx.threadId,
@@ -1218,16 +1198,18 @@ export function makeOmpAdapter(
                         }
                         return;
                       }
-                      ctx.activeAssistantItemsWithContent.delete(scopedItemId);
                       yield* offerRuntimeEvent(
                         input.lifecycleGeneration,
-                        makeAcpAssistantItemEvent({
+                        makeAcpTranscriptItemEvent({
                           stamp: yield* makeEventStamp(),
                           provider: PROVIDER,
                           threadId: ctx.threadId,
                           turnId: activeTurnId,
                           itemId: scopedItemId,
                           lifecycle: "item.completed",
+                          ...(event._tag === "ReasoningItemCompleted"
+                            ? { itemType: "reasoning" }
+                            : {}),
                         }),
                       );
                     }
