@@ -513,6 +513,48 @@ describe("managed worktrees", () => {
     expect(removals).toEqual([paths[0]]);
   });
 
+  it("refreshes the recovery snapshot when a removal is retried", async () => {
+    const { root, paths } = await makeManagedRoot(1);
+    const removals: string[] = [];
+    const snapshots: string[] = [];
+    let removalAttempts = 0;
+    const base = makeGit({ removals, snapshots });
+    const git = {
+      ...base,
+      removeWorktree: (input: { cwd: string; path: string }) => {
+        removalAttempts += 1;
+        return removalAttempts === 1
+          ? Effect.fail(new Error("worktree locked") as never)
+          : base.removeWorktree(input);
+      },
+    } as unknown as GitCoreShape;
+    const threads = [
+      {
+        id: "deleted",
+        worktreePath: paths[0],
+        associatedWorktreePath: paths[0],
+        archivedAt: null,
+        deletedAt: "2026-08-01T00:00:00.000Z",
+        busy: false,
+      },
+    ] as unknown as OrchestrationThread[];
+    const prune = () =>
+      Effect.runPromise(
+        pruneArchivedManagedWorktrees({
+          worktreesDir: root,
+          snapshotsDir: path.join(root, "snapshots"),
+          threads,
+          git,
+        }),
+      );
+
+    await prune();
+    await prune();
+
+    expect(snapshots).toHaveLength(2);
+    expect(removals).toEqual(paths);
+  });
+
   it("removes the emptied per-worktree parent after an automatic removal", async () => {
     const { root, paths } = await makeManagedRoot(2);
     const [activePath, deletedPath] = paths as [string, string];

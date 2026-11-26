@@ -471,19 +471,6 @@ const listUnpreservedIgnoredPaths = (input: { readonly git: GitCoreShape; readon
     return all.filter((entry) => !includedPaths.has(entry));
   });
 
-const snapshotExists = (snapshotPath: string) =>
-  Effect.tryPromise({
-    try: () =>
-      fs
-        .stat(path.join(snapshotPath, SNAPSHOT_MANIFEST_FILENAME))
-        .then((entry) => entry.isFile())
-        .catch((cause: unknown) => {
-          if ((cause as NodeJS.ErrnoException).code === "ENOENT") return false;
-          throw cause;
-        }),
-    catch: (cause) => (cause instanceof Error ? cause : new Error(String(cause))),
-  });
-
 function removeManagedWorktreeSafely(input: {
   readonly worktreesDir: string;
   readonly snapshotsDir: string;
@@ -523,10 +510,10 @@ function removeManagedWorktreeSafely(input: {
           );
           return false;
         }
-        const alreadySnapshotted = yield* snapshotExists(snapshotPath);
-        if (!alreadySnapshotted) {
-          yield* input.git.snapshotWorktree({ cwd: entry.path, outputPath: snapshotPath });
-        }
+        // Always refresh: included ignored files can change without changing
+        // HEAD or showing up as working-tree changes, so a cached snapshot can
+        // be stale even when the path and commit match.
+        yield* input.git.snapshotWorktree({ cwd: entry.path, outputPath: snapshotPath });
 
         const removal = Effect.gen(function* () {
           const status = yield* input.git.statusDetails(entry.path).pipe(
