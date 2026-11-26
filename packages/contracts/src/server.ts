@@ -250,6 +250,15 @@ export const ServerManagedWorktree = Schema.Struct({
 });
 export type ServerManagedWorktree = typeof ServerManagedWorktree.Type;
 
+export const ServerListWorktreesInput = Schema.Struct({
+  /**
+   * True for a follow-up poll of an already-started sweep. It must not start a
+   * new sweep, or completion polling would keep the sweep alive forever.
+   */
+  observeCleanup: Schema.optional(Schema.Boolean),
+});
+export type ServerListWorktreesInput = typeof ServerListWorktreesInput.Type;
+
 export const ServerListWorktreesResult = Schema.Struct({
   worktrees: Schema.Array(ServerManagedWorktree),
   /** A detached cleanup sweep is still running; clients can refresh again shortly. */

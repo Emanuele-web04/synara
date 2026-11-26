@@ -2784,18 +2784,26 @@ const makeWsRpcHandlersLayer = () =>
               .pipe(Effect.map((disconnected) => ({ disconnected }))),
             "Failed to disconnect",
           ),
-        [WS_METHODS.serverListWorktrees]: () =>
+        [WS_METHODS.serverListWorktrees]: (input) =>
           rpcEffect(
             Effect.gen(function* () {
               // Inventory reads stay fast: the merge sweep does GitHub lookups and
               // runs detached so opening the panel never waits on the network.
+              const worktrees = yield* listManagedWorktrees({
+                worktreesDir: config.worktreesDir,
+                git,
+              });
+              if (input?.observeCleanup) {
+                const cleanupPending = yield* Ref.get(pruneInFlight);
+                return {
+                  worktrees,
+                  ...(cleanupPending ? { cleanupPending: true } : {}),
+                };
+              }
               const started = yield* startPruneManagedWorktrees;
               const cleanupPending = started || (yield* Ref.get(pruneInFlight));
               return {
-                worktrees: yield* listManagedWorktrees({
-                  worktreesDir: config.worktreesDir,
-                  git,
-                }),
+                worktrees,
                 ...(cleanupPending ? { cleanupPending: true } : {}),
               };
             }),
