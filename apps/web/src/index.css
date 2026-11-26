@@ -297,21 +297,14 @@
     background: var(--app-sidebar-chip-surface);
   }
 
-  /* Rail quota tile: a plate holding a recessed well whose fill is the account's tightest
-     remaining window. Every tone resolves from the rail's own shell tone and the role
-     tokens, so a theme's material carries into the tile.
-     The track is not decoration: the reach of the meter is how the fill's fraction is read,
-     so the well clears 3:1 against the plate, the ink clears 3:1 against the well, and the
-     state edge clears 3:1 against the plate. In dark, a plate dark enough to keep the
-     destructive edge at 3:1 leaves no room for a 3:1 well inside it — two near-black tones
-     cannot differ by that much — so the well is drawn as a 3:1 ring there instead.
-     Normal → low → exhausted steps the edge weight and the fill's body together, so the
-     state still reads without colour. */
+  /* Recessed quota meter. Contrast is tested against every shipped palette in both variants.
+     The dark well uses a ring for its extent; low quota loses the fill, not just its colour. */
   .app-rail-usage-tile {
     --rail-usage-plate: color-mix(in srgb, var(--app-rail-shell-tone) 96%, black);
     --rail-usage-well: color-mix(in srgb, var(--app-rail-shell-tone) 52%, black);
     --rail-usage-well-edge: transparent;
-    --rail-usage-ink: color-mix(in srgb, var(--foreground) 70%, var(--rail-usage-well));
+    --rail-usage-ink: color-mix(in srgb, var(--foreground) 40%, black);
+    --rail-usage-alert: color-mix(in srgb, var(--destructive) 87%, black);
     --rail-usage-edge: var(--app-rail-inset-border);
     --rail-usage-edge-width: 0.5px;
     background: var(--rail-usage-plate);
@@ -321,7 +314,9 @@
   .dark .app-rail-usage-tile {
     --rail-usage-plate: color-mix(in srgb, var(--app-rail-shell-tone) 96%, white);
     --rail-usage-well: color-mix(in srgb, var(--app-rail-shell-tone) 45%, black);
-    --rail-usage-well-edge: color-mix(in srgb, var(--rail-usage-plate) 65%, white);
+    --rail-usage-well-edge: color-mix(in srgb, var(--rail-usage-plate) 58%, white);
+    --rail-usage-ink: color-mix(in srgb, var(--foreground) 70%, var(--rail-usage-well));
+    --rail-usage-alert: color-mix(in srgb, var(--destructive) 70%, white);
   }
 
   :where(button:hover) > .app-rail-usage-tile {
@@ -330,7 +325,7 @@
 
   .app-rail-usage-tile[data-usage-state="low"],
   .app-rail-usage-tile[data-usage-state="exhausted"] {
-    --rail-usage-edge: var(--destructive);
+    --rail-usage-edge: var(--rail-usage-alert);
     --rail-usage-edge-width: 1px;
   }
 

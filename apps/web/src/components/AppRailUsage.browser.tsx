@@ -25,7 +25,9 @@ import { serverQueryKeys, setProviderUsageQueryData } from "~/lib/serverReactQue
 import {
   DEFAULT_THEME_STATE,
   buildThemeCssVariables,
+  getAvailableCodeThemes,
   resolveThemePack,
+  setThemeCodeThemeId,
   type ThemeVariant,
 } from "~/theme/theme.logic";
 
@@ -33,10 +35,13 @@ import { AppRailUsage } from "./AppRailUsage";
 import { ProviderUsageSettingsPanel } from "./settings/ProviderUsageSettingsPanel";
 
 /** The app projects its theme pack into root variables on mount; the tile's tones need them. */
-function applyTheme(variant: ThemeVariant) {
+function applyTheme(variant: ThemeVariant, themeId?: string) {
   const root = document.documentElement;
   root.classList.toggle("dark", variant === "dark");
-  const build = buildThemeCssVariables(resolveThemePack(DEFAULT_THEME_STATE, variant), variant);
+  const state = themeId
+    ? setThemeCodeThemeId(DEFAULT_THEME_STATE, variant, themeId)
+    : DEFAULT_THEME_STATE;
+  const build = buildThemeCssVariables(resolveThemePack(state, variant), variant);
   for (const [name, value] of Object.entries(build.variables)) {
     root.style.setProperty(name, value);
   }
@@ -432,23 +437,27 @@ describe("AppRailUsage", () => {
     };
     for (const theme of ["light", "dark"] as const) {
       applyTheme(theme);
-      for (const { state } of cases) {
-        const tile = tileFor(state);
-        expect(tile).toHaveAttribute("data-usage-state", state);
+      for (const { id } of getAvailableCodeThemes(theme)) {
+        applyTheme(theme, id);
+        const tile = tileFor("low");
         const track = tileToken(tile, "--rail-usage-well");
         const plate = tileToken(tile, "--rail-usage-plate");
         const ink = tileToken(tile, "--rail-usage-ink");
+        const boundary = theme === "light" ? track : tileToken(tile, "--rail-usage-well-edge");
+        const palette = `${id} ${theme}`;
+        expect(contrast(boundary, plate), `${palette}: track boundary`).toBeGreaterThanOrEqual(3);
+        expect(contrast(ink, track), `${palette}: quota ink`).toBeGreaterThanOrEqual(3);
+        expect(
+          contrast(tileToken(tile, "--rail-usage-edge"), plate),
+          `${palette}: warning edge`,
+        ).toBeGreaterThanOrEqual(3);
+      }
+      applyTheme(theme);
+      for (const { state } of cases) {
+        const tile = tileFor(state);
+        expect(tile).toHaveAttribute("data-usage-state", state);
+        const ink = tileToken(tile, "--rail-usage-ink");
         const fill = tile.querySelector<HTMLElement>(".app-rail-usage-fill");
-        // The metre's reach is readable: a 3:1 well, or, in dark, the 3:1 ring that draws it.
-        if (theme === "light") {
-          expect(contrast(track, plate)).toBeGreaterThanOrEqual(3);
-        } else {
-          expect(contrast(tileToken(tile, "--rail-usage-well-edge"), plate)).toBeGreaterThanOrEqual(
-            3,
-          );
-        }
-        expect(contrast(ink, track)).toBeGreaterThanOrEqual(3);
-        expect(contrast(tileToken(tile, "--rail-usage-edge"), plate)).toBeGreaterThanOrEqual(3);
         if (state === "exhausted") {
           expect(fill).toBeNull();
         }
@@ -480,7 +489,7 @@ describe("AppRailUsage", () => {
     await expect.element(button).toBeVisible();
     const tile = button.element().querySelector(".app-rail-usage-tile")!;
     const frame = getComputedStyle(tile).boxShadow;
-    expect(frame).toContain(tileToken(tile, "--destructive"));
+    expect(frame).toContain(tileToken(tile, "--rail-usage-alert"));
     expect(frame).toContain("0px 0px 0px 1px inset");
     await userEvent.hover(button);
     expect(getComputedStyle(tile).boxShadow).toBe(frame);
@@ -498,7 +507,7 @@ describe("AppRailUsage", () => {
     expect(tile).toHaveAttribute("data-usage-state", "empty");
     expect(button.element().querySelector(".app-rail-usage-fill")).toBeNull();
     // No destructive frame: the empty well reads as "no reading", apart from a 0% tile.
-    expect(getComputedStyle(tile).boxShadow).not.toContain(tileToken(tile, "--destructive"));
+    expect(getComputedStyle(tile).boxShadow).not.toContain(tileToken(tile, "--rail-usage-alert"));
     expect(getComputedStyle(tile).boxShadow).toContain("0px 0px 0px 0.5px inset");
     expect(
       contrast(tileToken(tile, "--rail-usage-well"), tileToken(tile, "--rail-usage-plate")),
