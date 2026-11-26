@@ -19,6 +19,7 @@ import { cn } from "~/lib/utils";
 import { appRailButtonClassName } from "./AppRail";
 import {
   getRailUsageAccounts,
+  railUsageState,
   resolveRailUsageAccounts,
   type RailUsageAccount,
 } from "./AppRailUsage.logic";
@@ -34,8 +35,6 @@ import {
 } from "./sidebarHoverCardStyles";
 import { PreviewCard, PreviewCardPopup, PreviewCardTrigger } from "./ui/preview-card";
 import { useTranslation } from "~/i18n";
-
-const LOW_QUOTA_THRESHOLD = 20;
 
 function AppRailUsageTile({
   account,
@@ -56,8 +55,8 @@ function AppRailUsageTile({
   });
 
   // A failed fetch keeps the dimmed tile visible (its card says why) so a selected provider does
-  // not vanish on a network blip. Otherwise nothing displayable (still loading, signed out,
-  // or no usage source) keeps the tile hidden.
+  // not vanish on a network blip; a tile with no quota reading draws an empty well, which reads
+  // as "no reading yet" rather than as an exhausted account.
   const unavailable = snapshot?.status === "error";
   if (!unavailable && model.rows.length === 0 && model.usageLines.length === 0) {
     return null;
@@ -73,14 +72,7 @@ function AppRailUsageTile({
     t,
   );
   const remainingPercent = model.primaryRow?.remainingPercent;
-  const usageState =
-    remainingPercent === undefined
-      ? "empty"
-      : remainingPercent === 0
-        ? "exhausted"
-        : remainingPercent <= LOW_QUOTA_THRESHOLD
-          ? "low"
-          : "normal";
+  const usageState = railUsageState(remainingPercent);
 
   return (
     <PreviewCard>

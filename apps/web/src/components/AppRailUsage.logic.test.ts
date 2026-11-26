@@ -3,7 +3,9 @@ import { deriveProviderInstances } from "@synara/shared/providerInstances";
 import { describe, expect, it } from "vitest";
 import {
   MAX_RAIL_USAGE_ACCOUNTS,
+  RAIL_USAGE_LOW_THRESHOLD,
   getRailUsageAccounts,
+  railUsageState,
   resolveRailUsageAccounts,
   toggleRailUsageAccount,
 } from "./AppRailUsage.logic";
@@ -37,7 +39,7 @@ describe("rail usage accounts", () => {
     expect(toggleRailUsageAccount(added, "opencode", false, visible)).toEqual(saved);
     expect(
       resolveRailUsageAccounts(added, accounts).map((account) => account.instance.instanceId),
-    ).toEqual(saved);
+    ).toEqual(added);
   });
 
   it("allows two accounts of the same provider and distinguishes their names", () => {
@@ -55,10 +57,14 @@ describe("rail usage accounts", () => {
   it("drops duplicate, removed, and disabled accounts before applying the cap", () => {
     expect(
       selectedIds(["removed", "claude_disabled", "codex", "codex", "claude_work", "cursor"]),
-    ).toEqual(["codex", "claude_work"]);
-    expect(selectedIds(["codex", "claudeAgent", "claude_work"]).length).toBe(
-      MAX_RAIL_USAGE_ACCOUNTS,
-    );
+    ).toEqual(["codex", "claude_work", "cursor"]);
+    expect(selectedIds(["codex", "claudeAgent", "cursor", "antigravity", "grok"])).toEqual([
+      "codex",
+      "claudeAgent",
+      "cursor",
+      "antigravity",
+    ]);
+    expect(MAX_RAIL_USAGE_ACCOUNTS).toBe(4);
     expect(selectedIds([])).toEqual([]);
   });
 
@@ -86,8 +92,29 @@ describe("toggleRailUsageAccount", () => {
   });
 
   it("ignores another account past the cap", () => {
-    expect(
-      toggleRailUsageAccount(["claudeAgent", "claude_work"], "codex", true, available),
-    ).toEqual(["claudeAgent", "claude_work"]);
+    const full = ["codex", "claudeAgent", "cursor", "claude_work"];
+    expect(toggleRailUsageAccount(full, "grok", true, available)).toEqual(full);
+    expect(toggleRailUsageAccount(full.slice(0, 3), "grok", true, available)).toEqual([
+      ...full.slice(0, 3),
+      "grok",
+    ]);
+  });
+});
+
+describe("railUsageState", () => {
+  it.each([
+    ["no reading", undefined, "empty"],
+    ["0%", 0, "exhausted"],
+    ["1%", 1, "low"],
+    [`${RAIL_USAGE_LOW_THRESHOLD}%`, RAIL_USAGE_LOW_THRESHOLD, "low"],
+    [`${RAIL_USAGE_LOW_THRESHOLD + 1}%`, RAIL_USAGE_LOW_THRESHOLD + 1, "normal"],
+    ["100%", 100, "normal"],
+  ] as const)("%s remaining reads as %s", (_label, remaining, state) => {
+    expect(railUsageState(remaining)).toBe(state);
+  });
+
+  it("treats a missing reading as empty rather than nothing left", () => {
+    expect(railUsageState(undefined)).toBe("empty");
+    expect(railUsageState(0)).toBe("exhausted");
   });
 });

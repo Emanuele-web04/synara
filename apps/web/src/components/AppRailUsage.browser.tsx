@@ -22,9 +22,60 @@ const updateSettings = vi.hoisted(() => vi.fn());
 vi.mock("~/appSettings", () => ({ useAppSettings: () => ({ settings, updateSettings }) }));
 
 import { serverQueryKeys, setProviderUsageQueryData } from "~/lib/serverReactQuery";
+import {
+  DEFAULT_THEME_STATE,
+  buildThemeCssVariables,
+  resolveThemePack,
+  type ThemeVariant,
+} from "~/theme/theme.logic";
 
 import { AppRailUsage } from "./AppRailUsage";
 import { ProviderUsageSettingsPanel } from "./settings/ProviderUsageSettingsPanel";
+
+/** The app projects its theme pack into root variables on mount; the tile's tones need them. */
+function applyTheme(variant: ThemeVariant) {
+  const root = document.documentElement;
+  root.classList.toggle("dark", variant === "dark");
+  const build = buildThemeCssVariables(resolveThemePack(DEFAULT_THEME_STATE, variant), variant);
+  for (const [name, value] of Object.entries(build.variables)) {
+    root.style.setProperty(name, value);
+  }
+}
+
+function channels(value: string): readonly [number, number, number] {
+  const srgb = /^color\(srgb\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)/.exec(value);
+  if (srgb) return [Number(srgb[1]) * 255, Number(srgb[2]) * 255, Number(srgb[3]) * 255] as const;
+  const rgb = /^rgba?\(([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)/.exec(value);
+  if (!rgb) throw new Error(`unreadable colour: ${value}`);
+  return [Number(rgb[1]), Number(rgb[2]), Number(rgb[3])] as const;
+}
+
+function luminance(color: string): number {
+  const [red, green, blue] = channels(color).map((channel) => {
+    const scaled = channel / 255;
+    return scaled <= 0.03928 ? scaled / 12.92 : ((scaled + 0.055) / 1.055) ** 2.4;
+  }) as [number, number, number];
+  return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+}
+
+/** WCAG contrast ratio, so a state's mark is measured rather than asserted. */
+function contrast(left: string, right: string): number {
+  const [light, dark] = [luminance(left), luminance(right)].toSorted((a, b) => b - a) as [
+    number,
+    number,
+  ];
+  return (light + 0.05) / (dark + 0.05);
+}
+
+/** A rail token's colour, resolved in the tile's own context. */
+function tileToken(tile: Element, name: string): string {
+  const probe = document.createElement("span");
+  probe.style.background = getComputedStyle(tile).getPropertyValue(name);
+  document.body.append(probe);
+  const resolved = getComputedStyle(probe).backgroundColor;
+  probe.remove();
+  return resolved;
+}
 
 async function renderAccounts(
   snapshots: readonly ServerProviderUsageSnapshot[] | undefined,
@@ -38,23 +89,25 @@ async function renderAccounts(
   client.setQueryData(serverQueryKeys.settings(), serverSettings);
   const onOpenUsageSettings = vi.fn();
   const content = () => (
-    <QueryClientProvider client={client}>
-      {showSettings ? (
-        <div className="flex items-start gap-6 p-6">
-          <div
-            data-testid="usage-rail"
-            className="flex w-12 shrink-0 flex-col items-center gap-1 rounded-lg bg-sidebar py-2"
-          >
-            <AppRailUsage onOpenUsageSettings={onOpenUsageSettings} />
+    <div data-sidebar-layout="rail">
+      <QueryClientProvider client={client}>
+        {showSettings ? (
+          <div className="flex items-start gap-6 p-6">
+            <div
+              data-testid="usage-rail"
+              className="flex w-12 shrink-0 flex-col items-center gap-1 rounded-lg bg-sidebar py-2"
+            >
+              <AppRailUsage onOpenUsageSettings={onOpenUsageSettings} />
+            </div>
+            <div className="w-[520px] space-y-6">
+              <ProviderUsageSettingsPanel />
+            </div>
           </div>
-          <div className="w-[520px] space-y-6">
-            <ProviderUsageSettingsPanel />
-          </div>
-        </div>
-      ) : (
-        <AppRailUsage onOpenUsageSettings={onOpenUsageSettings} />
-      )}
-    </QueryClientProvider>
+        ) : (
+          <AppRailUsage onOpenUsageSettings={onOpenUsageSettings} />
+        )}
+      </QueryClientProvider>
+    </div>
   );
   const view = await render(content());
   return { client, onOpenUsageSettings, rerender: () => view.rerender(content()) };
@@ -106,6 +159,7 @@ const claudeSnapshots: readonly ServerProviderUsageSnapshot[] = [
 
 describe("AppRailUsage", () => {
   beforeEach(() => {
+    applyTheme("light");
     settings.disabledProviders = [];
     settings.railUsageProviders = ["codex"];
     settings.railUsageInstanceIds = null;
@@ -174,13 +228,6 @@ describe("AppRailUsage", () => {
     });
     await expect.element(personalSwitch).toBeChecked();
     await expect.element(workSwitch).toBeChecked();
-    await expect
-      .element(
-        page.getByRole("switch", {
-          name: "Show Codex usage at the bottom of the sidebar",
-        }),
-      )
-      .toBeDisabled();
 
     const personal = page.getByRole("button", { name: /^Claude · Default account usage:/ });
     const work = page.getByRole("button", { name: /^Claude · Work usage:/ });
@@ -268,7 +315,7 @@ describe("AppRailUsage", () => {
     await expect.element(page.getByRole("button", { name: /^Claude · Work usage:/ })).toBeVisible();
     await expect
       .element(page.getByRole("switch", { name: "Show Codex usage at the bottom of the sidebar" }))
-      .not.toBeChecked();
+      .toBeChecked();
     expect(settings.railUsageInstanceIds).toEqual(["claude_work", "claudeAgent", "codex"]);
   });
 
@@ -325,22 +372,6 @@ describe("AppRailUsage", () => {
     expect(onOpenUsageSettings).toHaveBeenCalledOnce();
   });
 
-  it.each([
-    [21, "normal"],
-    [20, "low"],
-  ])("uses the correct tile color at %i%% remaining", async (remaining, state) => {
-    await renderUsage([{ window: "Weekly", usedPercent: 100 - remaining }]);
-    const button = page.getByRole("button", { name: /^Codex usage:/ });
-    await expect.element(button).toBeVisible();
-    expect(button.element().querySelector(".app-rail-usage-tile")).toHaveAttribute(
-      "data-usage-state",
-      state,
-    );
-    expect(button.element().querySelector<HTMLElement>(".app-rail-usage-fill")?.style.height).toBe(
-      `${remaining}%`,
-    );
-  });
-
   it("uses the tighter named model limit when present", async () => {
     await renderUsage([
       { window: "seven_day", usedPercent: 57, windowDurationMins: 10_080 },
@@ -354,7 +385,80 @@ describe("AppRailUsage", () => {
     );
   });
 
-  it("shows a red outline and dims the glyph when any window is exhausted", async () => {
+  it("draws every state by shape, with each mark measured against the track", async () => {
+    const cases = [
+      { remaining: 43, state: "normal" },
+      { remaining: 18, state: "low" },
+      { remaining: 0, state: "exhausted" },
+    ] as const;
+    const clientFor = (remaining: number) => {
+      const client = new QueryClient({
+        defaultOptions: { queries: { retry: false, enabled: false } },
+      });
+      setProviderUsageQueryData(client, [
+        {
+          provider: "codex",
+          updatedAt: "2026-10-02T12:00:00.000Z",
+          status: "ok",
+          source: "test",
+          limits: [{ window: "Weekly", usedPercent: 100 - remaining }],
+          usageLines: [],
+        } satisfies ServerProviderUsageSnapshot,
+      ]);
+      client.setQueryData(serverQueryKeys.settings(), DEFAULT_SERVER_SETTINGS_VIEW);
+      return client;
+    };
+    await render(
+      <div data-sidebar-layout="rail" className="flex items-start gap-4">
+        {cases.map(({ remaining, state }) => (
+          <div
+            key={state}
+            data-state={state}
+            className="flex w-12 flex-col items-center gap-1 py-2"
+          >
+            <QueryClientProvider client={clientFor(remaining)}>
+              <AppRailUsage onOpenUsageSettings={() => {}} />
+            </QueryClientProvider>
+          </div>
+        ))}
+      </div>,
+    );
+    const tileFor = (state: string) => {
+      const tile = document.querySelector<HTMLElement>(
+        `[data-state="${state}"] .app-rail-usage-tile`,
+      );
+      expect(tile).not.toBeNull();
+      return tile!;
+    };
+    for (const { state } of cases) {
+      const tile = tileFor(state);
+      expect(tile).toHaveAttribute("data-usage-state", state);
+      const track = tileToken(tile, "--rail-usage-well");
+      const fill = tile.querySelector<HTMLElement>(".app-rail-usage-fill");
+      // The track stays visible against the plate in every state, above the reported 1.12:1.
+      expect(contrast(track, tileToken(tile, "--rail-usage-plate"))).toBeGreaterThan(1.12);
+      if (state === "normal") {
+        expect(fill?.style.height).toBe("43%");
+        expect(getComputedStyle(fill!).backgroundImage).toContain("linear-gradient");
+        expect(contrast(tileToken(tile, "--rail-usage-ink"), track)).toBeGreaterThanOrEqual(3);
+      }
+      if (state === "low") {
+        // The bar keeps its extent but loses its body to an outline, so it is not a hue shift.
+        expect(fill?.style.height).toBe("18%");
+        expect(getComputedStyle(fill!).backgroundImage).toBe("none");
+        expect(contrast(tileToken(tile, "--rail-usage-edge"), track)).toBeGreaterThanOrEqual(3);
+      }
+      if (state === "exhausted") {
+        expect(fill).toBeNull();
+        expect(document.querySelector(`[data-state="${state}"] button svg`)).toHaveClass(
+          "opacity-35",
+        );
+        expect(contrast(tileToken(tile, "--rail-usage-edge"), track)).toBeGreaterThanOrEqual(3);
+      }
+    }
+  });
+
+  it("lists every window, including an exhausted one, on the hover card", async () => {
     await renderUsage([
       { window: "Weekly", usedPercent: 0 },
       { window: "5h", usedPercent: 100 },
@@ -364,25 +468,29 @@ describe("AppRailUsage", () => {
     });
     await expect.element(button).toBeVisible();
     const tile = button.element().querySelector(".app-rail-usage-tile")!;
-    expect(tile).toHaveAttribute("data-usage-state", "exhausted");
-    expect(button.element().querySelector(".app-rail-usage-fill")).toBeNull();
-    expect(button.element().querySelector("svg")).toHaveClass("opacity-35");
-    const outline = getComputedStyle(tile).boxShadow;
-    expect(outline).toContain("rgba(180, 35, 50, 0.52)");
+    const frame = getComputedStyle(tile).boxShadow;
+    expect(frame).toContain(tileToken(tile, "--destructive"));
+    expect(frame).toContain("0px 0px 0px 1px inset");
     await userEvent.hover(button);
-    expect(getComputedStyle(tile).boxShadow).toBe(outline);
+    expect(getComputedStyle(tile).boxShadow).toBe(frame);
+    await expect.element(page.getByText("0% left", { exact: true }).last()).toBeVisible();
+    await expect.element(page.getByText("100% left", { exact: true }).last()).toBeVisible();
   });
 
-  it("keeps an unavailable provider visible with an empty neutral cell", async () => {
+  it("keeps an unavailable provider visible as an unfilled well, not an exhausted tile", async () => {
     await renderUsage([], "error");
     const button = page.getByRole("button", {
       name: "Codex usage: Unavailable. Open usage settings",
     });
     await expect.element(button).toBeVisible();
-    expect(button.element().querySelector(".app-rail-usage-tile")).toHaveAttribute(
-      "data-usage-state",
-      "empty",
-    );
+    const tile = button.element().querySelector<HTMLElement>(".app-rail-usage-tile")!;
+    expect(tile).toHaveAttribute("data-usage-state", "empty");
     expect(button.element().querySelector(".app-rail-usage-fill")).toBeNull();
+    // No destructive frame: the empty well reads as "no reading", apart from a 0% tile.
+    expect(getComputedStyle(tile).boxShadow).not.toContain(tileToken(tile, "--destructive"));
+    expect(getComputedStyle(tile).boxShadow).toContain("0px 0px 0px 0.5px inset");
+    expect(
+      contrast(tileToken(tile, "--rail-usage-well"), tileToken(tile, "--rail-usage-plate")),
+    ).toBeGreaterThan(1.12);
   });
 });

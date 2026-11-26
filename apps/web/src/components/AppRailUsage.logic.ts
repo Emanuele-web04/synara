@@ -8,8 +8,21 @@ import { PROVIDER_USAGE_PROVIDERS, providerUsageDisplayName } from "@synara/shar
 
 import { providerAccountQualifiedLabel } from "~/lib/providerInstancePresentation";
 
-/** The rail is one icon wide, so only a couple of usage tiles fit above the Help button. */
-export const MAX_RAIL_USAGE_ACCOUNTS = 2;
+/** The rail's fixed foot fits four tiles above the Help button; the items above them scroll. */
+export const MAX_RAIL_USAGE_ACCOUNTS = 4;
+
+/** At or below this the tile stops reading as a healthy meter. */
+export const RAIL_USAGE_LOW_THRESHOLD = 20;
+
+export type RailUsageState = "normal" | "low" | "exhausted" | "empty";
+
+/** Tile state from the account's tightest remaining window; no reading at all is `empty`. */
+export function railUsageState(remainingPercent: number | undefined): RailUsageState {
+  if (remainingPercent === undefined) return "empty";
+  if (remainingPercent <= 0) return "exhausted";
+  if (remainingPercent <= RAIL_USAGE_LOW_THRESHOLD) return "low";
+  return "normal";
+}
 
 export interface RailUsageAccount {
   readonly instance: ResolvedProviderInstance;
