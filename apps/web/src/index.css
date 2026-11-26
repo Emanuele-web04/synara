@@ -302,8 +302,8 @@
     --rail-usage-well: #ebebeb;
     --rail-usage-outline: rgb(0 0 0 / 14%);
     --rail-usage-outline-hover: rgb(0 0 0 / 24%);
-    --rail-usage-fill: rgb(0 0 0 / 15%);
-    --rail-usage-low-fill: rgb(180 35 50 / 27%);
+    --rail-usage-fill: rgb(0 0 0 / 19%);
+    --rail-usage-low-fill: rgb(180 35 50 / 33%);
     --rail-usage-empty-outline: rgb(180 35 50 / 52%);
     background: var(--rail-usage-rim);
     box-shadow: inset 0 0 0 1px var(--rail-usage-outline);
@@ -314,8 +314,8 @@
     --rail-usage-well: #121212;
     --rail-usage-outline: rgb(255 255 255 / 10%);
     --rail-usage-outline-hover: rgb(255 255 255 / 20%);
-    --rail-usage-fill: rgb(255 255 255 / 19%);
-    --rail-usage-low-fill: rgb(255 100 114 / 34%);
+    --rail-usage-fill: rgb(255 255 255 / 24%);
+    --rail-usage-low-fill: rgb(255 100 114 / 40%);
     --rail-usage-empty-outline: rgb(255 100 114 / 52%);
   }
 

@@ -288,11 +288,12 @@ describe("AppRailUsage", () => {
 
   it("fills one cell to the lowest quota and shows all three windows with resets on hover", async () => {
     settings.railUsageProviders = ["opencode"];
-    const resetsAt = (hours: number) => new Date(Date.now() + hours * 3_600_000).toISOString();
+    const now = Date.now();
+    const resetsAt = (hours: number) => new Date(now + hours * 3_600_000).toISOString();
     const { onOpenUsageSettings } = await renderAccounts([
       {
         provider: "opencode",
-        updatedAt: new Date().toISOString(),
+        updatedAt: new Date(now).toISOString(),
         status: "ok",
         source: "test",
         limits: [
