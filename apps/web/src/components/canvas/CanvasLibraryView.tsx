@@ -33,7 +33,6 @@ import {
   ComposerPickerMenuSubPopup,
 } from "../chat/ComposerPickerMenuPopup";
 import { Button } from "../ui/button";
-import { BUTTON_GROUP_ACTIVE_CLASS_NAME, ButtonGroup } from "../ui/button-group";
 import { IconButton } from "../ui/icon-button";
 import {
   Menu,
@@ -101,7 +100,10 @@ function CanvasPreview({ work, height }: { work: CanvasWorkSummary; height: numb
           </div>
         </div>
       ) : (
-        <CanvasIcon className={cn("text-muted-foreground/72", height > 60 ? "size-9" : "size-4")} />
+        // An empty work's mark, sized to its well: the list's small thumbnail gets a small one.
+        <CanvasIcon
+          className={cn("text-muted-foreground/72", height > 100 ? "size-9" : "size-5")}
+        />
       )}
     </div>
   );
@@ -413,25 +415,27 @@ export default function CanvasLibraryView() {
                     aria-label={t("workspace:canvasSearch")}
                   />
                 </div>
-                <ButtonGroup label={t("workspace:canvasLibraryLayout")}>
-                  {(
-                    [
-                      ["grid", "layout-grid-1", "workspace:canvasGridView"],
-                      ["list", "list-bullets", "workspace:canvasListView"],
-                    ] as const
-                  ).map(([value, icon, label]) => (
-                    <IconButton
-                      key={value}
-                      label={t(label)}
-                      tooltip={t(label)}
-                      aria-pressed={view === value}
-                      className={view === value ? BUTTON_GROUP_ACTIVE_CLASS_NAME : undefined}
-                      onClick={() => setView(value)}
-                    >
-                      <CentralIcon name={icon} />
-                    </IconButton>
-                  ))}
-                </ButtonGroup>
+                {/* The app's neutral segmented control, not an accent fill. */}
+                <SegmentedPicker<View>
+                  size="sm"
+                  iconOnly
+                  ariaLabel={t("workspace:canvasLibraryLayout")}
+                  value={view}
+                  className="w-auto shrink-0"
+                  onValueChange={setView}
+                  options={[
+                    {
+                      value: "grid",
+                      label: t("workspace:canvasGridView"),
+                      icon: <CentralIcon name="layout-grid-1" className="size-3.5" />,
+                    },
+                    {
+                      value: "list",
+                      label: t("workspace:canvasListView"),
+                      icon: <CentralIcon name="list-bullets" className="size-3.5" />,
+                    },
+                  ]}
+                />
               </div>
             </div>
             {section !== "recent" && !searching && (

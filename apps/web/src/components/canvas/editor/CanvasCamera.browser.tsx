@@ -28,6 +28,7 @@ import { canvasWorkQueryKey, canvasWorkQueryOptions } from "../canvasWorkCache";
 import { flushCanvasCameras } from "./canvasCamera";
 import { CanvasEditorProvider } from "./CanvasEditorContext";
 import { CanvasViewport } from "./CanvasViewport";
+import { CANVAS_FIRST_FIT_SETTLE_MS } from "./useCanvasCamera";
 
 const frame = (id: string, x: number, width: number, height: number): DesignFrame => ({
   id,
@@ -65,12 +66,12 @@ const workWith = (pages: CanvasPage[], updatedAt = at(1)): CanvasWork => ({
 });
 
 /** One window's editor on a page; several share the query cache like two dock panes. */
-function Window({ pageId, label }: { pageId: string; label: string }) {
+function Window({ pageId, label, width = 500 }: { pageId: string; label: string; width?: number }) {
   const { data } = useQuery({ ...canvasWorkQueryOptions("work1"), enabled: false });
   if (!data) return null;
   return (
     <CanvasEditorProvider work={data} pageId={pageId} readOnly={false}>
-      <div data-testid={label} className="relative h-[400px] w-[500px] shrink-0">
+      <div data-testid={label} className="relative h-[400px] shrink-0" style={{ width }}>
         <CanvasViewport />
       </div>
     </CanvasEditorProvider>
@@ -78,7 +79,10 @@ function Window({ pageId, label }: { pageId: string; label: string }) {
 }
 
 let client: QueryClient;
-async function mount(work: CanvasWork, windows: { pageId: string; label: string }[]) {
+async function mount(
+  work: CanvasWork,
+  windows: { pageId: string; label: string; width?: number }[],
+) {
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   client.setQueryData(canvasWorkQueryKey("work1"), work);
   const tree = (items: typeof windows) => (
@@ -184,6 +188,53 @@ describe("per-client camera", () => {
       client.setQueryData(canvasWorkQueryKey("work1"), workWith([page("page1", frames)], at(2)));
       await vi.waitFor(() => expectCamera("only", fitFor("only", frames)));
       expect(serverWrites()).toBe(0);
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("fits again while a pane opening around it is still taking its size", async () => {
+    const frames = [frame("desktop", 0, 1440, 1024), frame("mobile", 1600, 390, 844)];
+    // A side pane that opens narrow and then widens: the first fit lands on the narrow canvas.
+    const { screen, rerender } = await mount(workWith([page("page1", frames)]), [
+      { pageId: "page1", label: "pane", width: 180 },
+    ]);
+    try {
+      await vi.waitFor(() => expectCamera("pane", fitFor("pane", frames)));
+      const narrow = camera("pane").zoom;
+      await rerender([{ pageId: "page1", label: "pane", width: 560 }]);
+      // The camera follows to the fit for the size the pane keeps (not the narrow zoom).
+      await vi.waitFor(() => expectCamera("pane", fitFor("pane", frames)));
+      expect(camera("pane").zoom).toBeGreaterThan(narrow * 2);
+      flushCanvasCameras();
+      expect(storedCameras()["work1/page1"]!.zoom).toBeCloseTo(fitFor("pane", frames).zoom, 5);
+
+      // Once the user moves the camera, a resize leaves it where they put it.
+      wheel("pane", 0, 60);
+      await vi.waitFor(() => expect(camera("pane").y).toBeCloseTo(fitFor("pane", frames).y - 60));
+      const moved = camera("pane");
+      await rerender([{ pageId: "page1", label: "pane", width: 420 }]);
+      await sleep(300);
+      expectCamera("pane", moved);
+      expect(serverWrites()).toBe(0);
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("stops fitting again once the canvas has kept its size for a moment", async () => {
+    const frames = [frame("only", 0, 800, 600)];
+    const { screen, rerender } = await mount(workWith([page("page1", frames)]), [
+      { pageId: "page1", label: "pane", width: 300 },
+    ]);
+    try {
+      await vi.waitFor(() => expectCamera("pane", fitFor("pane", frames)));
+      const settled = camera("pane");
+      await sleep(CANVAS_FIRST_FIT_SETTLE_MS + 200);
+      // A later resize (the user dragging the pane wider) keeps the camera.
+      await rerender([{ pageId: "page1", label: "pane", width: 520 }]);
+      await sleep(300);
+      expectCamera("pane", settled);
     } finally {
       await screen.unmount();
     }

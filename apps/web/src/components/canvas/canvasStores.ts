@@ -187,6 +187,73 @@ export const useCanvasActivityStore = create<ActivityState>((set) => ({
     }),
 }));
 
+/** A canvas an agent is working on, to show in a side pane beside the chat that writes it. */
+export type CanvasPaneOpenRequest = { threadId: ThreadId; workId: string; pageId: string };
+
+/** Per thread, the works whose pane was already asked for during that thread's current turn. */
+export type CanvasPaneSurfaced = Readonly<Record<string, readonly string[]>>;
+
+/**
+ * Whether an activity event asks for the canvas pane beside its chat. Like the device pane, it
+ * is asked for once: the first write, edit or delete on a work in a turn surfaces it, and nothing
+ * more that turn does, so a pane the user closes stays closed until the next turn. Reads never
+ * ask. The `ended` event of a turn starts the count again for that chat.
+ */
+export function canvasPaneRequestFor(
+  event: ActivityEvent,
+  surfaced: CanvasPaneSurfaced,
+): { request: CanvasPaneOpenRequest | null; surfaced: CanvasPaneSurfaced } {
+  if (event.ended) {
+    if (!(event.threadId in surfaced)) return { request: null, surfaced };
+    const { [event.threadId]: _ended, ...rest } = surfaced;
+    return { request: null, surfaced: rest };
+  }
+  const works = surfaced[event.threadId] ?? [];
+  if ((event.kind ?? "write") === "read" || works.includes(event.workId))
+    return { request: null, surfaced };
+  return {
+    request: { threadId: event.threadId, workId: event.workId, pageId: event.pageId },
+    surfaced: { ...surfaced, [event.threadId]: [...works, event.workId] },
+  };
+}
+
+type CanvasPaneRequestState = {
+  surfaced: CanvasPaneSurfaced;
+  /** Requests no chat surface has taken yet; one per chat and work, the latest page kept. */
+  pending: readonly CanvasPaneOpenRequest[];
+  noteActivity: (event: ActivityEvent) => void;
+  /** Hands the pending requests over, once: remounting or closing a pane never replays them. */
+  take: () => CanvasPaneOpenRequest[];
+};
+
+/** Agent canvas work waiting to be shown beside its chat (see canvasPaneRequestFor). */
+export const useCanvasPaneRequestStore = create<CanvasPaneRequestState>((set, get) => ({
+  surfaced: {},
+  pending: [],
+  noteActivity: (event) =>
+    set((state) => {
+      const next = canvasPaneRequestFor(event, state.surfaced);
+      if (next.surfaced === state.surfaced) return {};
+      const request = next.request;
+      return {
+        surfaced: next.surfaced,
+        pending: request
+          ? [
+              ...state.pending.filter(
+                (entry) => entry.threadId !== request.threadId || entry.workId !== request.workId,
+              ),
+              request,
+            ]
+          : state.pending,
+      };
+    }),
+  take: () => {
+    const taken = [...get().pending];
+    if (taken.length) set({ pending: [] });
+    return taken;
+  },
+}));
+
 /** One frame's live layer activity (FRAME_ACTIVITY_KEY for the frame itself) at `now`. */
 export function canvasLayerActivity(
   state: Pick<ActivityState, "layers">,

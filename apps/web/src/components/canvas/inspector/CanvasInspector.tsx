@@ -1,7 +1,7 @@
 // FILE: CanvasInspector.tsx
 // Purpose: Right-side design inspector for the canvas editor. Shows the property sections for
-//          the selected frames and layers (or the Page section with nothing selected) under its
-//          top row, in this order: Layout (with Flex), Radius, Blending, Fill, SVG (an inline
+//          the selected frames and layers (or the Page section with nothing selected) from the
+//          top of the column, in this order: Layout (with Flex), Radius, Blending, Fill, SVG (an inline
 //          SVG's colour), Text, Underline, Outline, Text stroke, Border, Shadow, Inner shadow,
 //          Filters, Other styles, Selection colors and Export. Values are computed; edits write
 //          inline CSS.
@@ -9,7 +9,6 @@
 // Exports: CanvasInspector
 // Depends on: CanvasEditorContext (must render inside CanvasEditorProvider).
 
-import type { ReactNode } from "react";
 import { useTranslation } from "~/i18n";
 import { FrameToolIcon, ImageIcon, TextToolIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
@@ -54,17 +53,17 @@ const inspectorRoot = {
 };
 
 /**
- * The inspector column. Its 48px top row names what is selected on the left and holds
- * `actions` (the zoom menu, the work's own buttons) on the right. With nothing selected it shows
- * the Page section (the page's canvas colour).
+ * The inspector column: the property sections, starting at the top of the column. With nothing
+ * selected it shows the Page section (the page's canvas colour). `selectionRow` adds a 40px row
+ * naming what is selected (the side pane, which has no layers panel to name it); a read-only
+ * work gets the row in either case, to say why nothing can be edited.
  */
 export function CanvasInspector({
   className,
-  actions,
+  selectionRow = false,
 }: {
   className?: string;
-  /** Controls at the end of the top row (zoom menu, Back to chat, the work menu). */
-  actions?: ReactNode;
+  selectionRow?: boolean;
 }) {
   const { t } = useTranslation();
   const model = useInspectorModel();
@@ -75,35 +74,31 @@ export function CanvasInspector({
       ? null
       : (selectionName(model) ??
         t("workspace:canvasInspectorSelectedCount", { count: model.targets.length }));
-  // The side pane's slim column has its zoom in the pane header: with nothing to show the row
-  // is left out rather than kept empty.
+  const named = selectionRow && name !== null;
   const topRow =
-    !actions && !name && !model.readOnly ? null : (
+    !named && !model.readOnly ? null : (
       <div
         data-canvas-inspector-top=""
-        className="flex h-12 shrink-0 items-center gap-2 border-b border-border ps-3 pe-3"
+        className="flex h-10 shrink-0 items-center gap-2 border-b border-border px-3"
       >
-        {/* With the work's controls in the row, the selection is named in the layers panel
-          already, so only the side pane names it here. */}
         <div className="flex min-w-0 flex-1 items-center gap-1.5 text-ui-sm text-muted-foreground">
-          {actions ? null : (
+          {named ? (
             <>
               {Icon ? (
                 <Icon aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
               ) : null}
-              {name ? <span className="min-w-0 truncate">{name}</span> : null}
+              <span className="min-w-0 truncate text-foreground">{name}</span>
               {kind?.tag ? (
                 <span className="shrink-0 text-muted-foreground/72">{kind.tag}</span>
               ) : null}
             </>
-          )}
+          ) : null}
         </div>
         {model.readOnly ? (
           <span className="shrink-0 text-ui-sm text-muted-foreground">
             {t("workspace:canvasInspectorReadOnly")}
           </span>
         ) : null}
-        {actions}
       </div>
     );
   if (model.targets.length === 0)

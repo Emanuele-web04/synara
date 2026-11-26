@@ -7,7 +7,7 @@ import { ensureNativeApi } from "~/nativeApi";
 import { onWsServerCapabilitiesChange, readWsServerCapabilities } from "~/wsNativeApi";
 import { addWsTransportStateListener, readLatestWsTransportState } from "~/wsTransportEvents";
 import { loadCanvasAssets } from "./canvasAssets";
-import { useCanvasActivityStore } from "./canvasStores";
+import { useCanvasActivityStore, useCanvasPaneRequestStore } from "./canvasStores";
 import { handleCanvasChanged } from "./canvasWorkCache";
 
 /** Agents cannot lay out HTML on the server; this window renders (or measures) and answers. */
@@ -47,8 +47,9 @@ export function useCanvasLibrary() {
 
 /**
  * The app's one canvas subscription, mounted at the root (each workspace frame has its own
- * transport and QueryClient): it patches cached works, records agent activity and answers
- * agent screenshot requests whenever Synara is open.
+ * transport and QueryClient): it patches cached works, records agent activity (and the canvas
+ * pane it asks for beside the chat) and answers agent screenshot requests whenever Synara is
+ * open.
  */
 export function CanvasEventBridge() {
   const client = useQueryClient();
@@ -56,8 +57,11 @@ export function CanvasEventBridge() {
   useEffect(() => {
     if (!supported) return;
     return ensureNativeApi().canvas.onEvent((event) => {
-      if (event.type === "activity") useCanvasActivityStore.getState().record(event);
-      else if (event.type === "render") void answerRender(event);
+      if (event.type === "activity") {
+        useCanvasActivityStore.getState().record(event);
+        // An agent's canvas work asks for the canvas pane beside its chat.
+        useCanvasPaneRequestStore.getState().noteActivity(event);
+      } else if (event.type === "render") void answerRender(event);
       else handleCanvasChanged(client, event);
     });
   }, [client, supported]);

@@ -210,11 +210,15 @@ describe("canvas library", () => {
     const first = await mountLibrary();
     await vi.waitFor(() => expect(shownWorks()).toHaveLength(3));
     expect(document.querySelector("article[data-canvas-work]")).toBeTruthy();
-    await page.getByRole("button", { name: "List" }).click();
+    // The layout is the app's neutral segmented control (a radio group).
+    await page.getByRole("radio", { name: "List" }).click();
     await vi.waitFor(() => expect(document.querySelector("li[data-canvas-work]")).toBeTruthy());
     await expect
-      .element(page.getByRole("button", { name: "List" }))
-      .toHaveAttribute("aria-pressed", "true");
+      .element(page.getByRole("radio", { name: "List" }))
+      .toHaveAttribute("aria-checked", "true");
+    await expect
+      .element(page.getByRole("radio", { name: "Grid" }))
+      .toHaveAttribute("aria-checked", "false");
     await first.unmount();
     const second = await mountLibrary();
     try {

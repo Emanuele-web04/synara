@@ -5,8 +5,11 @@ import { CanvasIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { CanvasFramePreview } from "./editor/CanvasFramePreview";
 
-/** The canvas backdrop, so frames shown outside the editor sit on the same ground. */
-export const CANVAS_SURFACE_CLASS_NAME = "bg-background";
+/**
+ * The canvas backdrop (the app's background with the muted tint), so frames shown outside the
+ * editor sit on the same ground and an empty work still reads as a well on its card.
+ */
+export const CANVAS_SURFACE_CLASS_NAME = "bg-(--canvas-backdrop)";
 
 const THUMB_HEIGHT = 112;
 const FRAME_GAP = 18;

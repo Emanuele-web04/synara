@@ -28,6 +28,8 @@ import { canvasId, restyledLayerHtml } from "./canvasClipboard";
 import { useCanvasEditor, type CanvasEditorApi } from "./CanvasEditorContext";
 import type { CanvasGestureLayer, FlowDrop } from "./canvasGestureLayer";
 import {
+  CANVAS_DRAGGING_ATTRIBUTE,
+  canvasGestureHidesChrome,
   constrainToAxis,
   DRAG_THRESHOLD,
   dragPosition,
@@ -304,7 +306,21 @@ export function useCanvasGestures(input: {
   };
   const setGestureAttribute = (value: string | null) => {
     if (value) root.current?.setAttribute(CANVAS_GESTURE_ATTRIBUTE, value);
-    else root.current?.removeAttribute(CANVAS_GESTURE_ATTRIBUTE);
+    else {
+      root.current?.removeAttribute(CANVAS_GESTURE_ATTRIBUTE);
+      root.current?.removeAttribute(CANVAS_DRAGGING_ATTRIBUTE);
+    }
+  };
+  /** Marks the viewport once the gesture really drags (canvasGestureHidesChrome). */
+  const markDragging = (event: { clientX: number; clientY: number; pointerId: number }) => {
+    const element = root.current;
+    const current = gesture.current;
+    if (!element || !current || current.pointer !== event.pointerId) return;
+    if (element.hasAttribute(CANVAS_DRAGGING_ATTRIBUTE)) return;
+    const point = localPoint(event);
+    const distance = Math.hypot(point.x - current.x, point.y - current.y);
+    if (canvasGestureHidesChrome(current, distance))
+      element.setAttribute(CANVAS_DRAGGING_ATTRIBUTE, "");
   };
   const frameScreenRect = (frame: Pick<DesignFrame, "x" | "y" | "width" | "height">) => {
     const view = camera.get();
@@ -960,6 +976,11 @@ export function useCanvasGestures(input: {
   );
 
   const onPointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    moveGesture(event);
+    if (gesture.current) markDragging(event);
+  };
+
+  const moveGesture = (event: React.PointerEvent<HTMLDivElement>) => {
     const current = gesture.current;
     if (!current) {
       if (tool !== "move" || panning) return setHover(null);

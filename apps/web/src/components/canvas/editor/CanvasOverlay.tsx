@@ -40,6 +40,7 @@ import {
 } from "./canvasMeasure";
 import { DESIGN_LAYER_ATTRIBUTE } from "@synara/shared/designCanvasLayers";
 import { CanvasAgentOutlines } from "./CanvasAgentActivity";
+import { scheduleCommentPinClearance } from "./canvasPinPlacement";
 import { useCanvasEditor, type CanvasEditorApi } from "./CanvasEditorContext";
 import type { SpacingHandle } from "./canvasGestures";
 import { isLayerLocked, layerLabel, parentSelection } from "./canvasSelection";
@@ -339,10 +340,12 @@ export const CanvasOverlay = memo(function CanvasOverlay({
     [],
   );
 
-  // A new measurement replaces whatever a gesture previewed, its chip text included.
+  // A new measurement replaces whatever a gesture previewed, its chip text included, and moves
+  // the size badge: comment pins step off it.
   useLayoutEffect(() => {
     const overlay = container.current;
     if (!overlay) return;
+    scheduleCommentPinClearance(root.current);
     for (const element of overlay.querySelectorAll<HTMLElement>(
       "[data-canvas-box],[data-canvas-selection-group]",
     ))
@@ -356,7 +359,17 @@ export const CanvasOverlay = memo(function CanvasOverlay({
       const value = values[Number(span.getAttribute(CHIP_META_ATTRIBUTE))];
       if (value !== undefined && span.textContent !== value) span.textContent = value;
     }
-  }, [geometry]);
+  }, [geometry, root]);
+
+  // A zoom moves the badge (screen-sized, under the selection) against the pins it may cover.
+  useLayoutEffect(() => {
+    let zoom = camera.get().zoom;
+    return camera.subscribe((view) => {
+      if (view.zoom === zoom) return;
+      zoom = view.zoom;
+      scheduleCommentPinClearance(root.current);
+    });
+  }, [camera, root]);
 
   const hoverTarget = panelHover ?? hover;
   const hoverIndex = hoverTarget?.kind === "layer" ? editor.layers(hoverTarget.frameId) : undefined;

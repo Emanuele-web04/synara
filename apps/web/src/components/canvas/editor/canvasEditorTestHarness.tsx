@@ -318,11 +318,13 @@ function Window({
   readOnly,
   layers,
   inspector,
+  toolbar,
   children,
 }: {
   readOnly: boolean;
   layers: boolean;
   inspector: boolean;
+  toolbar: boolean;
   children?: ReactNode;
 }) {
   const { data } = useQuery({ ...canvasWorkQueryOptions("work1"), enabled: false });
@@ -339,7 +341,7 @@ function Window({
               mounted.commits++;
             }}
           >
-            <CanvasViewport />
+            <CanvasViewport toolbar={toolbar} />
           </Profiler>
         </div>
         {inspector && <CanvasInspector className="h-[400px] w-[260px] shrink-0" />}
@@ -352,21 +354,25 @@ function Window({
 const host = (frameId: string) =>
   document.querySelector<HTMLElement>(`[data-canvas-frame-id="${frameId}"]`)!;
 
-/** Mounts one editor on `work` (page1) with its viewport at 600×400 and the camera at 0,0 100%. */
+/**
+ * Mounts one editor on `work` (page1) with its viewport at 600×400 and the camera at 0,0 100%;
+ * `toolbar` adds the floating toolbar (with the zoom menu in it).
+ */
 export async function mountCanvas(
   work: CanvasWork,
   {
     readOnly = false,
     layers = false,
     inspector = false,
-  }: { readOnly?: boolean; layers?: boolean; inspector?: boolean } = {},
+    toolbar = false,
+  }: { readOnly?: boolean; layers?: boolean; inspector?: boolean; toolbar?: boolean } = {},
 ) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   client.setQueryData(canvasWorkQueryKey("work1"), work);
   const screen = await render(
     <QueryClientProvider client={client}>
       <SidebarProvider>
-        <Window readOnly={readOnly} layers={layers} inspector={inspector} />
+        <Window readOnly={readOnly} layers={layers} inspector={inspector} toolbar={toolbar} />
       </SidebarProvider>
     </QueryClientProvider>,
   );

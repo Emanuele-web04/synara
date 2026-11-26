@@ -32,15 +32,27 @@ const INPUT_CONTROL_SIZE_CLASS_NAMES: Record<InputControlSize, string> = {
 };
 
 /**
+ * `filled`: no border at rest, the soft secondary fill of the app's `subtle` buttons instead
+ * (the canvas inspector's dense fields). Focus still draws the control's focus border.
+ */
+const INPUT_CONTROL_FILLED_CLASS_NAME =
+  "border-transparent bg-[var(--color-background-button-secondary)] transition-colors hover:bg-[var(--color-background-button-secondary-hover)] dark:bg-[var(--color-background-button-secondary)]";
+
+/**
  * The input control's chrome (border, fill, focus and disabled states) at one of its sizes, for
  * a composite field that holds an input among other parts (a number field with a scrub handle,
- * a colour value beside its swatch) and so cannot render `<Input>` itself.
+ * a colour value beside its swatch) and so cannot render `<Input>` itself. `filled` is the
+ * borderless soft-fill look.
  */
-export function inputControlClassName(size: InputControlSize = "default"): string {
+export function inputControlClassName(
+  size: InputControlSize = "default",
+  { filled = false }: { filled?: boolean } = {},
+): string {
   return cn(
     GLASS_RAISED_SURFACE_CLASS_NAME,
     INPUT_CONTROL_BASE_CLASS_NAME,
     INPUT_CONTROL_SIZE_CLASS_NAMES[size],
+    filled && INPUT_CONTROL_FILLED_CLASS_NAME,
   );
 }
 

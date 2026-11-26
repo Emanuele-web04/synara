@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { dragPosition, resizeGeometry } from "./canvasGestures";
+import {
+  canvasGestureHidesChrome,
+  DRAG_THRESHOLD,
+  dragPosition,
+  resizeGeometry,
+} from "./canvasGestures";
 
 const box = { x: 100, y: 50, width: 200, height: 100 };
 const plain = { alt: false, shift: false, minSize: 16 };
@@ -45,4 +50,26 @@ describe("resizeGeometry", () => {
 
 it("drags to whole design pixels", () => {
   expect(dragPosition({ x: 10, y: 10 }, { x: 33, y: -7 }, 2)).toEqual({ x: 27, y: 7 });
+});
+
+describe("canvasGestureHidesChrome", () => {
+  it("hides the floating toolbar once a resize, spacing drag, draw, marquee or pan moves", () => {
+    for (const type of ["resize", "spacing", "draw", "marquee", "pan"]) {
+      expect(canvasGestureHidesChrome({ type }, 0)).toBe(false);
+      expect(canvasGestureHidesChrome({ type }, DRAG_THRESHOLD - 0.5)).toBe(false);
+      expect(canvasGestureHidesChrome({ type }, DRAG_THRESHOLD)).toBe(true);
+      expect(canvasGestureHidesChrome({ type }, 120)).toBe(true);
+    }
+  });
+
+  it("keeps it for a click: a press hides it only once it has become a drag", () => {
+    expect(canvasGestureHidesChrome({ type: "press", dragging: false }, 0)).toBe(false);
+    // A press that moved but did not drag (a read-only canvas, say) still shows it.
+    expect(canvasGestureHidesChrome({ type: "press", dragging: false }, 40)).toBe(false);
+    expect(canvasGestureHidesChrome({ type: "press", dragging: true }, 6)).toBe(true);
+  });
+
+  it("never hides it for a comment press", () => {
+    expect(canvasGestureHidesChrome({ type: "comment" }, 200)).toBe(false);
+  });
 });

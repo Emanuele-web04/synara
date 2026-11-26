@@ -1123,6 +1123,8 @@
   "canvasAgentWorking": "An agent is working on this page",
   "canvasDelete": "Delete",
   "canvasExpand": "Open full size",
+  "canvasShowInspector": "Show inspector",
+  "canvasHideInspector": "Hide inspector",
   "canvasFrame": "Frame",
   "canvasInsertImage": "Insert image",
   "canvasLayers": "Layers",

@@ -3,7 +3,8 @@
 //          "capsule" is a rounded track with a sliding pill for switching between
 //          equal views; "buttons" is a row of plain options for tab-like rows, the
 //          selected one on a soft fill. "sm" is the dense size of tool panels (the canvas
-//          inspector); `iconOnly` shows each option's icon with its label as the tooltip.
+//          inspector); `iconOnly` shows each option's icon with its label as the tooltip;
+//          `shape="field"` squares the capsule off to the radius of the dense fields beside it.
 // Layer: Shared presentation
 // Exports: SegmentedPicker, SegmentedPickerOption
 
@@ -38,6 +39,7 @@ export function SegmentedPicker<T extends string>({
   variant: variantProp,
   size: sizeProp,
   iconOnly: iconOnlyProp,
+  shape: shapeProp,
   className,
 }: {
   /** `null` selects nothing (a mixed value); the first option then takes the tab stop. */
@@ -50,6 +52,11 @@ export function SegmentedPicker<T extends string>({
   size?: "default" | "sm";
   /** Show only each option's icon; its label names it and shows as a tooltip. */
   iconOnly?: boolean;
+  /**
+   * The capsule's corners: `pill` (round) or `field`, the small radius and soft secondary fill
+   * of the dense input fields it sits beside (the canvas inspector).
+   */
+  shape?: "pill" | "field";
   className?: string;
 }) {
   const disabled = disabledProp ?? false;
@@ -65,6 +72,7 @@ export function SegmentedPicker<T extends string>({
   });
   const activeIndex = options.findIndex((option) => option.value === value);
   const capsule = variant === "capsule";
+  const field = capsule && shapeProp === "field";
 
   return (
     <div
@@ -73,7 +81,10 @@ export function SegmentedPicker<T extends string>({
       className={cn(
         capsule
           ? cn(
-              "relative isolate grid w-full rounded-full bg-black/[0.05] dark:bg-white/[0.07]",
+              "relative isolate grid w-full",
+              field
+                ? "rounded-sm bg-[var(--color-background-button-secondary)]"
+                : "rounded-full bg-black/[0.05] dark:bg-white/[0.07]",
               small ? "p-0.5" : "p-1",
             )
           : "flex flex-wrap items-center gap-1",
@@ -87,7 +98,10 @@ export function SegmentedPicker<T extends string>({
         <div
           aria-hidden
           className={cn(
-            "pointer-events-none absolute z-0 rounded-full bg-white shadow-[0_1px_2px_rgba(0,0,0,0.12)] transition-[left] duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] motion-reduce:transition-none dark:bg-background dark:shadow-none",
+            "pointer-events-none absolute z-0 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.12)] transition-[left] duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] motion-reduce:transition-none dark:shadow-none",
+            field
+              ? "rounded-[calc(var(--radius-sm)-2px)] dark:bg-white/[0.12]"
+              : "rounded-full dark:bg-background",
             small ? "inset-y-0.5" : "inset-y-1",
           )}
           style={pillGeometry(activeIndex, options.length, small ? "0.125rem" : "0.25rem")}
@@ -106,7 +120,9 @@ export function SegmentedPicker<T extends string>({
             title={iconOnly ? undefined : option.title}
             className={cn(
               "relative z-10 flex min-w-0 items-center justify-center gap-1.5 text-ui font-medium transition-colors duration-200 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50",
-              capsule ? "h-8 rounded-full px-3" : "h-8 rounded-lg px-3",
+              capsule
+                ? cn("h-8 px-3", field ? "rounded-[calc(var(--radius-sm)-2px)]" : "rounded-full")
+                : "h-8 rounded-lg px-3",
               small && cn("h-6 px-2 text-ui-sm", !capsule && "rounded-md"),
               active ? "text-foreground" : "text-muted-foreground hover:text-foreground",
               !capsule && (active ? "bg-foreground/[0.07]" : "hover:bg-foreground/[0.03]"),

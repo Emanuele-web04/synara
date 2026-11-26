@@ -1123,6 +1123,8 @@
   "canvasAgentWorking": "有智能体正在处理此页面",
   "canvasDelete": "删除",
   "canvasExpand": "全尺寸打开",
+  "canvasShowInspector": "显示检查器",
+  "canvasHideInspector": "隐藏检查器",
   "canvasFrame": "画框",
   "canvasInsertImage": "插入图片",
   "canvasLayers": "图层",

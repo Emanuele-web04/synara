@@ -1,13 +1,14 @@
 import type { ThreadId } from "@synara/contracts";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "~/i18n";
 import { downloadBlob } from "~/lib/browserDownload";
 import { executionStorage } from "~/lib/hosts/executionStorage";
 import { ArrowLeftIcon, Minimize2, MoreHorizontalIcon } from "~/lib/icons";
 import { cn, randomUUID } from "~/lib/utils";
 import { ensureNativeApi } from "~/nativeApi";
+import { ChatHeaderButton, ChatHeaderIconButton } from "../chat/chatHeaderControls";
 import {
   CHAT_MAIN_CONTENT_SURFACE_CLASS_NAME,
   CHAT_MAIN_VIEWPORT_SHELL_CLASS_NAME,
@@ -19,9 +20,9 @@ import {
 import { RouteInsetSurface } from "../RouteInsetSurface";
 import { RouteSurface, RouteSurfaceHeader } from "../RouteSurface";
 import { Button } from "../ui/button";
-import { IconButton } from "../ui/icon-button";
 import { Menu, MenuItem, MenuSub, MenuSubTrigger, MenuTrigger } from "../ui/menu";
 import { toastManager } from "../ui/toast";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { askInChat, CanvasStatus, openCanvasPane, useCanvasWork } from "./canvasPane";
 import { CanvasChatPanel } from "./CanvasChatPanel";
 import { CanvasPageMenu } from "./CanvasPageMenu";
@@ -30,6 +31,7 @@ import { CanvasResourceDialog } from "./CanvasResourceDialog";
 import { CANVAS_SIDE_TABS, CanvasSidePanel, type CanvasSideTab } from "./CanvasSidePanel";
 import { CanvasEditorProvider } from "./editor/CanvasEditorContext";
 import { CanvasEditorSurface } from "./editor/CanvasEditorSurface";
+import { CanvasZoomMenu } from "./editor/CanvasToolbar";
 import { CanvasCommentsPanel, canvasCommentCount } from "./editor/CanvasCommentsPanel";
 import { CanvasLayersPanel } from "./editor/CanvasLayersPanel";
 import { loadCanvasAssets } from "./canvasAssets";
@@ -39,9 +41,10 @@ import { useCanvasEditorStore } from "./canvasStores";
 const LEFT_TAB_KEY = "synara:canvas-left-tab";
 
 /**
- * Full-size canvas: the route header (back, title, page) over the editor, inside the route's
- * rounded content card: the left panel (Chat, Layers, Comments), the tool strip, the canvas and
- * the inspector, whose top row holds the zoom menu and the work's actions.
+ * Full-size canvas: the app's top bar (back, title and page on the left; the zoom menu, Back to
+ * chat and the work's menu on the right, like the chat header's actions) over the editor, inside
+ * the route's rounded content card: the left panel (Chat, Layers, Comments), the canvas with its
+ * floating toolbar, and the inspector.
  */
 export default function CanvasWorkView({
   workId,
@@ -117,6 +120,12 @@ export default function CanvasWorkView({
     (threadId: ThreadId | null) => setActiveChat(threadId),
     [],
   );
+  // The top bar's zoom menu drives the canvas in the editor body below it.
+  const body = useRef<HTMLDivElement>(null);
+  const viewportElement = useCallback(
+    () => body.current?.querySelector<HTMLElement>("[data-canvas-viewport]") ?? null,
+    [],
+  );
   const action = async (run: () => Promise<void>) => {
     try {
       await run();
@@ -154,15 +163,13 @@ export default function CanvasWorkView({
         );
     });
 
-  // The work's own controls: in the inspector's top row, or in the header while the panels
-  // are hidden.
+  // The work's own controls, at the end of the top bar.
+  const actionsLabel = work ? t("workspace:canvasActions", { title: work.title }) : "";
   const actions = work ? (
     <>
       {activeChat && (
-        <Button
-          variant="outline"
-          size="xs"
-          title={t("workspace:canvasCollapseToChat")}
+        <ChatHeaderButton
+          tone="outline"
           onClick={() => {
             openCanvasPane(activeChat, work.id, page?.id);
             void navigate({ to: "/$threadId", params: { threadId: activeChat } });
@@ -170,19 +177,21 @@ export default function CanvasWorkView({
         >
           <Minimize2 />
           {t("workspace:canvasCollapseToChat")}
-        </Button>
+        </ChatHeaderButton>
       )}
       <Menu keepOpenOnSubmenuInteraction>
-        <MenuTrigger
-          render={
-            <IconButton
-              label={t("workspace:canvasActions", { title: work.title })}
-              className="-me-1"
-            >
-              <MoreHorizontalIcon />
-            </IconButton>
-          }
-        />
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <MenuTrigger
+                render={<ChatHeaderIconButton type="button" tone="surface" label={actionsLabel} />}
+              >
+                <MoreHorizontalIcon className="size-4" />
+              </MenuTrigger>
+            }
+          />
+          <TooltipPopup side="bottom">{actionsLabel}</TooltipPopup>
+        </Tooltip>
         <ComposerPickerMenuPopup align="end">
           <MenuItem onClick={() => setOrganizing(true)}>{t("workspace:canvasOrganize")}</MenuItem>
           <MenuSub keepOpenOnFocusOut>
@@ -240,42 +249,47 @@ export default function CanvasWorkView({
     </>
   ) : null;
 
+  /** The top bar: back, the title and the page picker on the left, `trailing` on the right. */
+  const header = (trailing: ReactNode) => (
+    <RouteSurfaceHeader>
+      <div className="no-drag flex min-w-0 flex-1 items-center gap-1">
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label={t("workspace:canvasAllWorks")}
+          onClick={() => void navigate({ to: "/canvas" })}
+        >
+          <ArrowLeftIcon className="size-4" />
+        </Button>
+        <h1 className="truncate px-1 text-ui-lg font-medium">
+          {work?.title ?? t("workspace:canvasTitle")}
+        </h1>
+        {work && page && (
+          <CanvasPageMenu work={work} pageId={page.id} onSelect={(id) => void selectPage(id)} />
+        )}
+        {readOnly && (
+          <span className="shrink-0 text-ui-xs text-muted-foreground">
+            {t("workspace:canvasArchived")}
+          </span>
+        )}
+      </div>
+      {trailing ? (
+        <div className="flex shrink-0 items-center gap-2 [-webkit-app-region:no-drag]">
+          {trailing}
+        </div>
+      ) : null}
+    </RouteSurfaceHeader>
+  );
+
   return (
     <div className={cn(CHAT_MAIN_VIEWPORT_SHELL_CLASS_NAME, CHAT_MAIN_CONTENT_SURFACE_CLASS_NAME)}>
       <RouteInsetSurface>
         <RouteSurface>
-          <RouteSurfaceHeader>
-            <div className="no-drag flex min-w-0 flex-1 items-center gap-1">
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                aria-label={t("workspace:canvasAllWorks")}
-                onClick={() => void navigate({ to: "/canvas" })}
-              >
-                <ArrowLeftIcon className="size-4" />
-              </Button>
-              <h1 className="truncate px-1 text-ui-lg font-medium">
-                {work?.title ?? t("workspace:canvasTitle")}
-              </h1>
-              {work && page && (
-                <CanvasPageMenu
-                  work={work}
-                  pageId={page.id}
-                  onSelect={(id) => void selectPage(id)}
-                />
-              )}
-              {readOnly && (
-                <span className="text-ui-xs text-muted-foreground">
-                  {t("workspace:canvasArchived")}
-                </span>
-              )}
-              {uiHidden && actions ? (
-                <div className="ms-auto flex items-center gap-2">{actions}</div>
-              ) : null}
-            </div>
-          </RouteSurfaceHeader>
           {!work || !page ? (
-            <CanvasStatus connection={connection} error={query.isError} />
+            <>
+              {header(actions)}
+              <CanvasStatus connection={connection} error={query.isError} />
+            </>
           ) : (
             <CanvasEditorProvider
               work={work}
@@ -293,10 +307,19 @@ export default function CanvasWorkView({
               onSelectPage={selectPage}
               onOpenLibrary={openLibrary}
             >
+              {header(
+                <>
+                  <CanvasZoomMenu variant="topbar" viewportElement={viewportElement} />
+                  {actions}
+                </>,
+              )}
               {/* The editor fills the route's content card like any route body; its panels sit on
                   the card's own surface, and its corners follow the card's (the rail layout's
                   block radii), so the canvas never paints a square corner over the rounded edge. */}
-              <div className="flex min-h-0 flex-1 overflow-hidden rounded-[var(--app-rail-block-radii,0)] text-foreground">
+              <div
+                ref={body}
+                className="flex min-h-0 flex-1 overflow-hidden rounded-[var(--app-rail-block-radii,0)] text-foreground"
+              >
                 <CanvasSidePanel
                   tab={tab}
                   onTab={setTab}
@@ -325,7 +348,7 @@ export default function CanvasWorkView({
                     comments: <CanvasCommentsPanel className="flex-1" />,
                   }}
                 />
-                <CanvasEditorSurface inspector actions={uiHidden ? undefined : actions} />
+                <CanvasEditorSurface inspector zoomInHeader />
               </div>
             </CanvasEditorProvider>
           )}

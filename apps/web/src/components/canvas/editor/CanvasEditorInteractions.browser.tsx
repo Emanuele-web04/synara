@@ -429,13 +429,23 @@ describe("handles and outlines", () => {
         "[data-canvas-selection-group] > div:last-child",
       )!;
       expect(badge.textContent).toBe("400 × 300");
-      // The on-canvas accent is the app's info colour.
+      // The selection blue is fixed: the user's accent colour and the theme never change it.
       const accent = getComputedStyle(root).getPropertyValue("--canvas-accent").trim();
-      expect(accent).toBe(
-        getComputedStyle(document.documentElement).getPropertyValue("--info").trim(),
-      );
       expect(accent).not.toBe("");
-      expect(getComputedStyle(badge).backgroundColor).not.toBe("rgba(0, 0, 0, 0)");
+      const badgeColor = getComputedStyle(badge).backgroundColor;
+      expect(badgeColor).not.toBe("rgba(0, 0, 0, 0)");
+      const html = document.documentElement;
+      html.style.setProperty("--color-text-accent", "rgb(255, 0, 0)");
+      html.style.setProperty("--info", "rgb(255, 0, 0)");
+      html.classList.add("dark");
+      try {
+        expect(getComputedStyle(root).getPropertyValue("--canvas-accent").trim()).toBe(accent);
+        expect(getComputedStyle(badge).backgroundColor).toBe(badgeColor);
+      } finally {
+        html.style.removeProperty("--color-text-accent");
+        html.style.removeProperty("--info");
+        html.classList.remove("dark");
+      }
     } finally {
       await screen.unmount();
     }

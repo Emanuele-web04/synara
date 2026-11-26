@@ -20,6 +20,8 @@ import {
   TreeRow,
   treeRowIndent,
   TreeRowRenameInput,
+  TreeSectionHeader,
+  type TreeRowRun,
 } from "../../ui/TreeRow";
 import { selectionKey, useCanvasEditorStore, type CanvasSelectionItem } from "../canvasStores";
 import { pasteIntoCanvas, readClipboard } from "./canvasClipboard";
@@ -425,7 +427,8 @@ export function CanvasLayersPanel({ className }: { className?: string }) {
       if (event.clientY < edges.top + LAYER_AUTOSCROLL_EDGE) element.scrollTop -= 6;
       else if (event.clientY > edges.bottom - LAYER_AUTOSCROLL_EDGE) element.scrollTop += 6;
     }
-    const left = element?.getBoundingClientRect().left ?? box.left;
+    // Depth is read from the row's own edge (rows are inset from the panel's).
+    const left = box.left;
     const sources = draggedRows(dragging);
     const next = resolveLayerDrop({
       rows,
@@ -449,7 +452,7 @@ export function CanvasLayersPanel({ className }: { className?: string }) {
     );
   };
 
-  // Rows inside a selected frame or layer get a lighter wash of the selection gray.
+  // Rows inside a selected frame or layer take the row hover tone.
   const tinted = new Set<string>();
   let selectedDepth: number | null = null;
   for (const row of rows) {
@@ -457,17 +460,29 @@ export function CanvasLayersPanel({ className }: { className?: string }) {
     if (selected.has(row.key)) selectedDepth ??= row.depth;
     else if (selectedDepth !== null) tinted.add(row.key);
   }
+  // Consecutive filled rows (selected or tinted) read as one block: square corners between them.
+  const runs = new Map<string, TreeRowRun>();
+  const filled = (row: Row | undefined) =>
+    row !== undefined && (selected.has(row.key) || tinted.has(row.key));
+  rows.forEach((row, at) => {
+    if (!filled(row)) return;
+    const before = filled(rows[at - 1]);
+    const after = filled(rows[at + 1]);
+    if (before && after) runs.set(row.key, "middle");
+    else if (after) runs.set(row.key, "start");
+    else if (before) runs.set(row.key, "end");
+  });
   // One tab stop for the tree: the first selected row, else the first row.
   const tabStop = rows.find((row) => selected.has(row.key))?.key ?? rows[0]?.key;
 
   return (
     <div className={cn("flex min-h-0 flex-col", className)}>
-      {/* The layer tree sits right under the pages, with no header of its own. */}
+      <TreeSectionHeader title={t("workspace:canvasLayers")} className="mt-1.5" />
       <div
         ref={list}
         role="tree"
         aria-label={t("workspace:canvasLayers")}
-        className="min-h-0 flex-1 overflow-y-auto pt-1.5 pb-2"
+        className="min-h-0 flex-1 overflow-y-auto pb-2"
         onMouseLeave={() => setPanelHover(null)}
         onKeyDown={onTreeKeyDown}
         onContextMenu={(event) => {
@@ -488,7 +503,7 @@ export function CanvasLayersPanel({ className }: { className?: string }) {
         }}
       >
         {rows.length === 0 ? (
-          <p className="px-3 py-6 text-center text-ui-sm text-muted-foreground">
+          <p className="px-4 py-6 text-center text-ui-sm text-muted-foreground">
             {t("workspace:canvasLayersEmpty")}
           </p>
         ) : (
@@ -513,6 +528,8 @@ export function CanvasLayersPanel({ className }: { className?: string }) {
                 indent={indentOf(row.depth)}
                 selected={isSelected}
                 tinted={tinted.has(row.key)}
+                run={runs.get(row.key)}
+                actionsPinned={row.locked || row.hidden || row.lockedByParent}
                 muted={row.hidden || row.hiddenByParent}
                 className={cn(dragging === row.key && "opacity-40")}
                 drop={lineHere}

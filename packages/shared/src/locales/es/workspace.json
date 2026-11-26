@@ -1123,6 +1123,8 @@
   "canvasAgentWorking": "Un agente está trabajando en esta página",
   "canvasDelete": "Eliminar",
   "canvasExpand": "Abrir a tamaño completo",
+  "canvasShowInspector": "Mostrar inspector",
+  "canvasHideInspector": "Ocultar inspector",
   "canvasFrame": "Marco",
   "canvasInsertImage": "Insertar imagen",
   "canvasLayers": "Capas",

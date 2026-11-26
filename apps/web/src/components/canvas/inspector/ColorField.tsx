@@ -62,7 +62,9 @@ export function ColorSwatch({
     <span
       aria-hidden
       className={cn(
-        "relative block size-4 shrink-0 overflow-hidden rounded-sm shadow-[inset_0_0_0_1px_var(--border)]",
+        // The hairline sits over the colour, so a white swatch on the light field (or a black one
+        // on the dark field) keeps its edge.
+        "relative block size-4 shrink-0 overflow-hidden rounded-sm after:pointer-events-none after:absolute after:inset-0 after:rounded-[inherit] after:shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--foreground)_16%,transparent)] after:content-['']",
         className,
       )}
       style={CHECKER_STYLE}

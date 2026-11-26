@@ -3,6 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import {
   useEffect,
   useEffectEvent,
+  useLayoutEffect,
   useRef,
   useState,
   type CSSProperties,
@@ -32,6 +33,7 @@ import { runCanvasWrite } from "../canvasWorkCache";
 import { canvasId } from "./canvasClipboard";
 import { layerLabel } from "./canvasSelection";
 import { useCanvasEditor, type CanvasEditorApi } from "./CanvasEditorContext";
+import { CANVAS_PIN_ANCHOR_ATTRIBUTE, scheduleCommentPinClearance } from "./canvasPinPlacement";
 import { animateCanvasCamera } from "./useCanvasCamera";
 import {
   COMMENT_PIN_SIZE as PIN,
@@ -92,16 +94,29 @@ export function CanvasCommentLayer({
     (thread) => thread.status === "open" || thread.id === activeCommentId,
   );
   const pendingPoint = pending ? pinPoint(pending) : null;
+  // Pins that land on the selection's size badge step aside (canvasPinPlacement).
+  const layer = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    scheduleCommentPinClearance(
+      layer.current?.closest<HTMLElement>("[data-canvas-viewport]") ?? null,
+    );
+  });
   if (hidden) return null;
+  const anchor = { [CANVAS_PIN_ANCHOR_ATTRIBUTE]: "" };
   return (
-    <div className="pointer-events-none absolute inset-0" data-canvas-comments="">
+    <div ref={layer} className="pointer-events-none absolute inset-0" data-canvas-comments="">
       {threads.map((thread) => {
         const point = pinPoint(thread);
         if (!point) return null;
         const active = thread.id === activeCommentId;
         const first = thread.messages[0]!;
         return (
-          <div key={thread.id} className={cn("absolute", active && "z-10")} style={pinStyle(point)}>
+          <div
+            key={thread.id}
+            {...anchor}
+            className={cn("absolute", active && "z-10")}
+            style={pinStyle(point)}
+          >
             <CommentPin
               thread={thread}
               author={first.author}

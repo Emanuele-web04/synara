@@ -4,7 +4,9 @@ import {
   FRAME_ACTIVITY_KEY,
   canvasActivityKey,
   canvasLayerActivity,
+  canvasPaneRequestFor,
   useCanvasActivityStore,
+  useCanvasPaneRequestStore,
 } from "./canvasStores";
 
 type ActivityEvent = Extract<CanvasStreamEvent, { type: "activity" }>;
@@ -73,4 +75,47 @@ it("drops a thread's activity on the page when its turn ends, and expired entrie
   expect(store().layers[canvasActivityKey("work", "page")]).toEqual({
     detail: { [FRAME_ACTIVITY_KEY]: expect.objectContaining({ kind: "read" }) },
   });
+});
+
+it("asks for the canvas pane beside the chat once per work and turn, never for a read", () => {
+  let surfaced = {};
+  const step = (event: ActivityEvent) => {
+    const next = canvasPaneRequestFor(event, surfaced);
+    surfaced = next.surfaced;
+    return next.request;
+  };
+  // A read shows nothing.
+  expect(step(activity({ kind: "read" }))).toBeNull();
+  // The first write of the turn asks for the pane on that work and page.
+  expect(step(activity({ kind: "write" }))).toEqual({
+    threadId: agent,
+    workId: "work",
+    pageId: "page",
+  });
+  // Later edits and deletes on that work in the same turn do not ask again: a pane the user
+  // closed stays closed.
+  expect(step(activity({ kind: "edit", pageId: "page2" }))).toBeNull();
+  expect(step(activity({ kind: "delete" }))).toBeNull();
+  // Another work of the same turn, and another chat, ask for theirs.
+  expect(step(activity({ workId: "work2" }))).toMatchObject({ workId: "work2" });
+  expect(step(activity({ threadId: other }))).toMatchObject({ threadId: other });
+  // The turn's end starts the count again for that chat only.
+  expect(step(activity({ ended: true }))).toBeNull();
+  expect(step(activity({ kind: "edit" }))).toMatchObject({ threadId: agent, workId: "work" });
+  expect(step(activity({ threadId: other }))).toBeNull();
+});
+
+it("keeps one pending pane request per chat and work, and hands them over once", () => {
+  useCanvasPaneRequestStore.setState({ surfaced: {}, pending: [] });
+  const requests = useCanvasPaneRequestStore.getState();
+  requests.noteActivity(activity());
+  requests.noteActivity(activity({ ended: true }));
+  requests.noteActivity(activity({ pageId: "page2" }));
+  requests.noteActivity(activity({ threadId: other }));
+  expect(useCanvasPaneRequestStore.getState().pending).toEqual([
+    { threadId: agent, workId: "work", pageId: "page2" },
+    { threadId: other, workId: "work", pageId: "page" },
+  ]);
+  expect(useCanvasPaneRequestStore.getState().take()).toHaveLength(2);
+  expect(useCanvasPaneRequestStore.getState().take()).toEqual([]);
 });

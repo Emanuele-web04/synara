@@ -22,8 +22,9 @@ export type FlowDrop = {
   move: string | null;
 };
 
-const MARQUEE_CLASS_NAME = "absolute border border-muted-foreground bg-neutral-900/6";
-const PREVIEW_BOX_CLASS_NAME = "absolute border border-muted-foreground";
+// The marquee and the layers it would select draw in the selection blue.
+const MARQUEE_CLASS_NAME = "absolute border border-(--canvas-accent) bg-(--canvas-accent)/8";
+const PREVIEW_BOX_CLASS_NAME = "absolute border border-(--canvas-accent)/70";
 const DRAW_CLASS_NAME = "absolute border border-(--canvas-accent) bg-white/40";
 const DROP_LINE_CLASS_NAME = "absolute bg-(--canvas-drop)";
 const CONTAINER_CLASS_NAME = "absolute border border-(--canvas-accent)";

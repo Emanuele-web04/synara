@@ -1,6 +1,6 @@
 // FILE: ShortcutTooltip.tsx
 // Purpose: A canvas control's tooltip content: its name, then its shortcut in the app's key
-//          cap when it has one (the tool strip, the inspector's buttons).
+//          cap when it has one (the floating toolbar, the inspector's buttons).
 // Layer: Canvas editor UI
 // Exports: ShortcutTooltip
 

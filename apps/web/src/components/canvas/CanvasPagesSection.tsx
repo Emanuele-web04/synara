@@ -15,12 +15,18 @@ import {
   createPanelResizeOverlay,
   removePanelResizeOverlay,
 } from "~/lib/panelResize";
-import { AddPlusIcon, CheckIcon } from "~/lib/icons";
+import { AddPlusIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { EXPLORER_ROW_PROPS, useExplorerListNavigation } from "../chat/explorerListNavigation";
 import { IconButton } from "../ui/icon-button";
 import { DisclosureRegion } from "../ui/DisclosureRegion";
-import { setTreeRowDragImage, TreeRow, TreeRowRenameInput, TreeSectionHeader } from "../ui/TreeRow";
+import {
+  setTreeRowDragImage,
+  TreeRow,
+  treeRowIndent,
+  TreeRowRenameInput,
+  TreeSectionHeader,
+} from "../ui/TreeRow";
 import { CanvasAgentPageIndicator } from "./editor/CanvasAgentActivity";
 import { useActiveAgentPages } from "./canvasStores";
 import { CanvasPageGlyph } from "./canvasPageIcons";
@@ -28,7 +34,7 @@ import { showCanvasPageMenu } from "./canvasPageContextMenu";
 import { CANVAS_PAGE_TITLE_MAX_LENGTH, useCanvasPageActions } from "./useCanvasPageActions";
 
 /** Page rows line their icons up with the layer rows' (the same empty disclosure lane). */
-const PAGE_ROW_INDENT_PX = 2;
+const PAGE_ROW_INDENT_PX = treeRowIndent(0);
 const DRAG_TYPE = "text/x-synara-page";
 
 type Drop = { id: string; edge: "before" | "after" };
@@ -194,7 +200,7 @@ export function CanvasPagesSection({
   };
 
   return (
-    <section className="relative flex shrink-0 flex-col border-b border-border pb-1.5">
+    <section className="relative flex shrink-0 flex-col border-b border-border pt-1 pb-1.5">
       <TreeSectionHeader
         title={t("workspace:canvasPages")}
         disclosure={{ open, onToggle: () => setOpen((value) => !value) }}
@@ -203,7 +209,6 @@ export function CanvasPagesSection({
           <IconButton
             label={t("workspace:canvasAddPage")}
             tooltip={t("workspace:canvasAddPage")}
-            className="-me-1"
             disabled={!pages.canCreate}
             onClick={() => {
               setOpen(true);
@@ -262,8 +267,11 @@ export function CanvasPagesSection({
                 aria-selected={current}
                 tabIndex={current ? 0 : -1}
                 data-page-row={page.id}
+                data-canvas-page-current={current ? "" : undefined}
                 indent={PAGE_ROW_INDENT_PX}
                 disclosure={null}
+                // The open page is the selected row, like the sidebar's open chat.
+                selected={current}
                 className={cn(dragging === page.id && "opacity-40")}
                 drop={line}
                 // A page an agent is working on shows the activity indicator instead of its icon.
@@ -275,16 +283,6 @@ export function CanvasPagesSection({
                   )
                 }
                 label={page.title}
-                // The open page has a check mark after its name (no row fill).
-                actions={
-                  current ? (
-                    <CheckIcon
-                      aria-hidden
-                      data-canvas-page-current=""
-                      className="ms-auto size-3.5 text-foreground"
-                    />
-                  ) : null
-                }
                 editor={
                   renaming === page.id ? (
                     <TreeRowRenameInput

@@ -23,6 +23,27 @@ import {
 /** Screen pixels a press travels before it becomes a drag. */
 export const DRAG_THRESHOLD = 5;
 
+/**
+ * Set on the viewport while a gesture really drags (a move, resize, spacing drag, draw, marquee
+ * or pan past the drag threshold): the floating toolbar fades out of the way until it ends.
+ */
+export const CANVAS_DRAGGING_ATTRIBUTE = "data-canvas-dragging";
+
+/**
+ * Whether a gesture in progress hides the floating chrome. A press does once it has turned into
+ * a drag; a comment press never does; every other gesture (resize, spacing, draw, marquee, pan)
+ * once the pointer is `distance` screen pixels past the drag threshold, so a plain click on the
+ * canvas never flickers the toolbar.
+ */
+export function canvasGestureHidesChrome(
+  gesture: { type: string; dragging?: boolean },
+  distance: number,
+): boolean {
+  if (gesture.type === "comment") return false;
+  if (gesture.type === "press") return gesture.dragging === true;
+  return distance >= DRAG_THRESHOLD;
+}
+
 export type ResizeHandle = "n" | "s" | "e" | "w" | "nw" | "ne" | "sw" | "se";
 
 export type ResizeResult = WorldRect & {

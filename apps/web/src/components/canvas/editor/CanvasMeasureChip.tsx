@@ -8,6 +8,7 @@
 
 import type { CSSProperties } from "react";
 import { cn } from "~/lib/utils";
+import { CANVAS_SIZE_BADGE_ATTRIBUTE } from "./canvasPinPlacement";
 
 type ChipVariant = "label" | "distance" | "badge";
 
@@ -17,7 +18,7 @@ const chipClassName = (variant: ChipVariant, className?: string) =>
     variant === "label"
       ? "h-4 gap-1.5 rounded-[calc(var(--radius-sm)/2)] bg-(--canvas-chip) px-[5px] text-ui-xs leading-none text-(--canvas-chip-foreground)"
       : variant === "badge"
-        ? // The accent W × H badge under the selection.
+        ? // The selection-blue W × H badge under the selection.
           "h-4 gap-1.5 rounded-[calc(var(--radius-sm)/2)] bg-(--canvas-accent) px-[5px] text-ui-xs leading-none text-white"
         : "h-[13px] rounded-[calc(var(--radius-sm)/2)] bg-(--canvas-measure) px-[3px] text-ui-2xs leading-none text-white",
     className,
@@ -48,7 +49,11 @@ export function CanvasMeasureChip({
   style?: CSSProperties;
 }) {
   return (
-    <div className={chipClassName(variant, className)} style={style}>
+    <div
+      className={chipClassName(variant, className)}
+      style={style}
+      {...(variant === "badge" ? { [CANVAS_SIZE_BADGE_ATTRIBUTE]: "" } : {})}
+    >
       {leading ? <span className={MUTED_CLASS_NAME}>{leading}</span> : null}
       {label ? <span className={LABEL_CLASS_NAME}>{label}</span> : null}
       {meta.map((value, index) => (

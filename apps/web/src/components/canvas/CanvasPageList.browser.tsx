@@ -204,14 +204,17 @@ describe("canvas page list", () => {
     useCanvasActivityStore.setState({ frames: {}, layers: {} } as never);
   });
 
-  it("lists pages and dividers in one order, with icons, the open page checked and agent rain", async () => {
+  it("lists pages and dividers in one order, with icons, the open page selected and agent rain", async () => {
     const { screen } = await mountPages();
     try {
       expect(rows()).toEqual(["p1", "d1", "p2", "p3", "d2"]);
       expect(row("d1").getAttribute("aria-disabled")).toBe("true");
       expect(row("p1").querySelector('[data-canvas-page-icon="swatch"]')).toBeTruthy();
-      expect(row("p1").querySelector("[data-canvas-page-current]")).toBeTruthy();
-      expect(row("p2").querySelector("[data-canvas-page-current]")).toBeNull();
+      // The open page is the selected row (the sidebar's selected fill), not a check mark.
+      expect(row("p1").hasAttribute("data-canvas-page-current")).toBe(true);
+      expect(row("p1").getAttribute("aria-selected")).toBe("true");
+      expect(row("p2").hasAttribute("data-canvas-page-current")).toBe(false);
+      expect(row("p2").getAttribute("aria-selected")).toBe("false");
       // A page an agent works on shows the activity indicator in place of its icon.
       useCanvasActivityStore.getState().record({
         type: "activity",

@@ -104,6 +104,8 @@ import {
   CHAT_ROUTE_INSET_SHELL_CLASS_NAME,
 } from "./composerPickerStyles";
 import { routeSingleDockPaneOpenRequest } from "./dockPaneOpenRequest";
+import { DESIGN_CANVAS_ON } from "~/betaFeatures";
+import { openCanvasPaneForAgent, useCanvasPaneOpenRequests } from "../canvas/canvasPane";
 import {
   selectFloatingBrowserRequested,
   useFloatingBrowserRequestStore,
@@ -757,6 +759,17 @@ export function SingleChatSurface(props: {
             });
           }
         : null,
+  });
+  // An agent's canvas work opens the canvas beside its chat, like its browser and device work.
+  useCanvasPaneOpenRequests({
+    onOpenPaneRequested: DESIGN_CANVAS_ON
+      ? (request) =>
+          openCanvasPaneForAgent({
+            currentThreadId: props.threadId,
+            request,
+            requestImmediateHydration: () => requestImmediateDockHydration("canvas"),
+          })
+      : null,
   });
   const excludedThreadIds = new Set<ThreadId>([props.threadId]);
 

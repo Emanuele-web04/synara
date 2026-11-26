@@ -412,3 +412,142 @@ describe("canvas keyboard", () => {
     }
   });
 });
+
+const toolbarOf = (root: HTMLElement) => root.querySelector<HTMLElement>("[data-canvas-toolbar]")!;
+/** The viewport says a gesture drags: the toolbar is faded out and takes no presses. */
+const hidden = (root: HTMLElement) => root.hasAttribute("data-canvas-dragging");
+const takesPointer = (root: HTMLElement) => getComputedStyle(toolbarOf(root)).pointerEvents;
+
+describe("floating toolbar", () => {
+  beforeEach(async () => {
+    // A camera animation the previous test started may still save when it ends.
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    flushCanvasCameras();
+    resetCanvasStores();
+    for (const mock of Object.values(native.canvas)) mock.mockReset();
+  });
+  afterEach(() => {
+    flushCanvasCameras();
+    vi.restoreAllMocks();
+  });
+
+  it("fades out while a layer drags, without a render, and comes back on release", async () => {
+    serveCanvas(native, work());
+    const { screen, root, layer } = await mountCanvas(work(), { toolbar: true });
+    try {
+      expect(toolbarOf(root)).toBeTruthy();
+      expect(takesPointer(root)).toBe("auto");
+      // The zoom menu rides in the toolbar when no header shows it.
+      expect(root.querySelector("[data-canvas-zoom-corner]")).toBeNull();
+      expect(toolbarOf(root).textContent).toContain("100%");
+      select([{ kind: "layer", frameId: "f1", layerId: "badge" }]);
+      await vi.waitFor(() =>
+        expect(root.querySelector("[data-canvas-selection-group]")).toBeTruthy(),
+      );
+      await nextFrame();
+      const badge = layer("badge")!.getBoundingClientRect();
+      const start = { x: badge.left + 20, y: badge.top + 20 };
+      pointer(layer("badge")!, "pointerdown", start.x, start.y);
+      await nextFrame();
+      // A press alone keeps the toolbar.
+      expect(hidden(root)).toBe(false);
+      mounted.commits = 0;
+      await moveIn(layer("badge")!, start, [
+        [2, 0],
+        [20, 10],
+        [40, 30],
+      ]);
+      expect(hidden(root)).toBe(true);
+      expect(takesPointer(root)).toBe("none");
+      expect(mounted.commits).toBe(0);
+      pointer(layer("badge")!, "pointerup", start.x + 40, start.y + 30);
+      expect(hidden(root)).toBe(false);
+      expect(takesPointer(root)).toBe("auto");
+      await vi.waitFor(() => expect(native.canvas.editLayers).toHaveBeenCalledTimes(1));
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("stays for a click and hides for a marquee, a pan, a resize and a draw", async () => {
+    serveCanvas(native, work());
+    const { screen, root } = await mountCanvas(work(), { toolbar: true });
+    try {
+      const empty = viewportPoint(root, 500, 200);
+      // A click on the empty canvas.
+      pointer(root, "pointerdown", empty.x, empty.y);
+      pointer(root, "pointermove", empty.x + 2, empty.y + 1);
+      expect(hidden(root)).toBe(false);
+      pointer(root, "pointerup", empty.x + 2, empty.y + 1);
+      expect(hidden(root)).toBe(false);
+
+      // A marquee.
+      pointer(root, "pointerdown", empty.x, empty.y);
+      await moveIn(root, empty, [[30, 30]]);
+      expect(hidden(root)).toBe(true);
+      pointer(root, "pointerup", empty.x + 30, empty.y + 30);
+      expect(hidden(root)).toBe(false);
+
+      // A pan with the hand tool.
+      useCanvasEditorStore.getState().setTool("hand");
+      await nextFrame();
+      pointer(root, "pointerdown", empty.x, empty.y);
+      await moveIn(root, empty, [[40, 10]]);
+      expect(hidden(root)).toBe(true);
+      pointer(root, "pointerup", empty.x + 40, empty.y + 10);
+      expect(hidden(root)).toBe(false);
+
+      // A resize from a corner handle.
+      useCanvasEditorStore.getState().setTool("move");
+      select([{ kind: "layer", frameId: "f1", layerId: "badge" }]);
+      await vi.waitFor(() => expect(root.querySelector('[data-canvas-handle="se"]')).toBeTruthy());
+      await nextFrame();
+      const handle = root.querySelector('[data-canvas-handle="se"]')!;
+      const corner = handle.getBoundingClientRect();
+      const at = { x: corner.left + corner.width / 2, y: corner.top + corner.height / 2 };
+      pointer(handle, "pointerdown", at.x, at.y);
+      await moveIn(handle, at, [[12, 12]]);
+      expect(hidden(root)).toBe(true);
+      key(root, { key: "Escape" });
+      expect(hidden(root)).toBe(false);
+      pointer(handle, "pointerup", at.x + 12, at.y + 12);
+
+      // A rectangle drawn with the R tool, cancelled.
+      useCanvasEditorStore.getState().setTool("rectangle");
+      await nextFrame();
+      pointer(root, "pointerdown", empty.x, empty.y);
+      await moveIn(root, empty, [[50, 40]]);
+      expect(hidden(root)).toBe(true);
+      key(root, { key: "Escape" });
+      expect(hidden(root)).toBe(false);
+      pointer(root, "pointerup", empty.x + 50, empty.y + 40);
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("takes presses only inside its own box, and leaves with Hide UI", async () => {
+    serveCanvas(native, work());
+    const { screen, root } = await mountCanvas(work(), { toolbar: true });
+    try {
+      const bar = toolbarOf(root).getBoundingClientRect();
+      const midY = bar.top + bar.height / 2;
+      const inside = document.elementFromPoint(bar.left + bar.width / 2, midY);
+      expect(inside?.closest("[data-canvas-toolbar]")).toBeTruthy();
+      // Beside the bar, on the same line, the canvas gets the press.
+      const beside = document.elementFromPoint(bar.left - 20, midY);
+      expect(beside?.closest("[data-canvas-toolbar]")).toBeNull();
+      expect(root.contains(beside)).toBe(true);
+      // Its tools are the canvas's tools.
+      (
+        toolbarOf(root).querySelector<HTMLElement>('[aria-label="Rectangle"]') ??
+        toolbarOf(root).querySelectorAll<HTMLElement>("button")[3]!
+      ).click();
+      expect(useCanvasEditorStore.getState().tool).toBe("rectangle");
+      useCanvasEditorStore.getState().toggleUi();
+      await vi.waitFor(() => expect(root.querySelector("[data-canvas-toolbar]")).toBeNull());
+    } finally {
+      await screen.unmount();
+    }
+  });
+});

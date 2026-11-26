@@ -24,8 +24,8 @@ export const CANVAS_REVEAL_MIN_VISIBLE_SHARE = 0.25;
 type Rect = Pick<DesignFrame, "x" | "y" | "width" | "height">;
 
 /**
- * The share of a frame's area inside the canvas element (the visible canvas: the side panels,
- * the tool strip and the inspector are its neighbours, not on top of it).
+ * The share of a frame's area inside the canvas element (the visible canvas: the side panels
+ * and the inspector are its neighbours, not on top of it).
  */
 const visibleShare = (rect: Rect, view: DesignViewport, width: number, height: number) => {
   const left = view.x + rect.x * view.zoom;

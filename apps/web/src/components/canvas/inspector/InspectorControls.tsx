@@ -2,8 +2,10 @@
 // Purpose: Dense building blocks of the canvas inspector: sections, field rows, scrubbable
 //          number fields, icon toggle groups, selects, checkbox rows and the property row
 //          shared by Fill, Text color, Border and Shadow. Every control is the app's own at
-//          its densest size: xs inputs and selects, icon-xs buttons, the "sm" SegmentedPicker,
-//          the app checkbox; sections are 32px headers over 24px rows 8px apart.
+//          its densest size: xs inputs and selects on the borderless soft fill, icon-xs
+//          buttons, the "sm" SegmentedPicker squared off to the fields' radius, the app
+//          checkbox; sections are 32px headers (the sidebar's muted label) over 24px rows 8px
+//          apart.
 // Layer: Canvas editor UI
 // Depends on: @base-ui NumberField (scrubbing), ui/input, ui/toggle, ui/select, ui/checkbox,
 //             SegmentedPicker, ComposerPickerSelectPopup.
@@ -25,6 +27,7 @@ import { useTranslation } from "~/i18n";
 import { CentralIcon } from "~/lib/central-icons";
 import { AddPlusIcon, DragHandleIcon, MinusIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
+import { SIDEBAR_SECTION_LABEL_TONE_CLASS_NAME } from "~/sidebarRowStyles";
 import { ComposerPickerSelectPopup } from "../../chat/ComposerPickerMenuPopup";
 import { SegmentedPicker } from "../../SegmentedPicker";
 import { Button } from "../../ui/button";
@@ -36,16 +39,17 @@ import { inputControlClassName } from "../../ui/input";
 import { Select, SelectItem, SelectTrigger, SelectValue } from "../../ui/select";
 import { Toggle } from "../../ui/toggle";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../../ui/tooltip";
+import { TREE_SECTION_LABEL_CLASS_NAME } from "../../ui/TreeRow";
 import { clamp, formatNumber, largeStepFor, parseCssInput, type CssInput } from "./inspectorValues";
 
 // ── Shared chrome ────────────────────────────────────────────────────────
 
 /**
- * Field chrome shared by every inspector input: the app's xs input control. An open picker or
- * popover for the field keeps its focus border.
+ * Field chrome shared by every inspector input: the app's xs input control, borderless on the
+ * soft fill. An open picker or popover for the field keeps its focus border.
  */
 export const INSPECTOR_FIELD_CLASS_NAME = cn(
-  inputControlClassName("xs"),
+  inputControlClassName("xs", { filled: true }),
   "min-w-0 gap-1 px-1.5",
   "data-active:border-foreground/30 data-popup-open:border-foreground/30",
   "data-disabled:pointer-events-none data-disabled:opacity-64",
@@ -90,37 +94,46 @@ export function InspectorSection({
     !empty && children ? (
       <div className="flex flex-col gap-2 px-3 pt-1 pb-3">{children}</div>
     ) : null;
+  // The title is the sidebar's muted section label; an unset section's comes up on hover, where
+  // clicking it adds a value.
+  const titleClassName = cn(
+    TREE_SECTION_LABEL_CLASS_NAME,
+    "transition-colors",
+    canAdd && "group-hover/section:text-foreground",
+  );
   return (
     <section
       data-canvas-section=""
       data-dimmed={empty ? "" : undefined}
-      // An unset section is dimmed and comes up on hover.
-      className={cn(
-        "group/section border-b border-border text-foreground",
-        empty && "text-muted-foreground hover:text-foreground",
-      )}
+      className="group/section border-b border-border text-foreground"
     >
       <header className="flex h-8 items-center gap-2 px-3">
         {collapsible && !empty ? (
           <button
             type="button"
             aria-expanded={open}
-            className="flex h-full min-w-0 flex-1 items-center gap-1 text-start text-ui-sm font-medium outline-none focus-visible:underline"
+            className="flex h-full min-w-0 flex-1 items-center gap-1 text-start outline-none focus-visible:underline"
             onClick={() => setOpen((value) => !value)}
           >
-            <span className="truncate pb-px">{title}</span>
-            <DisclosureChevron open={open} className="size-3 text-muted-foreground" />
+            <span className={cn("truncate pb-px", titleClassName)}>{title}</span>
+            <DisclosureChevron
+              open={open}
+              className={cn("size-3", SIDEBAR_SECTION_LABEL_TONE_CLASS_NAME)}
+            />
           </button>
         ) : canAdd ? (
           <button
             type="button"
-            className="h-full min-w-0 flex-1 truncate pb-px text-start text-ui-sm font-medium outline-none focus-visible:underline"
+            className={cn(
+              "h-full min-w-0 flex-1 truncate pb-px text-start outline-none focus-visible:underline",
+              titleClassName,
+            )}
             onClick={onAdd}
           >
             {title}
           </button>
         ) : (
-          <h3 className="min-w-0 flex-1 truncate pb-px text-ui-sm font-medium">{title}</h3>
+          <h3 className={cn("min-w-0 flex-1 truncate pb-px", titleClassName)}>{title}</h3>
         )}
         {headerMenu}
         {canAdd ? (
@@ -283,7 +296,7 @@ export function InspectorActionRow({
   onClick: () => void;
 }) {
   return (
-    <Button variant="outline" size="xs" disabled={disabled} className="w-full" onClick={onClick}>
+    <Button variant="subtle" size="xs" disabled={disabled} className="w-full" onClick={onClick}>
       <span className="truncate">{label}</span>
       {hint ? <span className="shrink-0 font-normal text-muted-foreground">{hint}</span> : null}
     </Button>
@@ -304,10 +317,12 @@ export function InspectorSubheader({
 }) {
   return (
     <div className="flex h-6 min-w-0 items-center gap-2">
+      {/* Below the section's own label: smaller, in the same muted tone, never louder. */}
       <h4
         className={cn(
-          "min-w-0 flex-1 truncate text-ui-xs font-medium",
-          dimmed ? "text-muted-foreground/72" : "text-muted-foreground",
+          "min-w-0 flex-1 truncate text-ui-xs font-normal",
+          SIDEBAR_SECTION_LABEL_TONE_CLASS_NAME,
+          dimmed && "opacity-70",
         )}
       >
         {title}
@@ -664,6 +679,7 @@ export function InspectorToggleGroup<T extends string>({
   return (
     <SegmentedPicker<T>
       size="sm"
+      shape="field"
       iconOnly
       ariaLabel={ariaLabel}
       value={value}
@@ -745,7 +761,7 @@ export function InspectorSelect<T extends string>({
       <SelectTrigger
         aria-label={ariaLabel}
         size={chip ? "chip" : "xs"}
-        variant={chip ? "ghost" : "default"}
+        variant={chip ? "ghost" : "filled"}
         className={cn("min-w-0", chip ? "w-auto shrink-0" : "w-full", className)}
       >
         <SelectValue className="truncate text-start">

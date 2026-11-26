@@ -20,7 +20,7 @@ import { CanvasCommentLayer } from "./CanvasComments";
 import { useCanvasEditor } from "./CanvasEditorContext";
 import { CANVAS_FRAME_LABEL_HEIGHT, CanvasFrameView } from "./CanvasFrameView";
 import { CanvasOverlay, type CanvasOverlayHandle } from "./CanvasOverlay";
-import { CanvasZoomMenu } from "./CanvasToolbar";
+import { CanvasFloatingToolbar, CanvasZoomMenu } from "./CanvasToolbar";
 import {
   pasteIntoCanvas,
   readClipboard,
@@ -61,22 +61,25 @@ const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigat
 
 /**
  * The canvas: frames on an infinite world under this client's camera, with selection chrome,
- * gestures, keyboard shortcuts, paste and drop and comments (the tool strip and the zoom menu
- * sit beside it, see CanvasEditorSurface). It paints the page's canvas colour, or the canvas
- * backdrop (`--canvas-backdrop`, the app's background with the muted tint) when the page sets
- * none. Gestures and the camera write to the
- * DOM while they run, so this tree renders when one starts or settles, never per pointer move.
+ * gestures, keyboard shortcuts, paste and drop and comments, and the floating toolbar over it
+ * (see CanvasEditorSurface). It paints the page's canvas colour, or the canvas backdrop
+ * (`--canvas-backdrop`, the app's background with the muted tint) when the page sets none.
+ * Gestures and the camera write to the DOM while they run, so this tree renders when one starts
+ * or settles, never per pointer move; the toolbar hides during a drag the same way.
  */
 export function CanvasViewport({
   className,
   zoomOutside = false,
+  toolbar = false,
 }: {
   className?: string;
   /**
-   * The surrounding surface shows `CanvasZoomMenu` (the inspector's top row or the pane header),
-   * so the canvas leaves its corner empty.
+   * The surrounding surface shows `CanvasZoomMenu` (the app's top bar or the pane header), so
+   * the canvas does not.
    */
   zoomOutside?: boolean;
+  /** The floating toolbar, bottom-centre (with the zoom menu when `zoomOutside` is off). */
+  toolbar?: boolean;
 }) {
   const { t } = useTranslation();
   const editor = useCanvasEditor();
@@ -475,7 +478,13 @@ export function CanvasViewport({
     // A right-click in a popup the canvas's controls opened reaches here through the portal.
     if (!root.current?.contains(event.target as Node)) return;
     event.preventDefault();
-    if (tool !== "move" || (event.target as HTMLElement).closest("[data-canvas-comments]")) return;
+    if (
+      tool !== "move" ||
+      (event.target as HTMLElement).closest(
+        "[data-canvas-comments],[data-canvas-toolbar],[data-canvas-zoom-corner]",
+      )
+    )
+      return;
     // Right-click selects what is under the pointer (unless already selected).
     const label = (event.target as HTMLElement).closest<HTMLElement>("[data-canvas-frame-label]");
     const pressed: CanvasSelectionItem | null = label
@@ -650,7 +659,12 @@ export function CanvasViewport({
         className="pointer-events-none absolute inset-0"
         aria-hidden
       />
-      {!zoomOutside && !uiHidden && (
+      {uiHidden ? null : toolbar ? (
+        <CanvasFloatingToolbar
+          viewportElement={viewportElement}
+          trailing={zoomOutside ? undefined : <CanvasZoomMenu viewportElement={viewportElement} />}
+        />
+      ) : zoomOutside ? null : (
         <div className="absolute end-2 bottom-2" data-canvas-ui="" data-canvas-zoom-corner="">
           <CanvasZoomMenu viewportElement={viewportElement} />
         </div>

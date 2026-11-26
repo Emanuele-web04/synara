@@ -354,8 +354,8 @@ describe("layers panel", () => {
       select([{ kind: "layer", frameId: "f1", layerId: "one" }]);
       await vi.waitFor(() => expect(row("layer:f1:one")).toBeTruthy());
       // The row lanes: the chevron in the indent, 16 px more per level.
-      expect(row("layer:f1:card")!.style.paddingInlineStart).toBe("18px");
-      expect(row("layer:f1:one")!.style.paddingInlineStart).toBe("34px");
+      expect(row("layer:f1:card")!.style.paddingInlineStart).toBe("20px");
+      expect(row("layer:f1:one")!.style.paddingInlineStart).toBe("36px");
       const finish = await dragRow("layer:f1:badge", "layer:f1:card", 0.5);
       await nextFrame();
       expect(row("layer:f1:card")!.className).toContain("ring-1");

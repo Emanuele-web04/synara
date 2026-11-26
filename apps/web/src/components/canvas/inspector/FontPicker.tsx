@@ -238,7 +238,7 @@ export function FontPicker({
         <ComboboxTrigger
           aria-label={t("workspace:canvasInspectorFontFamily")}
           // The app's select trigger, as every inspector select.
-          className={cn(selectTriggerVariants({ size: "xs" }), "min-w-0")}
+          className={cn(selectTriggerVariants({ size: "xs", variant: "filled" }), "min-w-0")}
           data-disabled={disabled || busy ? "" : undefined}
         >
           <span

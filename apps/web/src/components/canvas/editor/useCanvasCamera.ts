@@ -9,7 +9,7 @@
 //          animateCanvasCamera, CANVAS_WHEEL_SETTLE_MS, CANVAS_CAMERA_ANIMATION_MS
 
 import type { DesignFrame, DesignViewport } from "@synara/contracts";
-import { useCallback, useEffect, useLayoutEffect, useMemo, type RefObject } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, type RefObject } from "react";
 import { fitDesignCanvas, zoomDesignCanvas } from "~/lib/designCanvas";
 import type { CanvasSelectionItem } from "../canvasStores";
 import { useCanvasEditor, type CanvasEditorApi } from "./CanvasEditorContext";
@@ -71,6 +71,14 @@ export function animateCanvasCamera(
 }
 /** Fitting never zooms past 200%. */
 const FIT_MAX_ZOOM = 2;
+/**
+ * After the first fit on a page, a canvas that is still taking its size (a side pane opening, its
+ * inspector appearing) is fitted again, until it has kept one size this long or the camera moved.
+ */
+export const CANVAS_FIRST_FIT_SETTLE_MS = 800;
+
+const sameView = (a: DesignViewport, b: DesignViewport) =>
+  Math.abs(a.x - b.x) < 0.5 && Math.abs(a.y - b.y) < 0.5 && Math.abs(a.zoom - b.zoom) < 1e-6;
 
 /** Where the selection is, in world pixels: frames from the model, layers as rendered. */
 export function selectionWorldRects(
@@ -226,6 +234,15 @@ export function useCanvasViewportCamera({
   // an empty page centres the origin at 100% and fits once its first frames arrive. It runs
   // before paint, so the default camera never flashes.
   const savedFrames = editor.page.frames;
+  /** The first fit while the canvas may still be taking its size (see the settle effect). */
+  const settling = useRef<{
+    fitted: DesignViewport;
+    width: number;
+    height: number;
+    until: number;
+  } | null>(null);
+  const framesRef = useRef(savedFrames);
+  framesRef.current = savedFrames;
   useLayoutEffect(() => {
     if (cameraPlaced) return;
     const element = root.current;
@@ -233,13 +250,18 @@ export function useCanvasViewportCamera({
     const place = () => {
       // A pane that is still opening has no size yet; place the camera once it has one.
       if (element.clientWidth < 40 || element.clientHeight < 40) return false;
-      if (savedFrames.length > 0)
-        setViewport(
-          fitDesignCanvas(savedFrames, element.clientWidth, element.clientHeight, {
-            maxZoom: FIT_MAX_ZOOM,
-          }),
-        );
-      else
+      if (savedFrames.length > 0) {
+        const fitted = fitDesignCanvas(savedFrames, element.clientWidth, element.clientHeight, {
+          maxZoom: FIT_MAX_ZOOM,
+        });
+        settling.current = {
+          fitted,
+          width: element.clientWidth,
+          height: element.clientHeight,
+          until: performance.now() + CANVAS_FIRST_FIT_SETTLE_MS,
+        };
+        setViewport(fitted);
+      } else
         setViewport(
           { x: element.clientWidth / 2, y: element.clientHeight / 2, zoom: 1 },
           { automatic: true },
@@ -253,4 +275,34 @@ export function useCanvasViewportCamera({
     observer.observe(element);
     return () => observer.disconnect();
   }, [cameraPlaced, root, savedFrames, setViewport]);
+
+  // The first fit can land while the canvas is still taking its size: a side pane that is
+  // opening, or whose inspector appears once the pane is measured. Until the canvas has kept one
+  // size for a moment, and unless the camera was moved meanwhile, each new size fits again.
+  useEffect(() => {
+    const element = root.current;
+    if (!element) return;
+    const observer = new ResizeObserver(() => {
+      const state = settling.current;
+      if (!state) return;
+      const width = element.clientWidth;
+      const height = element.clientHeight;
+      if (width === state.width && height === state.height) return;
+      if (performance.now() > state.until || !sameView(camera.get(), state.fitted)) {
+        settling.current = null;
+        return;
+      }
+      if (width < 40 || height < 40 || framesRef.current.length === 0) return;
+      const fitted = fitDesignCanvas(framesRef.current, width, height, { maxZoom: FIT_MAX_ZOOM });
+      settling.current = {
+        fitted,
+        width,
+        height,
+        until: performance.now() + CANVAS_FIRST_FIT_SETTLE_MS,
+      };
+      setViewport(fitted);
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [camera, root, setViewport]);
 }

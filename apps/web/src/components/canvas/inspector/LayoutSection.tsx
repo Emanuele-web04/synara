@@ -937,8 +937,8 @@ function AlignmentGrid({
       role="group"
       aria-label={t("workspace:canvasInspectorAlignment")}
       data-variant={baseline ? "baseline" : undefined}
-      // On the app's field chrome, like the inputs beside it.
-      className="grid h-15.5 w-16 shrink-0 grid-cols-3 grid-rows-3 rounded-md border border-border bg-background p-0.5 dark:bg-input/32"
+      // On the fields' soft fill and radius, like the inputs beside it.
+      className="grid h-15.5 w-16 shrink-0 grid-cols-3 grid-rows-3 rounded-sm bg-[var(--color-background-button-secondary)] p-0.5"
     >
       {GRID_POSITIONS.map((y) =>
         GRID_POSITIONS.map((x) => {
@@ -954,7 +954,7 @@ function AlignmentGrid({
                 horizontal: t(HORIZONTAL_KEYS[x]),
               })}
               className={cn(
-                "flex justify-center rounded-sm outline-none transition-colors hover:bg-[var(--color-background-button-secondary-hover)] focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none",
+                "flex justify-center rounded-[calc(var(--radius-sm)-2px)] outline-none transition-colors hover:bg-[var(--color-background-button-secondary-hover)] focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none",
                 active && baseline ? "items-end pb-1" : "items-center",
               )}
               onClick={() => onPick({ x, y })}

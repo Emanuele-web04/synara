@@ -1,12 +1,13 @@
 // FILE: CanvasToolbar.tsx
-// Purpose: The vertical tool strip at the canvas's left edge (V/H, F/R/T and image insert, C;
-//          undo and redo at its foot), on the app's sm toggles and ghost icon buttons, and the
-//          zoom menu the inspector's top row shows.
+// Purpose: The floating toolbar over the canvas (V/H, F/R/T and image insert, C, undo and redo,
+//          and the zoom menu where nothing else shows it), bottom-centre on the app's popover
+//          surface, and the zoom menu the app's top bar and pane headers show.
 // Layer: Canvas editor UI
-// Exports: CanvasToolStrip, CanvasZoomMenu
+// Exports: CanvasFloatingToolbar, CanvasZoomMenu
 
 import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "~/i18n";
+import { DISCLOSURE_FADE_MOTION_CLASS } from "~/lib/disclosureMotion";
 import {
   ChevronDownIcon,
   CursorIcon,
@@ -22,7 +23,12 @@ import {
 import { formatZoomPercent } from "~/lib/pdf/pdfZoom";
 import { cn } from "~/lib/utils";
 import { screenToWorld } from "~/lib/designCanvas";
+import { ChatHeaderButton } from "../../chat/chatHeaderControls";
 import { ComposerPickerMenuPopup } from "../../chat/ComposerPickerMenuPopup";
+import {
+  COMPOSER_COMMAND_MENU_SURFACE_CLASS_NAME,
+  COMPOSER_PICKER_RADIUS_CLASS_NAME,
+} from "../../chat/composerPickerStyles";
 import { Button } from "../../ui/button";
 import {
   Menu,
@@ -51,8 +57,7 @@ const tool = (
   label: string,
 ): ToolEntry => ({ tool: value, key, icon, label });
 
-// The strip's groups: navigate, create (insert image sits with the shapes), comment; history
-// sits at the foot of the strip.
+// The toolbar's groups: navigate, create (insert image sits with the shapes), comment, history.
 const NAVIGATE_TOOLS = [
   tool("move", "v", CursorIcon, "workspace:canvasToolMove"),
   tool("hand", "h", HandIcon, "workspace:canvasToolHand"),
@@ -64,7 +69,20 @@ const CREATE_TOOLS = [
 ];
 const COMMENT_TOOL = tool("comment", "c", MessageCircleIcon, "workspace:canvasToolComment");
 
-const STRIP_SEPARATOR = <span aria-hidden className="my-2 h-px w-4 shrink-0 bg-border" />;
+const TOOLBAR_SEPARATOR = <span aria-hidden className="mx-1 h-4 w-px shrink-0 bg-border" />;
+
+/**
+ * The toolbar's surface: the opaque popover panel of the app's floating menus, at the radius of
+ * the canvas's own menus. It fades out while a gesture drags (the viewport carries
+ * `data-canvas-dragging`, see canvasGestureHidesChrome) and takes no pointer events meanwhile.
+ */
+const FLOATING_TOOLBAR_CLASS_NAME = cn(
+  COMPOSER_COMMAND_MENU_SURFACE_CLASS_NAME,
+  COMPOSER_PICKER_RADIUS_CLASS_NAME,
+  DISCLOSURE_FADE_MOTION_CLASS,
+  "pointer-events-auto flex max-w-full shrink-0 items-center gap-0.5 overflow-x-auto p-1 [scrollbar-width:none]",
+  "[[data-canvas-dragging]_&]:pointer-events-none [[data-canvas-dragging]_&]:opacity-0",
+);
 
 function ToolTooltip({
   label,
@@ -80,14 +98,14 @@ function ToolTooltip({
   return (
     <Tooltip>
       <TooltipTrigger render={trigger}>{children}</TooltipTrigger>
-      <TooltipPopup side="right" sideOffset={8}>
+      <TooltipPopup side="top" sideOffset={8}>
         <ShortcutTooltip label={label} shortcut={shortcut} />
       </TooltipPopup>
     </Tooltip>
   );
 }
 
-/** A one-shot strip action (insert image, undo, redo), in the same chrome as the tools. */
+/** A one-shot toolbar action (insert image, undo, redo), in the same chrome as the tools. */
 function ActionButton({
   label,
   shortcut,
@@ -121,16 +139,18 @@ function ActionButton({
 }
 
 /**
- * The vertical tool strip beside the canvas: V/H, F/R/T with image insert, C, and undo and redo
- * at its foot. Same tools, shortcuts and tooltips as the canvas's keys.
+ * The floating toolbar, bottom-centre over the canvas: V/H, F/R/T with image insert, C, undo and
+ * redo, and `trailing` (the zoom menu where no header shows it). Same tools, shortcuts and
+ * tooltips as the canvas's keys. Only the bar itself takes pointer events; a narrow pane scrolls
+ * it sideways rather than letting it cover more of the canvas.
  */
-export function CanvasToolStrip({
+export function CanvasFloatingToolbar({
   viewportElement,
-  className,
+  trailing,
 }: {
-  /** The canvas this strip drives: inserted images land in its centre, picks focus it. */
+  /** The canvas this toolbar drives: inserted images land in its centre, picks focus it. */
   viewportElement: () => HTMLElement | null;
-  className?: string;
+  trailing?: ReactNode;
 }) {
   const { t } = useTranslation();
   const editor = useCanvasEditor();
@@ -169,30 +189,28 @@ export function CanvasToolStrip({
     void editor.commands.placeImage(selected, null, center);
   };
   return (
-    <div
-      role="toolbar"
-      aria-orientation="vertical"
-      aria-label={t("workspace:canvasTools")}
-      data-canvas-ui=""
-      data-canvas-tool-strip=""
-      className={cn(
-        "flex w-10 shrink-0 flex-col items-center gap-1 overflow-y-auto border-e border-border py-1.5",
-        className,
-      )}
-    >
-      {NAVIGATE_TOOLS.map(renderTool)}
-      {STRIP_SEPARATOR}
-      {CREATE_TOOLS.map(renderTool)}
-      <ActionButton
-        label={t("workspace:canvasInsertImage")}
-        disabled={editor.readOnly}
-        onClick={() => file.current?.click()}
+    <div className="pointer-events-none absolute inset-x-2 bottom-3 z-20 flex justify-center">
+      <div
+        role="toolbar"
+        aria-orientation="horizontal"
+        aria-label={t("workspace:canvasTools")}
+        data-canvas-ui=""
+        data-canvas-toolbar=""
+        className={FLOATING_TOOLBAR_CLASS_NAME}
       >
-        <ImageIcon />
-      </ActionButton>
-      {STRIP_SEPARATOR}
-      {renderTool(COMMENT_TOOL)}
-      <div className="mt-auto flex flex-col items-center gap-1 pt-2">
+        {NAVIGATE_TOOLS.map(renderTool)}
+        {TOOLBAR_SEPARATOR}
+        {CREATE_TOOLS.map(renderTool)}
+        <ActionButton
+          label={t("workspace:canvasInsertImage")}
+          disabled={editor.readOnly}
+          onClick={() => file.current?.click()}
+        >
+          <ImageIcon />
+        </ActionButton>
+        {TOOLBAR_SEPARATOR}
+        {renderTool(COMMENT_TOOL)}
+        {TOOLBAR_SEPARATOR}
         <ActionButton
           label={t("workspace:canvasUndo")}
           shortcut={canvasShortcutLabel("z", { modKey: true })}
@@ -215,18 +233,24 @@ export function CanvasToolStrip({
         >
           <Redo2Icon />
         </ActionButton>
+        {trailing ? (
+          <>
+            {TOOLBAR_SEPARATOR}
+            {trailing}
+          </>
+        ) : null}
+        <input
+          ref={file}
+          type="file"
+          accept="image/png,image/jpeg,image/webp,image/gif"
+          className="hidden"
+          onChange={(event) => {
+            const selected = event.target.files?.[0];
+            if (selected) insertImage(selected);
+            event.target.value = "";
+          }}
+        />
       </div>
-      <input
-        ref={file}
-        type="file"
-        accept="image/png,image/jpeg,image/webp,image/gif"
-        className="hidden"
-        onChange={(event) => {
-          const selected = event.target.files?.[0];
-          if (selected) insertImage(selected);
-          event.target.value = "";
-        }}
-      />
     </div>
   );
 }
@@ -254,8 +278,9 @@ function ZoomPercent({ camera, zoom }: { camera: CanvasLiveCamera; zoom: number 
 }
 
 /**
- * The zoom percentage with a typed zoom field and the zoom commands: "30% ⌄" in the
- * inspector's top row (or the canvas corner), or the quieter pane-header variant.
+ * The zoom percentage with a typed zoom field and the zoom commands: "30% ⌄" in the app's top
+ * bar (the chat header's control chrome), in the floating toolbar or the canvas corner, or the
+ * quieter pane-header variant.
  */
 export function CanvasZoomMenu({
   viewportElement,
@@ -263,8 +288,11 @@ export function CanvasZoomMenu({
   className,
 }: {
   viewportElement: () => HTMLElement | null;
-  /** `header`: the quiet percentage of a pane title bar (no chevron, 24px tall). */
-  variant?: "default" | "header";
+  /**
+   * `topbar`: a control of the app's top bar. `header`: the quiet percentage of a pane title bar
+   * (no chevron, 24px tall). `default`: inside the canvas (toolbar or corner).
+   */
+  variant?: "default" | "header" | "topbar";
   className?: string;
 }) {
   const { t } = useTranslation();
@@ -306,16 +334,22 @@ export function CanvasZoomMenu({
     <Menu open={open} onOpenChange={setOpen}>
       <MenuTrigger
         render={
-          <Button
-            variant="ghost"
-            size="xs"
-            data-canvas-ui=""
-            className={cn("tabular-nums", className)}
-          />
+          variant === "topbar" ? (
+            <ChatHeaderButton tone="plain" className={cn("gap-1 tabular-nums", className)} />
+          ) : (
+            <Button
+              variant="ghost"
+              size={variant === "default" ? "sm" : "xs"}
+              data-canvas-ui=""
+              className={cn("tabular-nums", variant === "default" && "px-2", className)}
+            />
+          )
         }
       >
         <ZoomPercent camera={camera} zoom={viewport.zoom} />
-        {variant === "default" && <ChevronDownIcon aria-hidden className="size-3" />}
+        {variant !== "header" && (
+          <ChevronDownIcon aria-hidden className="size-3 text-muted-foreground" />
+        )}
       </MenuTrigger>
       <ComposerPickerMenuPopup align="end" className="w-54">
         <CanvasZoomField
