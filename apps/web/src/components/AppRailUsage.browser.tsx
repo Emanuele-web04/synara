@@ -430,31 +430,42 @@ describe("AppRailUsage", () => {
       expect(tile).not.toBeNull();
       return tile!;
     };
-    for (const { state } of cases) {
-      const tile = tileFor(state);
-      expect(tile).toHaveAttribute("data-usage-state", state);
-      const track = tileToken(tile, "--rail-usage-well");
-      const fill = tile.querySelector<HTMLElement>(".app-rail-usage-fill");
-      // The track stays visible against the plate in every state, above the reported 1.12:1.
-      expect(contrast(track, tileToken(tile, "--rail-usage-plate"))).toBeGreaterThan(1.12);
-      if (state === "normal") {
-        expect(fill?.style.height).toBe("43%");
-        expect(getComputedStyle(fill!).backgroundImage).toContain("linear-gradient");
-        expect(contrast(tileToken(tile, "--rail-usage-ink"), track)).toBeGreaterThanOrEqual(3);
+    for (const theme of ["light", "dark"] as const) {
+      applyTheme(theme);
+      for (const { state } of cases) {
+        const tile = tileFor(state);
+        expect(tile).toHaveAttribute("data-usage-state", state);
+        const track = tileToken(tile, "--rail-usage-well");
+        const plate = tileToken(tile, "--rail-usage-plate");
+        const ink = tileToken(tile, "--rail-usage-ink");
+        const fill = tile.querySelector<HTMLElement>(".app-rail-usage-fill");
+        // The metre's reach is readable: a 3:1 well, or, in dark, the 3:1 ring that draws it.
+        if (theme === "light") {
+          expect(contrast(track, plate)).toBeGreaterThanOrEqual(3);
+        } else {
+          expect(contrast(tileToken(tile, "--rail-usage-well-edge"), plate)).toBeGreaterThanOrEqual(
+            3,
+          );
+        }
+        expect(contrast(ink, track)).toBeGreaterThanOrEqual(3);
+        expect(contrast(tileToken(tile, "--rail-usage-edge"), plate)).toBeGreaterThanOrEqual(3);
+        if (state === "exhausted") {
+          expect(fill).toBeNull();
+        }
+        if (state === "normal") {
+          expect(fill?.style.height).toBe("43%");
+          expect(getComputedStyle(fill!).backgroundImage).toContain("linear-gradient");
+        }
+        if (state === "low") {
+          // The bar keeps its extent but loses its body to an outline, so it is not a hue shift.
+          expect(fill?.style.height).toBe("18%");
+          expect(getComputedStyle(fill!).backgroundImage).toBe("none");
+          expect(getComputedStyle(fill!).boxShadow).toContain(ink);
+        }
       }
-      if (state === "low") {
-        // The bar keeps its extent but loses its body to an outline, so it is not a hue shift.
-        expect(fill?.style.height).toBe("18%");
-        expect(getComputedStyle(fill!).backgroundImage).toBe("none");
-        expect(contrast(tileToken(tile, "--rail-usage-edge"), track)).toBeGreaterThanOrEqual(3);
-      }
-      if (state === "exhausted") {
-        expect(fill).toBeNull();
-        expect(document.querySelector(`[data-state="${state}"] button svg`)).toHaveClass(
-          "opacity-35",
-        );
-        expect(contrast(tileToken(tile, "--rail-usage-edge"), track)).toBeGreaterThanOrEqual(3);
-      }
+      expect(document.querySelector('[data-state="exhausted"] button svg')).toHaveClass(
+        "opacity-35",
+      );
     }
   });
 
@@ -491,6 +502,6 @@ describe("AppRailUsage", () => {
     expect(getComputedStyle(tile).boxShadow).toContain("0px 0px 0px 0.5px inset");
     expect(
       contrast(tileToken(tile, "--rail-usage-well"), tileToken(tile, "--rail-usage-plate")),
-    ).toBeGreaterThan(1.12);
+    ).toBeGreaterThanOrEqual(3);
   });
 });

@@ -299,12 +299,19 @@
 
   /* Rail quota tile: a plate holding a recessed well whose fill is the account's tightest
      remaining window. Every tone resolves from the rail's own shell tone and the role
-     tokens, so a theme's material carries into the tile. Normal → low → exhausted steps the
-     edge weight and the fill's body together, so the state still reads without colour. */
+     tokens, so a theme's material carries into the tile.
+     The track is not decoration: the reach of the meter is how the fill's fraction is read,
+     so the well clears 3:1 against the plate, the ink clears 3:1 against the well, and the
+     state edge clears 3:1 against the plate. In dark, a plate dark enough to keep the
+     destructive edge at 3:1 leaves no room for a 3:1 well inside it — two near-black tones
+     cannot differ by that much — so the well is drawn as a 3:1 ring there instead.
+     Normal → low → exhausted steps the edge weight and the fill's body together, so the
+     state still reads without colour. */
   .app-rail-usage-tile {
     --rail-usage-plate: color-mix(in srgb, var(--app-rail-shell-tone) 96%, black);
-    --rail-usage-well: color-mix(in srgb, var(--app-rail-shell-tone) 88%, black);
-    --rail-usage-ink: color-mix(in srgb, var(--foreground) 50%, var(--rail-usage-well));
+    --rail-usage-well: color-mix(in srgb, var(--app-rail-shell-tone) 52%, black);
+    --rail-usage-well-edge: transparent;
+    --rail-usage-ink: color-mix(in srgb, var(--foreground) 70%, var(--rail-usage-well));
     --rail-usage-edge: var(--app-rail-inset-border);
     --rail-usage-edge-width: 0.5px;
     background: var(--rail-usage-plate);
@@ -313,7 +320,8 @@
 
   .dark .app-rail-usage-tile {
     --rail-usage-plate: color-mix(in srgb, var(--app-rail-shell-tone) 96%, white);
-    --rail-usage-well: color-mix(in srgb, var(--app-rail-shell-tone) 55%, black);
+    --rail-usage-well: color-mix(in srgb, var(--app-rail-shell-tone) 45%, black);
+    --rail-usage-well-edge: color-mix(in srgb, var(--rail-usage-plate) 65%, white);
   }
 
   :where(button:hover) > .app-rail-usage-tile {
@@ -328,6 +336,7 @@
 
   .app-rail-usage-well {
     background: var(--rail-usage-well);
+    box-shadow: inset 0 0 0 1px var(--rail-usage-well-edge);
   }
 
   .app-rail-usage-fill {
@@ -338,7 +347,7 @@
      a colourblind viewer and a monochrome screenshot instead of resting on a hue shift. */
   .app-rail-usage-tile[data-usage-state="low"] .app-rail-usage-fill {
     background: none;
-    box-shadow: inset 0 0 0 1px var(--rail-usage-edge);
+    box-shadow: inset 0 0 0 1px var(--rail-usage-ink);
   }
 
   /* ─── Chat-surface header hairline (horizontal counterpart of the seam) ───────────
