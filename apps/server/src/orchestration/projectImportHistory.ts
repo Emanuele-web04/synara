@@ -7,6 +7,7 @@ import type {
 } from "@synara/contracts";
 import { Data, Effect } from "effect";
 import { readClaudeImportMessageDates } from "../provider/claudeProjectImport";
+import { readDevinImportHistory } from "../provider/devinProjectImport";
 import type { ProviderAdapterRegistryShape } from "../provider/Services/ProviderAdapterRegistry";
 import { readClaudeSessionMessagePageInEnvironment } from "./importThreadRoute";
 import { mapClaudeSessionMessages, mapCodexSnapshotMessages } from "./importedThreadMessages";
@@ -76,6 +77,17 @@ export function makeProjectImportHistoryReader(registry: ProviderAdapterRegistry
   return Effect.fn(function* (
     input: ReadProjectImportHistoryInput,
   ): Effect.fn.Return<ProjectImportHistoryPage, unknown> {
+    if (input.provider === "devin") {
+      // The store holds the whole conversation, so one page is complete.
+      const page = yield* projectImportPromise(() =>
+        readDevinImportHistory({
+          dbPath: input.sourceHome,
+          sessionId: input.nativeId,
+          importedAt: input.sourceCreatedAt,
+        }),
+      );
+      return { nextCursor: null, messages: orderOlderPage(page.messages, input.before) };
+    }
     if (input.provider === "claudeAgent") {
       const page = yield* projectImportPromise(async () => {
         // Read the independent fork, never the original conversation.

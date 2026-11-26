@@ -10,7 +10,7 @@ import { CheckIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { VISIBLE_PROVIDER_DESCRIPTORS } from "../betaFeatures";
 
-const SOURCES = ["claudeAgent", "codex"] as const;
+const SOURCES = ["claudeAgent", "codex", "devin"] as const;
 
 /** Sample folder names shown inside the illustration: data, not copy, so untranslated. */
 const SAMPLE_PROJECTS = ["synara-web", "api-gateway", "ios-app"] as const;

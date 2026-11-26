@@ -22,6 +22,8 @@ import type {
   ProjectImportHistoryState,
 } from "../persistence/projectImportRepository";
 import { discoverClaudeProjects } from "../provider/claudeProjectImport";
+import { discoverDevinProjects } from "../provider/devinProjectImport";
+import { devinStorePathForEnvironment } from "../provider/devinSessionHistory";
 import { discoverCodexProjects } from "../provider/codexProjectImport";
 import { ensureProviderEnabled } from "../provider/enabledProviderAdapter";
 import { makeKeyedLock } from "../provider/keyedLock";
@@ -90,6 +92,11 @@ export function makeProjectImportHandlers(options: ProjectImportRouteOptions) {
         return discoverCodexProjects({
           env: source.environment,
           ...(source.codexHomePath ? { homePath: source.codexHomePath } : {}),
+        });
+      }
+      if (provider === "devin") {
+        return discoverDevinProjects({
+          dbPath: devinStorePathForEnvironment(source.environment),
         });
       }
       const claudeEnvironment = source.claudeEnvironment;
@@ -476,9 +483,14 @@ export function makeProjectImportHandlers(options: ProjectImportRouteOptions) {
             threadId: null,
             status: "project-linked",
           } satisfies ImportProjectResult;
+        // Devin's adapter cannot fork a native copy, so its import is
+        // history-only: messages come from the store and no provider process,
+        // session or turn is created.
+        const canCopyNative = source.provider !== "devin";
         if (
-          !options.providerService.importExternalThread ||
-          !options.providerService.stopRuntimeSession
+          canCopyNative &&
+          (!options.providerService.importExternalThread ||
+            !options.providerService.stopRuntimeSession)
         ) {
           return yield* new ProjectImportError({
             message: "Native conversation copying is unavailable.",
@@ -586,26 +598,33 @@ export function makeProjectImportHandlers(options: ProjectImportRouteOptions) {
         const providerOptions: ProviderStartOptions =
           source.provider === "codex"
             ? { codex: sourceAccount.providerOptions?.codex ?? {} }
-            : { claudeAgent: sourceAccount.providerOptions?.claudeAgent ?? {} };
+            : source.provider === "devin"
+              ? { devin: sourceAccount.providerOptions?.devin ?? {} }
+              : { claudeAgent: sourceAccount.providerOptions?.claudeAgent ?? {} };
         const runtimeCwd = workingDirectory ?? (directoryExists ? workspaceRoot : undefined);
         // The ledger and native binding survive failures. Retrying the same origin
         // resumes this frozen copy, while deterministic command IDs prevent replay.
         const importHistory = Effect.gen(function* () {
-          const copied = yield* options.providerService.importExternalThread!({
-            threadId,
-            provider: source.provider,
-            externalThreadId: source.id,
-            sourceCwd: source.cwd,
-            ...(runtimeCwd ? { cwd: runtimeCwd } : {}),
-            modelSelection,
-            runtimeMode: "approval-required",
-            providerOptions,
-          });
-          const nativeId = nativeImportId(source.provider, copied.resumeCursor);
-          if (!nativeId || nativeId === source.id)
-            return yield* new ProjectImportError({
-              message: "The provider did not create an independent conversation copy.",
+          const copyNativeThread = Effect.gen(function* () {
+            if (source.provider === "devin") return source.id;
+            const copied = yield* options.providerService.importExternalThread!({
+              threadId,
+              provider: source.provider,
+              externalThreadId: source.id,
+              sourceCwd: source.cwd,
+              ...(runtimeCwd ? { cwd: runtimeCwd } : {}),
+              modelSelection,
+              runtimeMode: "approval-required",
+              providerOptions,
             });
+            const copiedId = nativeImportId(source.provider, copied.resumeCursor);
+            if (!copiedId || copiedId === source.id)
+              return yield* new ProjectImportError({
+                message: "The provider did not create an independent conversation copy.",
+              });
+            return copiedId;
+          });
+          const nativeId = yield* copyNativeThread;
           let history = yield* options.repository.getHistory(threadId);
           if (history?.nativeId !== undefined && history.nativeId !== nativeId) {
             return yield* new ProjectImportError({

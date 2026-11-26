@@ -9,7 +9,7 @@ import {
 } from "./baseSchemas";
 import { ProviderInstanceId } from "./providerInstance";
 
-export const ProjectImportProvider = Schema.Literals(["codex", "claudeAgent"]);
+export const ProjectImportProvider = Schema.Literals(["codex", "claudeAgent", "devin"]);
 export type ProjectImportProvider = typeof ProjectImportProvider.Type;
 
 export const ProjectImportThread = Schema.Struct({
