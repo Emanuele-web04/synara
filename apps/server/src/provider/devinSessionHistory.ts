@@ -1,7 +1,7 @@
 // FILE: provider/devinSessionHistory.ts
 // Purpose: Read-only access to the Devin CLI/Desktop session store
-// (devin/cli/sessions.db, SQLite). Never writes, never opens a WAL, never
-// starts a Devin process. Layer: Provider history import.
+// (devin/cli/sessions.db, SQLite). Never writes to the database or starts
+// Devin. SQLite can access adjacent WAL and shared-memory files.
 // Exports: defaultDevinStorePath, listDevinSessions, readDevinSession,
 // DevinSessionRow, DevinSessionMessage.
 
@@ -22,15 +22,20 @@ interface ReadonlyStatement {
 interface ReadonlyDatabase {
   query?: (sql: string) => ReadonlyStatement; // bun:sqlite
   prepare?: (sql: string) => ReadonlyStatement; // node:sqlite
+  exec: (sql: string) => unknown;
   close: () => unknown;
+}
+
+async function openBunDatabase(dbPath: string, readonly: boolean): Promise<ReadonlyDatabase> {
+  const { Database } = (await importRuntimeModule("bun:sqlite")) as {
+    Database: new (path: string, options: { readonly: boolean }) => ReadonlyDatabase;
+  };
+  return new Database(dbPath, { readonly });
 }
 
 async function openReadOnlyDatabase(dbPath: string): Promise<ReadonlyDatabase> {
   if (process.versions.bun !== undefined) {
-    const { Database } = (await importRuntimeModule("bun:sqlite")) as {
-      Database: new (path: string, options: { readonly: boolean }) => ReadonlyDatabase;
-    };
-    return new Database(dbPath, { readonly: true });
+    return openBunDatabase(dbPath, true);
   }
   const { DatabaseSync } = await import("node:sqlite");
   return new DatabaseSync(dbPath, { readOnly: true }) as unknown as ReadonlyDatabase;
@@ -50,7 +55,9 @@ function asNumber(value: unknown): number | null {
 /** Devin stores epoch seconds in sessions/message_nodes. */
 function epochSecondsToIso(value: unknown): string | null {
   const seconds = asNumber(value);
-  return seconds === null ? null : new Date(seconds * 1000).toISOString();
+  if (seconds === null) return null;
+  const date = new Date(seconds * 1000);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
 }
 
 /** The store path an account with this launch environment writes to. */
@@ -108,10 +115,9 @@ function requireColumns(
   required: ReadonlyArray<string>,
 ): void {
   const columns = new Set(
-    (database
-      .prepare?.(`PRAGMA table_info(${table})`)
-      ?.all()
-      .map((row) => (row as { name?: unknown }).name) ?? []) as unknown[],
+    statement(database, `PRAGMA table_info(${table})`)
+      .all()
+      .map((row) => (row as { name?: unknown }).name),
   );
   const missing = required.filter((name) => !columns.has(name));
   if (missing.length > 0) {
@@ -155,26 +161,90 @@ function describeStoreFailure(error: unknown, dbPath: string): DevinStoreError {
   );
 }
 
-async function withStore<A>(dbPath: string, run: (database: ReadonlyDatabase) => A): Promise<A> {
+function readStore<A>(database: ReadonlyDatabase, run: (database: ReadonlyDatabase) => A): A {
   try {
-    await fs.access(dbPath);
-  } catch {
-    throw new DevinStoreError(`No Devin session store on this machine: ${dbPath}`);
-  }
-  let database: ReadonlyDatabase | null = null;
-  try {
-    database = await openReadOnlyDatabase(dbPath);
+    // Keep the session pointer and the message chain in the same read snapshot.
+    database.exec("BEGIN");
     requireColumns(database, "sessions", SESSION_COLUMNS);
     requireColumns(database, "message_nodes", ["session_id"]);
     return run(database);
-  } catch (error) {
-    throw error instanceof DevinStoreError ? error : describeStoreFailure(error, dbPath);
   } finally {
-    try {
-      database?.close();
-    } catch {
-      // A read-only handle that fails to close leaves no state behind.
+    database.close();
+  }
+}
+
+async function hasSidecar(dbPath: string): Promise<boolean> {
+  const files = await Promise.all(
+    ["-wal", "-shm"].map(async (suffix) => {
+      try {
+        await fs.lstat(dbPath + suffix);
+        return true;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        return false;
+      }
+    }),
+  );
+  return files.some(Boolean);
+}
+
+async function readCheckpointedBunStore<A>(
+  dbPath: string,
+  run: (database: ReadonlyDatabase) => A,
+  originalError: unknown,
+): Promise<A> {
+  // Apple's SQLite can reject a read-only WAL database after a clean close
+  // (oven-sh/bun#45171). Never copy an active WAL or open the source for writes.
+  const before = await fs.stat(dbPath, { bigint: true });
+  if (!before.isFile() || (await hasSidecar(dbPath))) throw originalError;
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "synara-devin-import-"));
+  try {
+    const copy = path.join(directory, "sessions.db");
+    await fs.copyFile(dbPath, copy);
+    const sidecar = await hasSidecar(dbPath);
+    const after = await fs.stat(dbPath, { bigint: true });
+    if (
+      sidecar ||
+      before.dev !== after.dev ||
+      before.ino !== after.ino ||
+      before.size !== after.size ||
+      before.mtimeNs !== after.mtimeNs ||
+      before.ctimeNs !== after.ctimeNs
+    ) {
+      throw originalError;
     }
+    const database = await openBunDatabase(copy, false);
+    return readStore(database, run);
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+}
+
+async function withStore<A>(dbPath: string, run: (database: ReadonlyDatabase) => A): Promise<A> {
+  try {
+    return readStore(await openReadOnlyDatabase(dbPath), run);
+  } catch (error) {
+    if (error instanceof DevinStoreError) throw error;
+    try {
+      await fs.stat(dbPath);
+    } catch (statError) {
+      if ((statError as NodeJS.ErrnoException).code === "ENOENT") {
+        throw new DevinStoreError(`No Devin session store on this machine: ${dbPath}`);
+      }
+    }
+    if (
+      process.platform === "darwin" &&
+      process.versions.bun !== undefined &&
+      (error as NodeJS.ErrnoException).code === "SQLITE_CANTOPEN"
+    ) {
+      try {
+        return await readCheckpointedBunStore(dbPath, run, error);
+      } catch (fallbackError) {
+        if (fallbackError instanceof DevinStoreError) throw fallbackError;
+        throw describeStoreFailure(fallbackError, dbPath);
+      }
+    }
+    throw describeStoreFailure(error, dbPath);
   }
 }
 

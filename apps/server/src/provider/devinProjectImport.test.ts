@@ -51,11 +51,13 @@ function writeStore(
     parentNodeId: number | null;
     message: string;
   }>,
+  wal = false,
 ): string {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "devin-import-"));
   temporaryDirectories.push(directory);
   const dbPath = path.join(directory, "sessions.db");
   const db = new DatabaseSync(dbPath);
+  if (wal) db.exec("PRAGMA journal_mode = WAL");
   db.exec(`
     CREATE TABLE sessions (
       id TEXT PRIMARY KEY, working_directory TEXT NOT NULL, backend_type TEXT NOT NULL,
@@ -144,6 +146,50 @@ describe("discoverDevinProjects", () => {
 });
 
 describe("readDevinImportHistory", () => {
+  it("reads a checkpointed WAL-mode store after its writer closes", async () => {
+    const dbPath = writeStore(
+      [{ id: "closed", mainChainId: 1 }],
+      [
+        {
+          sessionId: "closed",
+          nodeId: 1,
+          parentNodeId: null,
+          message: chatMessage({ role: "assistant", content: "saved turn" }),
+        },
+      ],
+      true,
+    );
+    expect(fs.existsSync(dbPath + "-wal")).toBe(false);
+    const page = await readDevinImportHistory({
+      dbPath,
+      sessionId: "closed",
+      importedAt: "2026-11-24T00:00:00.000Z",
+    });
+    expect(page.messages.map((message) => message.text)).toEqual(["saved turn"]);
+  });
+
+  it("reads the latest committed turn while it is still in the WAL", async () => {
+    const dbPath = writeStore([{ id: "live", mainChainId: 1 }], [], true);
+    const writer = new DatabaseSync(dbPath);
+    try {
+      writer.exec("PRAGMA wal_autocheckpoint = 0");
+      writer
+        .prepare(
+          "INSERT INTO message_nodes (session_id, node_id, chat_message, created_at) VALUES (?, ?, ?, 1)",
+        )
+        .run("live", 1, chatMessage({ role: "assistant", content: "latest turn" }));
+      expect(fs.statSync(dbPath + "-wal").size).toBeGreaterThan(32);
+      const page = await readDevinImportHistory({
+        dbPath,
+        sessionId: "live",
+        importedAt: "2026-11-24T00:00:00.000Z",
+      });
+      expect(page.messages.map((message) => message.text)).toEqual(["latest turn"]);
+    } finally {
+      writer.close();
+    }
+  });
+
   it("follows the main chain and keeps only user-visible text", async () => {
     const dbPath = writeStore(
       [{ id: "sess-1", cwd: "/workspace/app", mainChainId: 4 }],
