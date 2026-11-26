@@ -108,10 +108,20 @@ describe("preparing a new worktree chat", () => {
     });
   });
 
-  it("does not proceed if the checkout status is unavailable", async () => {
+  it("does not proceed without a base when the checkout status is unavailable", async () => {
     const queryClient = new QueryClient();
     vi.spyOn(queryClient, "fetchQuery").mockRejectedValue(new Error("disconnected"));
 
-    await expect(prepare("main", "main", queryClient)).resolves.toBe(false);
+    await expect(prepare(null, "main", queryClient)).resolves.toBe(false);
+  });
+
+  it("proceeds without copying edits when the base is explicit and status is unavailable", async () => {
+    const queryClient = new QueryClient();
+    vi.spyOn(queryClient, "fetchQuery").mockRejectedValue(new Error("disconnected"));
+
+    await expect(prepare("main", "main", queryClient)).resolves.toMatchObject({
+      baseBranchForWorktree: "main",
+      worktreeCopiesLocalChanges: false,
+    });
   });
 });

@@ -290,11 +290,10 @@ export async function prepareChatSendWorkspace({
       });
       worktreeSourceBranch = status.branch;
     } catch {
-      setStoreThreadError(
-        threadIdForSend,
-        "Unable to determine the current branch. Try again before sending.",
-      );
-      return false;
+      // This read only decides whether the new worktree copies uncommitted changes.
+      // With an explicit base branch the send can still proceed; without one, the
+      // base-branch guard below gives the actionable error.
+      worktreeSourceBranch = null;
     }
     nextThreadBranch ??= worktreeSourceBranch;
   }
