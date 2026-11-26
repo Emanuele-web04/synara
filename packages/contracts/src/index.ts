@@ -70,6 +70,7 @@ export * from "./remoteResources";
 
 export * from "./remoteAgentGateway";
 export * from "./todo";
+export * from "./secretRequest";
 export * from "./inboxRecaps";
 export * from "./productAnalytics";
 export * from "./reliability";

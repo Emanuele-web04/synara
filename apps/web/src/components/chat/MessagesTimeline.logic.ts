@@ -1197,6 +1197,7 @@ export function isStandaloneWorkEntry(
   entry: Pick<
     WorkLogEntry,
     | "connectorProposalId"
+    | "secretRequest"
     | "synaraWorkerNotice"
     | "providerHandoff"
     | "turnFailure"
@@ -1208,6 +1209,7 @@ export function isStandaloneWorkEntry(
 ): boolean {
   return Boolean(
     entry.connectorProposalId ||
+    entry.secretRequest ||
     entry.synaraWorkerNotice ||
     entry.providerHandoff ||
     entry.turnFailure ||
@@ -2321,6 +2323,8 @@ function workLogEntryContentEqual(a: WorkLogEntry, b: WorkLogEntry): boolean {
     workLogSubagentRunsEqual(a.subagentRun, b.subagentRun) &&
     workLogAutomationsEqual(a.automation, b.automation) &&
     a.connectorProposalId === b.connectorProposalId &&
+    a.secretRequest?.requestId === b.secretRequest?.requestId &&
+    a.secretRequest?.status === b.secretRequest?.status &&
     workLogSynaraThreadCreationsEqual(a.synaraThreadCreation, b.synaraThreadCreation) &&
     workLogLiveActivitiesEqual(a.liveActivity, b.liveActivity) &&
     workLogToolDetailsEqual(a.toolDetails, b.toolDetails) &&

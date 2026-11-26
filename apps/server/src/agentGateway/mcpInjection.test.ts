@@ -11,6 +11,7 @@ import {
   buildAcpSynaraMcpServers,
   buildClaudeMcpServers,
   buildCodexMcpConfigToml,
+  SYNARA_CODEX_MCP_TOOL_TIMEOUT_SEC,
   buildCodexMcpThreadConfig,
   buildOpenCodeConnectorMcpServers,
   buildOpenCodeMcpServer,
@@ -295,7 +296,11 @@ describe("connector injection", () => {
   it("adds connector proxies only to Codex's per-thread config", () => {
     assert.deepEqual(buildCodexMcpThreadConfig(withConnectors), {
       mcp_servers: {
-        synara: { url: connection.url, http_headers: { Authorization: authorization } },
+        synara: {
+          url: connection.url,
+          http_headers: { Authorization: authorization },
+          tool_timeout_sec: SYNARA_CODEX_MCP_TOOL_TIMEOUT_SEC,
+        },
         supabase_connector: {
           url: "http://127.0.0.1:3773/mcp/connectors/mcp_conn_1",
           http_headers: { Authorization: authorization },
@@ -303,6 +308,10 @@ describe("connector injection", () => {
       },
     });
     assert.notInclude(buildCodexMcpConfigToml(connection.url, "thread"), "connector");
+    assert.include(
+      buildCodexMcpConfigToml(connection.url, "thread"),
+      `tool_timeout_sec = ${SYNARA_CODEX_MCP_TOOL_TIMEOUT_SEC}`,
+    );
   });
 
   it("adds connectors using the transport advertised by ACP agents", () => {

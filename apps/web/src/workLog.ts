@@ -10,6 +10,9 @@ import {
   COMPUTER_SETUP_REQUIRED_ACTIVITY_KIND,
   INLINE_VISUAL_ACTIVITY_KIND,
   InlineVisualActivityPayload,
+  SECRET_REQUESTED_ACTIVITY_KIND,
+  SECRET_RESOLVED_ACTIVITY_KIND,
+  type SecretRequestStatus,
   isToolLifecycleItemType,
   type ModelSelection,
   STUDIO_OUTPUTS_ACTIVITY_KIND,
@@ -141,6 +144,16 @@ export interface WorkLogComputerSetupRequired {
   bundleId?: string;
 }
 
+export interface WorkLogSecretRequest {
+  requestId: string;
+  label: string;
+  reason: string;
+  url?: string;
+  placeholder?: string;
+  /** Unset while the agent waits for an answer. */
+  status?: SecretRequestStatus;
+}
+
 export interface WorkLogEntry {
   id: string;
   createdAt: string;
@@ -178,6 +191,8 @@ export interface WorkLogEntry {
   subagentRun?: WorkLogSubagentRun;
   automation?: WorkLogAutomation;
   connectorProposalId?: string;
+  /** An agent's private secret request card; the value itself never reaches the client log. */
+  secretRequest?: WorkLogSecretRequest;
   synaraThreadCreation?: WorkLogSynaraThreadCreation;
   // Deterministic coordinator-monitor rows (worker settled / stuck /
   // batch roll-up) render as compact centered pills in the coordinator
@@ -627,6 +642,8 @@ export function deriveWorkLogEntries(
         activity.kind !== "context-window.updated" && activity.kind !== "context-window.configured",
     )
     .filter((activity) => activity.kind !== FAST_MODE_STATE_ACTIVITY_KIND)
+    // A resolution only updates its request's card (applied below).
+    .filter((activity) => activity.kind !== SECRET_RESOLVED_ACTIVITY_KIND)
     .filter((activity) => activity.summary !== "Checkpoint captured")
     // Server-side Studio output attribution is environment-panel data, not transcript work.
     .filter((activity) => activity.kind !== STUDIO_OUTPUTS_ACTIVITY_KIND)
@@ -669,6 +686,15 @@ export function deriveWorkLogEntries(
       derived[index] = { ...entry, providerHandoff: { ...entry.providerHandoff, ...notices } };
     }
   }
+  const secretStatuses = deriveSecretRequestStatuses(ordered);
+  if (secretStatuses.size > 0) {
+    for (const [index, entry] of derived.entries()) {
+      const status = entry.secretRequest && secretStatuses.get(entry.secretRequest.requestId);
+      if (!status) continue;
+      // Copy rather than mutate: the entry is shared with the per-activity cache.
+      derived[index] = { ...entry, secretRequest: { ...entry.secretRequest!, status } };
+    }
+  }
   const midTurnNotificationIds = deriveMidTurnNotificationIds(ordered);
   if (midTurnNotificationIds.size > 0) {
     for (const [index, entry] of derived.entries()) {
@@ -692,6 +718,29 @@ export function deriveWorkLogEntries(
     ...completions,
     ...deriveTurnFailureEntries(ordered, translate),
   ];
+}
+
+const SECRET_REQUEST_STATUSES: ReadonlySet<string> = new Set<SecretRequestStatus>([
+  "saved",
+  "declined",
+  "cancelled",
+  "timed_out",
+]);
+
+function deriveSecretRequestStatuses(
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
+): Map<string, SecretRequestStatus> {
+  const statuses = new Map<string, SecretRequestStatus>();
+  for (const activity of activities) {
+    if (activity.kind !== SECRET_RESOLVED_ACTIVITY_KIND) continue;
+    const payload = asRecord(activity.payload);
+    const requestId = asTrimmedString(payload?.requestId);
+    const status = payload?.status;
+    if (requestId && typeof status === "string" && SECRET_REQUEST_STATUSES.has(status)) {
+      statuses.set(requestId, status as SecretRequestStatus);
+    }
+  }
+  return statuses;
 }
 
 interface BackgroundTaskState extends WorkLogBackgroundTask {
@@ -2270,6 +2319,22 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   if (activity.kind === "mcp.connector.proposed") {
     const proposalId = asTrimmedString(payload?.proposalId);
     if (proposalId) entry.connectorProposalId = proposalId;
+  }
+  if (activity.kind === SECRET_REQUESTED_ACTIVITY_KIND) {
+    const requestId = asTrimmedString(payload?.requestId);
+    const label = asTrimmedString(payload?.label);
+    const reason = asTrimmedString(payload?.reason);
+    if (requestId && label && reason) {
+      const url = asTrimmedString(payload?.url);
+      const placeholder = asTrimmedString(payload?.placeholder);
+      entry.secretRequest = {
+        requestId,
+        label,
+        reason,
+        ...(url ? { url } : {}),
+        ...(placeholder ? { placeholder } : {}),
+      };
+    }
   }
   if (activity.kind === INLINE_VISUAL_ACTIVITY_KIND && INLINE_VISUALS_ON) {
     const inlineVisual = Option.getOrUndefined(decodeInlineVisualPayload(activity.payload));

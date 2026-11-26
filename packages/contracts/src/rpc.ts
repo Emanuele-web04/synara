@@ -75,6 +75,7 @@ import {
   TodoStreamEvent,
   TodoUpdateInput,
 } from "./todo";
+import { SecretRequestAnswerInput } from "./secretRequest";
 import {
   ProjectAgentConfigureInput,
   ProjectAgentLinkProjectInput,
@@ -2128,6 +2129,12 @@ export const WsTodoDeleteRpc = Rpc.make(WS_METHODS.todoDelete, {
   error: WsRpcError,
 });
 
+export const WsSecretRequestAnswerRpc = Rpc.make(WS_METHODS.secretRequestAnswer, {
+  payload: SecretRequestAnswerInput,
+  success: Schema.Void,
+  error: WsRpcError,
+});
+
 export const WsSubscribeTodoEventsRpc = Rpc.make(WS_METHODS.subscribeTodoEvents, {
   payload: Schema.Struct({}),
   success: TodoStreamEvent,
@@ -2543,6 +2550,7 @@ export type WsFeatureRpc =
   | typeof WsTodoCreateRpc
   | typeof WsTodoUpdateRpc
   | typeof WsTodoDeleteRpc
+  | typeof WsSecretRequestAnswerRpc
   | typeof WsSubscribeTodoEventsRpc;
 
 // Partition construction while the explicit union bounds the exported declaration.
@@ -2750,6 +2758,7 @@ const wsApplicationRpcGroup = RpcGroup.make(
   WsTodoCreateRpc,
   WsTodoUpdateRpc,
   WsTodoDeleteRpc,
+  WsSecretRequestAnswerRpc,
   WsSubscribeTodoEventsRpc,
 );
 

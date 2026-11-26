@@ -237,6 +237,7 @@ import { RecapStatsQuery } from "./recapStats";
 import { UsageAnalyticsQuery } from "./usageAnalyticsStats";
 import { ThreadSearchQuery } from "./threadSearch";
 import { redactSensitiveProcessArgs } from "./processArgumentRedaction";
+import { SecretRequestError, secretRequestGate } from "./secrets/SecretRequestGate.ts";
 import { ServerEnvironment } from "./environment/Services/ServerEnvironment";
 import { ExternalMcpService } from "./externalMcp/Services/ExternalMcpService";
 import { type McpConnectorError, McpConnectors } from "./mcpConnectors/Services/McpConnectors";
@@ -3580,6 +3581,19 @@ const makeWsRpcHandlersLayer = () =>
           whenTasksEnabled(rpcEffect(todoService.update(input), "Failed to update task")),
         [WS_METHODS.todoDelete]: (input) =>
           whenTasksEnabled(rpcEffect(todoService.delete(input), "Failed to delete task")),
+        // The value goes straight to the in-memory gate and its owner-only file,
+        // never into orchestration events, logs, or the error text.
+        [WS_METHODS.secretRequestAnswer]: (input) =>
+          Effect.tryPromise({
+            try: () => secretRequestGate.answer(input),
+            catch: (cause) =>
+              new WsRpcError({
+                message:
+                  cause instanceof SecretRequestError
+                    ? cause.message
+                    : "Could not deliver the secret.",
+              }),
+          }),
         [WS_METHODS.subscribeTodoEvents]: (_, { clientId }) =>
           tasksEnabled
             ? streamAdmission.guard(

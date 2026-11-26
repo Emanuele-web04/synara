@@ -208,6 +208,8 @@ const SYNARA_GATEWAY_OWNED_TOOL_NAMES = [
   "synara_unlink_thread_pull_request",
   "synara_set_thread_archived",
   "synara_set_thread_goal",
+  // Secret requests (secretTools.ts)
+  "synara_request_secret",
   // Thread diagnostics (threadDiagnosticTools.ts)
   "synara_read_thread_activity",
   "synara_diagnose_thread",
