@@ -908,6 +908,20 @@ export function makeAntigravityAdapter(dependencies: AntigravityAdapterDependenc
             ...(providerOptions?.binaryPath ? { binaryPath: providerOptions.binaryPath } : {}),
             ...(providerOptions?.environment ? { environment: providerOptions.environment } : {}),
           };
+          // `agy` keeps its sign-in in the account's home, and a second account
+          // without one would take the ambient account's credentials in silence.
+          if (
+            input.providerInstanceId !== undefined &&
+            input.providerInstanceId !== PROVIDER &&
+            antigravitySettings.environment?.HOME === undefined
+          ) {
+            return yield* new ProviderAdapterValidationError({
+              provider: PROVIDER,
+              operation: "startSession",
+              issue:
+                "This Antigravity account has no home directory of its own yet. Sign in to it from Settings > Accounts.",
+            });
+          }
           const acp = yield* makeRuntime({
             antigravitySettings,
             childProcessSpawner,

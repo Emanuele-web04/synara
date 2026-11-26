@@ -1101,6 +1101,40 @@ describe("Antigravity ACP adapter", () => {
     ]);
   });
 
+  it("refuses a second account that has no home of its own", async () => {
+    const fake = makeControllableRuntime();
+    await runWithAdapter({ makeRuntime: fake.makeRuntime }, (adapter) =>
+      Effect.gen(function* () {
+        const refused = yield* adapter
+          .startSession(
+            startInput(ThreadId.makeUnsafe("thread-agy-account-without-home"), {
+              providerInstanceId: "agy_work",
+            }),
+          )
+          .pipe(Effect.flip);
+        expect(refused.message).toContain("no home directory of its own");
+        expect(fake.runtimeInputs).toHaveLength(0);
+      }),
+    );
+  });
+
+  it("starts a second account in the home its launch options carry", async () => {
+    const fake = makeControllableRuntime();
+    await runWithAdapter({ makeRuntime: fake.makeRuntime }, (adapter) =>
+      Effect.gen(function* () {
+        yield* adapter.startSession(
+          startInput(ThreadId.makeUnsafe("thread-agy-account-home"), {
+            providerInstanceId: "agy_work",
+            providerOptions: { antigravity: { environment: { HOME: "/accounts/work" } } },
+          }),
+        );
+      }),
+    );
+    expect(fake.runtimeInputs[0]?.antigravitySettings?.environment).toEqual({
+      HOME: "/accounts/work",
+    });
+  });
+
   it("attaches the Synara gateway and every granted connector as session MCP servers", async () => {
     const fake = makeControllableRuntime({ sessionSetupMethod: "resume" });
     await runWithAdapter(
