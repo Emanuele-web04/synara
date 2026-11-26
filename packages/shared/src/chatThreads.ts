@@ -159,9 +159,12 @@ export function buildPromptThreadTitleFallback(message: string): string {
 }
 
 // Keep generated titles compact so the sidebar never renders sentence-length prompts.
-export function sanitizeGeneratedThreadTitle(raw: string): string {
+export function sanitizeGeneratedThreadTitle(
+  raw: string,
+  maxWords = MAX_CHAT_THREAD_TITLE_WORDS,
+): string {
   const unquoted = firstGeneratedTitleLine(raw).replace(/^['"`]+|['"`]+$/g, "");
-  const words = titleWords(unquoted).slice(0, MAX_CHAT_THREAD_TITLE_WORDS);
+  const words = titleWords(unquoted).slice(0, maxWords);
   if (words.length === 0) {
     return GENERIC_CHAT_THREAD_TITLE;
   }

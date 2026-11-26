@@ -112,6 +112,8 @@ export interface ThreadTitleGenerationInput {
   message: string;
   /** Regenerate from durable conversation context instead of a single first-turn prompt. */
   context?: "conversation";
+  /** Word cap for the prompt and the trim; the shared default when omitted. */
+  maxWords?: number;
   attachments?: ReadonlyArray<ChatAttachment> | undefined;
   /** Model to use for generation. Uses the Git writing default if not specified. */
   model?: string;

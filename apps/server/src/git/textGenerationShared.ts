@@ -814,18 +814,21 @@ export function buildThreadTitlePrompt(input: {
   readonly message: string;
   readonly attachments?: ReadonlyArray<ChatAttachment>;
   readonly context?: "conversation";
+  readonly maxWords?: number;
 }) {
   const attachmentLines = attachmentMetadataLines(input.attachments);
   const usesConversationContext = input.context === "conversation";
+  const maxWords = input.maxWords ?? MAX_CHAT_THREAD_TITLE_WORDS;
+  const wordRange = maxWords > 3 ? `3-${maxWords}` : String(maxWords);
   const promptSections = [
     "You generate concise chat thread titles.",
     "Return a JSON object with key: title.",
     "Respond with only the JSON object, no prose and no code fences.",
     "Rules:",
     usesConversationContext
-      ? `- Summarize the conversation's current objective in 3-${MAX_CHAT_THREAD_TITLE_WORDS} words.`
-      : `- Summarize the user's request in 3-${MAX_CHAT_THREAD_TITLE_WORDS} words.`,
-    `- Never exceed ${MAX_CHAT_THREAD_TITLE_WORDS} words.`,
+      ? `- Summarize the conversation's current objective in ${wordRange} words.`
+      : `- Summarize the user's request in ${wordRange} words.`,
+    `- Never exceed ${maxWords} words.`,
     "- Be specific: include distinguishing identifiers from the message when present (PR/issue numbers, branch names, file or feature names, error codes).",
     "- Two different requests should never produce the same title if the message contains anything that tells them apart.",
     "- Use a short noun or verb phrase, not a full sentence.",
@@ -858,7 +861,7 @@ export function buildThreadTitlePrompt(input: {
     // title" past this size; sanitizeGeneratedThreadTitle still trims to the cap.
     rawTextFallback: {
       key: "title",
-      maxWords: MAX_CHAT_THREAD_TITLE_WORDS + 4,
+      maxWords: maxWords + 4,
     } satisfies RawTextFallback,
   };
 }

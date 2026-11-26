@@ -13,6 +13,10 @@ export const DEFAULT_CODEX_ACCOUNT_ID = "default";
 // How long an idle side chat stays usable before the server expires it.
 export const SidechatExpiry = Schema.Literals(["1h", "24h", "never"]);
 export type SidechatExpiry = typeof SidechatExpiry.Type;
+export const THREAD_TITLE_MAX_WORDS_OPTIONS = [3, 4, 5, 6, 7, 8] as const;
+export const ThreadTitleMaxWords = Schema.Literals(THREAD_TITLE_MAX_WORDS_OPTIONS);
+export type ThreadTitleMaxWords = typeof ThreadTitleMaxWords.Type;
+export const DEFAULT_THREAD_TITLE_MAX_WORDS: ThreadTitleMaxWords = 6;
 
 export const SourceControlWritingStyle = Schema.Literals(["repository", "conventional", "custom"]);
 export type SourceControlWritingStyle = typeof SourceControlWritingStyle.Type;
@@ -171,6 +175,9 @@ export const ServerSettings = Schema.Struct({
   // reads the project's other GitHub remotes, such as the upstream of a fork.
   githubInboxIncludeUpstreams: Schema.Boolean.pipe(Schema.withDecodingDefault(() => false)),
   sidechatExpiry: SidechatExpiry.pipe(Schema.withDecodingDefault(() => "1h")),
+  threadTitleMaxWords: ThreadTitleMaxWords.pipe(
+    Schema.withDecodingDefault(() => DEFAULT_THREAD_TITLE_MAX_WORDS),
+  ),
   sourceControlWritingStyle: SourceControlWritingStyle.pipe(
     Schema.withDecodingDefault(() => "repository"),
   ),
@@ -240,6 +247,7 @@ export const ServerSettingsPatch = Schema.Struct({
   addProjectBaseDirectory: Schema.optionalKey(StringSetting),
   githubInboxIncludeUpstreams: Schema.optionalKey(Schema.Boolean),
   sidechatExpiry: Schema.optionalKey(SidechatExpiry),
+  threadTitleMaxWords: Schema.optionalKey(ThreadTitleMaxWords),
   sourceControlWritingStyle: Schema.optionalKey(SourceControlWritingStyle),
   sourceControlCustomInstructions: Schema.optionalKey(SourceControlCustomInstructions),
   gitAttributionEnabled: Schema.optionalKey(Schema.Boolean),

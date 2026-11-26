@@ -35,6 +35,15 @@ describe("chatThreads", () => {
     expect(sanitizeGeneratedThreadTitle(raw)).toBe("Fix OAuth callback race");
   });
 
+  it("trims generated titles to a chosen word cap", () => {
+    const raw = "Fix the flaky OAuth callback race in production";
+    expect(sanitizeGeneratedThreadTitle(raw)).toBe("Fix the flaky OAuth callback race");
+    expect(sanitizeGeneratedThreadTitle(raw, 3)).toBe("Fix the flaky");
+    expect(sanitizeGeneratedThreadTitle(raw, 8)).toBe(
+      "Fix the flaky OAuth callback race in production",
+    );
+  });
+
   it("rejects empty and generic generated titles", () => {
     expect(isUsableGeneratedThreadTitle("New thread")).toBe(false);
     expect(isUsableGeneratedThreadTitle("Conversation")).toBe(false);
