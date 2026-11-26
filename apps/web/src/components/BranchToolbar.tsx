@@ -324,6 +324,10 @@ export default function BranchToolbar({
     : (draftThread?.workingDirectory ?? null);
   const activeProvider =
     serverThreadSession?.provider ?? serverThread?.modelSelection.provider ?? null;
+  // The limits panel belongs to the account this chat runs on. Without it the
+  // snapshot lookup falls through to the provider's default account.
+  const activeProviderInstanceId =
+    serverThreadSession?.providerInstanceId ?? serverThread?.modelSelection.instanceId;
   const usesFixedLocalWorkspace = fixedLocalWorkspaceCwd !== undefined;
   const branchCwd = usesFixedLocalWorkspace
     ? fixedLocalWorkspaceCwd
@@ -485,6 +489,7 @@ export default function BranchToolbar({
 
   const usageSummary = useProviderUsageSummary({
     provider: activeProvider,
+    instanceId: activeProviderInstanceId,
     threads,
     codexHomePath: settings.codexHomePath || null,
     fetchOpenUsageData: false,
