@@ -1,7 +1,8 @@
 // FILE: PageListPopover.tsx
-// Purpose: The page list: a "Page ⌄" trigger opening the pages (with their icons and the list's
-//          dividers) with an add button in the heading, inline rename (double-click, F2 or the
-//          pencil), per-row actions and the shared page menu on right-click.
+// Purpose: The page list: a "Page ⌄" trigger (with the agent indicator while an agent works on
+//          another page) opening the pages (with their icons and the list's dividers) with an add
+//          button in the heading, inline rename (double-click, F2 or the pencil), per-row actions
+//          and the shared page menu on right-click.
 // Layer: Canvas UI
 // Exports: PageListPopover, PageListEntry
 
@@ -13,7 +14,7 @@ import { ComposerPickerMenuPopup } from "../chat/ComposerPickerMenuPopup";
 import { MENU_ICON_CLASS_NAME } from "../chat/composerPickerStyles";
 import { Button } from "../ui/button";
 import { IconButton } from "../ui/icon-button";
-import { CanvasAgentPageIndicator } from "./editor/CanvasAgentActivity";
+import { CanvasAgentIconSlot, CanvasAgentIndicator } from "./editor/CanvasAgentActivity";
 import { CanvasPageGlyph } from "./canvasPageIcons";
 import { Menu, MenuGroup, MenuItem, MenuSeparator, MenuTrigger } from "../ui/menu";
 import { TreeRowRenameInput } from "../ui/TreeRow";
@@ -76,6 +77,10 @@ export function PageListPopover({
   const current = entries.find(
     (entry): entry is PageListItem => entry.kind === "page" && entry.id === currentId,
   );
+  // The open page shows an agent's work on the canvas; another page's shows on the trigger.
+  const agentElsewhere = entries.some(
+    (entry) => entry.kind === "page" && entry.id !== currentId && activePageIds?.has(entry.id),
+  );
   const startRename = (id: string) => {
     if (!readOnly) setRenamingId(id);
   };
@@ -100,6 +105,7 @@ export function PageListPopover({
     <Menu highlightItemOnHover={renamingId === null}>
       <MenuTrigger render={<Button variant="ghost" size="xs" className="min-w-0 shrink-0" />}>
         <span className="truncate">{current?.title}</span>
+        <CanvasAgentIndicator active={agentElsewhere} scope="otherPage" />
         <ChevronDownIcon className="size-3" />
       </MenuTrigger>
       <ComposerPickerMenuPopup align="start" className="w-55">
@@ -172,15 +178,19 @@ export function PageListPopover({
                 onKeyDown={(event) => onRowKeyDown(event, page)}
                 onContextMenu={readOnly ? undefined : contextMenu(page.id)}
               >
-                {activePageIds?.has(page.id) ? (
-                  // A page an agent is working on shows the activity indicator instead of its icon.
-                  <CanvasAgentPageIndicator />
-                ) : (
-                  <CanvasPageGlyph
-                    icon={page.icon}
-                    className={cn(MENU_ICON_CLASS_NAME, !selected && "opacity-60")}
-                  />
-                )}
+                {/* A page an agent is working on shows the activity indicator instead of its
+                    icon, inset like the menu's icons so the title stays put. */}
+                <CanvasAgentIconSlot
+                  active={activePageIds?.has(page.id) === true}
+                  scope="page"
+                  className="-mx-0.5"
+                  icon={
+                    <CanvasPageGlyph
+                      icon={page.icon}
+                      className={cn(MENU_ICON_CLASS_NAME, !selected && "opacity-60")}
+                    />
+                  }
+                />
                 <span className="min-w-0 flex-1 truncate">{page.title}</span>
                 {selected ? (
                   <CheckIcon

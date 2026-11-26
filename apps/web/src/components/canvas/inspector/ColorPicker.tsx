@@ -401,6 +401,7 @@ function ColorDetails({
           </span>
           <IconButton
             label={t("workspace:canvasInspectorCopyColor", { format: FORMAT_LABELS[name] })}
+            tooltip={t("workspace:canvasInspectorCopyColor", { format: FORMAT_LABELS[name] })}
             className="-me-1"
             onClick={() => copyText(formatColor(color, name))}
           >
@@ -477,6 +478,7 @@ function ColorTextField({
           render={
             <IconButton
               label={t("workspace:canvasInspectorColorFormat")}
+              tooltip={t("workspace:canvasInspectorColorFormat")}
               size="chip"
               className="shrink-0"
               disabled={disabled}

@@ -529,7 +529,7 @@ describe("comments tool, agent activity, camera and live inspector", () => {
   it("outlines an agent's frame with its radius, rains in the label and flashes layer reveals", async () => {
     const rounded = { ...f1, style: "background:#fff;border-radius:16px" };
     serveCanvas(native, workOf([rounded, f2]));
-    const { screen, root } = await mountCanvas(workOf([rounded, f2]));
+    const { screen, root } = await mountCanvas(workOf([rounded, f2]), { layers: true });
     try {
       await nextFrame();
       const event = (kind: "read" | "edit", layerIds?: Record<string, string[]>) =>
@@ -554,6 +554,12 @@ describe("comments tool, agent activity, camera and live inspector", () => {
       expect(
         root.querySelector('[data-canvas-frame-label="f1"] [data-canvas-agent-rain]'),
       ).toBeTruthy();
+      // The frame's row in the layers panel shows the same indicator in place of its icon;
+      // the other frame keeps its icon.
+      await vi.waitFor(() =>
+        expect(row("frame:f1")?.querySelector("[data-canvas-page-activity]")).toBeTruthy(),
+      );
+      expect(row("frame:f2")?.querySelector("[data-canvas-page-activity]")).toBeNull();
       // The edit flashes over the badge, inside the frame.
       await vi.waitFor(() =>
         expect(root.querySelector('[data-canvas-reveal="edit"]')).toBeTruthy(),

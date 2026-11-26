@@ -244,7 +244,10 @@ function AlignActions({ model }: { model: InspectorModel }) {
       <Menu>
         <MenuTrigger
           render={
-            <IconButton label={t("workspace:canvasInspectorMoreAlign")}>
+            <IconButton
+              label={t("workspace:canvasInspectorMoreAlign")}
+              tooltip={t("workspace:canvasInspectorMoreAlign")}
+            >
               <EllipsisIcon className="size-3.5" />
             </IconButton>
           }
@@ -743,7 +746,11 @@ function FlexGroup({
             <Menu>
               <MenuTrigger
                 render={
-                  <IconButton label={t("workspace:canvasInspectorMoreFlex")} size="icon-xs">
+                  <IconButton
+                    label={t("workspace:canvasInspectorMoreFlex")}
+                    tooltip={t("workspace:canvasInspectorMoreFlex")}
+                    size="icon-xs"
+                  >
                     <EllipsisIcon className="size-3.5" />
                   </IconButton>
                 }

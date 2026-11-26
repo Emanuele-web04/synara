@@ -17,7 +17,13 @@ import { IconButton } from "../ui/icon-button";
 import { CanvasEditorProvider, useCanvasEditor } from "./editor/CanvasEditorContext";
 import { CanvasEditorSurface } from "./editor/CanvasEditorSurface";
 import { CanvasZoomMenu } from "./editor/CanvasToolbar";
-import { askInChat, CanvasStatus, openCanvasPane, useCanvasWork } from "./canvasPane";
+import {
+  askInChat,
+  CanvasHeaderStatus,
+  CanvasStatus,
+  openCanvasPane,
+  useCanvasWork,
+} from "./canvasPane";
 import { CanvasPageMenu } from "./CanvasPageMenu";
 
 /** Below this width the side pane shows the canvas alone; Open full size has the full layout. */
@@ -105,6 +111,7 @@ export default function CanvasDockPane({
   const { connection, query } = useCanvasWork(workId);
   const work: CanvasWork | undefined = query.data;
   const page = work?.pages.find((item) => item.id === pageId) ?? work?.pages[0];
+  const readOnly = work?.readOnly === true || (work !== undefined && work.archivedAt !== null);
   return (
     <div ref={setElement} className="flex min-h-0 flex-1 flex-col">
       {!work || !page ? (
@@ -113,7 +120,7 @@ export default function CanvasDockPane({
         <CanvasEditorProvider
           work={work}
           pageId={page.id}
-          readOnly={work.readOnly === true || work.archivedAt !== null}
+          readOnly={readOnly}
           threadId={hostThreadId}
           onAskAgent={(prompt) => askInChat(hostThreadId, prompt)}
           onSelectPage={(next) => openCanvasPane(hostThreadId, work.id, next)}
@@ -133,6 +140,8 @@ export default function CanvasDockPane({
                   pageId={page.id}
                   onSelect={(next) => openCanvasPane(hostThreadId, work.id, next)}
                 />
+                {/* As in the full layout's header: archived, or updates unavailable. */}
+                <CanvasHeaderStatus readOnly={readOnly} connection={connection} />
               </span>
             }
             actions={

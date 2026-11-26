@@ -566,6 +566,7 @@ export function OtherStylesSection({ model }: { model: InspectorModel }) {
               {model.readOnly ? null : (
                 <IconButton
                   label={t("workspace:canvasInspectorRemoveStyle", { name: property })}
+                  tooltip={t("workspace:canvasInspectorRemoveStyle", { name: property })}
                   size="icon-xs"
                   className="opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
                   onClick={() => void model.commit({ [property]: null })}

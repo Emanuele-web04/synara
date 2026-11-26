@@ -190,9 +190,10 @@ The library (`CanvasLibraryView.tsx`, `/canvas`):
   works, with a trail back up) and Archive (archived works and folders; a work inside an
   archived folder offers "Restore the parent folder first").
 - **Search** matches titles; in Files it searches every folder. **Grid or list**, remembered
-  per viewer: cards with the thumbnail, or rows with a small one. Thumbnails render the work's
-  cover frame through the sanitized renderer, with the fonts and images it uses
-  (`previewAssets`).
+  per viewer: cards with the thumbnail, or rows with a small one. A whole card or row opens its
+  work (the card's title row tints on hover, as the chat's canvas card does); its menu stays
+  its own button. Thumbnails render the work's cover frame through the sanitized renderer, with
+  the fonts and images it uses (`previewAssets`).
 - **Menu** on a work or folder: Open, Rename (the shared rename dialog), Duplicate (works; a
   "(copy)" suffix, the copy stays in the library), Move to (Files or a folder; a folder never
   into itself or its subfolders), Associated project (works), Archive or Restore.
@@ -307,7 +308,7 @@ resize, flex spacing handles, marquee, drawing, comment placing) with `canvasGes
 (marquee, drop bar, reparent target, drawing and value chips, drawn outside React);
 `canvasLiveGeometry.ts` (where a gesture has put things, for the inspector);
 `CanvasOverlay.tsx` (selection chrome in world pixels); `CanvasAgentActivity.tsx` (agent
-outlines, rain, reveal flashes, the pages-list indicator); `canvasSelection.ts` (hit stack,
+outlines, rain, reveal flashes, the indicator on page and frame rows); `canvasSelection.ts` (hit stack,
 click and marquee rules, locks, tree helpers); `canvasMeasure.ts` (boxes, camera conversions,
 drawn boxes, the size badge, blocked frame labels); `useCanvasCamera.ts` (zoom, fit and centre
 for every control, animated; wheel and pinch; first-open placement); `useCanvasTextEditing.ts`;
@@ -336,7 +337,8 @@ selection actions (align, distribute, resize to fit or fill, resize by a step) l
   positioned layers; drawn on empty canvas they create a frame. While drawing, Shift keeps a
   square, Alt draws from the centre (both combine) and holding Space moves the box's origin
   with the pointer; a plain click makes a 100 × 100 box centred on the click. The tools sit in
-  the floating toolbar bottom-centre over the canvas, with undo and redo at its end.
+  the floating toolbar bottom-centre over the canvas, with undo and redo at its end, each
+  enabled only while there is something to undo or redo (`CanvasHistory.subscribe`).
 - **Hit test and click:** every layer within 4 screen pixels of the pointer is hit, ancestors
   first and the deepest last; the tolerance reaches only inside the topmost layer under the
   pointer, so a 1 px line is easy to hit but a neighbouring button never wins over the one
@@ -390,7 +392,9 @@ selection actions (align, distribute, resize to fit or fill, resize by a step) l
   change joins its step. Arrow keys nudge freely placed layers (Shift ×8) and reorder flow
   layers; ⌘ arrows resize the selection's width or height by 1 px (Shift 8); locked items stay
   put. 8 resize handles (4 drawn); Shift keeps the aspect ratio, Alt resizes from the centre,
-  only the dragged axis changes.
+  only the dragged axis changes. While a resize or a padding or gap handle drags, the canvas
+  keeps that handle's cursor until release (it holds the pointer, which soon leaves the handle),
+  set outside React.
 - **Text editing:** `plaintext-only` editing of a text block (plain or rich) starts on
   double-click (deep text included), Enter on a text layer, T with one text layer selected, or
   the Text tool clicked on existing text, which places the caret at the click
@@ -437,10 +441,16 @@ pre-wrap` when the layer would collapse them. An IME composing text keeps every 
   ⌘U / ⌘⇧X bold, italic, underline and strikethrough (see Rich text). Keys typed in fields,
   dialogs, menus and the canvas's own controls never reach canvas shortcuts. Tooltips on the
   toolbar, the Layers tab, the layer rows' eye and lock and the inspector's align, resize,
-  flex and text-alignment buttons show the key.
+  flex and text-alignment buttons show the key. Every icon-only inspector button names itself
+  in a tooltip (`inspector/inspectorIconButtons.test.ts` keeps it so), and so does the chat
+  card's Restore button, which shows the app's spinner while the restore runs.
 - **Toasts:** actions with no visible result on the canvas confirm with the app's toast:
   styles copied and pasted, opacity set by a digit, every layer unlocked, comments hidden or
-  shown. A new one replaces the last.
+  shown, and Hide UI (with the key that shows it again). A new one replaces the last.
+- **Header status:** both layouts' headers say, after the page switcher, when the work is
+  archived ("Archived") and while canvas updates are unavailable because the connection is down
+  ("Canvas updates unavailable. Reconnecting…", as the library says), from one
+  `CanvasHeaderStatus`.
 - **Clipboard:** a copy writes the layers' HTML source as plain text and, as `text/html`, a
   charset meta tag, the copied frames or layer trees as base64 JSON in a
   `<!--synara-canvas:v1:…-->` comment, then the HTML, so a paste after a reload or in another
@@ -607,9 +617,20 @@ pre-wrap` when the layer would collapse them. An IME composing text keeps every 
   `useCanvasActivityStore.layers`: a read flashes for 1.5 s, a write too with the new layer
   hidden until halfway, an edit for 1.0 s, a delete for 0.8 s where the layer was (its box is
   remembered as the renderer removes it). Flashes are drawn outside React in the agent colour
-  (deletes in the destructive colour), clipped to the frame. Pages with agent activity show a
-  grayscale rain instead of their icon in both page lists. Reduced motion stops the pulse and
+  (deletes in the destructive colour), clipped to the frame. Reduced motion stops the pulse and
   the rain and turns reveals off.
+- **Where an agent works, outside the canvas:** the same rain in grayscale
+  (`CanvasAgentPageIndicator`), with a spoken label and tooltip, fading in and out over 400 ms
+  (at once with reduced motion). It takes the icon's place on a page row in both page lists and
+  on a frame row in the layers panel; sits before the chevron of the page switcher (the full
+  layout's header and the side pane's header) while an agent works on a page other than the
+  open one; takes the Canvas glyph's place on the dock tab while an agent works on any page of
+  the work in that pane, so it shows from behind another tab (the dock's `paneIconOverrides`,
+  as the pull request tab's state glyph; idle, the tab draws its usual glyph); and follows the
+  title of the work's card or row in the library. The library needs no open editor:
+  `CanvasEventBridge` records the activity stream at the app's root. A window that subscribes
+  mid-turn sees a work's activity from that agent's next canvas call; the server does not replay
+  live activity to a new subscriber.
 - **Pages list** (`CanvasPagesSection.tsx`, Layers tab; `PageListPopover.tsx`, the header
   switcher in both layouts): pages and dividers in one order. A page row shows its icon (the
   agent rain while an agent works on it) and its name; the open page is the selected row in the
@@ -816,12 +837,14 @@ that renders the same text and spans), `designCanvasPages.test.ts` (list order a
 preservation and idempotence, and the commit operations replayed and validated).
 
 Web: `CanvasPageList.browser.tsx` (real drag, key and context-menu events: pages and dividers
-in one order with icons, the check and agent rain; drag reorder with the drop line; Alt+arrow
+in one order with icons, the check and agent rain cross-fading with the icon (a switcher row's
+title staying in line); drag reorder with the drop line; Alt+arrow
 moves; the page and divider menus, icons, Add divider below, rename, delete opening the next
-page; the header switcher; Use as cover and Remove cover; the pages splitter, remembered, and
-its double-click fit), `CanvasLibraryView.browser.tsx`
-(Recent, Files with its trail, Archive; search across folders and its empty state; grid and
-list remembered; Move to, folder cycles, the rename dialog), `canvasWorkCache.test.ts` (deltas, including the `duplicate` and `replace_html`
+page; the header switcher and its indicator for an agent on another page; Use as cover and
+Remove cover; the pages splitter, remembered, and its double-click fit),
+`CanvasLibraryView.browser.tsx` (Recent, Files with its trail, Archive; search across folders
+and its empty state; grid and list remembered; Move to, folder cycles, the rename dialog; the
+agent indicator on a work's card and row; the whole card opening its work), `canvasWorkCache.test.ts` (deltas, including the `duplicate` and `replace_html`
 shapes, refetch of one work on a gap, own-write echo, newest-wins), `canvasStores.test.ts`
 (activity kinds, per-layer entries, reads leaving the outline alone, `ended`; the side pane
 asked for once per work and turn, never for a read), `CanvasPaneAutoOpen.browser.tsx` (agent
@@ -836,12 +859,17 @@ again while a pane is still taking its size and not once it has settled or the c
 empty pages, per-page cameras, no server writes while idle),
 `CanvasDockPane.browser.tsx` (the side pane's inspector closed by default and remembered per
 viewer, no toggle where it does not fit, the canvas's middle kept when it opens and closes,
-Open full size on the same work and page, the first fit at the size the pane opens to),
+Open full size on the same work and page, the first fit at the size the pane opens to, the
+header's page name marked for an agent on another page; Archived and the connection status in
+its header; the dock's Canvas tab showing the agent indicator from behind another tab and its
+unchanged glyph when idle), `CanvasTurnCard.browser.tsx` (the Restore button's tooltip and its
+spinner while the restore runs),
 `editor/CanvasGestures.browser.tsx` (pan, wheel zoom, layer and frame drag, resize and
-marquee with zero React commits while the pointer moves, measured with a `Profiler`;
-cancel; flow reorder; keyboard tree walking and tools; the floating toolbar fading out for a
-drag, marquee, pan, resize and draw but not a click, with zero commits, taking presses only in
-its own box and leaving with Hide UI), `editor/canvasGestures.test.ts` (the hide rule) and
+marquee with zero React commits while the pointer moves, measured with a `Profiler`, the
+resize cursor held through the drag; cancel; flow reorder; keyboard tree walking and tools;
+the floating toolbar fading out for a drag, marquee, pan, resize and draw but not a click,
+with zero commits, taking presses only in its own box and leaving with Hide UI; Undo and Redo
+enabled only with something to undo or redo), `editor/canvasGestures.test.ts` (the hide rule) and
 `editor/canvasPinPlacement.test.ts` (a pin stepping off the size badge),
 `inspector/CanvasInspector.browser.tsx` and `inspector/CanvasInspectorSections.browser.tsx`
 (real pointer and key events against the in-memory store: rotation and the 90° button, one
@@ -888,11 +916,12 @@ copy with the embedded tree and a paste from another window, paste on top and to
 panel indent, slow inside drop, multi-row cross-frame move with undo, frame hide/lock/rename/
 reorder, inherited lock dot, dimmed children, ⌘R, ⌥L, icon centring; the Comment tool's
 first click and pointer-up composer; agent outline radius, rain, fades, edit and delete
-flashes, the pages-list indicator; animated zoom with zero commits, pinch versus Ctrl, pan
+flashes, the indicator on the frame's layers row; animated zoom with zero commits, pinch versus Ctrl, pan
 end on blur; live inspector X during a frame drag with zero commits),
 `editor/CanvasEditorCommands.browser.tsx` (the empty-canvas menu; click, Shift, Alt and Space
 drawing; ⌘ arrow resizes and fit or fill from the keys and handle double-clicks; ⌥ align and
-⌃⌥ distribute; ⇧Esc and the Deselect row; ⌘⇧X and the Adjust text submenu; toasts; the
+⌃⌥ distribute; ⇧Esc and the Deselect row; ⌘⇧X and the Adjust text submenu; toasts, Hide UI's
+included; the
 sizing badge; Show comments in the zoom menu; dashed flex outlines and the 2 px hover outline;
 the cover marker and hidden blocked labels; Alt-click subtree toggles, Tab renames and
 Collapse all in the layers panel) and

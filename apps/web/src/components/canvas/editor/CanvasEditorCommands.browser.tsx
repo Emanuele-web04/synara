@@ -407,6 +407,14 @@ describe("canvas editor commands", () => {
       await vi.waitFor(() => expect(titles()).toContain("Comments shown"));
       key(root, { key: "L", code: "KeyL", altKey: true, shiftKey: true, ...mod });
       await vi.waitFor(() => expect(titles()).toContain("All layers unlocked"));
+      // Hiding the UI says how to bring it back; showing it again needs no word.
+      key(root, { key: ".", code: "Period" });
+      await vi.waitFor(() => expect(titles()).toContain("UI hidden. Press . to show it"));
+      expect(useCanvasEditorStore.getState().uiHidden).toBe(true);
+      const count = add.mock.calls.length;
+      key(root, { key: ".", code: "Period" });
+      await vi.waitFor(() => expect(useCanvasEditorStore.getState().uiHidden).toBe(false));
+      expect(add.mock.calls.length).toBe(count);
     } finally {
       await screen.unmount();
     }

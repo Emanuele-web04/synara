@@ -207,7 +207,12 @@ export function FillSection({ model }: { model: InspectorModel }) {
       disabled={readOnly}
       onAdd={add}
       headerAction={
-        <IconButton label={t("workspace:canvasInspectorAddFill")} size="icon-xs" onClick={add}>
+        <IconButton
+          label={t("workspace:canvasInspectorAddFill")}
+          tooltip={t("workspace:canvasInspectorAddFill")}
+          size="icon-xs"
+          onClick={add}
+        >
           <AddPlusIcon className="size-3.5" />
         </IconButton>
       }
@@ -458,6 +463,7 @@ function FillMenu({
         render={
           <IconButton
             label={t("workspace:canvasInspectorFillOptions")}
+            tooltip={t("workspace:canvasInspectorFillOptions")}
             size="chip"
             className="shrink-0"
           >

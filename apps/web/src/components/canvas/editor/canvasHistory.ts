@@ -322,40 +322,61 @@ export function invertExportSettings(
 
 const MAX_HISTORY = 200;
 
-/** A bounded linear history of one work: a new change clears redo. */
+/**
+ * A bounded linear history of one work: a new change clears redo. Listeners hear every change,
+ * so controls can show whether there is anything to undo or redo.
+ */
 export class CanvasHistory {
   private past: CanvasHistoryEntry[] = [];
   private future: CanvasHistoryEntry[] = [];
+  private listeners = new Set<() => void>();
+  /** Calls `listener` after every change; returns the unsubscribe. */
+  subscribe = (listener: () => void) => {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  };
+  private changed() {
+    for (const listener of this.listeners) listener();
+  }
   push(entry: CanvasHistoryEntry) {
     this.past.push(entry);
     if (this.past.length > MAX_HISTORY) this.past.shift();
     this.future = [];
+    this.changed();
   }
   takeUndo() {
     const entry = this.past.pop();
     if (entry) this.future.push(entry);
+    this.changed();
     return entry;
   }
   takeRedo() {
     const entry = this.future.pop();
     if (entry) this.past.push(entry);
+    this.changed();
     return entry;
   }
   /** Moves the newest redo entry back to undo (its undo did not happen), and vice versa. */
   returnUndo() {
     const entry = this.future.pop();
     if (entry) this.past.push(entry);
+    this.changed();
   }
   returnRedo() {
     const entry = this.past.pop();
     if (entry) this.future.push(entry);
+    this.changed();
   }
   /** A replay that could not be reverted either is dropped rather than retried forever. */
   discardLastRedo() {
     this.future.pop();
+    this.changed();
   }
   discardLastUndo() {
     this.past.pop();
+    this.changed();
   }
   get canUndo() {
     return this.past.length > 0;

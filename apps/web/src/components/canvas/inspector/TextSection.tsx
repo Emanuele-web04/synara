@@ -606,7 +606,11 @@ export function UnderlineSection({ model: selected }: { model: InspectorModel })
           <Menu>
             <MenuTrigger
               render={
-                <IconButton label={t("workspace:canvasInspectorMoreUnderline")} size="icon-xs">
+                <IconButton
+                  label={t("workspace:canvasInspectorMoreUnderline")}
+                  tooltip={t("workspace:canvasInspectorMoreUnderline")}
+                  size="icon-xs"
+                >
                   <EllipsisIcon className="size-3.5" />
                 </IconButton>
               }

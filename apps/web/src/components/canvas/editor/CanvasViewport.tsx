@@ -44,6 +44,7 @@ import { parentSelection } from "./canvasSelection";
 import {
   CANVAS_OPACITY_DIGIT_MS,
   canvasKeyOf,
+  canvasShortcutLabelFor,
   isCanvasKeyTarget,
   matchCanvasShortcut,
   type CanvasShortcut,
@@ -190,6 +191,17 @@ export function CanvasViewport({
   /** ⌘⇧V, ⌘⇧R and the menus read the clipboard themselves: no paste event comes with them. */
   const pasteFromClipboard = async (mode: CanvasPasteMode) =>
     pasteContent(await readClipboard(), mode);
+  /** Hide UI takes the panels and tools away: a toast says how to bring them back. */
+  const toggleUi = () => {
+    const store = useCanvasEditorStore.getState();
+    store.toggleUi();
+    if (useCanvasEditorStore.getState().uiHidden)
+      showCanvasToast(
+        t("workspace:canvasToastUiHidden", {
+          shortcut: canvasShortcutLabelFor({ id: "toggle-ui" }) ?? ".",
+        }),
+      );
+  };
 
   /* ---------------------------------------------------------------- keyboard */
 
@@ -278,7 +290,7 @@ export function CanvasViewport({
       case "dashboard":
         return editor.openLibrary?.();
       case "toggle-ui":
-        return useCanvasEditorStore.getState().toggleUi();
+        return toggleUi();
       case "show-layers":
         return useCanvasEditorStore.getState().requestPanel({ kind: "layers" });
       case "collapse-layers":
@@ -504,7 +516,7 @@ export function CanvasViewport({
           const next = commands.stepFrame(step);
           if (next) zoom.fit([next]);
         },
-        onToggleUi: () => useCanvasEditorStore.getState().toggleUi(),
+        onToggleUi: toggleUi,
       });
     }
     if (!selection.some((item) => selectionKey(item) === selectionKey(pressed))) select([pressed]);

@@ -23,7 +23,13 @@ import {
   TreeSectionHeader,
   type TreeRowRun,
 } from "../../ui/TreeRow";
-import { selectionKey, useCanvasEditorStore, type CanvasSelectionItem } from "../canvasStores";
+import {
+  selectionKey,
+  useActiveAgentFrames,
+  useCanvasEditorStore,
+  type CanvasSelectionItem,
+} from "../canvasStores";
+import { CanvasAgentIconSlot } from "./CanvasAgentActivity";
 import { pasteIntoCanvas, readClipboard } from "./canvasClipboard";
 import { showCanvasContextMenu } from "./canvasContextMenu";
 import { canvasShortcutLabelFor } from "./canvasShortcuts";
@@ -100,6 +106,7 @@ export function CanvasLayersPanel({ className }: { className?: string }) {
   const setPanelHover = useCanvasEditorStore((state) => state.setPanelHover);
   const panelRequest = useCanvasEditorStore((state) => state.panelRequest);
   const selected = useMemo(() => new Set(selection.map(selectionKey)), [selection]);
+  const agentFrames = useActiveAgentFrames(editor.work.id, editor.page.id);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [renaming, setRenaming] = useState<string | null>(null);
   const [dragging, setDragging] = useState<string | null>(null);
@@ -541,7 +548,18 @@ export function CanvasLayersPanel({ className }: { className?: string }) {
                     ? { open: isOpen(row.key), onToggle: (deep) => toggle(row, deep) }
                     : null
                 }
-                icon={<Icon className="size-3.5" />}
+                // A frame an agent is working on shows the activity indicator instead of its icon.
+                icon={
+                  row.kind === "frame" ? (
+                    <CanvasAgentIconSlot
+                      active={agentFrames.has(row.item.frameId)}
+                      scope="frame"
+                      icon={<Icon className="size-3.5" />}
+                    />
+                  ) : (
+                    <Icon className="size-3.5" />
+                  )
+                }
                 onIconDoubleClick={() => centre(row)}
                 label={row.label}
                 editor={

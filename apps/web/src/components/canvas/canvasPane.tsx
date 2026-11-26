@@ -1,12 +1,19 @@
 import type { ThreadId } from "@synara/contracts";
 import { useQuery } from "@tanstack/react-query";
-import { useEffect, useEffectEvent } from "react";
+import { useEffect, useEffectEvent, type ReactNode } from "react";
 import { requestComposerFocus } from "~/composerFocusRequestStore";
 import { useComposerDraftStore } from "~/composerDraftStore";
 import { useTranslation } from "~/i18n";
 import { useRightDockStore } from "~/rightDockStore";
+import type { RightDockPane } from "~/rightDockStore.logic";
 import { routeSingleDockPaneOpenRequest } from "../chat/dockPaneOpenRequest";
-import { useCanvasPaneRequestStore, type CanvasPaneOpenRequest } from "./canvasStores";
+import { resolveRightDockPaneIcon } from "../chat/rightDockPaneMeta";
+import { CanvasAgentIconSlot } from "./editor/CanvasAgentActivity";
+import {
+  useActiveAgentPages,
+  useCanvasPaneRequestStore,
+  type CanvasPaneOpenRequest,
+} from "./canvasStores";
 import { canvasWorkQueryOptions } from "./canvasWorkCache";
 import { useCanvasLibrary } from "./useCanvasLibrary";
 
@@ -56,6 +63,29 @@ export function useCanvasPaneOpenRequests(input: {
   }, [openEnabled, pending]);
 }
 
+/** The canvas tab's glyph, handing its place to the agent indicator while an agent works there. */
+function CanvasDockTabIcon({ workId, icon }: { workId: string; icon: ReactNode }) {
+  const working = useActiveAgentPages(workId).size > 0;
+  return <CanvasAgentIconSlot active={working} scope="work" icon={icon} />;
+}
+
+/**
+ * Dock tab icons for a chat's panes (the dock's `paneIconOverrides`): the canvas tab shows the
+ * agent indicator while an agent works on any page of the work in that pane, so it shows from
+ * behind another tab too. Idle, the tab keeps its usual glyph.
+ */
+export function canvasDockPaneIcons(
+  panes: readonly RightDockPane[],
+): Record<string, ReactNode> | undefined {
+  const pane = panes.find((item) => item.kind === "canvas" && item.canvasWorkId);
+  if (!pane?.canvasWorkId) return undefined;
+  return {
+    [pane.id]: (
+      <CanvasDockTabIcon workId={pane.canvasWorkId} icon={resolveRightDockPaneIcon(pane)} />
+    ),
+  };
+}
+
 /** Seeds a chat's composer with a canvas request and focuses it; the user sends it. */
 export function askInChat(threadId: ThreadId, prompt: string) {
   const store = useComposerDraftStore.getState();
@@ -68,6 +98,42 @@ export function useCanvasWork(workId: string) {
   const connection = useCanvasLibrary();
   const query = useQuery({ ...canvasWorkQueryOptions(workId), enabled: connection.supported });
   return { connection, query };
+}
+
+/**
+ * After the title and page in both layouts' headers: why the canvas will not change right now
+ * (updates unavailable while the connection is down; an archived work is read only).
+ */
+export function CanvasHeaderStatus({
+  readOnly,
+  connection,
+}: {
+  readOnly: boolean;
+  connection: ReturnType<typeof useCanvasLibrary>;
+}) {
+  const { t } = useTranslation();
+  return (
+    <>
+      {connection.disconnected && (
+        <span
+          role="status"
+          data-canvas-header-status="disconnected"
+          title={t("workspace:designSyncFailed")}
+          className="min-w-0 truncate ps-1 text-ui-xs text-muted-foreground"
+        >
+          {t("workspace:designSyncFailed")}
+        </span>
+      )}
+      {readOnly && (
+        <span
+          data-canvas-header-status="archived"
+          className="shrink-0 ps-1 text-ui-xs text-muted-foreground"
+        >
+          {t("workspace:canvasArchived")}
+        </span>
+      )}
+    </>
+  );
 }
 
 export function CanvasStatus({

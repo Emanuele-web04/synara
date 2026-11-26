@@ -23,7 +23,13 @@ import { Button } from "../ui/button";
 import { Menu, MenuItem, MenuSub, MenuSubTrigger, MenuTrigger } from "../ui/menu";
 import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-import { askInChat, CanvasStatus, openCanvasPane, useCanvasWork } from "./canvasPane";
+import {
+  askInChat,
+  CanvasHeaderStatus,
+  CanvasStatus,
+  openCanvasPane,
+  useCanvasWork,
+} from "./canvasPane";
 import { CanvasChatPanel } from "./CanvasChatPanel";
 import { CanvasPageMenu } from "./CanvasPageMenu";
 import { CanvasPagesSection } from "./CanvasPagesSection";
@@ -267,11 +273,7 @@ export default function CanvasWorkView({
         {work && page && (
           <CanvasPageMenu work={work} pageId={page.id} onSelect={(id) => void selectPage(id)} />
         )}
-        {readOnly && (
-          <span className="shrink-0 text-ui-xs text-muted-foreground">
-            {t("workspace:canvasArchived")}
-          </span>
-        )}
+        {work && <CanvasHeaderStatus readOnly={readOnly} connection={connection} />}
       </div>
       {trailing ? (
         <div className="flex shrink-0 items-center gap-2 [-webkit-app-region:no-drag]">

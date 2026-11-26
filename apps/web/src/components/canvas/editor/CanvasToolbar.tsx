@@ -5,7 +5,7 @@
 // Layer: Canvas editor UI
 // Exports: CanvasFloatingToolbar, CanvasZoomMenu
 
-import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { useTranslation } from "~/i18n";
 import { DISCLOSURE_FADE_MOTION_CLASS } from "~/lib/disclosureMotion";
 import {
@@ -45,6 +45,7 @@ import { useCanvasEditor } from "./CanvasEditorContext";
 import { CanvasZoomField } from "./CanvasZoomField";
 import { ShortcutTooltip } from "./ShortcutTooltip";
 import type { CanvasLiveCamera } from "./canvasCamera";
+import { canvasHistoryFor } from "./canvasHistory";
 import { canvasShortcutLabel, canvasShortcutLabelFor } from "./canvasShortcuts";
 import { useCanvasCameraCommands } from "./useCanvasCamera";
 
@@ -144,6 +145,14 @@ function ActionButton({
  * tooltips as the canvas's keys. Only the bar itself takes pointer events; a narrow pane scrolls
  * it sideways rather than letting it cover more of the canvas.
  */
+/** Whether this work has anything to undo or redo; re-renders only when either flips. */
+function useCanvasHistoryAvailability(workId: string) {
+  const history = canvasHistoryFor(workId);
+  const canUndo = useSyncExternalStore(history.subscribe, () => history.canUndo);
+  const canRedo = useSyncExternalStore(history.subscribe, () => history.canRedo);
+  return { canUndo, canRedo };
+}
+
 export function CanvasFloatingToolbar({
   viewportElement,
   trailing,
@@ -157,6 +166,7 @@ export function CanvasFloatingToolbar({
   const active = useCanvasEditorStore((state) => state.tool);
   const setTool = useCanvasEditorStore((state) => state.setTool);
   const file = useRef<HTMLInputElement>(null);
+  const { canUndo, canRedo } = useCanvasHistoryAvailability(editor.work.id);
   // Hands focus back to the canvas, so single-key shortcuts keep working and the clicked
   // button never shows a keyboard focus ring.
   const refocus = () => viewportElement()?.focus({ preventScroll: true });
@@ -214,7 +224,7 @@ export function CanvasFloatingToolbar({
         <ActionButton
           label={t("workspace:canvasUndo")}
           shortcut={canvasShortcutLabel("z", { modKey: true })}
-          disabled={editor.readOnly}
+          disabled={editor.readOnly || !canUndo}
           onClick={() => {
             void editor.undo();
             refocus();
@@ -225,7 +235,7 @@ export function CanvasFloatingToolbar({
         <ActionButton
           label={t("workspace:canvasRedo")}
           shortcut={canvasShortcutLabel("z", { modKey: true, shiftKey: true })}
-          disabled={editor.readOnly}
+          disabled={editor.readOnly || !canRedo}
           onClick={() => {
             void editor.redo();
             refocus();

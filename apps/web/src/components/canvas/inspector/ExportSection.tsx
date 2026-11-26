@@ -98,7 +98,11 @@ export function ExportSection({ model }: { model: InspectorModel }) {
     <Menu>
       <MenuTrigger
         render={
-          <IconButton label={t("workspace:canvasCopyMenu")} size="icon-xs">
+          <IconButton
+            label={t("workspace:canvasCopyMenu")}
+            tooltip={t("workspace:canvasCopyMenu")}
+            size="icon-xs"
+          >
             <CopyIcon className="size-3.5" />
           </IconButton>
         }
@@ -138,7 +142,12 @@ export function ExportSection({ model }: { model: InspectorModel }) {
       onAdd={add}
       headerMenu={copyMenu}
       headerAction={
-        <IconButton label={t("workspace:canvasExportAddEntry")} size="icon-xs" onClick={add}>
+        <IconButton
+          label={t("workspace:canvasExportAddEntry")}
+          tooltip={t("workspace:canvasExportAddEntry")}
+          size="icon-xs"
+          onClick={add}
+        >
           <AddPlusIcon className="size-3.5" />
         </IconButton>
       }
@@ -178,6 +187,7 @@ export function ExportSection({ model }: { model: InspectorModel }) {
               />
               <IconButton
                 label={t("workspace:canvasExportRemoveEntry")}
+                tooltip={t("workspace:canvasExportRemoveEntry")}
                 size="icon-xs"
                 disabled={readOnly}
                 onClick={() => save(() => shared.filter((_, at) => at !== index))}
@@ -293,6 +303,7 @@ function ExportSizeField({
           render={
             <IconButton
               label={t("workspace:canvasExportSizePresets")}
+              tooltip={t("workspace:canvasExportSizePresets")}
               size="chip"
               className="shrink-0"
             >
@@ -346,7 +357,11 @@ function ExportRowSettings({
       <PopoverTrigger
         disabled={disabled}
         render={
-          <IconButton label={t("workspace:canvasExportRowSettings")} size="icon-xs">
+          <IconButton
+            label={t("workspace:canvasExportRowSettings")}
+            tooltip={t("workspace:canvasExportRowSettings")}
+            size="icon-xs"
+          >
             <EllipsisIcon className="size-3.5" />
           </IconButton>
         }

@@ -23,6 +23,7 @@ vi.mock("../../../nativeApi", async (importOriginal) => ({
 
 import { useCanvasEditorStore } from "../canvasStores";
 import { flushCanvasCameras } from "./canvasCamera";
+import { canvasHistoryFor } from "./canvasHistory";
 import { canvasLiveGeometry } from "./canvasLiveGeometry";
 import {
   element,
@@ -167,7 +168,7 @@ describe("canvas gestures render nothing while the pointer moves", () => {
     }
   });
 
-  it("drags a frame and resizes it without rendering until release", async () => {
+  it("drags a frame and resizes it without rendering until release, the cursor held", async () => {
     serveCanvas(native, work());
     const { screen, root, host } = await mountCanvas(work());
     try {
@@ -192,6 +193,7 @@ describe("canvas gestures render nothing while the pointer moves", () => {
 
       const handle = root.querySelector('[data-canvas-handle="se"]')!;
       const corner = viewportPoint(root, 425, 315);
+      expect(getComputedStyle(root).cursor).toBe("default");
       pointer(handle, "pointerdown", corner.x, corner.y);
       await nextFrame();
       mounted.commits = 0;
@@ -200,11 +202,15 @@ describe("canvas gestures render nothing while the pointer moves", () => {
         [40, 20],
       ]);
       expect(mounted.commits).toBe(0);
+      // The canvas holds the pointer: the corner's cursor stays on it, off the handle too.
+      expect(getComputedStyle(root).cursor).toBe("nwse-resize");
       expect([wrapper.style.width, wrapper.style.height]).toEqual(["440px", "320px"]);
       expect(root.querySelector("[data-canvas-selection-group]")!.textContent).toContain(
         "440 × 320",
       );
       pointer(handle, "pointerup", corner.x + 40, corner.y + 20);
+      // Released, the tool's cursor is back.
+      expect(getComputedStyle(root).cursor).toBe("default");
       await vi.waitFor(() => expect(native.canvas.layout).toHaveBeenCalledTimes(2));
       expect(native.canvas.layout.mock.calls[1]![0]).toMatchObject({
         frames: [{ id: "f1", x: 25, y: 15, width: 440, height: 320 }],
@@ -546,6 +552,35 @@ describe("floating toolbar", () => {
       expect(useCanvasEditorStore.getState().tool).toBe("rectangle");
       useCanvasEditorStore.getState().toggleUi();
       await vi.waitFor(() => expect(root.querySelector("[data-canvas-toolbar]")).toBeNull());
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("offers Undo and Redo only when there is something to undo or redo", async () => {
+    serveCanvas(native, work());
+    // This work's history starts empty (another test may have left steps in it).
+    const history = canvasHistoryFor("work1");
+    while (history.canUndo) history.discardLastUndo();
+    while (history.canRedo) history.discardLastRedo();
+    const { screen, root } = await mountCanvas(work(), { toolbar: true });
+    const button = (label: string) =>
+      toolbarOf(root).querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)!;
+    try {
+      expect(button("Undo").disabled).toBe(true);
+      expect(button("Redo").disabled).toBe(true);
+      // A selection is a step: Undo comes on.
+      mounted.editor!.select([{ kind: "frame", frameId: "f1" }]);
+      await vi.waitFor(() => expect(button("Undo").disabled).toBe(false));
+      expect(button("Redo").disabled).toBe(true);
+      button("Undo").click();
+      await vi.waitFor(() => expect(button("Redo").disabled).toBe(false));
+      expect(button("Undo").disabled).toBe(true);
+      expect(selection()).toEqual([]);
+      button("Redo").click();
+      await vi.waitFor(() => expect(button("Undo").disabled).toBe(false));
+      expect(button("Redo").disabled).toBe(true);
+      expect(selection()).toEqual(["frame:f1"]);
     } finally {
       await screen.unmount();
     }

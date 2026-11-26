@@ -304,12 +304,19 @@ export function useCanvasGestures(input: {
     const rect = root.current!.getBoundingClientRect();
     return { x: event.clientX - rect.left, y: event.clientY - rect.top };
   };
-  const setGestureAttribute = (value: string | null) => {
-    if (value) root.current?.setAttribute(CANVAS_GESTURE_ATTRIBUTE, value);
+  /**
+   * Marks the gesture on the viewport. `handle` is the resize or spacing handle it started on:
+   * its cursor stays on the canvas until release, since the canvas holds the pointer and the
+   * pointer soon leaves the handle (set outside React, so nothing re-renders).
+   */
+  const setGestureAttribute = (value: string | null, handle?: HTMLElement) => {
+    const element = root.current;
+    if (value) element?.setAttribute(CANVAS_GESTURE_ATTRIBUTE, value);
     else {
-      root.current?.removeAttribute(CANVAS_GESTURE_ATTRIBUTE);
-      root.current?.removeAttribute(CANVAS_DRAGGING_ATTRIBUTE);
+      element?.removeAttribute(CANVAS_GESTURE_ATTRIBUTE);
+      element?.removeAttribute(CANVAS_DRAGGING_ATTRIBUTE);
     }
+    if (element) element.style.cursor = handle ? getComputedStyle(handle).cursor : "";
   };
   /** Marks the viewport once the gesture really drags (canvasGestureHidesChrome). */
   const markDragging = (event: { clientX: number; clientY: number; pointerId: number }) => {
@@ -708,7 +715,7 @@ export function useCanvasGestures(input: {
             row,
             value: origin,
           };
-          setGestureAttribute("spacing");
+          setGestureAttribute("spacing", handle);
           return;
         }
       }
@@ -755,7 +762,7 @@ export function useCanvasGestures(input: {
           wrapper: item.kind === "frame" ? frameWrapper(editor, item.frameId) : null,
           result: null,
         };
-        setGestureAttribute("resize");
+        setGestureAttribute("resize", handle);
         return;
       }
     }

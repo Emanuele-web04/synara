@@ -23,11 +23,11 @@ vi.mock("../../nativeApi", async (importOriginal) => ({
   ensureNativeApi: () => native,
   readNativeApi: () => undefined,
 }));
-const shown = vi.hoisted(() => ({ work: null as unknown }));
+const shown = vi.hoisted(() => ({ work: null as unknown, disconnected: false }));
 vi.mock("./canvasPane", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./canvasPane")>()),
   useCanvasWork: () => ({
-    connection: { supported: true, negotiating: false, disconnected: false },
+    connection: { supported: true, negotiating: false, disconnected: shown.disconnected },
     query: { data: shown.work, isError: false },
   }),
 }));
@@ -38,8 +38,12 @@ vi.mock("@tanstack/react-router", async (importOriginal) => ({
 }));
 
 import { fitDesignCanvas } from "~/lib/designCanvas";
+import { createDefaultRightDockState, openPaneInState } from "~/rightDockStore.logic";
+import { RightDock } from "../chat/RightDock";
 import { SidebarProvider } from "../ui/sidebar";
 import CanvasDockPane, { CANVAS_DOCK_INSPECTOR_KEY } from "./CanvasDockPane";
+import { canvasDockPaneIcons } from "./canvasPane";
+import { useCanvasActivityStore } from "./canvasStores";
 import { flushCanvasCameras } from "./editor/canvasCamera";
 import { frameOf, resetCanvasStores, workOf } from "./editor/canvasEditorTestHarness";
 
@@ -85,16 +89,36 @@ function camera() {
 }
 const fitNow = () =>
   fitDesignCanvas(frames, viewport().clientWidth, viewport().clientHeight, { maxZoom: 2 });
+const headerStatus = (kind: string) =>
+  document.querySelector(`[data-canvas-header-status="${kind}"]`);
+const otherPageMarker = () => document.querySelector('[data-canvas-page-activity="otherPage"]');
+const dockTab = (label: string) =>
+  [...document.querySelectorAll<HTMLElement>("[data-surface-tab]")].find((item) =>
+    item.textContent?.includes(label),
+  )!;
+/** What CanvasEventBridge records for an agent's write (or the end of its turn). */
+const agentWrites = (pageId: string, ended = false) =>
+  useCanvasActivityStore.getState().record({
+    type: "activity",
+    workId: "work1",
+    pageId,
+    frameIds: ended ? [] : ["mobile"],
+    threadId: ThreadId.makeUnsafe("agent"),
+    expiresAt: new Date(Date.now() + (ended ? 0 : 40_000)).toISOString(),
+    ...(ended ? { ended: true } : {}),
+  });
 
 describe("canvas side pane", () => {
   beforeEach(async () => {
     await page.viewport(1400, 800);
     resetCanvasStores();
     shown.work = work;
+    shown.disconnected = false;
   });
   afterEach(() => {
     flushCanvasCameras();
     localStorage.clear();
+    useCanvasActivityStore.setState({ frames: {}, layers: {} });
   });
 
   it("opens with the inspector closed and remembers this viewer's choice", async () => {
@@ -161,6 +185,64 @@ describe("canvas side pane", () => {
     }
   });
 
+  it("marks the page name in its header while an agent works on another page", async () => {
+    shown.work = {
+      ...work,
+      pages: [...work.pages, { ...work.pages[0]!, id: "page2", title: "Page 2", frames: [] }],
+    };
+    const { screen } = await mountPane(760);
+    const marker = otherPageMarker;
+    try {
+      await vi.waitFor(() => expect(viewport()).toBeTruthy());
+      // On the open page, the canvas shows it (the outline); the header stays as it is.
+      agentWrites("page1");
+      await vi.waitFor(() =>
+        expect(document.querySelector('[data-canvas-agent-outline="mobile"]')).toBeTruthy(),
+      );
+      expect(marker()).toBeNull();
+      // On another page, the page name in the header gets the indicator, with its label.
+      agentWrites("page2");
+      await vi.waitFor(() => expect(marker()).toBeTruthy());
+      expect(marker()!.closest("button")?.textContent).toContain("Page 1");
+      expect(marker()!.getAttribute("aria-label")).toBe("An agent is working on another page");
+      // The turn's end takes it away after its fade.
+      agentWrites("page2", true);
+      await vi.waitFor(() => expect(marker()).toBeNull());
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("says in its header when the work is archived or canvas updates are unavailable", async () => {
+    const first = await mountPane(760);
+    try {
+      await vi.waitFor(() => expect(viewport()).toBeTruthy());
+      expect(headerStatus("archived")).toBeNull();
+      expect(headerStatus("disconnected")).toBeNull();
+    } finally {
+      await first.screen.unmount();
+    }
+    // Archived, and the connection down: both, after the page name, as the full layout says.
+    shown.work = { ...work, archivedAt: "2026-11-20T00:00:00.000Z" };
+    shown.disconnected = true;
+    const second = await mountPane(760);
+    try {
+      await vi.waitFor(() => expect(headerStatus("archived")).toBeTruthy());
+      expect(headerStatus("archived")!.textContent).toBe("Archived");
+      expect(headerStatus("disconnected")!.textContent).toBe(
+        "Canvas updates unavailable. Reconnecting…",
+      );
+      expect(headerStatus("disconnected")!.getAttribute("role")).toBe("status");
+      const pageName = document.querySelector('button[aria-haspopup="menu"]')!;
+      expect(
+        pageName.compareDocumentPosition(headerStatus("archived")!) &
+          Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+    } finally {
+      await second.screen.unmount();
+    }
+  });
+
   it("has no inspector toggle where the pane is too narrow for it", async () => {
     localStorage.setItem(CANVAS_DOCK_INSPECTOR_KEY, "open");
     const { screen } = await mountPane(480);
@@ -188,6 +270,87 @@ describe("canvas side pane", () => {
         expect(camera().y).toBeCloseTo(fit.y, 2);
       });
       expect(camera().zoom).toBeGreaterThan(narrow * 2);
+    } finally {
+      await screen.unmount();
+    }
+  });
+});
+
+describe("canvas dock tab", () => {
+  afterEach(() => {
+    useCanvasActivityStore.setState({ frames: {}, layers: {} });
+  });
+
+  // The canvas pane behind the browser, which is the tab in front.
+  const state = {
+    ...openPaneInState(
+      openPaneInState(createDefaultRightDockState(), {
+        paneId: "canvas-pane",
+        kind: "canvas",
+        canvasWorkId: "work1",
+        canvasPageId: "page1",
+      }),
+      { paneId: "browser-pane", kind: "browser" },
+    ),
+    open: true,
+  };
+  const mountDock = (icons: boolean) =>
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <div style={{ display: "flex", width: 1000, height: 400 }}>
+          <div style={{ flex: 1 }} />
+          <RightDock
+            state={state}
+            minWidth={300}
+            defaultWidth="500px"
+            shouldAcceptWidth={() => true}
+            addMenuKinds={[]}
+            {...(icons ? { paneIconOverrides: canvasDockPaneIcons(state.panes) ?? {} } : {})}
+            onSelectPane={() => {}}
+            onClosePane={() => {}}
+            onCollapse={() => {}}
+            onOpenChange={() => {}}
+            onAddPane={() => {}}
+            renderPane={() => <div />}
+          />
+        </div>
+      </QueryClientProvider>,
+    );
+  const tab = dockTab;
+  // The chip's 16px glyph slot, as drawn.
+  const glyph = (label: string) => tab(label).querySelector("span.relative.size-4")!.innerHTML;
+
+  it("shows the agent indicator on the canvas tab from behind another tab, its glyph otherwise", async () => {
+    // The dock as every other host draws it, without the canvas icon.
+    const plain = await mountDock(false);
+    const plainGlyphs = { canvas: glyph("Canvas"), browser: glyph("Browser") };
+    await plain.unmount();
+
+    const screen = await mountDock(true);
+    const indicator = () => tab("Canvas").querySelector('[data-canvas-page-activity="work"]');
+    try {
+      // Idle, both tabs draw exactly what they always do.
+      expect(glyph("Canvas")).toBe(plainGlyphs.canvas);
+      expect(glyph("Browser")).toBe(plainGlyphs.browser);
+      expect(indicator()).toBeNull();
+
+      // An agent writes on any page of the work: the canvas tab shows it; the browser tab does not.
+      agentWrites("page2");
+      await vi.waitFor(() => expect(indicator()).toBeTruthy());
+      expect(indicator()!.getAttribute("aria-label")).toBe("An agent is working on this canvas");
+      expect(tab("Browser").querySelector("[data-canvas-page-activity]")).toBeNull();
+      expect(glyph("Browser")).toBe(plainGlyphs.browser);
+      // It fades in, over the glyph fading out.
+      await vi.waitFor(() =>
+        expect(
+          getComputedStyle(indicator()!.querySelector("[data-canvas-agent-rain]")!).opacity,
+        ).toBe("1"),
+      );
+
+      // The turn ends: after the fade the tab has its glyph back, unchanged.
+      agentWrites("page2", true);
+      await vi.waitFor(() => expect(indicator()).toBeNull());
+      expect(glyph("Canvas")).toBe(plainGlyphs.canvas);
     } finally {
       await screen.unmount();
     }

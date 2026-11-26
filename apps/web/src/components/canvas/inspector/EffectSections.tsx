@@ -159,7 +159,11 @@ export function ShadowSection({ model }: { model: InspectorModel }) {
             <Menu>
               <MenuTrigger
                 render={
-                  <IconButton label={t("workspace:canvasInspectorShadowType")} size="icon-xs">
+                  <IconButton
+                    label={t("workspace:canvasInspectorShadowType")}
+                    tooltip={t("workspace:canvasInspectorShadowType")}
+                    size="icon-xs"
+                  >
                     <EllipsisIcon className="size-3.5" />
                   </IconButton>
                 }
@@ -182,7 +186,12 @@ export function ShadowSection({ model }: { model: InspectorModel }) {
               </ComposerPickerMenuPopup>
             </Menu>
           )}
-          <IconButton label={t("workspace:canvasInspectorAddShadow")} size="icon-xs" onClick={add}>
+          <IconButton
+            label={t("workspace:canvasInspectorAddShadow")}
+            tooltip={t("workspace:canvasInspectorAddShadow")}
+            size="icon-xs"
+            onClick={add}
+          >
             <AddPlusIcon className="size-3.5" />
           </IconButton>
         </>
@@ -258,6 +267,7 @@ export function InnerShadowSection({ model }: { model: InspectorModel }) {
       headerAction={
         <IconButton
           label={t("workspace:canvasInspectorAddInnerShadow")}
+          tooltip={t("workspace:canvasInspectorAddInnerShadow")}
           size="icon-xs"
           onClick={add}
         >
@@ -488,7 +498,11 @@ function FilterGroupRows({
     <div className="flex min-w-0 flex-col gap-1.5">
       <InspectorSubheader title={title} dimmed={!mixed && shared.length === 0}>
         {disabled ? null : (
-          <IconButton label={t("workspace:canvasInspectorAdd", { name: title })} onClick={add}>
+          <IconButton
+            label={t("workspace:canvasInspectorAdd", { name: title })}
+            tooltip={t("workspace:canvasInspectorAdd", { name: title })}
+            onClick={add}
+          >
             <AddPlusIcon />
           </IconButton>
         )}
@@ -544,6 +558,7 @@ function FilterRow({
   const remove = disabled ? null : (
     <IconButton
       label={t("workspace:canvasInspectorRemoveFilter")}
+      tooltip={t("workspace:canvasInspectorRemoveFilter")}
       size="icon-xs"
       onClick={onRemove}
     >

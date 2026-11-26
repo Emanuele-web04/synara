@@ -139,6 +139,7 @@ export function InspectorSection({
         {canAdd ? (
           <IconButton
             label={t("workspace:canvasInspectorAdd", { name: title })}
+            tooltip={t("workspace:canvasInspectorAdd", { name: title })}
             className="-me-1"
             onClick={onAdd}
           >
@@ -248,7 +249,7 @@ export function InspectorPropertyRow({
         {children}
       </div>
       {onRemove && removeLabel && !disabled ? (
-        <IconButton label={removeLabel} className="-mx-1" onClick={onRemove}>
+        <IconButton label={removeLabel} tooltip={removeLabel} className="-mx-1" onClick={onRemove}>
           <MinusIcon />
         </IconButton>
       ) : null}

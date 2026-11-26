@@ -27,7 +27,7 @@ import {
   TreeRowRenameInput,
   TreeSectionHeader,
 } from "../ui/TreeRow";
-import { CanvasAgentPageIndicator } from "./editor/CanvasAgentActivity";
+import { CanvasAgentIconSlot } from "./editor/CanvasAgentActivity";
 import { useActiveAgentPages } from "./canvasStores";
 import { CanvasPageGlyph } from "./canvasPageIcons";
 import { showCanvasPageMenu } from "./canvasPageContextMenu";
@@ -276,11 +276,11 @@ export function CanvasPagesSection({
                 drop={line}
                 // A page an agent is working on shows the activity indicator instead of its icon.
                 icon={
-                  activePages.has(page.id) ? (
-                    <CanvasAgentPageIndicator />
-                  ) : (
-                    <CanvasPageGlyph icon={page.icon} className="size-3.5" />
-                  )
+                  <CanvasAgentIconSlot
+                    active={activePages.has(page.id)}
+                    scope="page"
+                    icon={<CanvasPageGlyph icon={page.icon} className="size-3.5" />}
+                  />
                 }
                 label={page.title}
                 editor={

@@ -5,6 +5,7 @@ import { useTranslation } from "~/i18n";
 import { RotateCcwIcon } from "~/lib/icons";
 import { ensureNativeApi } from "~/nativeApi";
 import { Button } from "../ui/button";
+import { IconButton } from "../ui/icon-button";
 import {
   Popover,
   PopoverDescription,
@@ -12,6 +13,7 @@ import {
   PopoverTitle,
   PopoverTrigger,
 } from "../ui/popover";
+import { Spinner } from "../ui/spinner";
 import { toastManager } from "../ui/toast";
 import { CanvasFrameStrip } from "./CanvasFrameStrip";
 import { useCanvasPreviewContext } from "./canvasAssets";
@@ -127,18 +129,23 @@ export function CanvasTurnCard({
         </div>
         {activity?.restorable && !activity.restoredAt && turnId && (
           <Popover open={confirmOpen} onOpenChange={setConfirmOpen}>
+            {/* Named on hover; the app's spinner while the restore runs, as Export does. */}
             <PopoverTrigger
               disabled={restoring}
               render={
-                <Button
+                <IconButton
                   size="icon-xs"
-                  variant="ghost"
-                  aria-label={t("workspace:canvasRestoreTurn")}
-                />
+                  label={t("workspace:canvasRestoreTurn")}
+                  tooltip={t("workspace:canvasRestoreTurn")}
+                >
+                  {restoring ? (
+                    <Spinner className="size-3.5" />
+                  ) : (
+                    <RotateCcwIcon className="size-3.5" />
+                  )}
+                </IconButton>
               }
-            >
-              <RotateCcwIcon className="size-3.5" />
-            </PopoverTrigger>
+            />
             <PopoverPopup side="top" align="end" className="w-60">
               <div className="flex flex-col gap-2">
                 <div className="flex flex-col gap-0.5">

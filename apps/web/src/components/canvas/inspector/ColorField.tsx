@@ -356,6 +356,7 @@ export function ColorField({
               ) : null}
               <IconButton
                 label={t("workspace:canvasInspectorCloseColorPicker")}
+                tooltip={t("workspace:canvasInspectorCloseColorPicker")}
                 className="-me-1"
                 onClick={() => handleOpenChange(false)}
               >

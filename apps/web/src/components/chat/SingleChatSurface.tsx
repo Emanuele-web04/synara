@@ -105,7 +105,11 @@ import {
 } from "./composerPickerStyles";
 import { routeSingleDockPaneOpenRequest } from "./dockPaneOpenRequest";
 import { DESIGN_CANVAS_ON } from "~/betaFeatures";
-import { openCanvasPaneForAgent, useCanvasPaneOpenRequests } from "../canvas/canvasPane";
+import {
+  canvasDockPaneIcons,
+  openCanvasPaneForAgent,
+  useCanvasPaneOpenRequests,
+} from "../canvas/canvasPane";
 import {
   selectFloatingBrowserRequested,
   useFloatingBrowserRequestStore,
@@ -839,10 +843,15 @@ export function SingleChatSurface(props: {
   const pullRequestPaneStateIcon = usePullRequestPaneStateIcon(
     pullRequestPane ? pullRequestDetailInputFromPane(pullRequestPane) : null,
   );
+  // The canvas tab shows when an agent is working on its work, even from behind another tab.
+  const canvasPaneIcons = useMemo(
+    () => (DESIGN_CANVAS_ON ? canvasDockPaneIcons(dockState.panes) : undefined),
+    [dockState.panes],
+  );
   const paneIconOverrides =
     pullRequestPane && pullRequestPaneStateIcon
-      ? { [pullRequestPane.id]: pullRequestPaneStateIcon }
-      : undefined;
+      ? { ...canvasPaneIcons, [pullRequestPane.id]: pullRequestPaneStateIcon }
+      : canvasPaneIcons;
 
   const createDockSidechat = async () => {
     // Reuse /side so the current model, permissions and workspace stay inherited.

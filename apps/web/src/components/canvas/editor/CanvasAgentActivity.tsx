@@ -3,13 +3,23 @@
 //          follows the frame's corner radius, a strip of "rain" dots in the frame's label row,
 //          both fading in and out over 400 ms, and per-layer reveal flashes for reads, writes,
 //          edits and deletes. Reveals are drawn outside React from the activity store, so an
-//          agent's edits never re-render the canvas; reduced motion turns them off.
+//          agent's edits never re-render the canvas; reduced motion turns them off. Outside the
+//          canvas, the same rain in grayscale marks pages, frames, works and the dock tab.
 // Layer: Canvas editor UI
-// Exports: CanvasAgentOutlines, CanvasAgentRain, CanvasAgentReveals, useFadePresence,
-//          rememberRemovedLayers, AGENT_FADE_MS, REVEAL_DURATIONS
+// Exports: CanvasAgentOutlines, CanvasAgentRain, CanvasAgentReveals, CanvasAgentPageIndicator,
+//          CanvasAgentIndicator, CanvasAgentIconSlot, useFadePresence, rememberRemovedLayers,
+//          AGENT_FADE_MS, REVEAL_DURATIONS
 
 import type { DesignFrame } from "@synara/contracts";
-import { memo, useEffect, useRef, useState, type CSSProperties, type RefObject } from "react";
+import {
+  memo,
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+  type RefObject,
+} from "react";
 import { useTranslation } from "~/i18n";
 import { cn } from "~/lib/utils";
 import {
@@ -188,17 +198,92 @@ export function CanvasAgentRain({
   );
 }
 
-/** In the pages list, a page with agent activity shows grayscale rain instead of its icon. */
-export function CanvasAgentPageIndicator() {
+/** What the muted indicator stands for, which picks its spoken label and tooltip. */
+export type CanvasAgentIndicatorScope = "page" | "frame" | "work" | "otherPage";
+
+const INDICATOR_LABEL_KEYS: Readonly<Record<CanvasAgentIndicatorScope, string>> = {
+  page: "workspace:canvasAgentWorking",
+  frame: "workspace:canvasAgentWorkingFrame",
+  work: "workspace:canvasAgentWorkingWork",
+  otherPage: "workspace:canvasAgentWorkingOtherPage",
+};
+
+/**
+ * Outside the canvas (page and frame rows, the dock tab, library cards, the page switcher), agent
+ * activity shows as grayscale rain, in place of an icon where there is one.
+ */
+export function CanvasAgentPageIndicator({
+  scope = "page",
+  visible = true,
+  className,
+}: {
+  scope?: CanvasAgentIndicatorScope;
+  visible?: boolean;
+  className?: string | undefined;
+}) {
   const { t } = useTranslation();
+  const label = t(INDICATOR_LABEL_KEYS[scope]);
   return (
     <span
       role="img"
-      aria-label={t("workspace:canvasAgentWorking")}
-      data-canvas-page-activity=""
-      className="flex w-3.5 shrink-0"
+      aria-label={label}
+      title={label}
+      data-canvas-page-activity={scope}
+      className={cn("flex w-3.5 shrink-0", className)}
     >
-      <CanvasAgentRain muted className="w-full" />
+      <CanvasAgentRain muted visible={visible} className="w-full" />
+    </span>
+  );
+}
+
+/**
+ * The indicator where nothing stands while no agent works (a card's title row, the page
+ * switcher): it fades in and out over AGENT_FADE_MS, like the rain on the canvas.
+ */
+export function CanvasAgentIndicator({
+  active,
+  scope,
+  className,
+}: {
+  active: boolean;
+  scope: CanvasAgentIndicatorScope;
+  className?: string;
+}) {
+  const { mounted, visible } = useFadePresence(active);
+  return mounted ? (
+    <CanvasAgentPageIndicator scope={scope} visible={visible} className={className} />
+  ) : null;
+}
+
+/**
+ * An icon that hands its place to the indicator while an agent works there, cross-fading over
+ * AGENT_FADE_MS (at once with reduced motion). Idle, it renders `icon` alone, as before.
+ */
+export function CanvasAgentIconSlot({
+  active,
+  scope,
+  icon,
+  className,
+}: {
+  active: boolean;
+  scope: CanvasAgentIndicatorScope;
+  icon: ReactNode;
+  /** On the slot while it shows the indicator (a menu row's icon inset, say). */
+  className?: string;
+}) {
+  const { mounted, visible } = useFadePresence(active);
+  if (!mounted) return icon;
+  return (
+    <span
+      data-canvas-agent-slot=""
+      className={cn("relative flex shrink-0 items-center justify-center", className)}
+    >
+      <span aria-hidden className={cn("flex", FADE_CLASS_NAME)} style={fadeStyle(!visible)}>
+        {icon}
+      </span>
+      <span className="absolute inset-0 flex items-center justify-center">
+        <CanvasAgentPageIndicator scope={scope} visible={visible} />
+      </span>
     </span>
   );
 }

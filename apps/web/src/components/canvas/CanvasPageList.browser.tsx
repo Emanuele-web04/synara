@@ -119,6 +119,25 @@ const rows = () =>
     (row) => row.dataset.pageRow,
   );
 const row = (id: string) => document.querySelector<HTMLElement>(`section [data-page-row="${id}"]`)!;
+/** Where a page's title starts in the open switcher list. */
+const switcherTitleLeft = (label: string) =>
+  [...document.querySelectorAll<HTMLElement>('[role="menu"] [role="menuitem"]')]
+    .find((item) => item.textContent?.includes(label))!
+    .querySelector("span.flex-1")!
+    .getBoundingClientRect().left;
+/** The header's page switcher (the first menu trigger). */
+const switcher = () => document.querySelector<HTMLElement>('button[aria-haspopup="menu"]')!;
+/** What CanvasEventBridge records for an agent's write on a page (or its turn's end). */
+const agentOnPage = (pageId: string, ended = false) =>
+  useCanvasActivityStore.getState().record({
+    type: "activity",
+    workId: "work1",
+    pageId,
+    frameIds: ended ? [] : ["f1"],
+    threadId: "chat1" as never,
+    expiresAt: new Date(Date.now() + (ended ? 0 : 40_000)).toISOString(),
+    ...(ended ? { ended: true } : {}),
+  });
 const operations = () =>
   native.canvas.changePages.mock.calls.map(([input]) => (input as CanvasPageChangeInput).operation);
 const menuIds = (call = -1) =>
@@ -215,19 +234,67 @@ describe("canvas page list", () => {
       expect(row("p1").getAttribute("aria-selected")).toBe("true");
       expect(row("p2").hasAttribute("data-canvas-page-current")).toBe(false);
       expect(row("p2").getAttribute("aria-selected")).toBe("false");
-      // A page an agent works on shows the activity indicator in place of its icon.
-      useCanvasActivityStore.getState().record({
-        type: "activity",
-        workId: "work1",
-        pageId: "p1",
-        frameIds: ["f1"],
-        threadId: "chat1" as never,
-        expiresAt: new Date(Date.now() + 40_000).toISOString(),
-      });
+      // A page an agent works on shows the activity indicator in place of its icon: the two
+      // cross-fade, and the icon comes back the same way when the turn ends.
+      agentOnPage("p1");
       await vi.waitFor(() =>
         expect(row("p1").querySelector("[data-canvas-page-activity]")).toBeTruthy(),
       );
-      expect(row("p1").querySelector("[data-canvas-page-icon]")).toBeNull();
+      // The slot's first child holds the icon as it fades.
+      const fading = row("p1").querySelector("[data-canvas-agent-slot] > span")!;
+      expect(fading.querySelector("[data-canvas-page-icon]")).toBeTruthy();
+      const rain = () => row("p1").querySelector<HTMLElement>("[data-canvas-agent-rain]")!;
+      await vi.waitFor(() => expect(getComputedStyle(fading).opacity).toBe("0"));
+      await vi.waitFor(() => expect(getComputedStyle(rain()).opacity).toBe("1"));
+      agentOnPage("p1", true);
+      await nextFrame();
+      // Still there while it fades out, then the bare icon again.
+      expect(row("p1").querySelector("[data-canvas-page-activity]")).toBeTruthy();
+      await vi.waitFor(() =>
+        expect(row("p1").querySelector("[data-canvas-agent-slot]")).toBeNull(),
+      );
+      expect(row("p1").querySelector('[data-canvas-page-icon="swatch"]')).toBeTruthy();
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("marks the page switcher while an agent works on a page other than the open one", async () => {
+    const { screen } = await mountPages();
+    const trigger = switcher;
+    const marker = () => trigger().querySelector('[data-canvas-page-activity="otherPage"]');
+    const agent = agentOnPage;
+    try {
+      expect(trigger().textContent).toContain("P1");
+      // The open page: the canvas shows it, the switcher does not.
+      agent("p1");
+      await vi.waitFor(() =>
+        expect(row("p1").querySelector("[data-canvas-page-activity]")).toBeTruthy(),
+      );
+      expect(marker()).toBeNull();
+      // Another page: the switcher shows the indicator before its chevron, and the list the page.
+      agent("p3");
+      await vi.waitFor(() => expect(marker()).toBeTruthy());
+      expect(marker()!.getAttribute("aria-label")).toBe("An agent is working on another page");
+      expect(marker()!.nextElementSibling?.tagName.toLowerCase()).toBe("svg");
+      // The open page's activity ends; another page's keeps it.
+      agent("p1", true);
+      await vi.waitFor(() =>
+        expect(row("p1").querySelector("[data-canvas-page-activity]")).toBeNull(),
+      );
+      expect(marker()).toBeTruthy();
+      trigger().click();
+      await vi.waitFor(() => expect(document.querySelector('[role="menu"]')).toBeTruthy());
+      const menuRow = [
+        ...document.querySelectorAll<HTMLElement>('[role="menu"] [role="menuitem"]'),
+      ].find((item) => item.textContent?.includes("P3"))!;
+      expect(menuRow.querySelector('[data-canvas-page-activity="page"]')).toBeTruthy();
+      // Its title stays in line with the other rows' (the indicator takes the icon's inset).
+      expect(switcherTitleLeft("P3")).toBe(switcherTitleLeft("P2"));
+      // Opening that page: the activity is on the open page now, so the switcher clears.
+      menuRow.click();
+      await vi.waitFor(() => expect(trigger().textContent).toContain("P3"));
+      await vi.waitFor(() => expect(marker()).toBeNull());
     } finally {
       await screen.unmount();
     }

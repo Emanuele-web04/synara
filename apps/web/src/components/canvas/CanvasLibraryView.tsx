@@ -22,6 +22,7 @@ import { CanvasIcon, FolderIcon, MoreHorizontalIcon, PlusIcon } from "~/lib/icon
 import { cn, randomUUID } from "~/lib/utils";
 import { ensureNativeApi } from "~/nativeApi";
 import { useStore } from "~/store";
+import { CanvasAgentIndicator } from "./editor/CanvasAgentActivity";
 import { CanvasFramePreview } from "./editor/CanvasFramePreview";
 import { RenameDialog } from "../RenameDialog";
 import { RouteInsetSurface } from "../RouteInsetSurface";
@@ -46,6 +47,7 @@ import {
 } from "../ui/menu";
 import { SearchInput } from "../ui/search-input";
 import { CanvasResourceDialog, type CanvasResourceFields } from "./CanvasResourceDialog";
+import { useActiveAgentPages } from "./canvasStores";
 import { canvasQueryKey } from "./canvasWorkCache";
 import { useCanvasLibrary } from "./useCanvasLibrary";
 import { useCanvasPreviewContext } from "./canvasAssets";
@@ -107,6 +109,14 @@ function CanvasPreview({ work, height }: { work: CanvasWorkSummary; height: numb
       )}
     </div>
   );
+}
+
+/**
+ * After a work's title, while an agent works on any of its pages: the activity stream reaches
+ * the library with no editor open (`CanvasEventBridge` records it at the app's root).
+ */
+function WorkAgentIndicator({ workId }: { workId: string }) {
+  return <CanvasAgentIndicator active={useActiveAgentPages(workId).size > 0} scope="work" />;
 }
 
 /** Creating a work or a folder (renaming has its own dialog). */
@@ -530,26 +540,34 @@ export default function CanvasLibraryView() {
                 )}
                 <div className="grid grid-cols-[repeat(auto-fill,minmax(256px,1fr))] gap-6">
                   {works.map((work) => (
+                    // The whole card opens the work (the thumbnail's button reaches over it), and
+                    // its title row tints on hover, as the chat's canvas card does; the menu
+                    // stays its own button.
                     <article
                       key={work.id}
-                      className="overflow-hidden rounded-lg border border-border bg-card p-1"
+                      className="group/work-card relative overflow-hidden rounded-lg border border-border bg-card p-1"
                       data-canvas-work={work.id}
                     >
                       <button
-                        className="block aspect-[256/168] w-full overflow-hidden rounded-md text-start outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                        className="block aspect-[256/168] w-full overflow-hidden rounded-md text-start outline-none after:absolute after:inset-0 focus-visible:ring-1 focus-visible:ring-ring"
                         onClick={() => open(work)}
                         aria-label={t("workspace:canvasOpenWork", { title: work.title })}
                       >
                         <CanvasPreview work={work} height={168} />
                       </button>
-                      <div className="flex items-center gap-2 ps-2 pe-1.5 pt-2 pb-1.5">
+                      <div className="mt-1 flex items-center gap-2 rounded-md ps-2 pe-1.5 pt-1 pb-1.5 transition-colors group-hover/work-card:bg-[var(--color-background-button-secondary-hover)]">
                         <div className="min-w-0 flex-1">
-                          <h2 className="truncate text-ui-sm font-medium">{work.title}</h2>
+                          <div className="flex items-center gap-1.5">
+                            <h2 className="min-w-0 truncate text-ui-sm font-medium">
+                              {work.title}
+                            </h2>
+                            <WorkAgentIndicator workId={work.id} />
+                          </div>
                           <p className="mt-0.5 truncate text-ui-xs text-muted-foreground">
                             {subtitle(work)}
                           </p>
                         </div>
-                        {resourceMenu(work)}
+                        <div className="relative">{resourceMenu(work)}</div>
                       </div>
                     </article>
                   ))}
@@ -587,8 +605,11 @@ export default function CanvasLibraryView() {
                         )}
                       </span>
                       <span className="min-w-0 flex-1">
-                        <span className="block truncate text-ui-sm font-medium">
-                          {resource.title}
+                        <span className="flex items-center gap-1.5">
+                          <span className="min-w-0 truncate text-ui-sm font-medium">
+                            {resource.title}
+                          </span>
+                          {resource.kind === "work" && <WorkAgentIndicator workId={resource.id} />}
                         </span>
                         {resource.kind === "work" && (
                           <span className="block text-ui-xs text-muted-foreground">

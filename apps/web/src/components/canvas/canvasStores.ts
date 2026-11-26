@@ -295,8 +295,8 @@ export function useActiveAgentFrames(workId: string, pageId: string | undefined)
 }
 
 /**
- * Pages of a work with a live agent outline on any frame (the pages list shows an indicator
- * indicator for them); re-evaluates as the outlines expire.
+ * Pages of a work with a live agent outline on any frame (the page lists, the page switcher, the
+ * dock tab and the library show an indicator for them); re-evaluates as the outlines expire.
  */
 export function useActiveAgentPages(workId: string): ReadonlySet<string> {
   const frames = useCanvasActivityStore((state) => state.frames);

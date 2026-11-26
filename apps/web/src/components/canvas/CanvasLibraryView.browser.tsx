@@ -45,6 +45,7 @@ import type { ReactNode } from "react";
 import { page, userEvent } from "vitest/browser";
 import { render } from "vitest-browser-react";
 import CanvasLibraryView from "./CanvasLibraryView";
+import { useCanvasActivityStore } from "./canvasStores";
 
 const time = (day: number) => new Date(Date.UTC(2026, 10, day)).toISOString();
 const work = (
@@ -133,6 +134,19 @@ const shownFolders = () =>
     (item) => item.dataset.canvasFolder,
   );
 const lastInput = () => native.canvas.list.mock.calls.at(-1)![0] as CanvasListInput;
+const workMarker = (id: string) =>
+  document.querySelector(`[data-canvas-work="${id}"] [data-canvas-page-activity="work"]`);
+/** What CanvasEventBridge records from the stream with no editor open (or a turn's end). */
+const agentOn = (workId: string, ended: boolean) =>
+  useCanvasActivityStore.getState().record({
+    type: "activity",
+    workId,
+    pageId: "any-page",
+    frameIds: ended ? [] : ["f1"],
+    threadId: "chat1" as never,
+    expiresAt: new Date(Date.now() + (ended ? 0 : 40_000)).toISOString(),
+    ...(ended ? { ended: true } : {}),
+  });
 /** How far in from a menu row's start its icon sits. */
 const inset = (row: Element) =>
   (row.querySelector("svg")?.getBoundingClientRect().left ?? 0) - row.getBoundingClientRect().left;
@@ -153,6 +167,7 @@ describe("canvas library", () => {
   });
   afterEach(() => {
     document.body.innerHTML = "";
+    useCanvasActivityStore.setState({ frames: {}, layers: {} });
   });
 
   it("shows Recent across folders, Files one folder at a time and Archive apart", async () => {
@@ -275,6 +290,65 @@ describe("canvas library", () => {
           item.textContent?.includes("Folder inner"),
         ),
       ).toBe(false);
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("marks a work an agent is working on, in the grid and in the list", async () => {
+    const screen = await mountLibrary();
+    const marker = workMarker;
+    const agent = (ended = false) => agentOn("loose", ended);
+    try {
+      await vi.waitFor(() => expect(shownWorks()).toHaveLength(3));
+      expect(document.querySelector("[data-canvas-page-activity]")).toBeNull();
+      agent();
+      await vi.waitFor(() => expect(marker("loose")).toBeTruthy());
+      expect(marker("loose")!.getAttribute("aria-label")).toBe(
+        "An agent is working on this canvas",
+      );
+      // After the title, on the card's title row.
+      expect(marker("loose")!.previousElementSibling?.textContent).toBe("LOOSE");
+      expect(marker("filed")).toBeNull();
+      expect(marker("deep")).toBeNull();
+
+      await page.getByRole("radio", { name: "List" }).click();
+      await vi.waitFor(() => expect(document.querySelector("li[data-canvas-work]")).toBeTruthy());
+      await vi.waitFor(() => expect(marker("loose")).toBeTruthy());
+      expect(marker("filed")).toBeNull();
+
+      // The turn ends: it fades and goes.
+      agent(true);
+      await vi.waitFor(() => expect(marker("loose")).toBeNull());
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("opens a work from anywhere on its card, its menu staying a menu", async () => {
+    const screen = await mountLibrary();
+    try {
+      await vi.waitFor(() => expect(shownWorks()).toHaveLength(3));
+      // A click on the title, not only on the thumbnail, opens the work: the point is the
+      // title's centre, and what takes it there is the card's button (hence `force`).
+      const title = page.getByRole("heading", { name: "LOOSE" });
+      const box = title.element().getBoundingClientRect();
+      expect(
+        document
+          .elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)
+          ?.closest("button")
+          ?.getAttribute("aria-label"),
+      ).toBe("Open LOOSE");
+      await title.click({ force: true });
+      expect(navigate).toHaveBeenCalledWith({
+        to: "/canvas/$workId",
+        params: { workId: "loose" },
+        search: { page: undefined, chat: undefined },
+      });
+      navigate.mockReset();
+      await page.getByRole("button", { name: "Actions for LOOSE" }).click();
+      await expect.element(page.getByRole("menuitem", { name: "Rename" })).toBeVisible();
+      expect(navigate).not.toHaveBeenCalled();
     } finally {
       await screen.unmount();
     }
