@@ -181,6 +181,12 @@ export const GENERATED_SETTINGS_SEARCH_ROWS: readonly GeneratedSettingsSearchRow
     description: "settings:replaceTheSystemTitleBarWithSynaraSFrameless",
   },
   {
+    target: "setting-rounded-window-corners",
+    section: "appearance",
+    title: "settings:roundedWindowCorners",
+    description: "settings:roundedWindowCornersDescription",
+  },
+  {
     target: "setting-ascii-background",
     section: "appearance",
     title: "settings:asciiBackground",

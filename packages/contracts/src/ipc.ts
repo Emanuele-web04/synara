@@ -848,6 +848,9 @@ export interface DesktopCustomTitleBarState {
   supported: boolean;
   preference: boolean;
   active: boolean;
+  /** Electron `roundedCorners` for the frameless window; also fixed at creation. */
+  roundedCornersPreference: boolean;
+  roundedCornersActive: boolean;
   restartRequired: boolean;
 }
 
@@ -1112,6 +1115,7 @@ export interface DesktopBridge {
   customTitleBar?: {
     getState: () => Promise<DesktopCustomTitleBarState>;
     setPreference: (enabled: boolean) => Promise<DesktopCustomTitleBarState>;
+    setRoundedCorners: (enabled: boolean) => Promise<DesktopCustomTitleBarState>;
     relaunch: () => Promise<void>;
   };
   /**

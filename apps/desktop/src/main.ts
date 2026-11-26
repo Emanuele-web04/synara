@@ -330,7 +330,7 @@ import {
 import { handleDesktopStdioError, isBrokenPipeError } from "./desktopProcessErrors";
 import { createDesktopStaticProtocolResolver } from "./desktopStaticProtocol";
 import {
-  readCustomTitleBarPreference,
+  readCustomTitleBarSettings,
   resolveDesktopCustomTitleBarState,
   resolveDesktopTitleBarFrameOptions,
   writeCustomTitleBarPreference,
@@ -606,6 +606,8 @@ type DesktopUpdateErrorContext = DesktopUpdateState["errorContext"];
 let mainWindow: BrowserWindow | null = null;
 /** Whether the live BrowserWindow was created with `frame: false` (win32/linux). */
 let customTitleBarActive = false;
+/** Whether the live frameless BrowserWindow was created with Electron's rounded corners. */
+let roundedCornersActive = true;
 let backendProcess: ChildProcess.ChildProcess | null = null;
 let backendPort = 0;
 let backendAuthToken = "";
@@ -5676,7 +5678,23 @@ function registerIpcHandlers(): void {
     if (!state.supported) {
       return state;
     }
-    writeCustomTitleBarPreference(DESKTOP_CUSTOM_TITLE_BAR_PATH, rawEnabled);
+    writeCustomTitleBarPreference(DESKTOP_CUSTOM_TITLE_BAR_PATH, {
+      enabled: rawEnabled,
+      roundedCorners: state.roundedCornersPreference,
+    });
+    return getDesktopCustomTitleBarState();
+  });
+
+  ipcMain.removeHandler(IPC.customTitleBarSetRoundedCorners);
+  ipcMain.handle(IPC.customTitleBarSetRoundedCorners, async (_event, rawEnabled: unknown) => {
+    const state = getDesktopCustomTitleBarState();
+    if (typeof rawEnabled !== "boolean" || !state.supported) {
+      return state;
+    }
+    writeCustomTitleBarPreference(DESKTOP_CUSTOM_TITLE_BAR_PATH, {
+      enabled: state.preference,
+      roundedCorners: rawEnabled,
+    });
     return getDesktopCustomTitleBarState();
   });
 
@@ -6046,12 +6064,16 @@ function getTitleBarOptions(): BrowserWindowConstructorOptions {
       trafficLightPosition: getMacTrafficLightPosition(),
     };
   }
-  const preference = readCustomTitleBarPreference(DESKTOP_CUSTOM_TITLE_BAR_PATH);
+  const { enabled: preference, roundedCorners } = readCustomTitleBarSettings(
+    DESKTOP_CUSTOM_TITLE_BAR_PATH,
+  );
   const frameOptions = resolveDesktopTitleBarFrameOptions({
     platform: process.platform,
     preference,
+    roundedCorners,
   });
   customTitleBarActive = "frame" in frameOptions && frameOptions.frame === false;
+  roundedCornersActive = roundedCorners;
   return frameOptions;
 }
 
@@ -6070,10 +6092,13 @@ function getKeepAwakeController(): KeepAwakeController {
 }
 
 function getDesktopCustomTitleBarState() {
+  const saved = readCustomTitleBarSettings(DESKTOP_CUSTOM_TITLE_BAR_PATH);
   return resolveDesktopCustomTitleBarState({
     platform: process.platform,
-    preference: readCustomTitleBarPreference(DESKTOP_CUSTOM_TITLE_BAR_PATH),
+    preference: saved.enabled,
     active: customTitleBarActive,
+    roundedCornersPreference: saved.roundedCorners,
+    roundedCornersActive,
   });
 }
 

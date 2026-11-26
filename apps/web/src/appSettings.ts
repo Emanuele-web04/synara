@@ -558,6 +558,8 @@ export const AppSettingsSchema = Schema.Struct({
   // Electron `frame` is fixed at window creation, so the desktop main process also
   // persists this value and a relaunch is required for the live window to match.
   useCustomTitleBar: Schema.Boolean.pipe(withDefaults(() => true)),
+  // Electron's rounded corners on that frameless window. Also fixed at window creation.
+  useRoundedWindowCorners: Schema.Boolean.pipe(withDefaults(() => true)),
   enableTaskCompletionToasts: Schema.Boolean.pipe(withDefaults(() => true)),
   enableSystemTaskCompletionNotifications: Schema.Boolean.pipe(withDefaults(() => true)),
   // Finished-work alerts wait for the agent's background subagents too, and a

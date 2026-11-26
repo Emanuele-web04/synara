@@ -206,6 +206,8 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   customTitleBar: {
     getState: () => ipcRenderer.invoke(IPC.customTitleBarGetState),
     setPreference: (enabled) => ipcRenderer.invoke(IPC.customTitleBarSetPreference, enabled),
+    setRoundedCorners: (enabled) =>
+      ipcRenderer.invoke(IPC.customTitleBarSetRoundedCorners, enabled),
     relaunch: () => ipcRenderer.invoke(IPC.customTitleBarRelaunch),
   },
   keepAwake: {

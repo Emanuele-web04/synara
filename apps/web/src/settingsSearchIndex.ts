@@ -136,6 +136,7 @@ export const ROW_EXTRA_KEYWORDS: Readonly<Record<string, readonly string[]>> = {
   "setting-use-custom-title-bar": [
     "settings:framelessWindowSystemTitleBarWindowsLinuxCaptionControls",
   ],
+  "setting-rounded-window-corners": ["settings:roundedWindowCornersSearch"],
   "setting-use-system-ui-font": ["settings:useTheOperatingSystemInterfaceFontThroughoutSynara"],
   "setting-ui-density": ["settings:controlSpacingInTheSidebarComposerChatGuttersAnd2"],
   "setting-chat-width": ["settings:controlHowWideTheChatColumnGrowsSoTables"],
