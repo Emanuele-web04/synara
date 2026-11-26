@@ -310,7 +310,10 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     id: "worktrees:managed-worktrees",
     section: "worktrees",
     title: "onboarding:managedWorktrees",
-    keywords: ["settings:reviewAndCleanUpTheWorktreesCreatedBySynara"],
+    keywords: [
+      "settings:worktreeCleanupSearchKeywords",
+      "settings:reviewAndCleanUpTheWorktreesCreatedBySynara",
+    ],
     target: null,
   },
   {

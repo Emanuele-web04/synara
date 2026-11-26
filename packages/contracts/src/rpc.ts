@@ -386,6 +386,7 @@ import {
   ServerGetSettingsResult,
   ServerKeepAwakeUpdatedPayload,
   ServerListLocalServersResult,
+  ServerListWorktreesInput,
   ServerListWorktreesResult,
   ServerProviderUpdateError,
   ServerProviderUpdateInput,
@@ -1567,7 +1568,7 @@ export const WsServerGetMcpConnectorSetupRpc = Rpc.make(WS_METHODS.serverGetMcpC
 });
 
 export const WsServerListWorktreesRpc = Rpc.make(WS_METHODS.serverListWorktrees, {
-  payload: Schema.Struct({}),
+  payload: ServerListWorktreesInput,
   success: ServerListWorktreesResult,
   error: WsRpcError,
 });

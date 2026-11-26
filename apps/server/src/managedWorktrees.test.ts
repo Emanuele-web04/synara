@@ -1,13 +1,15 @@
+import { withWorktreeLifecycle, withWorktreeRemoval } from "./worktreeLifecycle";
 import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 
 import type { OrchestrationThread } from "@synara/contracts";
-import { Effect } from "effect";
+import { Effect, Option } from "effect";
 import { afterEach, describe, expect, it } from "vitest";
 
 import type { GitCoreShape } from "./git/Services/GitCore.ts";
+import type { ManagedWorktreeMergeCleanup, ManagedWorktreeThreadRef } from "./managedWorktrees.ts";
 import type { ProjectionSnapshotQueryShape } from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import {
   archivedWorktreeHasNoOtherOwners,
@@ -103,12 +105,16 @@ function makeGit(input: {
   readonly dirtyPaths?: ReadonlySet<string>;
 }) {
   return {
-    execute: ({ cwd }: { cwd: string }) =>
-      Effect.succeed({
-        code: 0,
-        stdout: `worktree /repo/project\nHEAD abc\nbranch refs/heads/main\n\nworktree ${cwd}\nHEAD abc\ndetached\n`,
-        stderr: "",
-      }),
+    execute: ({ cwd, args }: { cwd: string; args: ReadonlyArray<string> }) =>
+      Effect.succeed(
+        args[0] === "ls-files"
+          ? { code: 0, stdout: "", stderr: "" }
+          : {
+              code: 0,
+              stdout: `worktree /repo/project\nHEAD abc\nbranch refs/heads/main\n\nworktree ${cwd}\nHEAD abc\ndetached\n`,
+              stderr: "",
+            },
+      ),
     withMutation: (_cwd: string, effect: Effect.Effect<unknown, unknown, unknown>) => effect,
     snapshotWorktree: ({ outputPath }: { outputPath: string }) =>
       Effect.sync(() => {
@@ -157,6 +163,147 @@ afterEach(async () => {
 });
 
 describe("managed worktrees", () => {
+  it.each([
+    "merged",
+    "disabled",
+    "active",
+    "busy",
+    "dirty",
+    "follow-up",
+    "closed",
+    "lookup-failed",
+    "shared-unmerged",
+    "shared-busy-deleted",
+    "protected",
+    "detached",
+    "restored-during-snapshot",
+    "restored-after-final-check",
+    "snapshot-failed",
+  ])("verifies merge-aware removal safety: %s", async (scenario) => {
+    const { root, paths } = await makeManagedRoot(1);
+    const removals: string[] = [];
+    const snapshots: string[] = [];
+    const head = "a".repeat(40);
+    const pr = {
+      number: 1,
+      title: "Change",
+      url: "https://github.com/example/repo/pull/1",
+      headBranch: "synara/test",
+      baseBranch: "main",
+      state: "merged" as const,
+    };
+    const thread: ManagedWorktreeThreadRef = {
+      id: "owner",
+      archivedAt: scenario === "active" ? null : "2026-10-10T00:00:00Z",
+      worktreePath: paths[0]!,
+      lastKnownPr: pr,
+      busy: scenario === "busy",
+    };
+    const threads = [
+      thread,
+      ...(scenario === "shared-unmerged"
+        ? [{ ...thread, id: "sibling", lastKnownPr: { ...pr, url: pr.url + "2" } }]
+        : []),
+      ...(scenario === "shared-busy-deleted"
+        ? [
+            {
+              ...thread,
+              id: "deleted-sibling",
+              archivedAt: null,
+              deletedAt: "2026-10-09T00:00:00Z",
+              lastKnownPr: null,
+              busy: true,
+            },
+          ]
+        : []),
+    ];
+    let restored = false;
+    let restore: Promise<void> | undefined;
+    const base = makeGit({
+      removals,
+      snapshots,
+      ...(scenario === "dirty" ? { dirtyPaths: new Set(paths) } : {}),
+    });
+    const git: GitCoreShape = {
+      ...base,
+      removeWorktree: (input) =>
+        scenario === "restored-after-final-check"
+          ? Effect.gen(function* () {
+              restore = Effect.runPromise(
+                withWorktreeLifecycle(
+                  root,
+                  Effect.sync(() => {
+                    restored = true;
+                  }),
+                ),
+              );
+              yield* Effect.sleep("30 millis");
+              expect(restored).toBe(false);
+              yield* base.removeWorktree(input);
+            })
+          : base.removeWorktree(input),
+      execute: (input) =>
+        input.args[0] === "rev-parse"
+          ? Effect.succeed({ code: 0, stdout: head + "\n", stderr: "" })
+          : base.execute(input),
+      statusDetails: (cwd) =>
+        scenario === "detached"
+          ? base.statusDetails(cwd).pipe(Effect.map((status) => ({ ...status, branch: null })))
+          : base.statusDetails(cwd),
+      snapshotWorktree: (input) =>
+        scenario === "snapshot-failed"
+          ? Effect.fail(new Error("No snapshot space") as never)
+          : base.snapshotWorktree(input).pipe(
+              Effect.tap(() =>
+                Effect.sync(() => {
+                  restored = scenario === "restored-during-snapshot";
+                }),
+              ),
+            ),
+    };
+    const policy: ManagedWorktreeMergeCleanup = {
+      withOwnership: (effect) =>
+        withWorktreeRemoval(root, effect).pipe(Effect.map(Option.getOrElse(() => false))),
+      enabled: Effect.succeed(scenario !== "disabled"),
+      isProtected: () => Effect.succeed(scenario === "protected"),
+      github: {
+        getPullRequestWithChecks: (input) =>
+          scenario === "lookup-failed"
+            ? Effect.fail(new Error("GitHub unavailable") as never)
+            : Effect.succeed({
+                summary: {
+                  number: 1,
+                  title: "Change",
+                  url: input.reference,
+                  headRefName: "synara/test",
+                  baseRefName: "main",
+                  state:
+                    scenario === "closed" || input.reference.endsWith("12") ? "closed" : "merged",
+                },
+                headSha: scenario === "follow-up" ? "b".repeat(40) : head,
+                checks: [],
+              }),
+      },
+    };
+    await Effect.runPromise(
+      pruneArchivedManagedWorktrees({
+        worktreesDir: root,
+        snapshotsDir: path.join(root, "snapshots"),
+        threads,
+        git,
+        mergeCleanup: policy,
+        readThreads: () => Effect.succeed(restored ? [{ ...thread, archivedAt: null }] : threads),
+      }),
+    );
+    if (restore) await restore;
+    expect(removals).toEqual(
+      scenario === "merged" || scenario === "restored-after-final-check" ? paths : [],
+    );
+    if (scenario === "restored-after-final-check") expect(restored).toBe(true);
+    if (scenario === "merged" || scenario === "restored-during-snapshot")
+      expect(snapshots).toHaveLength(1);
+  });
+
   it("discovers linked worktrees and reports their primary checkout", async () => {
     const { root, paths } = await makeManagedRoot(2);
     const git = {
@@ -189,6 +336,7 @@ describe("managed worktrees", () => {
           associatedWorktreePath: worktreePath,
           archivedAt: new Date(Date.UTC(2026, 0, index + 1)).toISOString(),
           deletedAt: null,
+          busy: false,
         }) as unknown as OrchestrationThread,
     );
     const snapshotsDir = path.join(root, "snapshots");
@@ -231,6 +379,7 @@ describe("managed worktrees", () => {
           ),
           archivedAt: new Date(Date.UTC(2026, 0, index + 1)).toISOString(),
           deletedAt: null,
+          busy: false,
         }) as unknown as OrchestrationThread,
     );
 
@@ -264,6 +413,7 @@ describe("managed worktrees", () => {
             deletedAt: index === 0 ? new Date(Date.UTC(2026, 0, index + 2)).toISOString() : null,
             worktreePath,
             associatedWorktreePath: worktreePath,
+            busy: false,
           })),
         ),
       getSnapshot: () => Effect.die(new Error("getSnapshot must not be used by worktree prune")),
@@ -295,6 +445,7 @@ describe("managed worktrees", () => {
         associatedWorktreePath: paths[0],
         archivedAt: null,
         deletedAt: null,
+        busy: false,
       },
       {
         id: "thread-deleted",
@@ -302,6 +453,7 @@ describe("managed worktrees", () => {
         associatedWorktreePath: paths[1],
         archivedAt: null,
         deletedAt: "2026-08-01T00:00:00.000Z",
+        busy: false,
       },
     ] as unknown as OrchestrationThread[];
 
@@ -315,6 +467,92 @@ describe("managed worktrees", () => {
     );
 
     expect(removals).toEqual([paths[1]]);
+  });
+
+  it("scopes deletion cleanup to the requested deleted owner", async () => {
+    const { root, paths } = await makeManagedRoot(3);
+    const removals: string[] = [];
+    const git = makeGit({ removals });
+    const threads = [
+      {
+        id: "deleted-a",
+        worktreePath: paths[0],
+        associatedWorktreePath: paths[0],
+        archivedAt: null,
+        deletedAt: "2026-08-01T00:00:00.000Z",
+        busy: false,
+      },
+      {
+        id: "deleted-b",
+        worktreePath: paths[1],
+        associatedWorktreePath: paths[1],
+        archivedAt: null,
+        deletedAt: "2026-08-02T00:00:00.000Z",
+        busy: false,
+      },
+      {
+        id: "archived",
+        worktreePath: paths[2],
+        associatedWorktreePath: paths[2],
+        archivedAt: "2026-08-03T00:00:00.000Z",
+        deletedAt: null,
+        busy: false,
+      },
+    ] as unknown as OrchestrationThread[];
+
+    await Effect.runPromise(
+      pruneArchivedManagedWorktrees({
+        worktreesDir: root,
+        snapshotsDir: path.join(root, "snapshots"),
+        threads,
+        git,
+        onlyDeletedThreadId: "deleted-a",
+      }),
+    );
+
+    expect(removals).toEqual([paths[0]]);
+  });
+
+  it("refreshes the recovery snapshot when a removal is retried", async () => {
+    const { root, paths } = await makeManagedRoot(1);
+    const removals: string[] = [];
+    const snapshots: string[] = [];
+    let removalAttempts = 0;
+    const base = makeGit({ removals, snapshots });
+    const git = {
+      ...base,
+      removeWorktree: (input: { cwd: string; path: string }) => {
+        removalAttempts += 1;
+        return removalAttempts === 1
+          ? Effect.fail(new Error("worktree locked") as never)
+          : base.removeWorktree(input);
+      },
+    } as unknown as GitCoreShape;
+    const threads = [
+      {
+        id: "deleted",
+        worktreePath: paths[0],
+        associatedWorktreePath: paths[0],
+        archivedAt: null,
+        deletedAt: "2026-08-01T00:00:00.000Z",
+        busy: false,
+      },
+    ] as unknown as OrchestrationThread[];
+    const prune = () =>
+      Effect.runPromise(
+        pruneArchivedManagedWorktrees({
+          worktreesDir: root,
+          snapshotsDir: path.join(root, "snapshots"),
+          threads,
+          git,
+        }),
+      );
+
+    await prune();
+    await prune();
+
+    expect(snapshots).toHaveLength(2);
+    expect(removals).toEqual(paths);
   });
 
   it("removes the emptied per-worktree parent after an automatic removal", async () => {
@@ -337,6 +575,7 @@ describe("managed worktrees", () => {
         associatedWorktreePath: paths[0],
         archivedAt: null,
         deletedAt: null,
+        busy: false,
       },
       {
         id: "thread-deleted",
@@ -344,6 +583,7 @@ describe("managed worktrees", () => {
         associatedWorktreePath: paths[1],
         archivedAt: null,
         deletedAt: "2026-08-01T00:00:00.000Z",
+        busy: false,
       },
     ] as unknown as OrchestrationThread[];
 
@@ -377,6 +617,7 @@ describe("managed worktrees", () => {
         associatedWorktreePath: paths[0],
         archivedAt: null,
         deletedAt: "2026-08-01T00:00:00.000Z",
+        busy: false,
       },
     ] as unknown as OrchestrationThread[];
 
@@ -405,6 +646,7 @@ describe("managed worktrees", () => {
         associatedWorktreePath: paths[0],
         archivedAt: null,
         deletedAt: null,
+        busy: false,
       },
     ] as unknown as OrchestrationThread[];
 
@@ -470,24 +712,28 @@ describe("managed worktrees", () => {
           worktreePath: "/wt/active",
           archivedAt: null,
           deletedAt: null,
+          busy: false,
         },
         {
           id: "deleted",
           worktreePath: "/wt/deleted",
           archivedAt: null,
           deletedAt: "2026-08-01T00:00:00.000Z",
+          busy: false,
         },
         {
           id: "archived-old",
           worktreePath: "/wt/archived-old",
           archivedAt: "2026-01-01T00:00:00.000Z",
           deletedAt: null,
+          busy: false,
         },
         {
           id: "archived-new",
           worktreePath: "/wt/archived-new",
           archivedAt: "2026-02-01T00:00:00.000Z",
           deletedAt: null,
+          busy: false,
         },
       ],
     });

@@ -10,11 +10,16 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useMemo, useState } from "react";
 
 import { Button } from "~/components/ui/button";
+import { Switch } from "~/components/ui/switch";
 import { gitRemoveWorktreeMutationOptions } from "~/lib/gitReactQuery";
 import { ArchiveIcon } from "~/lib/icons";
 import { deleteArchivedThreadsFromClient } from "~/lib/archivedThreadDelete";
 import { formatRelativeTime } from "~/lib/relativeTime";
-import { serverQueryKeys, serverWorktreesQueryOptions } from "~/lib/serverReactQuery";
+import {
+  serverQueryKeys,
+  serverWorktreesQueryOptions,
+  serverSettingsQueryOptions,
+} from "~/lib/serverReactQuery";
 import { unarchiveThreadFromClient } from "~/lib/threadArchive";
 import { cn } from "~/lib/utils";
 import { ensureNativeApi, readNativeApi } from "~/nativeApi";
@@ -47,9 +52,53 @@ function WorktreesStatus(props: { children: string; error?: boolean }) {
   );
 }
 
-export function WorktreesSettingsPanel({ active }: { readonly active: boolean }) {
+function WorktreeMergeCleanupSetting() {
   const { t } = useTranslation();
+  const queryClient = useQueryClient();
+  const settings = useQuery(serverSettingsQueryOptions());
+  const update = useMutation({
+    mutationFn: (enabled: boolean) =>
+      ensureNativeApi().server.updateSettings({ worktrees: { pruneAfterMerge: enabled } }),
+    onSuccess: (next) => {
+      queryClient.setQueryData(serverQueryKeys.settings(), next);
+    },
+    onError: (error) =>
+      toastManager.add({
+        type: "error",
+        title: t("settings:couldNotUpdateWorktreeCleanup"),
+        description: error.message,
+      }),
+  });
+  return (
+    <SettingsSection title={t("settings:automaticWorktreeCleanup")}>
+      <SettingsListRow
+        title={t("settings:removeArchivedWorktreesAfterMerge")}
+        description={t("settings:removeArchivedWorktreesAfterMergeDescription")}
+        actions={
+          <Switch
+            aria-label={t("settings:removeArchivedWorktreesAfterMerge")}
+            checked={settings.data?.worktrees?.pruneAfterMerge ?? false}
+            disabled={!settings.data || update.isPending}
+            onCheckedChange={(value) => update.mutate(Boolean(value))}
+          />
+        }
+      />
+    </SettingsSection>
+  );
+}
 
+export function WorktreesSettingsPanel({ active }: { readonly active: boolean }) {
+  if (!active) return null;
+  return (
+    <div className="space-y-6">
+      <WorktreeMergeCleanupSetting />
+      <WorktreesInventoryPanel />
+    </div>
+  );
+}
+
+function WorktreesInventoryPanel() {
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
   const worktreesQuery = useQuery(serverWorktreesQueryOptions());
   const removeWorktreeMutation = useMutation(gitRemoveWorktreeMutationOptions({ queryClient }));
@@ -166,8 +215,6 @@ export function WorktreesSettingsPanel({ active }: { readonly active: boolean })
     },
     [queryClient, removeDeletedThreadFromClientState, removeWorktreeMutation, t],
   );
-
-  if (!active) return null;
 
   if (worktreesQuery.isLoading) {
     return <WorktreesStatus>{t("settings:loadingManagedWorktrees")}</WorktreesStatus>;

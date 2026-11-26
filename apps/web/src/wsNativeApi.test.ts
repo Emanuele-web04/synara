@@ -482,6 +482,7 @@ describe("wsNativeApi", () => {
           activeProvider: null,
           runtimeMode: null,
         },
+        worktrees: { pruneAfterMerge: false },
       },
     } as const;
     emitPush(WS_CHANNELS.serverSettingsUpdated, payload);

@@ -22,6 +22,7 @@ import type {
   SpaceId,
   ThreadId,
   ThreadEnvironmentMode,
+  OrchestrationThreadPullRequest,
   TurnId,
 } from "@synara/contracts";
 import { ServiceMap } from "effect";
@@ -127,6 +128,9 @@ export interface ProjectionManagedWorktreeThread {
   readonly deletedAt: string | null;
   readonly worktreePath: string | null;
   readonly associatedWorktreePath: string | null;
+  readonly lastKnownPr?: OrchestrationThreadPullRequest | null;
+  /** True when active work exists; removal requires an explicit false. */
+  readonly busy?: boolean;
 }
 
 /** Opt-in extras for thread shell reads; internal callers leave both off. */

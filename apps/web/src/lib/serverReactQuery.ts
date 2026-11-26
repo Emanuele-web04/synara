@@ -407,11 +407,17 @@ export function serverSettingsQueryOptions() {
 export function serverWorktreesQueryOptions() {
   return queryOptions({
     queryKey: serverQueryKeys.worktrees(),
-    queryFn: async () => {
+    queryFn: async ({ client, queryKey }) => {
       const api = ensureNativeApi();
-      return api.server.listWorktrees();
+      // Only the first fetch starts a sweep. Polls observe the running one;
+      // otherwise completion polling would keep starting new sweeps forever.
+      const current = client.getQueryData<{ cleanupPending?: boolean }>(queryKey);
+      return api.server.listWorktrees({ observeCleanup: current?.cleanupPending === true });
     },
     staleTime: 30_000,
+    // The list returns before the detached cleanup finishes; poll until the
+    // server reports the sweep is done so removed checkouts disappear.
+    refetchInterval: (query) => (query.state.data?.cleanupPending ? 2_000 : false),
     refetchOnWindowFocus: true,
     refetchOnReconnect: true,
   });

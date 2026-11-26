@@ -21,6 +21,7 @@ import { readAccountCredentials, accountApiIssuer } from "./accountAuth";
 import { EditorDebugService } from "./editor/debugService";
 import { EditorLanguageService } from "./editor/languageService";
 import { requireNativeEditor } from "./editor/nativeEditorGate";
+import { resolveManagedWorktreeMergeCleanup } from "./managedWorktreeMergeCleanup";
 import { readEventLoopStatus } from "./eventLoopMonitor";
 import { makeGitActionRunner } from "./git/gitActionRunner";
 import { makeDetachedWorktreeSetupStream } from "./git/worktreeSetupStream";
@@ -83,6 +84,7 @@ import {
   Option,
   Path,
   Queue,
+  Ref,
   Schema,
   Scope,
   Stream,
@@ -1192,7 +1194,9 @@ const makeWsRpcHandlersLayer = () =>
           }
         });
 
+      const mergeCleanup = yield* resolveManagedWorktreeMergeCleanup;
       const pruneManagedWorktrees = pruneProjectedArchivedManagedWorktrees({
+        ...(mergeCleanup ? { mergeCleanup } : {}),
         homeDir: config.homeDir,
         worktreesDir: config.worktreesDir,
         snapshotQuery: projectionReadModelQuery,
@@ -1216,6 +1220,17 @@ const makeWsRpcHandlersLayer = () =>
           ),
         ),
       );
+      const pruneInFlight = yield* Ref.make(false);
+      const startPruneManagedWorktrees = Effect.gen(function* () {
+        const shouldStart = yield* Ref.modify(pruneInFlight, (inFlight) => [!inFlight, true]);
+        if (!shouldStart) return false;
+        yield* pruneManagedWorktrees.pipe(
+          Effect.ensuring(Ref.set(pruneInFlight, false)),
+          Effect.forkDetach,
+          Effect.asVoid,
+        );
+        return true;
+      });
       const getOrchestrationHighWaterSequence = orchestrationEngine.getEventHighWaterSequence.pipe(
         Effect.mapError((cause) =>
           toWsRpcError(cause, "Failed to capture orchestration high-water sequence"),
@@ -2769,9 +2784,29 @@ const makeWsRpcHandlersLayer = () =>
               .pipe(Effect.map((disconnected) => ({ disconnected }))),
             "Failed to disconnect",
           ),
-        [WS_METHODS.serverListWorktrees]: () =>
+        [WS_METHODS.serverListWorktrees]: (input) =>
           rpcEffect(
-            pruneManagedWorktrees.pipe(Effect.map((worktrees) => ({ worktrees }))),
+            Effect.gen(function* () {
+              // Inventory reads stay fast: the merge sweep does GitHub lookups and
+              // runs detached so opening the panel never waits on the network.
+              const worktrees = yield* listManagedWorktrees({
+                worktreesDir: config.worktreesDir,
+                git,
+              });
+              if (input?.observeCleanup) {
+                const cleanupPending = yield* Ref.get(pruneInFlight);
+                return {
+                  worktrees,
+                  ...(cleanupPending ? { cleanupPending: true } : {}),
+                };
+              }
+              const started = yield* startPruneManagedWorktrees;
+              const cleanupPending = started || (yield* Ref.get(pruneInFlight));
+              return {
+                worktrees,
+                ...(cleanupPending ? { cleanupPending: true } : {}),
+              };
+            }),
             "Failed to list managed worktrees",
           ),
         [WS_METHODS.serverListLocalServers]: () =>

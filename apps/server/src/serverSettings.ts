@@ -65,6 +65,7 @@ import {
   type ExternalProviderServer,
 } from "./providerCredentials";
 import { isProviderCredentialKey } from "./providerChildEnvironment.ts";
+import { withWorktreeLifecycle } from "./worktreeLifecycle";
 
 export interface ServerSettingsShape {
   readonly start: Effect.Effect<void, ServerSettingsError>;
@@ -755,7 +756,7 @@ function decodeSettingsFromJson(settingsPath: string, raw: string) {
 }
 
 const makeServerSettings = Effect.gen(function* () {
-  const { settingsPath } = yield* ServerConfig;
+  const { settingsPath, homeDir } = yield* ServerConfig;
   const providerCredentials = yield* ProviderCredentials;
   const secretStore = yield* ServerSecretStore;
   const fs = yield* FileSystem.FileSystem;
@@ -1396,9 +1397,10 @@ const makeServerSettings = Effect.gen(function* () {
         settings,
       })),
     ),
-    updateSettings,
+    updateSettings: (patch, derivePatch) =>
+      withWorktreeLifecycle(homeDir, updateSettings(patch, derivePatch)),
     updateSettingsView: (patch) =>
-      updateSettings(patch).pipe(
+      withWorktreeLifecycle(homeDir, updateSettings(patch)).pipe(
         Effect.map((settings) => toServerSettingsUpdateView(settings, patch)),
       ),
     subscribeChanges: PubSub.subscribe(changesPubSub).pipe(

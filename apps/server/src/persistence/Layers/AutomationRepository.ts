@@ -1,3 +1,5 @@
+import { ServerConfig } from "../../config";
+import { withWorktreeLifecycle } from "../../worktreeLifecycle";
 import { randomBytes } from "node:crypto";
 
 import {
@@ -188,6 +190,9 @@ function toRun(row: AutomationRunDbRow) {
 }
 
 const makeAutomationRepository = Effect.gen(function* () {
+  const config = yield* Effect.serviceOption(ServerConfig);
+  const protect = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    Option.isSome(config) ? withWorktreeLifecycle(config.value.homeDir, effect) : effect;
   const sql = yield* SqlClient.SqlClient;
   // Runtime callers opt out of Group-owned work on Stable. Filter before LIMIT
   // so preserved Beta state cannot starve ordinary automation work.
@@ -2227,13 +2232,13 @@ const makeAutomationRepository = Effect.gen(function* () {
     );
 
   return {
-    createDefinition,
-    saveDefinition,
-    resolvePendingProposal,
+    createDefinition: (input) => protect(createDefinition(input)),
+    saveDefinition: (input) => protect(saveDefinition(input)),
+    resolvePendingProposal: (input) => protect(resolvePendingProposal(input)),
     getDefinitionById,
     listDueDefinitions,
     setDefinitionNextRunAt,
-    attachDefinitionThread,
+    attachDefinitionThread: (input) => protect(attachDefinitionThread(input)),
     archiveDefinition,
     list,
     createRun,
@@ -2272,7 +2277,7 @@ const makeAutomationRepository = Effect.gen(function* () {
     recordDefinitionRunFailure,
     resetDefinitionFailureCount,
     incrementDefinitionIterationCount,
-    restartDefinitionLoop,
+    restartDefinitionLoop: (input) => protect(restartDefinitionLoop(input)),
     tryAcquireSchedulerLease,
   } satisfies AutomationRepositoryShape;
 });

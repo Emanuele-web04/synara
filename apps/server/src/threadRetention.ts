@@ -1,3 +1,4 @@
+import { resolveManagedWorktreeMergeCleanup } from "./managedWorktreeMergeCleanup";
 // FILE: threadRetention.ts
 // Purpose: Runs the server-side retention loop that archives inactive orchestration threads.
 // Layer: Server maintenance
@@ -311,7 +312,9 @@ export const startThreadRetentionJob = Effect.fn("startThreadRetentionJob")(func
   const automationRepository = yield* AutomationRepository;
   const config = yield* ServerConfig;
   const git = yield* GitCore;
+  const mergeCleanup = yield* resolveManagedWorktreeMergeCleanup;
   const pruneArchivedManagedWorktrees = pruneProjectedArchivedManagedWorktrees({
+    ...(mergeCleanup ? { mergeCleanup } : {}),
     homeDir: config.homeDir,
     worktreesDir: config.worktreesDir,
     snapshotQuery: projectionSnapshotQuery,

@@ -1,7 +1,8 @@
+import { resolveManagedWorktreeMergeCleanup } from "../../managedWorktreeMergeCleanup";
 import { ThreadId, type OrchestrationEvent } from "@synara/contracts";
 import { makeDrainableWorker, startDrainableWorkerProducers } from "@synara/shared/DrainableWorker";
 import { terminalScopeIdsForThread } from "@synara/shared/terminalThreads";
-import { Cause, Effect, Layer, Option, Stream } from "effect";
+import { Cause, Effect, Layer, Option, Ref, Stream } from "effect";
 
 import { ServerConfig } from "../../config";
 import { DeviceService } from "../../device/Services/DeviceService";
@@ -112,20 +113,49 @@ const make = Effect.gen(function* () {
   const serverConfig = yield* ServerConfig;
   const git = yield* GitCore;
 
+  const mergeCleanup = yield* resolveManagedWorktreeMergeCleanup;
+  const pruneInFlight = yield* Ref.make(false);
   const pruneManagedWorktreesAfterLifecycle = (context: {
     readonly eventType: ThreadDeletedEvent["type"];
     readonly threadId?: string;
   }) =>
+    Effect.gen(function* () {
+      const shouldStart = yield* Ref.modify(pruneInFlight, (inFlight) => [!inFlight, true]);
+      if (!shouldStart) return;
+      yield* pruneProjectedArchivedManagedWorktrees({
+        ...(mergeCleanup ? { mergeCleanup } : {}),
+        homeDir: serverConfig.homeDir,
+        worktreesDir: serverConfig.worktreesDir,
+        snapshotQuery: projectionSnapshotQuery,
+        git,
+      }).pipe(
+        Effect.asVoid,
+        Effect.catch((error) =>
+          Effect.logWarning("thread lifecycle cleanup skipped managed worktree prune", {
+            ...context,
+            error: error instanceof Error ? error.message : String(error),
+          }),
+        ),
+        Effect.ensuring(Ref.set(pruneInFlight, false)),
+        // Deletion cleanup must not block the drainable worker on GitHub lookups.
+        Effect.forkDetach,
+        Effect.asVoid,
+      );
+    });
+
+  const pruneDeletedThreadWorktreeBeforePurge = (threadId: string) =>
     pruneProjectedArchivedManagedWorktrees({
+      ...(mergeCleanup ? { mergeCleanup } : {}),
       homeDir: serverConfig.homeDir,
       worktreesDir: serverConfig.worktreesDir,
       snapshotQuery: projectionSnapshotQuery,
       git,
+      onlyDeletedThreadId: threadId,
     }).pipe(
       Effect.asVoid,
       Effect.catch((error) =>
-        Effect.logWarning("thread lifecycle cleanup skipped managed worktree prune", {
-          ...context,
+        Effect.logWarning("thread deletion cleanup skipped managed worktree reclaim", {
+          threadId,
           error: error instanceof Error ? error.message : String(error),
         }),
       ),
@@ -269,12 +299,10 @@ const make = Effect.gen(function* () {
     const { threadId } = event.payload;
     yield* detachThreadDevice(threadId);
     const cleanupSucceeded = yield* cleanupThreadBeforePurge(threadId);
-    // Reclaim while the soft-deleted projection row still names the worktree.
-    // Dirty managed worktrees are snapped and left with a warning (no force).
-    yield* pruneManagedWorktreesAfterLifecycle({
-      eventType: event.type,
-      threadId,
-    });
+    // Reclaim the deleted owner's checkout while its soft-deleted projection row
+    // still names it. This pass is synchronous and never calls GitHub; the full
+    // merged/retention sweep runs detached after the purge.
+    yield* pruneDeletedThreadWorktreeBeforePurge(threadId);
     if (!cleanupSucceeded) {
       yield* Effect.logWarning("thread deletion cleanup deferred stats archive purge", {
         threadId,
@@ -282,6 +310,10 @@ const make = Effect.gen(function* () {
       return;
     }
     yield* purgeThreadData(event);
+    yield* pruneManagedWorktreesAfterLifecycle({
+      eventType: event.type,
+      threadId,
+    });
   });
 
   const processLifecycleEvent = (event: ThreadLifecycleCleanupEvent) =>

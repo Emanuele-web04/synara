@@ -161,6 +161,10 @@ export const ServerSettings = Schema.Struct({
   autoResumeAfterUsageLimits: Schema.Boolean.pipe(Schema.withDecodingDefault(() => false)),
   // Server-owned epoch: disabling invalidates pending waits across a rapid re-enable/restart.
   usageLimitRecoveryEpoch: NonNegativeInt.pipe(Schema.withDecodingDefault(() => 0)),
+  // Automatic cleanup of clean, merged managed worktrees owned only by archived threads.
+  worktrees: Schema.Struct({
+    pruneAfterMerge: Schema.Boolean.pipe(Schema.withDecodingDefault(() => false)),
+  }).pipe(Schema.withDecodingDefault(() => ({}))),
   enableAssistantStreaming: Schema.Boolean.pipe(Schema.withDecodingDefault(() => true)),
   enableProviderUpdateChecks: Schema.Boolean.pipe(Schema.withDecodingDefault(() => true)),
   keepAwakeMode: KeepAwakeMode.pipe(Schema.withDecodingDefault(() => DEFAULT_KEEP_AWAKE_MODE)),
@@ -232,6 +236,9 @@ const ProviderSettingsBasePatch = {
 
 export const ServerSettingsPatch = Schema.Struct({
   autoResumeAfterUsageLimits: Schema.optionalKey(Schema.Boolean),
+  worktrees: Schema.optionalKey(
+    Schema.Struct({ pruneAfterMerge: Schema.optionalKey(Schema.Boolean) }),
+  ),
   enableAssistantStreaming: Schema.optionalKey(Schema.Boolean),
   enableProviderUpdateChecks: Schema.optionalKey(Schema.Boolean),
   keepAwakeMode: Schema.optionalKey(KeepAwakeMode),
