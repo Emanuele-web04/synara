@@ -1319,21 +1319,25 @@ export class DesktopBrowserManager {
     return this.humanControlEpochByThreadId.get(threadId) ?? 0;
   }
 
-  private humanBrowserOperations = 0;
+  // An unscoped operation reserves the shared browser profile.
+  private readonly humanBrowserOperations = new Map<ThreadId | undefined, number>();
 
-  isHumanBrowserOperationActive(): boolean {
-    return this.humanBrowserOperations > 0;
+  isHumanBrowserOperationActive(threadId?: ThreadId): boolean {
+    return this.humanBrowserOperations.has(undefined) || this.humanBrowserOperations.has(threadId);
   }
 
-  /** Cookie imports affect the shared session, so pause every agent until they drain. */
-  beginHumanBrowserOperation(): () => void {
-    this.humanBrowserOperations += 1;
-    for (const threadId of this.states.keys()) this.markHumanControl(threadId);
+  /** Cookie imports pause the shared session. Filling a password reserves only its chat. */
+  beginHumanBrowserOperation(threadId?: ThreadId): () => void {
+    this.humanBrowserOperations.set(threadId, (this.humanBrowserOperations.get(threadId) ?? 0) + 1);
+    for (const id of threadId === undefined ? this.states.keys() : [threadId])
+      this.markHumanControl(id);
     let released = false;
     return () => {
       if (released) return;
       released = true;
-      this.humanBrowserOperations -= 1;
+      const remaining = this.humanBrowserOperations.get(threadId)! - 1;
+      if (remaining > 0) this.humanBrowserOperations.set(threadId, remaining);
+      else this.humanBrowserOperations.delete(threadId);
     };
   }
 
@@ -1477,6 +1481,16 @@ export class DesktopBrowserManager {
       webContents: runtime.webContents,
       expectAgentInput: (signal) => this.expectAutomationInput(input.threadId, tab.id, signal),
     };
+  }
+
+  isVisibleBrowserContents(contents: WebContents): boolean {
+    const runtime = this.findRuntimeByWebContentsId(contents.id);
+    if (!runtime) return false;
+    try {
+      return this.getVisibleAutomationRuntime(runtime).webContents === contents;
+    } catch {
+      return false;
+    }
   }
 
   /** Owner dialogs cover the native view; import targets the selected tab, not its paint bounds. */

@@ -243,7 +243,7 @@ export class BrowserHostPipeServer {
   private readonly platform: NodeJS.Platform;
   private readonly automationHost: Pick<DesktopBrowserAutomationHost, "executeTool">;
   private readonly disposeAutomationHost: (() => Promise<void>) | undefined;
-  private readonly drainAutomationHost: (() => Promise<void>) | undefined;
+  private readonly drainAutomationHost: ((threadId?: ThreadId) => Promise<void>) | undefined;
   private readonly maxInFlightRequests: number;
   private readonly maxQueuedOutputBytes: number;
   private readonly capability: string;
@@ -278,13 +278,13 @@ export class BrowserHostPipeServer {
       const automationHost = new DesktopBrowserAutomationHost(browserManager, hostOptions);
       this.automationHost = automationHost;
       this.disposeAutomationHost = () => automationHost.dispose();
-      this.drainAutomationHost = () => automationHost.waitForIdle();
+      this.drainAutomationHost = (threadId) => automationHost.waitForIdle(threadId);
     }
     this.server = Net.createServer((socket) => this.handleConnection(socket));
   }
 
-  async waitForIdle(): Promise<void> {
-    await this.drainAutomationHost?.();
+  async waitForIdle(threadId?: ThreadId): Promise<void> {
+    await this.drainAutomationHost?.(threadId);
   }
 
   async start(): Promise<void> {

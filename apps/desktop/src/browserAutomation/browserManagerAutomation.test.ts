@@ -116,6 +116,27 @@ describe("DesktopBrowserManager tab switching", () => {
 
   const bounds = { x: 0, y: 50, width: 800, height: 600 };
 
+  it("reserves only the chat receiving a password and keeps overlapping reservations until both finish", () => {
+    const { manager } = makeManager();
+    const other = ThreadId.makeUnsafe("other-chat");
+    const notify = vi.fn();
+    manager.subscribeAutomationHumanControl(THREAD_ID, notify);
+    const release = manager.beginHumanBrowserOperation(THREAD_ID);
+    const second = manager.beginHumanBrowserOperation(THREAD_ID);
+    expect(notify).toHaveBeenCalledTimes(2);
+    expect(manager.isHumanBrowserOperationActive(other)).toBe(false);
+    release();
+    release();
+    expect(manager.isHumanBrowserOperationActive(THREAD_ID)).toBe(true);
+    const shared = manager.beginHumanBrowserOperation();
+    expect(manager.isHumanBrowserOperationActive(other)).toBe(true);
+    second();
+    expect(manager.isHumanBrowserOperationActive(THREAD_ID)).toBe(true);
+    shared();
+    expect(manager.isHumanBrowserOperationActive(THREAD_ID)).toBe(false);
+    manager.dispose();
+  });
+
   it("keeps three tabs live through quick and slow switches without reloading", async () => {
     vi.useFakeTimers();
     const pages = [1, 2, 3].map((index) => makeView(400 + index));

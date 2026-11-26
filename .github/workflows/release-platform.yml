@@ -193,6 +193,7 @@ jobs:
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          SYNARA_MAC_WEBAUTHN_PROFILE_BASE64: ${{ inputs.platform == 'mac' && ((inputs.desktop_flavor == 'production' && secrets.MAC_WEBAUTHN_PROFILE_STABLE) || (inputs.desktop_flavor == 'beta' && secrets.MAC_WEBAUTHN_PROFILE_BETA)) || '' }}
           AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
           AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
@@ -247,6 +248,11 @@ jobs:
               key_path="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY_ID}.p8"
               (umask 077; printf '%s' "$APPLE_API_KEY" > "$key_path")
               export APPLE_API_KEY="$key_path"
+              if [[ -n "$SYNARA_MAC_WEBAUTHN_PROFILE_BASE64" ]]; then
+                export SYNARA_MAC_WEBAUTHN_PROFILE="$RUNNER_TEMP/synara-webauthn.provisionprofile"
+                (umask 077; printf '%s' "$SYNARA_MAC_WEBAUTHN_PROFILE_BASE64" | /usr/bin/base64 -D > "$SYNARA_MAC_WEBAUTHN_PROFILE")
+              fi
+              unset SYNARA_MAC_WEBAUTHN_PROFILE_BASE64
               echo "macOS signing enabled."
               signed=true
               args+=(--signed)

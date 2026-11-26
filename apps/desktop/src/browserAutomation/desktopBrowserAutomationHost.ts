@@ -289,7 +289,7 @@ export class DesktopBrowserAutomationHost {
   private readonly idempotency = new Map<string, IdempotencyEntry>();
   private readonly idempotencyTombstones = new Map<string, IdempotencyTombstone>();
   private readonly lockTails = new Map<string, Promise<void>>();
-  private readonly activeOperations = new Set<Promise<unknown>>();
+  private readonly activeOperations = new Map<Promise<unknown>, ThreadId>();
   private readonly diagnostics = new BrowserDiagnosticsStore();
   private readonly requestOpenPanel: ((threadId: ThreadId) => void | Promise<void>) | undefined;
   private disposed = false;
@@ -306,13 +306,19 @@ export class DesktopBrowserAutomationHost {
     if (this.disposal) return this.disposal;
     this.disposed = true;
     this.disposal = (async () => {
-      await Promise.allSettled([...this.activeOperations]);
+      await Promise.allSettled([...this.activeOperations.keys()]);
     })();
     return this.disposal;
   }
 
-  async waitForIdle(): Promise<void> {
-    while (this.activeOperations.size > 0) await Promise.allSettled([...this.activeOperations]);
+  async waitForIdle(threadId?: ThreadId): Promise<void> {
+    for (;;) {
+      const matching = [...this.activeOperations].filter(
+        ([, owner]) => threadId === undefined || owner === threadId,
+      );
+      if (!matching.length) return;
+      await Promise.allSettled(matching.map(([operation]) => operation));
+    }
   }
 
   async executeTool(request: BrowserAutomationToolRequest): Promise<unknown> {
@@ -334,7 +340,7 @@ export class DesktopBrowserAutomationHost {
       request.name !== "browser_status" &&
       request.name !== "browser_tabs" &&
       (this.browserManager.isAnnotationInteractive(request.threadId) ||
-        this.browserManager.isHumanBrowserOperationActive())
+        this.browserManager.isHumanBrowserOperationActive(request.threadId))
     ) {
       throw new BrowserAutomationHostError({
         code: "BrowserInterruptedByHuman",
@@ -430,7 +436,7 @@ export class DesktopBrowserAutomationHost {
           });
         }
       })();
-      this.activeOperations.add(operation);
+      this.activeOperations.set(operation, request.threadId);
       void operation.then(
         () => this.activeOperations.delete(operation),
         () => this.activeOperations.delete(operation),
@@ -696,7 +702,7 @@ export class DesktopBrowserAutomationHost {
     });
     try {
       if (
-        this.browserManager.isHumanBrowserOperationActive() ||
+        this.browserManager.isHumanBrowserOperationActive(threadId) ||
         this.browserManager.getAutomationHumanControlEpoch(threadId) !== epoch
       ) {
         interrupt(humanError);

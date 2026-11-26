@@ -37,6 +37,7 @@ import {
   validateDesktopNativeBuildHost,
 } from "./lib/desktop-platform-build-config.ts";
 import { stageCloudflared } from "./lib/cloudflared.ts";
+import { stageMacWebAuthnProfile } from "./lib/mac-webauthn-profile.ts";
 import { stageDesktopRuntimeResources } from "./lib/desktop-runtime-resources.ts";
 import {
   SYNARA_PACKAGED_DESKTOP_FLAVORS,
@@ -248,6 +249,7 @@ interface StagePackageJson {
   readonly synaraLockfileSha256: string;
   readonly synaraSourceTag: string | null;
   readonly synaraWindowsPublisherSubject: string | null;
+  readonly synaraWebAuthnAccessGroup?: string;
   readonly private: true;
   readonly description: string;
   readonly author: string;
@@ -916,6 +918,7 @@ const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   mockUpdates: boolean,
   mockUpdateServerPort: string | undefined,
   flavor: SynaraPackagedDesktopFlavor,
+  macProvisioningProfile?: string,
 ) {
   const buildConfig: Record<string, unknown> = {
     ...artifactIdentity.buildConfig,
@@ -959,6 +962,7 @@ const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     target,
     signed,
     adHocSign: artifactIdentity.identity.usesScriptedUpdates && !signed,
+    ...(macProvisioningProfile ? { macProvisioningProfile } : {}),
     flavor,
     ...(windowsAzureSignOptions ? { windowsAzureSignOptions } : {}),
   } as const;
@@ -1343,6 +1347,25 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     { flavor: options.flavor, repositoryRoot: repoRoot },
   );
 
+  const macProfile =
+    options.platform === "mac" &&
+    options.signed &&
+    (options.flavor === "production" || options.flavor === "beta")
+      ? process.env.SYNARA_MAC_WEBAUTHN_PROFILE
+      : undefined;
+  const webAuthnAccessGroup = macProfile
+    ? yield* Effect.try({
+        try: () =>
+          stageMacWebAuthnProfile({
+            profile: macProfile,
+            entitlements: path.join(stageResourcesDir, "entitlements.mac.plist"),
+            team: process.env.APPLE_TEAM_ID,
+            bundleId: artifactIdentity.identity.bundleId,
+          }),
+        catch: (cause) =>
+          new BuildScriptError({ message: "Invalid macOS passkey signing configuration.", cause }),
+      })
+    : undefined;
   const resolvedBuildConfig = yield* createBuildConfig(
     options.platform,
     options.target,
@@ -1351,6 +1374,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     options.mockUpdates,
     options.mockUpdateServerPort,
     options.flavor,
+    macProfile ? path.resolve(macProfile) : undefined,
   );
 
   const stagePackageJson: StagePackageJson = {
@@ -1361,6 +1385,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     synaraLockfileSha256: resolvedLockfileSha256,
     synaraSourceTag: options.sourceTag ?? null,
     synaraWindowsPublisherSubject: resolvedBuildConfig.windowsPublisherSubject,
+    ...(webAuthnAccessGroup ? { synaraWebAuthnAccessGroup: webAuthnAccessGroup } : {}),
     private: true,
     description: "Synara desktop build",
     author: "Emanuele Di Pietro",

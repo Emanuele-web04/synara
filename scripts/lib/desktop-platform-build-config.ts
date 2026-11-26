@@ -89,6 +89,7 @@ export interface CreateDesktopPlatformBuildConfigInput {
   readonly platform: "linux" | "mac" | "win";
   readonly target: string;
   readonly signed?: boolean;
+  readonly macProvisioningProfile?: string;
   /** Seal isolated local bundles without selecting a release certificate. */
   readonly adHocSign?: boolean;
   readonly windowsAzureSignOptions?: Record<string, string>;
@@ -167,6 +168,9 @@ export function createDesktopPlatformBuildConfig(
         ? { identity: "-", timestamp: "none" }
         : {}),
       entitlements: MAC_ENTITLEMENTS_PATH,
+      ...(input.macProvisioningProfile
+        ? { provisioningProfile: input.macProvisioningProfile }
+        : {}),
       entitlementsInherit: MAC_INHERITED_ENTITLEMENTS_PATH,
       signIgnore: [...MAC_SIGN_IGNORE_PATTERNS],
       binaries: [

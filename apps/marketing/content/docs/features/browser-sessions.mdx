@@ -9,11 +9,13 @@ Chromium stores site data and honors the expiry dates on persistent cookies. On 
 
 ## Email suggestions
 
-After you type an email address and submit a supported login form, click the login field or press the down arrow on a later visit to choose that address. Suggestions are limited to the same origin and are available across chats. Synara respects forms that turn autocomplete off. It encrypts the address history locally when secure OS storage is available. Otherwise, suggestions last until you quit the app.
+On supported sign-in pages, Synara remembers an email you type and submit, including email-first flows where **Continue** opens a separate password step. On your next visit, click the login field, Tab or Shift+Tab into it, or press the down arrow to open the account menu. Use the arrow keys and Enter to choose an address, or Escape to dismiss. Suggestions are limited to the same origin and are available across chats. Synara respects forms that turn autocomplete off. It encrypts the address history locally when secure OS storage is available. Otherwise, suggestions last until you quit the app.
 
 ## Saved logins
 
 In the desktop app, open the browser toolbar’s **Saved logins** key button to manage locally saved accounts. The list shows each site, username and whether the login was saved by you or an agent. An unfinished signup can appear separately from a saved account.
+
+On a sign-in page, choose an account under **Saved logins** in the field menu to fill the username and current password. In a two-step flow, choose the username first, then choose the saved account in the password field. Synara offers accounts from the unlocked vault for that exact origin. Agents cannot select from the native menu. After you fill a password, browser tools for that chat pause until the page navigates to a new document or the tab closes. Other chats can continue working.
 
 Under **Saving & access**:
 
@@ -26,6 +28,13 @@ Use **Set up** beside **Master password** to set a password of at least 12 chara
 After setup, **Lock saved logins** locks vault access; use **Unlock** with the master password to access it again. Revealing any saved password also requires the master password. The reveal lasts up to 20 seconds and closes when the app loses focus, the document becomes hidden, the dialog closes or you select **Hide password**. Use a login’s delete button and confirm **Delete** to remove that saved login.
 
 Saved login deletion and vault locking affect the saved-password vault. They do not sign you out of websites or remove imported browser cookies. Use the website’s sign-out controls to end a signed-in session.
+
+## Passkeys
+
+Use the site's **Sign in with a passkey** action. The available choices depend on the operating system, the authenticator and the site.
+
+- On compatible Windows 11 systems, Windows offers Windows Hello, a security key, or a nearby phone. Choose the phone option and scan the system QR code. Both devices need Bluetooth and an internet connection. [Microsoft passkey support](https://learn.microsoft.com/en-us/windows/security/identity-protection/passkeys/)
+- A macOS Synara build signed with its channel's passkey provisioning profile can create and use a passkey on that Mac with Touch ID. When Chromium asks which account to use, select it in the native account menu. These credentials are local to that app and Mac. The standard macOS Electron runtime does not provide the phone QR flow for third-party sites.
 
 ## Import an existing browser session
 

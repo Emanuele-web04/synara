@@ -75,9 +75,9 @@ export class BrowserVaultCapture {
     }
   }
 
-  isHumanControlled(runtime: BrowserAutomationVisibleRuntime): boolean {
+  isHumanControlled(contents: BrowserAutomationVisibleRuntime["webContents"]): boolean {
     for (const page of this.pages) {
-      if (page.runtime.webContents === runtime.webContents) return page.lastAgentActivity === 0;
+      if (page.runtime.webContents === contents) return page.lastAgentActivity === 0;
     }
     return false;
   }

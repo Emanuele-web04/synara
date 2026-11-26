@@ -426,6 +426,10 @@ Required secrets used by the workflow:
 - `APPLE_API_ISSUER`
 - `APPLE_TEAM_ID`
 
+To enable device-bound Touch ID passkeys in the desktop browser, create a Developer ID provisioning profile with Keychain Sharing for each channel's explicit App ID. The profile must authorize `<AppIDPrefix>.<bundle ID>.webauthn` and the Developer ID Application certificate used for that release. Store the base64-encoded profiles in separate optional Actions secrets named `MAC_WEBAUTHN_PROFILE_STABLE` and `MAC_WEBAUTHN_PROFILE_BETA`. For a local signed build, set `SYNARA_MAC_WEBAUTHN_PROFILE` to the matching profile's path. Packaging checks the team, bundle, expiry, and keychain grant before applying the entitlement to the main app. Builds without the profile use the standard signature and leave local Touch ID passkeys unavailable.
+
+For a provisioned build, inspect `Contents/embedded.provisionprofile` with `security cms -D -i` and compare its authorization to the app's signed `keychain-access-groups` using `codesign --display --entitlements - "/path/to/Synara.app"`. On a compatible Mac, register a test account's passkey in the browser, restart, sign in with that passkey, and confirm the other channel cannot select it. [Apple's provisioning profile guide](https://developer.apple.com/documentation/technotes/tn3125-inside-code-signing-provisioning-profiles) · [Electron 43 WebAuthn](https://github.com/electron/electron/blob/v43.8.12/docs/api/app.md#appconfigurewebauthnoptions-macos)
+
 Checklist:
 
 1. Apple Developer account access:

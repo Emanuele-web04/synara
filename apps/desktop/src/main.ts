@@ -303,6 +303,7 @@ import { MacUpdateInstallHandoff } from "./macUpdateInstallHandoff";
 import { BROWSER_SESSION_PARTITION, DesktopBrowserManager } from "./browserManager";
 import { BrowserSessionRestore } from "./browserAutomation/browserSessionRestore";
 import { createCookieSessionBackend } from "./browserAutomation/electronCookieSession";
+import { configureBrowserTouchId, registerBrowserPasskeyAccounts } from "./browserPasskeys";
 import { BrowserVault } from "./browserAutomation/browserVault";
 import { BrowserVaultCapture } from "./browserAutomation/browserVaultCapture";
 import { BrowserEmailHistory } from "./browserAutomation/browserEmailHistory";
@@ -407,13 +408,13 @@ const shellEnvironmentSync = syncShellEnvironment();
 
 const IPC = DESKTOP_IPC_CHANNELS;
 const MAX_CLIPBOARD_IMAGE_DATA_URL_LENGTH = 16 * 1024 * 1024;
-const packagedDesktopFlavor = app.isPackaged
-  ? (
-      JSON.parse(FS.readFileSync(Path.join(app.getAppPath(), "package.json"), "utf8")) as {
-        synaraDesktopFlavor?: unknown;
-      }
-    ).synaraDesktopFlavor
+const packagedMetadata = app.isPackaged
+  ? (JSON.parse(FS.readFileSync(Path.join(app.getAppPath(), "package.json"), "utf8")) as {
+      synaraDesktopFlavor?: unknown;
+      synaraWebAuthnAccessGroup?: unknown;
+    })
   : undefined;
+const packagedDesktopFlavor = packagedMetadata?.synaraDesktopFlavor;
 const isSourceDesktopBuild =
   requestedSourceBuildMarker === SYNARA_SOURCE_DESKTOP_BUILD_MARKER &&
   packagedDesktopFlavor === undefined;
@@ -666,11 +667,18 @@ const browserEmailHistory = new BrowserEmailHistory(
   Path.join(userDataPath, "browser-emails.enc"),
   browserOsKeyStore,
 );
-const browserManager = new DesktopBrowserManager({
+const browserManager: DesktopBrowserManager = new DesktopBrowserManager({
   onRuntimeReady: (runtime) => {
     const unregisterCapture = browserVaultCapture.register(runtime);
-    const unregisterEmails = registerLoginEmailMenu(runtime.webContents, browserEmailHistory, () =>
-      browserVaultCapture.isHumanControlled(runtime),
+    const unregisterEmails = registerLoginEmailMenu(
+      runtime.webContents,
+      browserEmailHistory,
+      browserVault,
+      () => isHumanBrowserPage(runtime.webContents),
+      () => ({
+        release: browserManager.beginHumanBrowserOperation(runtime.threadId),
+        ready: browserHostPipeServer?.waitForIdle(runtime.threadId) ?? Promise.resolve(),
+      }),
     );
     return () => {
       unregisterEmails();
@@ -711,6 +719,13 @@ const browserManager = new DesktopBrowserManager({
     );
   },
 });
+function isHumanBrowserPage(contents: Electron.WebContents): boolean {
+  return (
+    browserManager.isVisibleBrowserContents(contents) &&
+    browserVaultCapture.isHumanControlled(contents)
+  );
+}
+
 let browserHostPipeServer: BrowserHostPipeServer | null = null;
 let appSnapManager: DesktopAppSnapManager | null = null;
 let configuredUpdaterCacheDirName: string | null = null;
@@ -6740,9 +6755,17 @@ if (hasSingleInstanceLock) {
       // Install the session-owned proxy before anything can create or navigate browser
       // pages. It does not feed the backend, so bootstrap starts the backend meanwhile
       // and holds the first window until the guard is up; a failure is awaited below.
-      const browserNetworkGuardReady = getBetterwrightNetworkGuard(
-        session.fromPartition(BROWSER_SESSION_PARTITION),
-      ).initialize();
+      configureBrowserTouchId(
+        desktopIdentity.bundleId,
+        packagedMetadata?.synaraWebAuthnAccessGroup,
+      );
+      const browserSession = session.fromPartition(BROWSER_SESSION_PARTITION);
+      const disposePasskeyAccounts = registerBrowserPasskeyAccounts(
+        browserSession,
+        isHumanBrowserPage,
+      );
+      app.once("will-quit", disposePasskeyAccounts);
+      const browserNetworkGuardReady = getBetterwrightNetworkGuard(browserSession).initialize();
       // Observed below and in bootstrap; this keeps an early return from leaving it unobserved.
       browserNetworkGuardReady.catch(() => undefined);
       productAnalytics.start();
