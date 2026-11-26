@@ -280,7 +280,8 @@ export async function prepareChatSendWorkspace({
   }
 
   // The branch query can finish just after the user chooses New worktree. Use the
-  // resolved active branch at send time instead of rejecting an otherwise valid fast send.
+  // resolved active branch at send time instead of rejecting an otherwise valid fast send,
+  // reading the project's checkout when the chat has no base branch of its own yet.
   if (
     isFirstMessage &&
     nextThreadEnvMode === "worktree" &&
@@ -288,6 +289,12 @@ export async function prepareChatSendWorkspace({
     !nextThreadBranch
   ) {
     nextThreadBranch = activeRootBranch ?? null;
+    if (!nextThreadBranch && gitBranchSourceCwd) {
+      const gitStatus = await queryClient
+        .ensureQueryData(gitStatusQueryOptions(gitBranchSourceCwd))
+        .catch(() => null);
+      nextThreadBranch = gitStatus?.branch ?? null;
+    }
   }
 
   // A settled local thread keeps its historical branch until the user resumes it, so the

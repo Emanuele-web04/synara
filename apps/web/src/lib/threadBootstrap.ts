@@ -46,6 +46,9 @@ export interface InheritedThreadContext {
 // Carry the active surface's branch/worktree/env into a new thread bootstrap.
 // A pending draft wins outright; otherwise we derive the env mode from the
 // active thread's worktree so a fresh thread inherits the same workspace shape.
+//
+// This is the terminal rule, not the chat rule: a shell means the workspace on
+// screen. A chat takes its workspace from the project, never from the open chat.
 export function resolveInheritedThreadContext(input: {
   activeThread:
     | Pick<Thread, "branch" | "worktreePath" | "workingDirectory" | "envMode">
