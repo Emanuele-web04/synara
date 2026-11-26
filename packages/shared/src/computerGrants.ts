@@ -14,6 +14,7 @@ import type {
   ComputerBuildSignature,
   ComputerPermission,
   DesktopAppSnapPermissionKind,
+  DesktopAppSnapSettingsPane,
   DesktopAppSnapState,
 } from "@synara/contracts";
 
@@ -76,12 +77,112 @@ export function computerGrantsBlockControl(permissions: readonly ComputerPermiss
   return COMPUTER_BLOCKING_PERMISSIONS.some((permission) => permissions.includes(permission));
 }
 
-/** Exactly what System Settings › Privacy & Security calls each grant. */
-export const COMPUTER_PERMISSION_LABELS: Readonly<Record<ComputerPermission, string>> = {
+/** Which page holds a grant on a macOS; the i18n key for its name is `settings:<key>`. */
+export type ComputerPermissionPaneKey =
+  | "accessibility"
+  | "deviceControlAndDataAccess"
+  | "screenRecording"
+  | "screenAndSystemAudioRecording"
+  | "inputMonitoring";
+
+/** The grant's own name, which macOS has not renamed even where it renamed the page. */
+const COMPUTER_PERMISSION_GRANT_LABELS: Readonly<Record<ComputerPermission, string>> = {
   accessibility: "Accessibility",
   screenRecording: "Screen Recording",
   inputMonitoring: "Input Monitoring",
 };
+
+/**
+ * The macOS a version string names, or null when the string is not one.
+ *
+ * `process.getSystemVersion()` is the only source that answers: the Chromium
+ * user agent a renderer sees is frozen at 10.15.7. The minor version is kept
+ * because pages have been renamed between minors — 27.3 splits the one 27.0
+ * calls a single page.
+ */
+function macOsVersion(version: string | null | undefined): { major: number; minor: number } | null {
+  const match = /^(\d+)(?:\.(\d+))?(?:\.\d+)*$/.exec(version?.trim() ?? "");
+  if (!match) return null;
+  const major = Number.parseInt(match[1]!, 10);
+  const minor = Number.parseInt(match[2] ?? "0", 10);
+  // macOS 11 was the first versioned 11; anything below it is either the frozen
+  // "10.15.7" a Chromium user agent reports or not a macOS at all, and reading
+  // it as a real version would name a modern Mac's pages with 2019's names.
+  if (!Number.isSafeInteger(major) || major < 11 || !Number.isSafeInteger(minor)) return null;
+  return { major, minor };
+}
+
+/**
+ * Which page holds a grant on this macOS, so a surface can name the page the
+ * user has to open instead of the page an older version had.
+ *
+ * Thresholds come from the pages and from Apple's notes: macOS 27.0.1 opens
+ * "Device Control and Data Access" for `Privacy_Accessibility`, and the
+ * November 2026 notes say 27.3 splits that page into "System & App Protection
+ * Override" and "Accessibility" — the latter is the grant's own name, and it is
+ * the one this answers with from 27.3 on because a deep link opens one pane;
+ * `computerPermissionSplitPaneMessageKey` names the sibling. Sequoia renamed
+ * screen recording; input monitoring has never moved. A null version keeps the
+ * pre-rename names, the only fallback that is a real page on some supported
+ * macOS.
+ */
+export function computerPermissionPaneKey(
+  permission: ComputerPermission,
+  osVersion?: string | null,
+): ComputerPermissionPaneKey {
+  const version = macOsVersion(osVersion) ?? { major: 0, minor: 0 };
+  switch (permission) {
+    case "accessibility":
+      return version.major === 27 && version.minor < 3
+        ? "deviceControlAndDataAccess"
+        : "accessibility";
+    case "screenRecording":
+      return version.major >= 15 ? "screenAndSystemAudioRecording" : "screenRecording";
+    case "inputMonitoring":
+      return "inputMonitoring";
+  }
+}
+
+/**
+ * The second page a split leaves the same grant on, or null where one page holds
+ * it. macOS 27.3 splits Device Control and Data Access into "System & App
+ * Protection Override" and "Accessibility", and Apple's November 2026 note does
+ * not say which half files a given app, so copy that names one page for 27.3 on
+ * has to name the other as well. Both titles come from that announcement: no
+ * 27.3 build was available to read them off a window.
+ */
+export function computerPermissionSplitPaneMessageKey(
+  permission: ComputerPermission,
+  osVersion?: string | null,
+): string | null {
+  const version = macOsVersion(osVersion);
+  if (permission !== "accessibility" || version === null) return null;
+  const split = version.major > 27 || (version.major === 27 && version.minor >= 3);
+  return split ? "settings:systemAndAppProtectionOverride" : null;
+}
+
+/** The `settings:` message a page's name is translated by; `settings:<key>`. */
+export function computerPermissionPaneMessageKey(
+  permission: ComputerPermission,
+  osVersion?: string | null,
+): string {
+  return `settings:${computerPermissionPaneKey(permission, osVersion)}`;
+}
+
+/**
+ * The grant a System Settings pane holds, for surfaces that hold a pane id —
+ * the settings rows and the guide — rather than a grant.
+ */
+export function computerPermissionForPane(pane: DesktopAppSnapSettingsPane): ComputerPermission {
+  switch (pane) {
+    case "accessibility":
+      return "accessibility";
+    case "input-monitoring":
+      return "inputMonitoring";
+    case "screen-recording":
+      return "screenRecording";
+  }
+}
 
 /**
  * The service name `tccutil` files each grant under, which is not the label:
@@ -106,10 +207,15 @@ export function sortComputerPermissions(
   return COMPUTER_PERMISSIONS.filter((permission) => permissions.includes(permission));
 }
 
-/** "Accessibility", or "Accessibility and Screen Recording". */
+/**
+ * "Accessibility", or "Accessibility and Screen Recording" — the grant as macOS
+ * files it, for prose about the grant itself. Copy that names a page asks
+ * `computerPermissionPaneMessageKey`, because pages get renamed and grants
+ * do not.
+ */
 export function listComputerPermissions(permissions: readonly ComputerPermission[]): string {
   const labels = sortComputerPermissions(permissions).map(
-    (permission) => COMPUTER_PERMISSION_LABELS[permission],
+    (permission) => COMPUTER_PERMISSION_GRANT_LABELS[permission],
   );
   if (labels.length === 0) return "";
   if (labels.length === 1) return labels[0]!;
@@ -171,10 +277,12 @@ export function computerPermissionSetupMessage(
   buildSignature: ComputerBuildSignature,
   bundleId?: string | undefined,
 ): string {
+  // No sub-path: this string is built where the reader's macOS is unknown, and
+  // the page names differ by version.
   const labels = listComputerPermissions(permissions);
   const base =
     labels.length > 0
-      ? `Synara needs ${labels} to control this Mac. Turn Synara on in System Settings › Privacy & Security › ${labels}, then try again.`
+      ? `Synara needs ${labels} to control this Mac. Turn Synara on in System Settings › Privacy & Security, then try again.`
       : "Synara needs a macOS privacy permission to control this Mac. Grant it in System Settings › Privacy & Security, then try again.";
   const advice = computerStaleGrantAdvice(permissions, buildSignature, bundleId);
   return advice ? `${base} ${advice}` : base;

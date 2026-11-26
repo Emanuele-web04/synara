@@ -4,20 +4,21 @@
 // Layer: Settings UI component
 
 import type { DesktopAppSnapSettingsPane } from "@synara/contracts";
+import {
+  computerPermissionForPane,
+  computerPermissionPaneMessageKey,
+  computerPermissionSplitPaneMessageKey,
+} from "@synara/shared/computerGrants";
 
 import { Button } from "~/components/ui/button";
 import { Spinner } from "~/components/ui/spinner";
 import { useTranslation } from "~/i18n";
 
-const GUIDE_PANE_LABELS: Record<DesktopAppSnapSettingsPane, string> = {
-  accessibility: "settings:accessibility",
-  "input-monitoring": "settings:inputMonitoring",
-  "screen-recording": "settings:screenRecording",
-};
-
 export function AppSnapPermissionGuide(props: {
   pane: DesktopAppSnapSettingsPane;
   appDisplayName: string;
+  /** macOS the app runs on; the pane was renamed twice and the copy follows it. */
+  osVersion?: string | null;
   waiting: boolean;
   onOpenSettings: () => void;
   onRestart: () => void;
@@ -25,6 +26,11 @@ export function AppSnapPermissionGuide(props: {
   const { t } = useTranslation();
 
   const app = props.appDisplayName;
+  const permission = computerPermissionForPane(props.pane);
+  const paneLabel = t(computerPermissionPaneMessageKey(permission, props.osVersion));
+  // One deep link opens one pane, so where a release split the grant across two
+  // pages the second is named in the step that follows.
+  const splitPaneLabel = computerPermissionSplitPaneMessageKey(permission, props.osVersion);
   const steps = [
     <Button
       key="open-settings"
@@ -33,9 +39,12 @@ export function AppSnapPermissionGuide(props: {
       variant="outline"
       onClick={props.onOpenSettings}
     >
-      {t("settings:openSettings", { value0: t(GUIDE_PANE_LABELS[props.pane]) })}
+      {t("settings:openSettings", { value0: paneLabel })}
     </Button>,
     t("settings:permissionGuideEnableInstalledApp", { app }),
+    ...(splitPaneLabel === null
+      ? []
+      : [t("settings:permissionGuideSplitGrant", { app, value0: t(splitPaneLabel) })]),
     t("settings:permissionGuideCompleteAuthentication"),
   ];
 

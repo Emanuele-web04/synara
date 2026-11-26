@@ -48,6 +48,8 @@ import { Input } from "~/components/ui/input";
 import { Switch } from "~/components/ui/switch";
 import { useProvisionComputer } from "~/hooks/useProvisionComputer";
 import { useRefreshOnWindowReturn } from "~/hooks/useRefreshOnWindowReturn";
+import { computerPermissionPaneMessageKey } from "@synara/shared/computerGrants";
+
 import {
   AppSnapPermissionSection,
   COMPUTER_PERMISSION_PANES,
@@ -376,11 +378,17 @@ function LocalComputerSettingsPanel({
     : captureBlocked
       ? t("settings:screenCaptureIsNotAllowedYet")
       : availabilityView.title;
+  const capturePageName = t(
+    computerPermissionPaneMessageKey(
+      "screenRecording",
+      typeof window === "undefined" ? undefined : window.desktopBridge?.systemVersion,
+    ),
+  );
   const attentionDescription =
     nativePermissionSetupError ??
     (captureBlocked
       ? backend === COMPUTER_MAC_BACKEND
-        ? t("settings:theAgentCanActOnTheDesktopButCannot2")
+        ? t("settings:theAgentCanActOnTheDesktopButCannot2", { value0: capturePageName })
         : t("settings:theAgentCanActOnTheDesktopButCannot")
       : availabilityView.description);
   const attentionTone = cn(

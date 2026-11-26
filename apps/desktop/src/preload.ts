@@ -152,6 +152,7 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   productAnalytics: productAnalyticsBridge,
   ...(betaDiagnosticsBridge ? { betaDiagnostics: betaDiagnosticsBridge } : {}),
   getWsUrl: getDesktopWsUrl,
+  systemVersion: process.getSystemVersion(),
   whenBackendReady: () => ipcRenderer.invoke(IPC.backendReady),
   remoteResourceUrl: (hostId, reference) =>
     ipcRenderer.sendSync(IPC.remoteResourceUrl, hostId, reference),

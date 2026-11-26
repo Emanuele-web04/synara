@@ -1061,6 +1061,8 @@ export interface DesktopBridge {
     revealApp: () => Promise<boolean>;
   };
   getWsUrl: () => string | null;
+  /** `process.getSystemVersion()` ("27.0.1"); a renderer's user agent is frozen at 10.15.7. */
+  systemVersion?: string;
   /** Resolves once the desktop has seen its backend become ready, or stop trying. */
   whenBackendReady?: () => Promise<void>;
   remoteResourceUrl?: (hostId: string, reference: RemoteResourceReference) => string | null;

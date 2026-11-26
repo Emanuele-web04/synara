@@ -1,93 +1,11 @@
 import AppKit
 import ApplicationServices
 
-/// Synara permission coach: draggable app chip next to System Settings.
-/// Drag follows zats/permiso's AppDragSourceView. Panel moves by background;
-/// the chip opts out so dragging it never moves the coach.
-
-final class AppDragView: NSView, NSPasteboardItemDataProvider, NSDraggingSource {
-    private let dragURL: URL
-    private let titleField: NSTextField
-    private let iconView = NSImageView()
-    private let gripView = NSImageView()
-    init(frame frameRect: NSRect, appName: String, appPath: String, toolTipText: String) {
-        dragURL = URL(fileURLWithPath: appPath)
-        titleField = NSTextField(labelWithString: appName)
-        super.init(frame: frameRect)
-        wantsLayer = true
-        layer?.cornerRadius = 8
-        layer?.cornerCurve = .continuous
-        layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
-        layer?.borderColor = NSColor.separatorColor.cgColor
-        layer?.borderWidth = 0.5
-        gripView.image = NSImage(systemSymbolName: "line.3.horizontal", accessibilityDescription: nil)
-        gripView.contentTintColor = .tertiaryLabelColor
-        gripView.imageScaling = .scaleProportionallyUpOrDown
-        addSubview(gripView)
-        if let icon = NSWorkspace.shared.icon(forFile: appPath) as NSImage?,
-           !icon.isTemplate, icon.size.width > 1 {
-            iconView.image = icon
-        } else if let symbol = NSImage(systemSymbolName: "app.fill", accessibilityDescription: nil) {
-            iconView.image = symbol
-            iconView.contentTintColor = .labelColor
-        }
-        iconView.imageScaling = .scaleProportionallyUpOrDown
-        addSubview(iconView)
-        titleField.font = NSFont.systemFont(ofSize: 13, weight: .medium)
-        titleField.textColor = .labelColor
-        titleField.alignment = .left
-        addSubview(titleField)
-        toolTip = toolTipText
-    }
-    @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-    override func viewDidChangeEffectiveAppearance() {
-        layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
-        layer?.borderColor = NSColor.separatorColor.cgColor
-    }
-    override func layout() {
-        super.layout()
-        let icon: CGFloat = 16, inset: CGFloat = 8, gap: CGFloat = 4
-        gripView.frame = NSRect(x: inset, y: (bounds.height - 12) / 2, width: 12, height: 12)
-        let iconX = inset + 14 + gap
-        iconView.frame = NSRect(x: iconX, y: (bounds.height - icon) / 2, width: icon, height: icon)
-        let titleX = iconX + icon + gap
-        titleField.frame = NSRect(x: titleX, y: (bounds.height - 20) / 2, width: max(0, bounds.width - titleX - inset), height: 20)
-    }
-    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-    override var mouseDownCanMoveWindow: Bool { false }
-    override func hitTest(_ point: NSPoint) -> NSView? {
-        guard bounds.contains(point) else { return nil }
-        return self
-    }
-    override func mouseDown(with event: NSEvent) {
-        let item = NSPasteboardItem()
-        item.setDataProvider(self, forTypes: [.fileURL])
-        let fileItem = NSDraggingItem(pasteboardWriter: item)
-        fileItem.setDraggingFrame(bounds, contents: dragImage())
-        let session = beginDraggingSession(with: [fileItem], event: event, source: self)
-        session.animatesToStartingPositionsOnCancelOrFail = true
-    }
-    func pasteboard(_ pasteboard: NSPasteboard?, item: NSPasteboardItem, provideDataForType type: NSPasteboard.PasteboardType) {
-        guard type == .fileURL else { return }
-        item.setData(dragURL.dataRepresentation, forType: .fileURL)
-    }
-    func draggingSession(_ session: NSDraggingSession, willBeginAt screenPoint: NSPoint) { isHidden = true }
-    func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) { isHidden = false }
-    func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation { .copy }
-    private func dragImage() -> NSImage {
-        let image = NSImage(size: bounds.size)
-        image.lockFocus()
-        displayIgnoringOpacity(bounds, in: NSGraphicsContext.current!)
-        image.unlockFocus()
-        return image
-    }
-}
-
+/// Synara permission coach: a card that floats under System Settings and says
+/// which switch to turn on, and what to do when macOS has not listed the app.
 @MainActor
 final class GrantCoach: NSObject {
     private let appName: String
-    private let appPath: String
     private let pane: String
     private var isPresented = false
     private var settingsOpen = false
@@ -98,21 +16,16 @@ final class GrantCoach: NSObject {
     private var onGranted: (() -> Void)?
     private var onDismissed: (() -> Void)?
     private var lastFollow = CGRect.null
-    init(appName: String, appPath: String, pane: String) {
+    init(appName: String, pane: String) {
         self.appName = appName
-        self.appPath = appPath
         self.pane = pane
         super.init()
     }
-    private var paneTitle: String {
-        switch pane {
-        case "accessibility": "Accessibility"
-        case "input-monitoring": "Input Monitoring"
-        default: "Screen Recording"
-        }
-    }
     private var headline: String {
-        "Drop \(appName) on the list above."
+        "Turn on \(appName) in the list above."
+    }
+    private var hint: String {
+        "Not listed? Press Add and choose \(appName)."
     }
     func present(onGranted: @escaping () -> Void, onDismissed: (() -> Void)? = nil) {
         self.onGranted = onGranted
@@ -181,8 +94,9 @@ final class GrantCoach: NSObject {
         }
     }
     private func build() {
-        let width: CGFloat = 360, pad: CGFloat = 16, gap: CGFloat = 12, row: CGFloat = 20, chipHeight: CGFloat = 36
-        let height = pad + row + gap + chipHeight + pad
+        let width: CGFloat = 360, pad: CGFloat = 16, arrow: CGFloat = 20
+        let row: CGFloat = 20, lineGap: CGFloat = 4
+        let height = pad + row + lineGap + row + pad
         let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: width, height: height),
                             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.isFloatingPanel = true
@@ -201,23 +115,23 @@ final class GrantCoach: NSObject {
         card.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
         card.layer?.borderColor = NSColor.separatorColor.cgColor
         panel.contentView = card
-        let arrowY = height - pad - row
-        let arrow = NSImageView(frame: NSRect(x: pad, y: arrowY, width: row, height: row))
-        arrow.image = NSImage(systemSymbolName: "arrow.up", accessibilityDescription: nil)
-        arrow.contentTintColor = .controlAccentColor
-        arrow.imageScaling = .scaleProportionallyUpOrDown
-        card.addSubview(arrow)
+        let headlineY = height - pad - row
+        let arrowView = NSImageView(frame: NSRect(x: pad, y: headlineY, width: arrow, height: row))
+        arrowView.image = NSImage(systemSymbolName: "arrow.up", accessibilityDescription: nil)
+        arrowView.contentTintColor = .controlAccentColor
+        arrowView.imageScaling = .scaleProportionallyUpOrDown
+        card.addSubview(arrowView)
         let title = NSTextField(labelWithString: headline)
         title.font = NSFont.systemFont(ofSize: 13, weight: .medium)
         title.textColor = .labelColor
         title.lineBreakMode = .byTruncatingTail
-        title.frame = NSRect(x: pad + row + 8, y: arrowY, width: width - pad * 2 - row * 2 - 16, height: row)
+        title.frame = NSRect(x: pad + arrow + 8, y: headlineY, width: width - pad * 2 - arrow * 2 - 16, height: row)
         card.addSubview(title)
         // A direct close action also works before keyboard-monitoring permission
         // is granted, while System Settings keeps the keyboard focus.
         let closeButton = NSButton(title: "", target: self, action: #selector(closeGuide))
         closeButton.image = NSImage(systemSymbolName: "xmark", accessibilityDescription: nil)
-        closeButton.frame = NSRect(x: width - pad - row, y: arrowY, width: row, height: row)
+        closeButton.frame = NSRect(x: width - pad - arrow, y: headlineY, width: arrow, height: row)
         closeButton.isBordered = false
         closeButton.refusesFirstResponder = true
         closeButton.imagePosition = .imageOnly
@@ -225,10 +139,14 @@ final class GrantCoach: NSObject {
         closeButton.toolTip = "Close permission guide"
         closeButton.setAccessibilityLabel("Close permission guide")
         card.addSubview(closeButton)
-        let chip = AppDragView(frame: NSRect(x: pad, y: pad, width: width - pad * 2, height: chipHeight),
-                               appName: appName, appPath: appPath,
-                               toolTipText: "Drag \(appName) onto the \(paneTitle) list")
-        card.addSubview(chip)
+        let hintView = NSTextField(labelWithString: hint)
+        hintView.font = NSFont.systemFont(ofSize: 12)
+        hintView.textColor = .secondaryLabelColor
+        hintView.lineBreakMode = .byTruncatingTail
+        hintView.frame = NSRect(x: pad + arrow + 8, y: pad, width: width - pad * 2 - arrow - 8, height: row)
+        hintView.toolTip = "Not listed? Press Add at the bottom of the list and choose \(appName)."
+        card.addSubview(hintView)
+        panel.setAccessibilityLabel("Turn on \(appName) in the permission list")
         self.panel = panel
     }
     private func follow() {

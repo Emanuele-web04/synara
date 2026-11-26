@@ -2206,8 +2206,8 @@ function resolveAppSnapHelperPath(): string {
   return Path.resolve(__dirname, "..", ".electron-runtime", "appsnap", "synara-appsnap-helper");
 }
 
-/// The .app bundle that owns this process; the permission guide drags this
-/// bundle into the System Settings privacy lists.
+/// The .app bundle that owns this process, which is the copy the permission
+/// guide asks the user to turn on in the System Settings privacy lists.
 function resolveAppSnapAppBundlePath(): string {
   let directory = Path.dirname(app.getPath("exe"));
   while (directory !== Path.dirname(directory)) {

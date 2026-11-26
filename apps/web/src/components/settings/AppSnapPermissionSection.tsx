@@ -13,6 +13,11 @@ import {
 } from "@synara/contracts";
 import { useEffect, useRef, useState } from "react";
 
+import {
+  computerPermissionForPane,
+  computerPermissionPaneMessageKey,
+} from "@synara/shared/computerGrants";
+
 import { createLatestAppSnapRequestGuard } from "~/appSnap.logic";
 import { DisclosureRegion } from "~/components/ui/DisclosureRegion";
 import { Button } from "~/components/ui/button";
@@ -21,11 +26,10 @@ import { StatusDot } from "~/components/ui/status-chip";
 import { toastManager } from "~/components/ui/toast";
 import { AppSnapPermissionGuide } from "./AppSnapPermissionGuide";
 import { SettingsRow, SettingsSection } from "./SettingsPanelPrimitives";
-import { useTranslation } from "~/i18n";
+import { t, useTranslation } from "~/i18n";
 
 export interface AppSnapPermissionPaneDescriptor {
   readonly pane: DesktopAppSnapSettingsPane;
-  readonly title: string;
   readonly description: string;
 }
 
@@ -33,12 +37,10 @@ export interface AppSnapPermissionPaneDescriptor {
 export const APP_SNAP_PERMISSION_PANES: readonly AppSnapPermissionPaneDescriptor[] = [
   {
     pane: "input-monitoring",
-    title: "settings:inputMonitoring",
     description: "settings:letsSynaraNoticeTheDoubleOptionChordWhileAnother",
   },
   {
     pane: "screen-recording",
-    title: "settings:screenRecording",
     description: "settings:letsSynaraCaptureAnImageOfTheFrontmostWindow",
   },
 ];
@@ -51,17 +53,14 @@ export const APP_SNAP_PERMISSION_PANES: readonly AppSnapPermissionPaneDescriptor
 export const COMPUTER_PERMISSION_PANES: readonly AppSnapPermissionPaneDescriptor[] = [
   {
     pane: "accessibility",
-    title: "settings:accessibility",
     description: "settings:letsSynaraMoveThePointerClickAndTypeOn",
   },
   {
     pane: "screen-recording",
-    title: "settings:screenRecording",
     description: "settings:letsSynaraCaptureWindowsAndTheDesktopSoThe",
   },
   {
     pane: "input-monitoring",
-    title: "settings:inputMonitoring",
     description: "settings:letsSynaraDetectEscapeAndPauseWhenYouTake",
   },
 ];
@@ -74,11 +73,14 @@ const PERMISSION_LABELS: Record<DesktopAppSnapPermission, string> = {
   unknown: "common:common_unknown",
 };
 
-const PANE_LABELS: Record<DesktopAppSnapSettingsPane, string> = {
-  accessibility: "settings:accessibility",
-  "input-monitoring": "settings:inputMonitoring",
-  "screen-recording": "settings:screenRecording",
-};
+/** The page holding a pane's grant, named for the macOS the app is running. */
+function paneName(
+  translate: typeof t,
+  pane: DesktopAppSnapSettingsPane,
+  osVersion: string | undefined,
+): string {
+  return translate(computerPermissionPaneMessageKey(computerPermissionForPane(pane), osVersion));
+}
 
 function AppSnapPermissionBadge({ permission }: { permission: DesktopAppSnapPermission }) {
   const { t } = useTranslation();
@@ -200,6 +202,7 @@ export function AppSnapPermissionSection({
   const requestGuardRef = useRef(createLatestAppSnapRequestGuard());
   const onStateChangeRef = useRef(onStateChange);
   onStateChangeRef.current = onStateChange;
+  const osVersion = typeof window === "undefined" ? undefined : window.desktopBridge?.systemVersion;
 
   // macOS fires no event when a TCC permission changes, so an open guide polls
   // the helper's preflight until the grant shows up (or the user restarts).
@@ -224,7 +227,7 @@ export function AppSnapPermissionSection({
     };
   }, [guidePane, permissionKinds]);
 
-  // The floating drag-in coach lives for exactly as long as the inline guide.
+  // The floating permission coach lives for exactly as long as the inline guide.
   // Only hide what this surface showed: mounting with no guide must not close a
   // coach a startPermissionSetup session is still driving. Unmounting with a
   // shown guide hides it, so navigating away cannot strand the coach on screen;
@@ -251,14 +254,16 @@ export function AppSnapPermissionSection({
   useEffect(() => {
     if (!guidePane) return;
     if (appSnapPanePermission(state, guidePane) !== "granted") return;
-    const paneLabel = t(PANE_LABELS[guidePane]);
     onGuidePaneChange(null);
     toastManager.add({
       type: "success",
       title: t("settings:permissionGranted"),
-      description: t("settings:isReadyFor", { value0: paneLabel, value1: feature }),
+      description: t("settings:isReadyFor", {
+        value0: paneName(t, guidePane, osVersion),
+        value1: feature,
+      }),
     });
-  }, [guidePane, state, feature, onGuidePaneChange, t]);
+  }, [guidePane, state, feature, onGuidePaneChange, t, osVersion]);
 
   async function recheckPermissions() {
     const bridge = window.desktopBridge?.appSnap;
@@ -293,13 +298,13 @@ export function AppSnapPermissionSection({
 
   return (
     <SettingsSection title="settings:macOSPermissions">
-      {panes.map(({ pane, title, description }) => {
+      {panes.map(({ pane, description }) => {
         const permission = appSnapPanePermission(state, pane);
         const guideOpen = guidePane === pane;
         return (
           <SettingsRow
             key={pane}
-            title={t(title)}
+            title={paneName(t, pane, osVersion)}
             description={t(description)}
             control={
               <div className="flex items-center gap-2">
@@ -330,6 +335,7 @@ export function AppSnapPermissionSection({
                 <AppSnapPermissionGuide
                   pane={pane}
                   appDisplayName={state.appDisplayName}
+                  osVersion={osVersion ?? null}
                   waiting={permission !== "granted"}
                   onOpenSettings={() => {
                     void window.desktopBridge?.appSnap

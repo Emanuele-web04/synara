@@ -1697,7 +1697,7 @@ describe("AppSnap permission guide", () => {
   });
 
   it("forwards guide state events to the renderer", async () => {
-    const { manager, guideChild, onPermissionGuideState, dispose } = await createGuideManager();
+    const { guideChild, onPermissionGuideState, dispose } = await createGuideManager();
     try {
       guideChild.stdout.write(`${JSON.stringify({ type: "permission-guide", state: "shown" })}\n`);
       await flushPromises();
@@ -1728,7 +1728,7 @@ describe("AppSnap permission guide", () => {
   });
 
   it("forwards a crash/exit as closed when no final state was emitted", async () => {
-    const { manager, guideChild, onPermissionGuideState, dispose } = await createGuideManager();
+    const { guideChild, onPermissionGuideState, dispose } = await createGuideManager();
     try {
       guideChild.stdout.write(`${JSON.stringify({ type: "permission-guide", state: "shown" })}\n`);
       await flushPromises();
@@ -1746,8 +1746,8 @@ describe("AppSnap permission guide", () => {
   it("never raises an OS prompt when a guide opens", async () => {
     // No macOS prompt is ever raised by a guide: the inline steps plus the
     // coach are the whole flow. A denied prompt cannot be re-raised, while the
-    // Settings page (toggle, or drag-and-drop where the list accepts it)
-    // always works.
+    // Settings page itself (its switch, or its Add button for an app it never
+    // listed) always works.
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
     const captureDirectory = mkdtempSync(join(tmpdir(), "synara-appsnap-guide-ax-"));
     const guideChild = createFakeChildProcess();

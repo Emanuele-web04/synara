@@ -304,7 +304,11 @@ describe("AppSnapSettingsPanel", () => {
     await expect
       .element(mounted.getByRole("button", { name: "Open Input Monitoring settings" }))
       .toBeVisible();
-    expect(mounted.getByText("Find Synara (Dev) in the list and turn on its toggle.")).toBeTruthy();
+    expect(
+      mounted.getByText(
+        "Turn Synara (Dev) on in the list. If Synara (Dev) is not listed, press Add and choose it from Applications.",
+      ),
+    ).toBeTruthy();
 
     await vi.waitFor(() => {
       expect(openPermissionSettings).toHaveBeenCalledWith("input-monitoring");

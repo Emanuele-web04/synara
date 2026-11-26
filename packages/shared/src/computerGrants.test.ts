@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  computerPermissionPaneKey,
+  computerPermissionPaneMessageKey,
+  computerPermissionSplitPaneMessageKey,
   computerPermissionSetupMessage,
   computerGrantsBlockControl,
   computerStaleGrantAdvice,
@@ -117,5 +120,58 @@ describe("computerGrantsBlockControl", () => {
     expect(computerGrantsBlockControl(["screenRecording"])).toBe(false);
     expect(computerGrantsBlockControl(["inputMonitoring"])).toBe(true);
     expect(computerGrantsBlockControl([])).toBe(false);
+  });
+});
+
+describe("naming the System Settings pane a grant lives in", () => {
+  it("names the page each macOS opens, and the pre-rename page when it cannot read one", () => {
+    // Verified against the panes on macOS 27.0.1: `Privacy_Accessibility` opens
+    // a page titled "Device Control and Data Access", `Privacy_ScreenCapture`
+    // one titled "Screen & System Audio Recording". Copy that says
+    // "Accessibility" sends the user hunting a page that is not there.
+    expect(computerPermissionPaneKey("accessibility", "27.0.1")).toBe("deviceControlAndDataAccess");
+    expect(computerPermissionPaneKey("accessibility", "26.5.1")).toBe("accessibility");
+    expect(computerPermissionPaneKey("screenRecording", "15.0")).toBe(
+      "screenAndSystemAudioRecording",
+    );
+    expect(computerPermissionPaneKey("screenRecording", "14.6")).toBe("screenRecording");
+    expect(computerPermissionPaneKey("inputMonitoring", "27.0.1")).toBe("inputMonitoring");
+    for (const version of [undefined, null, "", "26A434", "27.0.1 (26A434)", "10.15.7"]) {
+      expect(computerPermissionPaneKey("screenRecording", version)).toBe("screenRecording");
+    }
+  });
+
+  it("names the sibling page from 27.3 on, where one release splits the grant in two", () => {
+    // Apple's 16 November 2026 note splits Device Control and Data Access into
+    // "System & App Protection Override" and "Accessibility" and does not say
+    // which half files an app. Both titles come from that note: no 27.3 build
+    // was available to read them off a window.
+    expect(computerPermissionSplitPaneMessageKey("accessibility", "27.2")).toBeNull();
+    for (const version of ["27.3", "27.3.1", "27.3.2", "27.4", "28.0"]) {
+      expect(computerPermissionSplitPaneMessageKey("accessibility", version)).toBe(
+        "settings:systemAndAppProtectionOverride",
+      );
+    }
+    expect(computerPermissionSplitPaneMessageKey("accessibility", undefined)).toBeNull();
+    expect(computerPermissionSplitPaneMessageKey("screenRecording", "27.3")).toBeNull();
+  });
+
+  it("keeps grant names for prose about the grant, whatever macOS calls the page", () => {
+    // "macOS may ask to allow Screen Recording" describes the request, and no
+    // prompt has ever been titled after the page.
+    expect(computerPermissionPaneMessageKey("accessibility", "27.0.1")).toBe(
+      "settings:deviceControlAndDataAccess",
+    );
+  });
+
+  it("reads the minor version, because a page has been renamed mid-major", () => {
+    // Apple's November 2026 notes split Device Control and Data Access in 27.3,
+    // and one of the two halves carries the name "Accessibility" again. Naming a
+    // page a release removed is the bug this resolver exists to prevent; naming
+    // one that release has is why the minor version is read at all. Which half
+    // holds the grant is an expectation, not something this resolver can see.
+    expect(computerPermissionPaneKey("accessibility", "27.2")).toBe("deviceControlAndDataAccess");
+    expect(computerPermissionPaneKey("accessibility", "27.3.1")).toBe("accessibility");
+    expect(computerPermissionPaneKey("accessibility", "28.0")).toBe("accessibility");
   });
 });
