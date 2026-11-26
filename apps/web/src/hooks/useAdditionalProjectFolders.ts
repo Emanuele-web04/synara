@@ -6,6 +6,7 @@
 
 import { findProjectFolderProblem } from "@synara/shared/projectFolders";
 import { useState } from "react";
+import { useTranslation } from "~/i18n";
 
 export function useAdditionalProjectFolders(input: {
   /** The primary folder the extra ones are checked against. */
@@ -15,6 +16,7 @@ export function useAdditionalProjectFolders(input: {
   /** Why a folder cannot join the project, or null after a clean change. */
   readonly onProblem: (problem: string | null) => void;
 }) {
+  const { t } = useTranslation();
   const [additionalFolders, setAdditionalFolders] = useState<ReadonlyArray<string>>(
     input.initial ?? [],
   );
@@ -23,6 +25,10 @@ export function useAdditionalProjectFolders(input: {
   const addFolder = (folder: string): boolean => {
     const candidate = folder.trim();
     if (!candidate) return false;
+    if (candidate !== folder) {
+      input.onProblem(t("workspace:projectFolderPathWhitespaceUnsupported"));
+      return false;
+    }
     const problem = findProjectFolderProblem([input.primary, ...additionalFolders, candidate]);
     if (problem) {
       input.onProblem(problem);

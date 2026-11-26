@@ -228,6 +228,7 @@ function EditProjectForm({
             onRemove={removeFolder}
             addRow={
               <ProjectFolderAddRow
+                browse={isElectron ? undefined : readNativeApi()?.filesystem.browse}
                 picker={isElectron}
                 disabled={saving || isPickingFolder}
                 picking={isPickingFolder}

@@ -269,7 +269,11 @@ import type {
   ProjectWriteFileInput,
   ProjectWriteFileResult,
 } from "./project";
-import type { FilesystemBrowseInput, FilesystemBrowseResult } from "./filesystem";
+import type {
+  FilesystemBrowseInput,
+  FilesystemBrowseResult,
+  FilesystemCreateFolderInput,
+} from "./filesystem";
 import type {
   DeviceAttachInput,
   DeviceBootInput,
@@ -1329,6 +1333,7 @@ export interface NativeApi {
   };
   filesystem: {
     browse: (input: FilesystemBrowseInput) => Promise<FilesystemBrowseResult>;
+    createFolder: (input: FilesystemCreateFolderInput) => Promise<string>;
   };
   studio: {
     listThreadOutputs: (

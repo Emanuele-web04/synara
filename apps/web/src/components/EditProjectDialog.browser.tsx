@@ -67,7 +67,7 @@ describe("EditProjectDialog", () => {
       await expect
         .element(page.getByRole("button", { name: "Remove ws-alpha" }))
         .not.toBeInTheDocument();
-      await page.getByRole("textbox", { name: "Additional folder path" }).fill("/tmp/ws-docs");
+      await page.getByLabelText("Additional folder path").fill("/tmp/ws-docs");
       await page.getByRole("button", { name: "Add folder" }).click();
       await page.getByRole("button", { name: "Remove ws-api" }).click();
       await page.getByRole("button", { name: "Save" }).click();
@@ -86,14 +86,14 @@ describe("EditProjectDialog", () => {
     const onSave = vi.fn();
     const screen = await renderFoldersDialog(onSave);
     try {
-      await page.getByRole("textbox", { name: "Additional folder path" }).fill("/tmp/ws-alpha/src");
+      await page.getByLabelText("Additional folder path").fill("/tmp/ws-alpha/src");
       await page.getByRole("button", { name: "Add folder" }).click();
 
       await expect
         .element(page.getByRole("alert"))
         .toHaveTextContent("src is inside ws-alpha. Add only one of them.");
       await expect
-        .element(page.getByRole("textbox", { name: "Additional folder path" }))
+        .element(page.getByLabelText("Additional folder path"))
         .toHaveValue("/tmp/ws-alpha/src");
     } finally {
       await screen.unmount();

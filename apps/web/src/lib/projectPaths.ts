@@ -38,7 +38,7 @@ function trimTrailingPathSeparators(value: string): string {
   return /^[a-zA-Z]:$/.test(trimmed) ? `${trimmed}\\` : trimmed;
 }
 
-function preferredPathSeparator(value: string): "/" | "\\" {
+export function preferredPathSeparator(value: string): "/" | "\\" {
   const absolutePathKind = getAbsolutePathKind(value);
   if (absolutePathKind === "windows") {
     return "\\";

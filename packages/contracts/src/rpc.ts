@@ -218,7 +218,11 @@ import {
   ThreadComputerState,
 } from "./computer";
 import { ComputerGetAuditHistoryInput, ComputerGetAuditHistoryResult } from "./computerAudit";
-import { FilesystemBrowseInput, FilesystemBrowseResult } from "./filesystem";
+import {
+  FilesystemBrowseInput,
+  FilesystemBrowseResult,
+  FilesystemCreateFolderInput,
+} from "./filesystem";
 import {
   GitHubProjectProvisionInput,
   GitHubProjectProvisionProgressEvent,
@@ -812,6 +816,12 @@ export const WsStudioListThreadOutputsRpc = Rpc.make(WS_METHODS.studioListThread
 export const WsFilesystemBrowseRpc = Rpc.make(WS_METHODS.filesystemBrowse, {
   payload: FilesystemBrowseInput,
   success: FilesystemBrowseResult,
+  error: WsRpcError,
+});
+
+export const WsFilesystemCreateFolderRpc = Rpc.make(WS_METHODS.filesystemCreateFolder, {
+  payload: FilesystemCreateFolderInput,
+  success: Schema.String,
   error: WsRpcError,
 });
 
@@ -2391,6 +2401,7 @@ export type WsFeatureRpc =
   | typeof WsProjectsProvisionFromGitHubRpc
   | typeof WsStudioListThreadOutputsRpc
   | typeof WsFilesystemBrowseRpc
+  | typeof WsFilesystemCreateFolderRpc
   | typeof WsShellOpenInEditorRpc
   | typeof WsGitGithubRepositoryRpc
   | typeof WsGitStatusRpc
@@ -2598,6 +2609,7 @@ const wsApplicationRpcGroup = RpcGroup.make(
   WsProjectsProvisionFromGitHubRpc,
   WsStudioListThreadOutputsRpc,
   WsFilesystemBrowseRpc,
+  WsFilesystemCreateFolderRpc,
   WsShellOpenInEditorRpc,
   WsGitGithubRepositoryRpc,
   WsGitStatusRpc,

@@ -3,6 +3,7 @@ import { Data, Effect, ServiceMap } from "effect";
 import type {
   FilesystemBrowseInput,
   FilesystemBrowseResult,
+  FilesystemCreateFolderInput,
   ProjectDiscoverScriptsInput,
   ProjectDiscoverScriptsResult,
   ProjectListDirectoriesInput,
@@ -23,6 +24,9 @@ export interface WorkspaceEntriesShape {
   readonly browse: (
     input: FilesystemBrowseInput,
   ) => Effect.Effect<FilesystemBrowseResult, WorkspaceEntriesError>;
+  readonly createFolder: (
+    input: FilesystemCreateFolderInput,
+  ) => Effect.Effect<string, WorkspaceEntriesError>;
   readonly search: (
     input: ProjectSearchEntriesInput,
   ) => Effect.Effect<ProjectSearchEntriesResult, WorkspaceEntriesError>;

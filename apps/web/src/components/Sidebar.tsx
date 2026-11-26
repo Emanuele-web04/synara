@@ -174,12 +174,15 @@ import {
   isMacNavigatorPlatform,
   newCommandId,
   newMessageId,
-  newProjectId,
   newThreadId,
   randomUUID,
 } from "../lib/utils";
 import { isOrdinarySpaceProject } from "../lib/spaces";
-import { expandProjectHomePath, joinProjectPath } from "../lib/projectPaths";
+import {
+  buildGitHubProjectProvisionRequest,
+  recoverGitHubProjectRegistration,
+  runProjectProvisionWithCancellationRecovery,
+} from "../lib/githubProjectProvisioning";
 import { reconcileDeletedThreadsFromClient } from "../lib/deletedThreadClientReconciliation";
 import { deleteProjectFromClient } from "../lib/projectDelete";
 import { persistAppStateNow, useStore } from "../store";
@@ -450,7 +453,6 @@ import {
   pruneProjectThreadListPagingForCollapsedProjects,
   recoverExistingAddProjectTarget,
   runExclusiveProjectAddition,
-  runProjectProvisionWithCancellationRecovery,
   resolveAutomationCountBadge,
   resolvePullRequestReviewBadge,
   resolveSidebarRootThreadId,
@@ -629,8 +631,6 @@ const SIDEBAR_LIST_ANIMATION_OPTIONS = {
 const EMPTY_THREAD_JUMP_LABELS = new Map<string, string>();
 const ADD_PROJECT_SNAPSHOT_CATCH_UP_MAX_ATTEMPTS = 6;
 const ADD_PROJECT_SNAPSHOT_CATCH_UP_DELAY_MS = 50;
-const GITHUB_CANCEL_RECOVERY_MAX_ATTEMPTS = 40;
-const GITHUB_CANCEL_RECOVERY_DELAY_MS = 250;
 /** Snap the optimistic segment selection back if the navigation never lands. */
 const EMPTY_PROJECT_SIDEBAR_DATA: ReadonlyMap<ProjectId, SidebarDerivedProjectData> = new Map();
 const DebugFeatureFlagsMenu = import.meta.env.DEV
@@ -2654,28 +2654,6 @@ export default function Sidebar() {
     [],
   );
 
-  // Cancellation can arrive while the server is committing project.create. Give
-  // that durable commit and its read-model projection enough time to become
-  // observable before reporting the clone as cancelled.
-  const waitForCancelledGitHubProjectInSnapshot = useCallback(
-    async (
-      api: NonNullable<ReturnType<typeof readNativeApi>>,
-      projectId: ProjectId,
-      workspaceRoot?: string,
-    ): Promise<{
-      project: OrchestrationShellSnapshot["projects"][number] | null;
-      snapshot: OrchestrationShellSnapshot | null;
-    }> =>
-      waitForRecoverableProjectInReadModel({
-        projectId,
-        ...(workspaceRoot ? { workspaceRoot } : {}),
-        loadSnapshot: () => api.orchestration.getShellSnapshot().catch(() => null),
-        maxAttempts: GITHUB_CANCEL_RECOVERY_MAX_ATTEMPTS,
-        delayMs: GITHUB_CANCEL_RECOVERY_DELAY_MS,
-      }),
-    [],
-  );
-
   const waitForProjectWorkspaceRootInSnapshot = useCallback(
     async (
       api: NonNullable<ReturnType<typeof readNativeApi>>,
@@ -4386,43 +4364,34 @@ export default function Sidebar() {
               }
               if (!project || !snapshot) return false;
 
+              if (options.signal.aborted) return true;
               handleSelectSpaceForIncomingProject(project.spaceId ?? null);
               return openExistingProjectFromSnapshot(project.id, snapshot);
             };
-            const requestedProjectId = newProjectId();
-            const requestedWorkspaceRoot = joinProjectPath(
-              expandProjectHomePath(value.destinationParent, homeDir),
-              value.directoryName,
+            const request = buildGitHubProjectProvisionRequest(
+              {
+                operationId: value.operationId,
+                repository: value.repository,
+                destinationParent: value.destinationParent,
+                directoryName: value.directoryName,
+              },
+              value.spaceId,
             );
             const provision = await runProjectProvisionWithCancellationRecovery({
               signal: options.signal,
               provision: () =>
-                api.projects.provisionFromGitHub(
-                  {
-                    operationId: value.operationId,
-                    repository: value.repository,
-                    destinationParent: value.destinationParent,
-                    directoryName: value.directoryName,
-                    commandId: newCommandId(),
-                    projectId: requestedProjectId,
-                    newProjectSpaceId: value.spaceId,
-                    defaultModelSelection: {
-                      provider: "codex",
-                      model: getDefaultModel("codex"),
-                    },
-                    createdAt: new Date().toISOString(),
-                  },
-                  { signal: options.signal },
-                ),
+                api.projects.provisionFromGitHub(request, { signal: options.signal }),
               // Cancellation can race the server's project.create commit. If that
               // commit won, recover the durable project and report success instead
               // of telling the user a registered project was cancelled.
-              recoverCommittedProject: () =>
-                openProvisionedProject(
-                  requestedProjectId,
-                  requestedWorkspaceRoot,
-                  waitForCancelledGitHubProjectInSnapshot,
-                ),
+              recoverCommittedProject: async () => {
+                const { project, snapshot } = await recoverGitHubProjectRegistration(
+                  request.projectId,
+                  () => api.orchestration.getShellSnapshot().catch(() => null),
+                );
+                if (snapshot) syncServerShellSnapshot(snapshot);
+                return Boolean(project);
+              },
             });
             if (provision.status === "recovered") return;
             if (
@@ -4464,11 +4433,9 @@ export default function Sidebar() {
       activeSpaceId,
       addProjectFromPath,
       handleSelectSpaceForIncomingProject,
-      homeDir,
       openExistingProjectFromSnapshot,
       projects,
       syncServerShellSnapshot,
-      waitForCancelledGitHubProjectInSnapshot,
       waitForProjectInSnapshot,
     ],
   );

@@ -172,7 +172,7 @@ import {
 } from "./project";
 import { StudioListThreadOutputsInput } from "./studio";
 import { OrchestrationGetInlineVisualInput } from "./inlineVisual";
-import { FilesystemBrowseInput } from "./filesystem";
+import { FilesystemBrowseInput, FilesystemCreateFolderInput } from "./filesystem";
 import {
   DEVICE_WS_CHANNELS,
   DEVICE_WS_METHODS,
@@ -317,6 +317,7 @@ export const WS_METHODS = {
 
   // Filesystem browse methods
   filesystemBrowse: "filesystem.browse",
+  filesystemCreateFolder: "filesystem.createFolder",
 
   // Shell methods
   shellOpenInEditor: "shell.openInEditor",
@@ -633,6 +634,7 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.studioListThreadOutputs, StudioListThreadOutputsInput),
 
   tagRequestBody(WS_METHODS.filesystemBrowse, FilesystemBrowseInput),
+  tagRequestBody(WS_METHODS.filesystemCreateFolder, FilesystemCreateFolderInput),
 
   // Device pane (macOS only; the server refuses these off darwin)
   tagRequestBody(DEVICE_WS_METHODS.list, DeviceListInput),

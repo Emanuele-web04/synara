@@ -41,6 +41,7 @@ import {
   ATTACHMENT_UPLOAD_ROUTE_PATH,
 } from "@synara/shared/binaryTransfer";
 import { RouterProvider, createMemoryHistory } from "@tanstack/react-router";
+import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { HttpResponse, http, ws } from "msw";
 import { setupWorker } from "msw/browser";
 import { page, userEvent } from "vitest/browser";
@@ -2349,6 +2350,7 @@ async function mountChatView(options: {
   initialEntry?: string;
   onRender?: ProfilerOnRenderCallback;
   strictMode?: boolean;
+  probe?: React.ReactNode;
 }): Promise<MountedChatView> {
   fixture = buildFixture(options.snapshot);
   options.configureFixture?.(fixture);
@@ -2369,6 +2371,21 @@ async function mountChatView(options: {
   ]);
 
   const host = createFullscreenTestHost();
+  const probeRoute = router.routesById["/_chat/$threadId"];
+  const OriginalComponent = probeRoute.options.component;
+  if (options.probe && OriginalComponent) {
+    probeRoute.update({
+      component: () => (
+        <>
+          <OriginalComponent />
+          {options.probe}
+        </>
+      ),
+    });
+  }
+  const restoreProbe = () => {
+    if (options.probe && OriginalComponent) probeRoute.update({ component: OriginalComponent });
+  };
   const content = options.onRender ? (
     <Profiler id="issue-550-root" onRender={options.onRender}>
       <RouterProvider router={router} />
@@ -2391,6 +2408,7 @@ async function mountChatView(options: {
     });
   } catch (cause) {
     await screen.unmount();
+    restoreProbe();
     if (host.isConnected) host.remove();
     throw cause;
   }
@@ -2400,6 +2418,7 @@ async function mountChatView(options: {
     if (cleanedUp) return;
     cleanedUp = true;
     await screen.unmount();
+    restoreProbe();
     if (host.isConnected) host.remove();
     // React Query retries and background refetches outlive the unmounted tree.
     // A leftover provider-discovery retry can recreate the websocket API inside
@@ -2476,6 +2495,53 @@ const HEARTBEAT_AUTOMATION_REQUEST = {
 };
 
 describe("ChatView transcript geometry (full app)", () => {
+  it("prepares a connected-project draft without navigating and cancels before staging another", async () => {
+    let createThread!: ReturnType<typeof useHandleNewThread>["handleNewThread"];
+    function Probe() {
+      createThread = useHandleNewThread().handleNewThread;
+      return null;
+    }
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: MessageId.makeUnsafe("navigation-owner"),
+        targetText: "Existing conversation",
+      }),
+      probe: <Probe />,
+    });
+    const navigate = vi.spyOn(mounted.router, "navigate");
+    try {
+      const originalRoute = mounted.router.state.location.pathname;
+      const first = new AbortController();
+      const threadId = await createThread(
+        PROJECT_ID,
+        { fresh: true },
+        { signal: first.signal, deferNavigation: true },
+      );
+      if (!threadId) throw new Error("The project draft was not prepared.");
+      expect(useComposerDraftStore.getState().getDraftThread(threadId)).toMatchObject({
+        projectId: PROJECT_ID,
+      });
+      expect(mounted.router.state.location.pathname).toBe(originalRoute);
+      expect(navigate).not.toHaveBeenCalled();
+      const second = new AbortController();
+      const pending = createThread(
+        PROJECT_ID,
+        { fresh: true },
+        { signal: second.signal, deferNavigation: true },
+      );
+      second.abort();
+      expect(await pending).toBeNull();
+      expect(useComposerDraftStore.getState().projectDraftThreadIdByProjectId[PROJECT_ID]).toBe(
+        threadId,
+      );
+      expect(mounted.router.state.location.pathname).toBe(originalRoute);
+      expect(navigate).not.toHaveBeenCalled();
+    } finally {
+      navigate.mockRestore();
+      await mounted.cleanup();
+    }
+  });
   it("keeps the active chat explicitly unread until the next visit", async () => {
     const snapshot = createSnapshotWithInlineToolOverflow({ active: false });
     const mounted = await mountChatView({ viewport: DEFAULT_VIEWPORT, snapshot });

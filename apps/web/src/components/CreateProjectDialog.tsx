@@ -1,8 +1,9 @@
 import { readExecutionContext } from "../lib/hosts/executionContext";
 import { appHistory } from "../appNavigation";
 import { ComputerPicker, useWorkspaceComputers } from "./hosts/ComputerPicker";
+import { FolderPathInput } from "../lib/hosts/FolderPathInput";
 import { showExecutionFolderPicker } from "../lib/hosts/ExecutionFolderPicker";
-import { readWorkspaceSessions } from "../lib/hosts/workspaceSessions";
+import { readAvailableWorkspaceNavigation } from "../lib/hosts/workspaceSessions";
 import { workspaceRoute } from "../lib/hosts/workspaceFrame";
 import { useRemoteProjectSpacesStore } from "../remoteProjectSpacesStore";
 // FILE: CreateProjectDialog.tsx
@@ -12,8 +13,14 @@ import { useRemoteProjectSpacesStore } from "../remoteProjectSpacesStore";
 // Layer: Web UI dialog
 // Exports: CreateProjectDialog, CreateProjectSubmitValue
 
-import { type GitHubProjectProvisionProgressEvent, type SpaceId } from "@synara/contracts";
+import {
+  type GitHubProjectProvisionProgressEvent,
+  type ProjectId,
+  type SpaceId,
+  WS_FILESYSTEM_CREATE_FOLDER_CAPABILITY,
+} from "@synara/contracts";
 import { parseGitHubRepositoryInput } from "@synara/shared/githubRepository";
+import { describeErrorMessage } from "@synara/shared/errorMessages";
 import { findProjectFolderProblem } from "@synara/shared/projectFolders";
 import { normalizeProjectDirectoryName } from "@synara/shared/projectDirectoryName";
 import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
@@ -23,7 +30,7 @@ import { useAdditionalProjectFolders } from "../hooks/useAdditionalProjectFolder
 import { useWindowFolderDrop } from "../hooks/useWindowFolderDrop";
 import { VOID_SPACE_KEY, spaceKey, toSpaceIconName } from "../lib/spaceGrouping";
 import { createSpace } from "../lib/spaces";
-import { readNativeApi } from "../nativeApi";
+import { readNativeApi, readNativeApiServerCapability } from "../nativeApi";
 import { randomUUID } from "../lib/utils";
 import { joinProjectPath } from "../lib/projectPaths";
 import type { Space } from "../types";
@@ -105,7 +112,14 @@ export function CreateProjectDialog(props: {
   const remoteSession = sessions.find(
     (session) => session.host.executionScope.environmentId === computerId,
   );
-  const githubAvailable = props.githubProvisioningAvailable && !remote;
+  const githubAvailable = remote
+    ? selectedComputer?.available === true && Boolean(remoteSession?.navigation?.cloneGitHubProject)
+    : props.githubProvisioningAvailable;
+  const githubUnavailableReason = remote
+    ? selectedComputer?.available
+      ? t("git:cloneHostNeedsUpdate")
+      : t("git:cloneHostUnavailable")
+    : t("workspace:updateTheSynaraServerToAddGitHubProjects");
   const dialogGeneration = useRef(0);
   const [source, setSource] = useState<"local" | "github">("local");
   const [path, setPath] = useState("");
@@ -170,7 +184,9 @@ export function CreateProjectDialog(props: {
     setPath("");
     setAdditionalFolders([]);
     setRepositoryInput("");
-    setDestinationParent(props.defaultCloneParent);
+    setDestinationParent(
+      requestedComputer && requestedComputer !== localId ? "~/" : props.defaultCloneParent,
+    );
     setDirectoryName("");
     setDirectoryNameEdited(false);
     setProvisionProgress(null);
@@ -197,11 +213,17 @@ export function CreateProjectDialog(props: {
   ]);
 
   useEffect(() => {
-    if (!githubAvailable && source === "github") {
+    if (!submitting && !githubAvailable && source === "github") {
       setSource("local");
     }
-  }, [githubAvailable, source]);
+  }, [githubAvailable, source, submitting]);
 
+  const browseFolders =
+    !props.open || !selectedComputer?.available
+      ? undefined
+      : remote
+        ? remoteSession?.navigation?.browseFolders
+        : readNativeApi()?.filesystem?.browse;
   const trimmedPath = path.trim();
   const parsedRepository = parseGitHubRepositoryInput(repositoryInput);
   const trimmedDestinationParent = destinationParent.trim();
@@ -215,7 +237,7 @@ export function CreateProjectDialog(props: {
   const voidSpace = useVoidSpace();
 
   useEffect(() => {
-    if (!props.open) return;
+    if (!props.open || remote) return;
     const api = readNativeApi();
     if (!api) return;
     return api.projects.onProvisionProgress((event: GitHubProjectProvisionProgressEvent) => {
@@ -226,27 +248,31 @@ export function CreateProjectDialog(props: {
       }
       setProvisionProgress(event.message);
     });
-  }, [props.open]);
+  }, [props.open, remote]);
 
   const applyPickedFolder = useCallback(
     (picked: string) => {
       setPath(picked);
       if (!nameEdited) setName(picked.split(/[/\\]/).findLast(Boolean) ?? picked);
       setPickedPath(picked);
-      setFormError(null);
+      setFormError(
+        picked !== picked.trim() ? t("workspace:projectFolderPathWhitespaceUnsupported") : null,
+      );
       // Land focus on the confirm button so a plain Enter finishes the flow.
       requestAnimationFrame(() => document.getElementById(submitButtonId)?.focus());
     },
-    [nameEdited, submitButtonId],
+    [nameEdited, submitButtonId, t],
   );
 
   const applyDestinationParent = useCallback(
     (picked: string) => {
       setDestinationParent(picked);
-      setFormError(null);
+      setFormError(
+        picked !== picked.trim() ? t("workspace:projectFolderPathWhitespaceUnsupported") : null,
+      );
       requestAnimationFrame(() => document.getElementById(directoryNameInputId)?.focus());
     },
-    [directoryNameInputId],
+    [directoryNameInputId, t],
   );
 
   // Replaces the primary folder (`path`); the rest keep their order.
@@ -259,7 +285,7 @@ export function CreateProjectDialog(props: {
     setAdditionalFolders(rest);
     setFormError(null);
   };
-  const folders = trimmedPath ? [trimmedPath, ...additionalFolders] : [];
+  const folders = trimmedPath ? [path, ...additionalFolders] : [];
   const makeFolderPrimary = (index: number) =>
     setFolders([folders[index]!, ...folders.filter((_, candidate) => candidate !== index)]);
   const removeFolder = (index: number) => {
@@ -280,6 +306,11 @@ export function CreateProjectDialog(props: {
     }
     const generation = dialogGeneration.current;
     const selectedNavigation = remoteSession?.navigation;
+    const createRemoteFolder = selectedNavigation?.createFolder;
+    const connectionIsCurrent = () =>
+      remoteSession &&
+      selectedNavigation &&
+      readAvailableWorkspaceNavigation(remoteSession) === selectedNavigation;
     setIsPickingFolder(true);
     // No try/finally: the React Compiler skips optimizing components that use it.
     try {
@@ -288,24 +319,30 @@ export function CreateProjectDialog(props: {
           ? await api.dialogs.pickFolder()
           : await showExecutionFolderPicker({
               label: selectedComputer.label,
+              createFolder: remote
+                ? createRemoteFolder &&
+                  ((input) => {
+                    if (generation !== dialogGeneration.current || !connectionIsCurrent())
+                      throw new Error(t("workspace:folderPickerConnectionChanged"));
+                    return createRemoteFolder(input);
+                  })
+                : readNativeApiServerCapability(WS_FILESYSTEM_CREATE_FOLDER_CAPABILITY)
+                  ? api.filesystem.createFolder
+                  : undefined,
               browse: remote
                 ? selectedNavigation!.browseFolders
                 : (input) => api.filesystem.browse(input),
             });
       if (generation !== dialogGeneration.current) return;
-      if (
-        remote &&
-        !readWorkspaceSessions().some(
-          (entry) => entry.host === remoteSession?.host && entry.navigation === selectedNavigation,
-        )
-      )
-        throw new Error("The connection changed. Choose the folder again.");
+      if (remote && !connectionIsCurrent())
+        throw new Error(t("workspace:folderPickerConnectionChanged"));
       if (picked) {
         if (mode === "additional") addAdditionalFolder(picked);
         else if (source === "github") applyDestinationParent(picked);
         else applyPickedFolder(picked);
       }
     } catch (error) {
+      if (generation !== dialogGeneration.current) return;
       setFormError(
         error instanceof Error
           ? error.message
@@ -333,6 +370,15 @@ export function CreateProjectDialog(props: {
       setFormError("This computer is unavailable. Reconnect it or choose another computer.");
       return;
     }
+    // Project registration canonicalizes paths. Reject instead of registering a trimmed sibling.
+    if (
+      source === "local"
+        ? path !== trimmedPath || additionalFolders.some((folder) => folder !== folder.trim())
+        : destinationParent !== trimmedDestinationParent
+    ) {
+      setFormError(t("workspace:projectFolderPathWhitespaceUnsupported"));
+      return;
+    }
     // The confirm button stays enabled (and white) like the reference dialog;
     // an empty submit explains what is missing instead of being unclickable.
     if (source === "local" && trimmedPath.length === 0) {
@@ -356,7 +402,7 @@ export function CreateProjectDialog(props: {
       return;
     }
     if (source === "github" && !githubAvailable) {
-      setFormError(t("workspace:updateTheSynaraServerBeforeAddingAProjectFrom"));
+      setFormError(githubUnavailableReason);
       return;
     }
     if (source === "github" && trimmedDestinationParent.length === 0) {
@@ -370,11 +416,56 @@ export function CreateProjectDialog(props: {
     setSubmitting(true);
     setFormError(null);
     setProvisionProgress(source === "github" ? "Validating repository" : null);
+    const generation = dialogGeneration.current;
     const abortController = new AbortController();
     submitAbortRef.current = abortController;
     try {
       const spaceId = spaces.find((space) => space.id === selectedSpaceKey)?.id ?? null;
-      if (source === "github") {
+      if (remote) {
+        const navigation = remoteSession?.navigation;
+        if (!navigation) throw new Error("This computer is no longer connected.");
+        const operationId = randomUUID();
+        activeOperationIdRef.current = source === "github" ? operationId : null;
+        let result: { projectId: ProjectId; path: string; created?: boolean };
+        if (source === "github") {
+          if (!navigation.cloneGitHubProject) throw new Error(githubUnavailableReason);
+          result = await navigation.cloneGitHubProject(
+            {
+              operationId,
+              repository: parsedRepository ?? repositoryInput.trim(),
+              destinationParent: trimmedDestinationParent,
+              directoryName: normalizedDirectoryName ?? trimmedDirectoryName,
+            },
+            {
+              signal: abortController.signal,
+              onProgress: (event) => {
+                if (
+                  generation !== dialogGeneration.current ||
+                  activeOperationIdRef.current !== event.operationId
+                )
+                  return;
+                setProvisionProgress(event.kind === "completed" ? "Project added" : event.message);
+              },
+            },
+          );
+        } else {
+          result = await navigation.createProject({
+            name: name.trim(),
+            workspaceRoot: trimmedPath,
+            additionalFolders,
+            createIfMissing: path !== pickedPath,
+          });
+        }
+        if (generation !== dialogGeneration.current) return;
+        if (readAvailableWorkspaceNavigation(remoteSession) !== navigation)
+          throw new Error("The connection changed. Reconnect to view the project.");
+        if (spaceId !== null && (source === "local" || result.created)) {
+          useRemoteProjectSpacesStore
+            .getState()
+            .assignSpace({ environmentId: computerId, projectId: result.projectId }, spaceId);
+        }
+        navigate(workspaceRoute(computerId, result.path));
+      } else if (source === "github") {
         const operationId = randomUUID();
         activeOperationIdRef.current = operationId;
         await props.onSubmit(
@@ -388,28 +479,6 @@ export function CreateProjectDialog(props: {
           },
           { signal: abortController.signal },
         );
-      } else if (remote) {
-        const navigation = remoteSession?.navigation;
-        if (!navigation) throw new Error("This computer is no longer connected.");
-        const { projectId, path } = await navigation.createProject({
-          name: name.trim(),
-          workspaceRoot: trimmedPath,
-          additionalFolders,
-          createIfMissing: trimmedPath !== pickedPath,
-        });
-        if (
-          !readWorkspaceSessions().some(
-            (entry) => entry.host === remoteSession.host && entry.navigation === navigation,
-          )
-        )
-          throw new Error("The connection changed. Reconnect to view the project.");
-        if (spaceId !== null) {
-          // Spaces belong to the controlling computer, even when the project lives elsewhere.
-          useRemoteProjectSpacesStore
-            .getState()
-            .assignSpace({ environmentId: computerId, projectId }, spaceId);
-        }
-        navigate(workspaceRoute(computerId, path));
       } else {
         await props.onSubmit(
           {
@@ -418,24 +487,27 @@ export function CreateProjectDialog(props: {
             workspaceRoot: trimmedPath,
             additionalFolders,
             spaceId,
-            createIfMissing: trimmedPath !== pickedPath,
+            createIfMissing: path !== pickedPath,
           },
           { signal: abortController.signal },
         );
       }
+      if (generation !== dialogGeneration.current) return;
       submitAbortRef.current = null;
+      activeOperationIdRef.current = null;
       props.onOpenChange(false);
     } catch (error) {
+      if (generation !== dialogGeneration.current) return;
       submitAbortRef.current = null;
       activeOperationIdRef.current = null;
       setFormError(
         abortController.signal.aborted
           ? source === "github"
-            ? t("workspace:gitHubCloneCancelledYouCanRetrySafely")
+            ? remote
+              ? t("git:cloneCancelledCheckProjects")
+              : t("workspace:gitHubCloneCancelledYouCanRetrySafely")
             : t("workspace:projectCreationCancelled")
-          : error instanceof Error
-            ? error.message
-            : t("workspace:anErrorOccurredWhileAddingTheProject"),
+          : describeErrorMessage(error, t("workspace:anErrorOccurredWhileAddingTheProject")),
       );
       setProvisionProgress(null);
       setSubmitting(false);
@@ -479,7 +551,7 @@ export function CreateProjectDialog(props: {
   // Only echo the drop/browse result while the path field still matches it;
   // hand-editing the path afterwards puts the box back in its idle state.
   const pickedFolderName =
-    pickedPath !== null && trimmedPath === pickedPath
+    pickedPath !== null && path === pickedPath
       ? (pickedPath.split(/[/\\]/).findLast(Boolean) ?? pickedPath)
       : null;
   const finalClonePath = joinProjectPath(trimmedDestinationParent, trimmedDirectoryName);
@@ -487,8 +559,39 @@ export function CreateProjectDialog(props: {
   // switches to the list once another folder joins it. Browser builds list folders as soon
   // as a path is typed, since there is no picker to fall back on.
   const showFolderList =
-    folders.length > 0 &&
-    (!isElectron || pickedPath === trimmedPath || additionalFolders.length > 0);
+    folders.length > 0 && (!isElectron || pickedPath === path || additionalFolders.length > 0);
+
+  const computerPicker = (
+    <div className="flex flex-wrap items-center gap-1 text-ui text-muted-foreground">
+      <span>{source === "github" ? t("git:cloneOnComputer") : "Add a folder on"}</span>
+      <ComputerPicker
+        computers={computers}
+        value={computerId}
+        disabled={submitting || isPickingFolder}
+        purpose="Project computer"
+        onChange={(id) => {
+          if (id === computerId) return;
+          dialogGeneration.current += 1;
+          setComputerId(id);
+          setDestinationParent(id === localId ? props.defaultCloneParent : "~/");
+          setProvisionProgress(null);
+          setPath("");
+          setAdditionalFolders([]);
+          setPickedPath(null);
+          setFormError(null);
+          if (!nameEdited) setName("");
+        }}
+        onManage={
+          readExecutionContext()?.controller.capabilities.remoteConnections === true
+            ? () => {
+                handleOpenChange(false);
+                navigate("/settings?section=connections");
+              }
+            : undefined
+        }
+      />
+    </div>
+  );
 
   return (
     <Dialog open={props.open} onOpenChange={handleOpenChange}>
@@ -502,12 +605,7 @@ export function CreateProjectDialog(props: {
             value={source}
             disabled={submitting}
             githubAvailable={githubAvailable}
-            {...(remote
-              ? {
-                  githubUnavailableReason:
-                    "Select This computer to clone from GitHub. You can add an existing folder on a connected computer.",
-                }
-              : {})}
+            githubUnavailableReason={githubUnavailableReason}
             onValueChange={(nextSource) => {
               setSource(nextSource);
               setFormError(null);
@@ -519,6 +617,12 @@ export function CreateProjectDialog(props: {
               );
             }}
           />
+
+          {!githubAvailable ? (
+            <p role="status" className="text-ui-sm text-muted-foreground">
+              {githubUnavailableReason}
+            </p>
+          ) : null}
 
           {source === "local" ? (
             <>
@@ -540,54 +644,25 @@ export function CreateProjectDialog(props: {
                   onKeyDown={submitOnEnter}
                 />
               </InputGroup>
-              <div className="flex flex-wrap items-center gap-1 text-ui text-muted-foreground">
-                <span>Add a folder on</span>
-                <ComputerPicker
-                  computers={computers}
-                  value={computerId}
-                  disabled={submitting || isPickingFolder}
-                  purpose="Project computer"
-                  onChange={(id) => {
-                    if (id === computerId) return;
-                    dialogGeneration.current += 1;
-                    setComputerId(id);
-                    setPath("");
-                    setAdditionalFolders([]);
-                    setPickedPath(null);
-                    setFormError(null);
-                    if (!nameEdited) setName("");
-                  }}
-                  onManage={
-                    readExecutionContext()?.controller.capabilities.remoteConnections === true
-                      ? () => {
-                          handleOpenChange(false);
-                          navigate("/settings?section=connections");
-                        }
-                      : undefined
-                  }
-                />
-              </div>
-              <InputGroup className={PROJECT_DIALOG_FIELD_CONTROL_CLASS_NAME}>
-                <InputGroupInput
-                  id={pathInputId}
-                  value={path}
-                  aria-label={t("workspace:projectFolderPath")}
-                  placeholder={t("workspace:pathToProject")}
-                  disabled={submitting || isPickingFolder}
-                  aria-invalid={formError ? true : undefined}
-                  {...(formError ? { "aria-describedby": errorId } : {})}
-                  spellCheck={false}
-                  autoCorrect="off"
-                  autoCapitalize="off"
-                  onChange={(event) => {
-                    setPath(event.target.value);
-                    setFormError(null);
-                    if (!nameEdited)
-                      setName(event.target.value.split(/[/\\]/).findLast(Boolean) ?? "");
-                  }}
-                  onKeyDown={submitOnEnter}
-                />
-              </InputGroup>
+              {computerPicker}
+              <FolderPathInput
+                key={computerId}
+                className={PROJECT_DIALOG_FIELD_CONTROL_CLASS_NAME}
+                browse={browseFolders}
+                id={pathInputId}
+                value={path}
+                aria-label={t("workspace:projectFolderPath")}
+                placeholder={t("workspace:pathToProject")}
+                disabled={submitting || isPickingFolder}
+                aria-invalid={formError ? true : undefined}
+                {...(formError ? { "aria-describedby": errorId } : {})}
+                onChange={(next) => {
+                  setPath(next);
+                  setFormError(null);
+                  if (!nameEdited) setName(next.split(/[/\\]/).findLast(Boolean) ?? "");
+                }}
+                onEnter={submitOnEnter}
+              />
               {showFolderList ? (
                 <ProjectFolderList
                   folders={folders}
@@ -596,6 +671,8 @@ export function CreateProjectDialog(props: {
                   onRemove={removeFolder}
                   addRow={
                     <ProjectFolderAddRow
+                      key={computerId}
+                      browse={browseFolders}
                       picker={!remote && isElectron}
                       disabled={isPickingFolder || submitting}
                       picking={isPickingFolder}
@@ -658,40 +735,48 @@ export function CreateProjectDialog(props: {
               )}
             </>
           ) : (
-            <CreateGitHubProjectFields
-              repositoryInputId={repositoryInputId}
-              destinationParentInputId={destinationParentInputId}
-              directoryNameInputId={directoryNameInputId}
-              errorId={errorId}
-              repositoryInput={repositoryInput}
-              destinationParent={destinationParent}
-              directoryName={directoryName}
-              finalClonePath={finalClonePath}
-              formError={formError}
-              provisionProgress={provisionProgress}
-              isElectron={isElectron || Boolean(remote)}
-              isPickingFolder={isPickingFolder}
-              submitting={submitting}
-              onRepositoryChange={(nextInput) => {
-                setRepositoryInput(nextInput);
-                const nextRepository = parseGitHubRepositoryInput(nextInput);
-                if (nextRepository && !directoryNameEdited) {
-                  setDirectoryName(nextRepository.split("/").at(-1) ?? "");
-                }
-                setFormError(null);
-              }}
-              onDestinationParentChange={(nextParent) => {
-                setDestinationParent(nextParent);
-                setFormError(null);
-              }}
-              onDirectoryNameChange={(nextName) => {
-                setDirectoryName(nextName);
-                setDirectoryNameEdited(true);
-                setFormError(null);
-              }}
-              onBrowse={() => void handleBrowse()}
-              onSubmitKeyDown={submitOnEnter}
-            />
+            <>
+              {computerPicker}
+              {remote ? (
+                <p className="text-ui-sm text-muted-foreground">
+                  {t("git:cloneUsesSelectedComputer")}
+                </p>
+              ) : null}
+              <CreateGitHubProjectFields
+                browse={browseFolders}
+                repositoryInputId={repositoryInputId}
+                destinationParentInputId={destinationParentInputId}
+                directoryNameInputId={directoryNameInputId}
+                errorId={errorId}
+                repositoryInput={repositoryInput}
+                destinationParent={destinationParent}
+                directoryName={directoryName}
+                finalClonePath={finalClonePath}
+                formError={formError}
+                provisionProgress={provisionProgress}
+                isPickingFolder={isPickingFolder}
+                submitting={submitting}
+                onRepositoryChange={(nextInput) => {
+                  setRepositoryInput(nextInput);
+                  const nextRepository = parseGitHubRepositoryInput(nextInput);
+                  if (nextRepository && !directoryNameEdited) {
+                    setDirectoryName(nextRepository.split("/").at(-1) ?? "");
+                  }
+                  setFormError(null);
+                }}
+                onDestinationParentChange={(nextParent) => {
+                  setDestinationParent(nextParent);
+                  setFormError(null);
+                }}
+                onDirectoryNameChange={(nextName) => {
+                  setDirectoryName(nextName);
+                  setDirectoryNameEdited(true);
+                  setFormError(null);
+                }}
+                onBrowse={() => void handleBrowse()}
+                onSubmitKeyDown={submitOnEnter}
+              />
+            </>
           )}
 
           {!remote ? (
