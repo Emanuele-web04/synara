@@ -55,6 +55,7 @@ const LIST_THREADS_DEFAULT_LIMIT = 50;
 const LIST_THREADS_MAX_LIMIT = 200;
 // Leave time for the progress response before the caller's 60-second tool deadline.
 const WAIT_PROGRESS_INTERVAL_MS = 30_000;
+const WAIT_SUMMARY_BUDGET_MS = 2_000;
 
 export interface ThreadReadToolsInput {
   readonly snapshotQuery: ProjectionSnapshotQueryShape;
@@ -414,7 +415,7 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
     requiredCapability: "thread:read",
     definition: {
       name: "synara_wait_for_threads",
-      description: `Wait for the pinned turns of 1–20 Synara threads and return every outcome in input order. When results are required, keep calling until allTerminal is true, passing the returned runIds to each subsequent call. A timedOut response is progress, not completion; do not finish or ask the user to check again while required work is pending. Assistant summaries are capped at ${WAIT_THREAD_SUMMARY_MAX_CHARS} characters; use each result's readThread call to page the full transcript. Timeouts never retry, replace, cancel, or create work.`,
+      description: `Wait for the pinned turns of 1–20 Synara threads and return every outcome in input order. When results are required, keep calling until allTerminal is true, passing the returned runIds to each subsequent call. A timedOut response is progress, not completion; do not finish or ask the user to check again while required work is pending. Assistant summaries are capped at ${WAIT_THREAD_SUMMARY_MAX_CHARS} characters and can be omitted if collecting them takes too long. Use each result's readThread call to page the full transcript. Timeouts never retry, replace, cancel, or create work.`,
       inputSchema: {
         type: "object",
         properties: {
@@ -558,11 +559,18 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
           pollDelayMs = Math.min(1_000, Math.ceil(pollDelayMs * 1.5));
         }
         const timedOut = results.some((result) => !result.terminal);
+        const summaryDeadline = (yield* Clock.currentTimeMillis) + WAIT_SUMMARY_BUDGET_MS;
         const finalResults = yield* Effect.forEach(results, (result) =>
           Effect.gen(function* () {
             if (!result.terminal || result.runId === null) {
               return { ...result, timedOut: !result.terminal && timedOut };
             }
+            const outcome = {
+              ...result,
+              error: result.state === "error" ? "Turn failed." : null,
+            };
+            const remainingMs = summaryDeadline - (yield* Clock.currentTimeMillis);
+            if (remainingMs <= 0) return outcome;
             const detail = yield* snapshotQuery.getThreadDetailById(result.threadId).pipe(
               Effect.mapError((error) => new ToolInputError(errorText(error))),
               Effect.flatMap(
@@ -577,18 +585,21 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
                   onSome: Effect.succeed,
                 }),
               ),
+              Effect.timeoutOrElse({
+                duration: remainingMs,
+                onTimeout: () => Effect.succeed(null),
+              }),
             );
+            if (detail === null) return outcome;
             const assistantMessage = detail.messages.findLast(
               (message) => message.role === "assistant" && message.turnId === result.runId,
             );
             const summary = summarizeWaitThreadText(assistantMessage?.text);
             return {
-              ...result,
-              timedOut: false,
+              ...outcome,
               summary: summary.summary,
               summaryTruncated: summary.truncated,
-              error:
-                result.state === "error" ? (detail.session?.lastError ?? "Turn failed.") : null,
+              error: result.state === "error" ? (detail.session?.lastError ?? outcome.error) : null,
             };
           }),
         );

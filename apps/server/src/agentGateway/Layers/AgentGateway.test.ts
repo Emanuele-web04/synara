@@ -393,6 +393,7 @@ function makeHarnessLayer(
     readonly threadPrincipal?: "unmanaged" | "group-member" | "worker" | "coordinator";
     readonly listModels?: (typeof ProviderDiscoveryService)["Service"]["listModels"];
     readonly threadDetails?: ReadonlyMap<string, OrchestrationThread>;
+    readonly slowThreadDetailId?: ThreadIdType;
     readonly hubCoordinator?: boolean;
     readonly dispatch?: (typeof OrchestrationEngineService)["Service"]["dispatch"];
     readonly commandReceipts?: (typeof OrchestrationCommandReceiptRepository)["Service"];
@@ -599,8 +600,9 @@ function makeHarnessLayer(
           : Option.none<OrchestrationProjectShell>(),
       ),
     getThreadDetailById: (threadId: ThreadIdType) =>
-      Effect.sync(() => {
+      Effect.gen(function* () {
         threadDetailReads += 1;
+        if (threadId === options.slowThreadDetailId) yield* Effect.never;
         return Option.fromNullishOr(
           threadDetailsById.get(threadId as string) ??
             Option.getOrUndefined(
@@ -5007,6 +5009,59 @@ describe("AgentGateway", () => {
       assert.equal(result.allTerminal, false);
       assert.equal(result.timedOut, true);
       assert.deepEqual(result.runIds, ["turn-long-wait"]);
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  it.effect("returns known mixed outcomes when a summary read stalls", () => {
+    const completed = makeThreadShell("thread-completed-with-slow-summary", {
+      latestTurn: {
+        turnId: TurnId.makeUnsafe("turn-completed"),
+        state: "completed",
+        requestedAt: NOW,
+        startedAt: NOW,
+        completedAt: NOW,
+        assistantMessageId: null,
+      },
+    });
+    const running = makeThreadShell("thread-still-running", {
+      latestTurn: {
+        turnId: TurnId.makeUnsafe("turn-running"),
+        state: "running",
+        requestedAt: NOW,
+        startedAt: NOW,
+        completedAt: null,
+        assistantMessageId: null,
+      },
+    });
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(
+      [makeThreadShell("thread-parent"), completed, running],
+      [],
+      { slowThreadDetailId: completed.id },
+    );
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const fiber = yield* harness
+        .callTool({
+          token: "token-parent",
+          name: "synara_wait_for_threads",
+          args: { threadIds: [completed.id, running.id], timeoutMs: 60_000 },
+        })
+        .pipe(Effect.forkChild);
+      yield* TestClock.adjust("32 seconds");
+      assert.equal(harness.getWaitReadCounts().detailReads, 1);
+      assert.isDefined(fiber.pollUnsafe(), "the wait should return before the MCP deadline");
+      const response = yield* Fiber.join(fiber);
+      assert.isFalse(isToolError(response.result));
+      const result = toolResultJson(response.result);
+      assert.equal(result.allTerminal, false);
+      assert.equal(result.timedOut, true);
+      assert.deepEqual(result.runIds, ["turn-completed", "turn-running"]);
+      const outcomes = result.threads as Array<{ state: string; summary: string | null }>;
+      assert.deepEqual(
+        outcomes.map((outcome) => outcome.state),
+        ["completed", "running"],
+      );
+      assert.isNull(outcomes[0]?.summary);
     }).pipe(Effect.provide(gatewayLayer));
   });
 
