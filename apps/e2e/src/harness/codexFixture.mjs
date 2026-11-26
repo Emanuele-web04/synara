@@ -8,7 +8,7 @@ if (process.argv.includes("--version")) {
   console.log("codex-cli 0.134.0");
   process.exit(0);
 }
-const root = process.env.HOME;
+const root = process.env.DESIGN_CANVAS_FIXTURE_ROOT ?? process.env.HOME;
 const send = (frame) => process.stdout.write(`${JSON.stringify(frame)}\n`);
 const record = (value) =>
   fs.appendFileSync(path.join(root, "fixture-provider.jsonl"), `${JSON.stringify(value)}\n`);
@@ -51,7 +51,19 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
   if (request.method === "turn/start") {
     turnId = `fixture-turn-${Date.now()}`;
     const itemId = `${turnId}-message`;
-    record({ kind: "turn", turnId, pid: process.pid });
+    const inputText = (request.params?.input ?? [])
+      .map((item) => (typeof item.text === "string" ? item.text : ""))
+      .join("\n");
+    const routing =
+      /<synara_canvas_context>[\s\S]*?workId="([a-zA-Z0-9_-]+)", pageId="([a-zA-Z0-9_-]+)"/.exec(
+        inputText,
+      );
+    record({
+      kind: "turn",
+      turnId,
+      pid: process.pid,
+      ...(routing ? { canvas: { workId: routing[1], pageId: routing[2] } } : {}),
+    });
     const approval = JSON.stringify(request.params?.input).includes("APPROVAL FIXTURE");
     const remoteMcp = JSON.stringify(request.params?.input).includes("REMOTE MCP FIXTURE");
     reply({ turn: { id: turnId } });
@@ -67,6 +79,8 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
           const plan = JSON.parse(
             fs.readFileSync(path.join(root, "mcp-fixture-plan.json"), "utf8"),
           );
+          if (plan.warmupMs)
+            await new Promise((resolve) => setTimeout(resolve, Math.min(plan.warmupMs, 5000)));
           const results = [];
           for (const step of plan.steps) {
             const response = await fetch(plan.endpoint, {
@@ -78,14 +92,24 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
               body: JSON.stringify({
                 jsonrpc: "2.0",
                 id: results.length + 1,
-                method: "tools/call",
-                params: step,
+                method: step.method ?? "tools/call",
+                params: step.params ?? step,
               }),
             });
             results.push({ status: response.status, body: await response.json() });
           }
           // Only tool results are recorded. The thread-scoped bearer never leaves memory.
           fs.writeFileSync(path.join(root, "mcp-fixture-results.json"), JSON.stringify(results));
+          // Optionally settle the turn so the same thread can take another turn.
+          if (plan.completeTurn) {
+            notify("item/completed", {
+              item: { type: "agentMessage", id: itemId, text: "REMOTE STREAM STARTED" },
+            });
+            notify("turn/completed", {
+              turn: { id: turnId, status: "completed", items: [], error: null },
+            });
+            record({ kind: "completed", turnId, pid: process.pid });
+          }
         })().catch(() =>
           fs.writeFileSync(
             path.join(root, "mcp-fixture-results.json"),

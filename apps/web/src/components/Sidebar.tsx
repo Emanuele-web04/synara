@@ -1,3 +1,4 @@
+import { CanvasIcon } from "~/lib/icons";
 import {
   dispatchSelectedWorkspaceChatCreation,
   openWorkspacePath,
@@ -1442,6 +1443,8 @@ export default function Sidebar() {
   const isOnTasks = workspaceSurfacePath.startsWith("/tasks");
   const isOnAutomations = workspaceSurfacePath.startsWith("/automations");
   const isOnPullRequests = workspaceSurfacePath.startsWith("/pull-requests");
+  const isOnCanvas =
+    workspaceSurfacePath === "/canvas" || workspaceSurfacePath.startsWith("/canvas/");
   const isOnInbox = workspaceSurfacePath.startsWith("/inbox");
   // Lightweight read of automations to drive the sidebar count badge. Shares the
   // ["automations"] query cache with the Automations route (and its live stream updates).
@@ -4598,6 +4601,15 @@ export default function Sidebar() {
         onMouseEnter: prefetchModelsForPrimaryNewThread,
         onFocus: prefetchModelsForPrimaryNewThread,
       },
+      canvas: {
+        icon: CanvasIcon,
+        label: t("workspace:canvasTitle"),
+        active: isOnCanvas,
+        badge: null,
+        onClick: () => {
+          void navigate({ to: "/canvas" });
+        },
+      },
       inbox: {
         icon: InboxIcon,
         label: t("workspace:inbox"),
@@ -4651,6 +4663,7 @@ export default function Sidebar() {
       handlePrimaryNewThread,
       inboxBadge,
       isOnAutomations,
+      isOnCanvas,
       isOnInbox,
       isOnKanban,
       isOnPullRequests,
@@ -7545,7 +7558,8 @@ export default function Sidebar() {
     !isOnTasks &&
     !isOnPullRequests &&
     !isOnAutomations &&
-    !isOnInbox;
+    !isOnInbox &&
+    !isOnCanvas;
   const sidebarHelpMenuProps = {
     onOpenShortcuts: () => void navigate({ to: "/settings", search: { section: "shortcuts" } }),
     onOpenFeedback: () => openFeedbackDialog(),

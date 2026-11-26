@@ -523,6 +523,26 @@
     "./nativeLocalizationResources": {
       "types": "./src/nativeLocalizationResources.ts",
       "import": "./src/nativeLocalizationResources.ts"
+    },
+    "./designCanvasLayers": {
+      "types": "./src/designCanvasLayers.ts",
+      "import": "./src/designCanvasLayers.ts"
+    },
+    "./designCanvasCode": {
+      "types": "./src/designCanvasCode.ts",
+      "import": "./src/designCanvasCode.ts"
+    },
+    "./designCanvasSvg": {
+      "types": "./src/designCanvasSvg.ts",
+      "import": "./src/designCanvasSvg.ts"
+    },
+    "./designCanvasPages": {
+      "types": "./src/designCanvasPages.ts",
+      "import": "./src/designCanvasPages.ts"
+    },
+    "./designCanvasText": {
+      "types": "./src/designCanvasText.ts",
+      "import": "./src/designCanvasText.ts"
     }
   },
   "scripts": {

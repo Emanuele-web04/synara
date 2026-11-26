@@ -3702,3 +3702,52 @@ diffs-container {
 [data-dock-maximized="true"] .editor-markdown-preview__body {
   max-width: 1120px;
 }
+
+/* Design canvas: the backdrop behind the frames (the app's background with the muted tint, so
+   white frames keep their edges; a page's own colour replaces it), the on-canvas accent for
+   selection and hover outlines, handles and badges (the app's info accent), the agent's colour
+   for frames an agent is writing, and dark neutral chips, measure lines and the drop bar. Chips,
+   measures and the drop bar sit on the user's frame content, so they keep the same colours in
+   light and dark themes. */
+:root {
+  --canvas-backdrop: color-mix(in srgb, var(--background) 96%, var(--foreground));
+  --canvas-accent: var(--info);
+  --canvas-hover: color-mix(in oklab, var(--info) 75%, var(--color-white));
+  --canvas-agent: var(--claude);
+  --canvas-chip: #0e0e0e;
+  --canvas-chip-foreground: #f5f5f5;
+  --canvas-chip-muted: #8a8a8a;
+  --canvas-measure: #525252;
+  --canvas-drop: #171717;
+}
+
+/* Comment pins keep their screen size down to 50% zoom, then shrink with the canvas (half size
+   at 25%), so a pin never covers the small frame it points at. Driven by the camera's live
+   variable, so a zoom renders nothing. */
+[data-canvas-viewport] {
+  --canvas-pin-scale: clamp(0.5, calc(var(--canvas-zoom, 1) * 2), 1);
+}
+
+/* Agent activity: the frame outline pulses and the label row's dots fall. */
+@keyframes canvas-agent-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+@keyframes canvas-agent-rain {
+  0% {
+    opacity: 0;
+    transform: translateY(-1px);
+  }
+  35% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(1px);
+  }
+}

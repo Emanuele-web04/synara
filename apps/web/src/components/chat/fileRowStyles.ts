@@ -13,7 +13,7 @@ import { cn } from "~/lib/utils";
 // full literals, so the focus-visible variant is spelled out rather than derived.
 const FILE_ROW_SELECTED_BLOCK_CLASS_NAME =
   "bg-[var(--color-background-button-secondary)] text-foreground";
-const FILE_ROW_FOCUS_BLOCK_CLASS_NAME =
+export const FILE_ROW_FOCUS_BLOCK_CLASS_NAME =
   "focus-visible:bg-[var(--color-background-button-secondary)] focus-visible:text-foreground";
 
 /**

@@ -122,7 +122,7 @@ export function ComputerPicker({
 export function WorkspaceSurfaceComputerPicker({
   path,
 }: {
-  path: "/tasks" | "/kanban" | "/inbox" | "/pull-requests";
+  path: "/canvas" | "/tasks" | "/kanban" | "/inbox" | "/pull-requests";
 }) {
   const { computers, localId, currentId, navigate } = useWorkspaceComputers();
   const frame = readWorkspaceFrame();

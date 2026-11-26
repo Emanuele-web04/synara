@@ -1,3 +1,9 @@
+import type { CanvasStreamEvent } from "@synara/contracts";
+import { makeCanvasLibraryStore } from "./canvasLibraryStore";
+import { canvasImageAsset } from "./canvasAssets";
+import { setCanvasChatSelection } from "./canvasChatSelection";
+import { makeCanvasFontService } from "./canvasFonts";
+import { registerCanvasRenderClient, submitCanvasRender } from "./canvasRenderRequests";
 import { AgentGateway } from "./agentGateway/Services/AgentGateway";
 import {
   desktopUpdateAuthorityForSession,
@@ -80,7 +86,10 @@ import { AutomationService } from "./automation/Services/AutomationService";
 import { TodoService } from "./todo/Services/TodoService";
 import { isServerBetaFeatureEnabled } from "./betaFeatureGate";
 import { readInlineVisual } from "./inlineVisualStore";
-import { INLINE_VISUALS_BETA_FEATURE } from "@synara/shared/betaFeatures";
+import {
+  DESIGN_CANVAS_BETA_FEATURE,
+  INLINE_VISUALS_BETA_FEATURE,
+} from "@synara/shared/betaFeatures";
 import { ProjectAgentService } from "./projectAgent/Services/ProjectAgentService";
 import { isGroupCoordinatorHostProject } from "./projectAgent/groupCoordinatorHost";
 import {
@@ -558,6 +567,23 @@ const makeWsRpcHandlersLayer = () =>
       const recapStatsQuery = yield* RecapStatsQuery;
       const threadSearchQuery = yield* ThreadSearchQuery;
       const projectionReadModelQuery = yield* ProjectionSnapshotQuery;
+      const canvasLibrary = makeCanvasLibraryStore(config.stateDir);
+      const canvasFonts = makeCanvasFontService({ stateDir: config.stateDir });
+      // Beta only, like the agent tools: a Stable server serves no canvas data.
+      const canvasEnabled = isServerBetaFeatureEnabled(DESIGN_CANVAS_BETA_FEATURE);
+      const canvasUnavailableError = () =>
+        new WsRpcError({
+          message: "Canvas is unavailable in this app.",
+          code: "FEATURE_UNAVAILABLE",
+          retryable: false,
+        });
+      const withDesignProject = <A>(projectId: ProjectId, run: () => Promise<A>) =>
+        Effect.gen(function* () {
+          const project = yield* projectionReadModelQuery.getProjectShellById(projectId);
+          if (Option.isNone(project)) return yield* Effect.fail(new Error("Project not found."));
+          return yield* Effect.tryPromise({ try: run, catch: (error) => error });
+        });
+
       const providerAdapterRegistry = yield* ProviderAdapterRegistry;
       const providerDiscoveryService = yield* ProviderDiscoveryService;
       const providerHealth = yield* ProviderHealth;
@@ -1254,6 +1280,13 @@ const makeWsRpcHandlersLayer = () =>
 
       const rpcEffect = <A, E, R>(effect: Effect.Effect<A, E, R>, fallbackMessage: string) =>
         effect.pipe(Effect.mapError((cause) => toWsRpcError(cause, fallbackMessage)));
+      const canvasRpc = <A>(run: () => Promise<A>) =>
+        canvasEnabled
+          ? rpcEffect(
+              Effect.tryPromise({ try: run, catch: (error) => error }),
+              "Canvas operation failed",
+            )
+          : Effect.fail(canvasUnavailableError());
 
       /**
        * The account RPCs are owner-only, entirely — reads included; see
@@ -3473,6 +3506,102 @@ const makeWsRpcHandlersLayer = () =>
               Stream.mapError((cause) => toWsRpcError(cause, "Automation event stream failed")),
             ),
           ),
+        [WS_METHODS.subscribeCanvasEvents]: (_, { clientId }) =>
+          canvasEnabled
+            ? streamAdmission.guard(
+                clientId,
+                { key: "canvas.events" },
+                bufferLiveUiStream(
+                  Stream.callback<CanvasStreamEvent>((queue) =>
+                    Effect.gen(function* () {
+                      const publish = (event: CanvasStreamEvent) => {
+                        Effect.runFork(Queue.offer(queue, event).pipe(Effect.asVoid));
+                      };
+                      const unsubscribe = canvasLibrary.subscribe(publish);
+                      // Each live editor client can answer agent screenshot requests.
+                      const releaseRenderer = registerCanvasRenderClient();
+                      yield* Effect.addFinalizer(() =>
+                        Effect.sync(() => {
+                          unsubscribe();
+                          releaseRenderer();
+                        }),
+                      );
+                      // A fresh subscription repairs changes missed while disconnected.
+                      publish({ type: "changed" });
+                    }),
+                  ),
+                  // Events may carry layer deltas; a subscriber that falls behind restarts
+                  // and gets the full invalidation above instead of a long backlog.
+                  {
+                    label: "canvas.events",
+                    capacity: 256,
+                    onDroppedEvents: failLiveUiStreamForSnapshotResync,
+                  },
+                ),
+              )
+            : Stream.fail(canvasUnavailableError()),
+        [WS_METHODS.canvasList]: (input) => canvasRpc(() => canvasLibrary.list(input)),
+        [WS_METHODS.canvasGet]: (input) => canvasRpc(() => canvasLibrary.get(input.workId)),
+        [WS_METHODS.canvasGetAsset]: (input) =>
+          canvasRpc(() => canvasLibrary.getAsset(input.workId, input.assetId)),
+        [WS_METHODS.canvasCreate]: (input) =>
+          input.projectId
+            ? canvasEnabled
+              ? rpcEffect(
+                  withDesignProject(input.projectId, () => canvasLibrary.create(input)),
+                  "Canvas operation failed",
+                )
+              : Effect.fail(canvasUnavailableError())
+            : canvasRpc(() => canvasLibrary.create(input)),
+        [WS_METHODS.canvasCreateFolder]: (input) =>
+          canvasRpc(() => canvasLibrary.createFolder(input)),
+        [WS_METHODS.canvasUpdate]: (input) =>
+          input.projectId
+            ? canvasEnabled
+              ? rpcEffect(
+                  withDesignProject(input.projectId, () => canvasLibrary.update(input)),
+                  "Canvas operation failed",
+                )
+              : Effect.fail(canvasUnavailableError())
+            : canvasRpc(() => canvasLibrary.update(input)),
+        [WS_METHODS.canvasDuplicate]: (input) => canvasRpc(() => canvasLibrary.duplicate(input)),
+        [WS_METHODS.canvasChangePages]: (input) =>
+          canvasRpc(() => canvasLibrary.changePages(input)),
+        [WS_METHODS.canvasBindChat]: (input) => canvasRpc(() => canvasLibrary.bindChat(input)),
+        [WS_METHODS.canvasLayout]: (input) => canvasRpc(() => canvasLibrary.layout(input)),
+        [WS_METHODS.canvasEditLayers]: (input) =>
+          canvasRpc(async () => {
+            const result = await canvasLibrary.editLayers(input);
+            return {
+              work: result.work,
+              createdNodeIds: result.createdNodeIds,
+              dropped: result.dropped,
+            };
+          }),
+        [WS_METHODS.canvasRestoreFrames]: (input) =>
+          canvasRpc(() => canvasLibrary.restoreFrames(input)),
+        [WS_METHODS.canvasChangeComments]: (input) =>
+          canvasRpc(() => canvasLibrary.changeComments(input, { kind: "user" })),
+        [WS_METHODS.canvasImportImage]: (input) =>
+          canvasRpc(() => canvasLibrary.putAssets(input.workId, [canvasImageAsset(input)])),
+        [WS_METHODS.canvasFontCatalog]: () => canvasRpc(() => canvasFonts.catalog()),
+        [WS_METHODS.canvasAddFont]: (input) =>
+          canvasRpc(async () =>
+            canvasLibrary.putAssets(input.workId, await canvasFonts.download(input.family)),
+          ),
+        [WS_METHODS.canvasTurnActivity]: (input) =>
+          canvasRpc(async () => ({
+            activities: await canvasLibrary.turnActivity(input.threadId),
+          })),
+        [WS_METHODS.canvasRestoreTurn]: (input) =>
+          canvasRpc(() => canvasLibrary.restoreTurn(input)),
+        [WS_METHODS.canvasSubmitRender]: (input) =>
+          canvasRpc(async () => ({ accepted: submitCanvasRender(input) })),
+        [WS_METHODS.canvasSetChatSelection]: (input) =>
+          canvasRpc(async () => {
+            setCanvasChatSelection(input);
+            return {};
+          }),
         // Keep refusal handling for hosts that do not offer Tasks.
         [WS_METHODS.todoList]: () =>
           whenTasksEnabled(rpcEffect(todoService.list(), "Failed to list tasks")),

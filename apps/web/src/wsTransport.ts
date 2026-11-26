@@ -1,3 +1,4 @@
+import { type CanvasStreamEvent, WS_CANVAS_LIBRARY_CAPABILITY } from "@synara/contracts";
 import { readWorkspaceFrame } from "./lib/hosts/workspaceFrame";
 // FILE: wsTransport.ts
 // Purpose: Browser-side Effect RPC transport over the Synara WebSocket endpoint.
@@ -2404,6 +2405,15 @@ export class WsTransport {
             (event: AutomationStreamEvent) => this.emit(WS_CHANNELS.automationEvent, event),
             restartChannel,
           );
+        } else if (channel === WS_CHANNELS.canvasEvent) {
+          if (!this.compatibility?.capabilities.includes(WS_CANVAS_LIBRARY_CAPABILITY)) return;
+          this.startStream(
+            client,
+            "canvas.events",
+            client[WS_METHODS.subscribeCanvasEvents]({}),
+            (event: CanvasStreamEvent) => this.emit(WS_CHANNELS.canvasEvent, event),
+            restartChannel,
+          );
         } else if (channel === WS_CHANNELS.todoEvent) {
           this.startStream(
             client,
@@ -2463,6 +2473,7 @@ export class WsTransport {
     else if (channel === WS_CHANNELS.terminalEvent) this.stopStream("terminal.events");
     else if (channel === WS_CHANNELS.projectDevServerEvent) this.stopStream("project.devServers");
     else if (channel === WS_CHANNELS.automationEvent) this.stopStream("automation.events");
+    else if (channel === WS_CHANNELS.canvasEvent) this.stopStream("canvas.events");
     else if (channel === WS_CHANNELS.todoEvent) this.stopStream("todo.events");
     else if (channel === DEVICE_WS_CHANNELS.event) this.stopStream("device.events");
     else if (channel === COMPUTER_WS_CHANNELS.event) this.stopStream("computer.events");

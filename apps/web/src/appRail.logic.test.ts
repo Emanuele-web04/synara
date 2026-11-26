@@ -26,6 +26,7 @@ describe("rail item order", () => {
       "automations",
       "home",
       "inbox",
+      "canvas",
       "spaces",
       "kanban",
       "tasks",
@@ -40,6 +41,7 @@ describe("rail item order", () => {
       "home",
       "inbox",
       "spaces",
+      "canvas",
       "tasks",
       "pullRequests",
       "automations",
@@ -66,7 +68,7 @@ describe("rail item order", () => {
         studioAvailable: false,
         inboxAvailable: false,
       }),
-    ).toEqual(["home", "kanban", "tasks", "pullRequests", "automations"]);
+    ).toEqual(["home", "canvas", "kanban", "tasks", "pullRequests", "automations"]);
     expect(
       buildRailItemOrder({
         order,
@@ -82,6 +84,7 @@ describe("rail item order", () => {
     const stable = { studioAvailable: false, inboxAvailable: false };
     expect(RAIL_ORDERABLE_ITEM_IDS.filter((id) => isRailItemAvailable(id, stable))).toEqual([
       "home",
+      "canvas",
       "spaces",
       "kanban",
       "tasks",

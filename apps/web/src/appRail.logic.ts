@@ -19,6 +19,7 @@ import { normalizeIdOrder, normalizeKnownIds, placeNewIdAfter } from "./lib/orde
 import type { SidebarNavItemId } from "./sidebarNavOrdering";
 import type { Space } from "./types";
 import { t } from "~/i18n";
+import { DESIGN_CANVAS_ON } from "./betaFeatures";
 
 /** Rail items that switch the panel content instead of navigating. */
 export const RAIL_PANEL_ITEM_IDS = ["home", "spaces"] as const;
@@ -38,6 +39,7 @@ export type RailItemId = RailPanelItemId | RailRouteItemId;
 export const RAIL_ORDERABLE_ITEM_IDS = [
   "home",
   "inbox",
+  "canvas",
   "spaces",
   "kanban",
   "tasks",
@@ -79,6 +81,8 @@ export interface RailAvailability {
 /** Whether an item exists on this host at all: the rail and its Customize list agree. */
 export function isRailItemAvailable(id: RailOrderableItemId, availability: RailAvailability) {
   if (id === "studio") return availability.studioAvailable;
+  // Canvas is Beta-only; Stable never lists it, even in Customize.
+  if (id === "canvas") return DESIGN_CANVAS_ON;
   if (id === "inbox") return availability.inboxAvailable;
   return true;
 }
@@ -185,7 +189,9 @@ export function resolveActiveRailShortcutKey(input: {
  * their page layout.
  */
 export function railItemShowsPanel(id: RailItemId): boolean {
-  return id !== "kanban" && id !== "tasks" && id !== "pullRequests" && id !== "inbox";
+  return (
+    id !== "canvas" && id !== "kanban" && id !== "tasks" && id !== "pullRequests" && id !== "inbox"
+  );
 }
 
 function matchesRoute(pathname: string, route: string): boolean {
@@ -194,6 +200,7 @@ function matchesRoute(pathname: string, route: string): boolean {
 
 /** The route rail item that owns a pathname, or null for thread and chat-index routes. */
 export function railItemForPathname(pathname: string): RailRouteItemId | null {
+  if (matchesRoute(pathname, "/canvas")) return "canvas";
   if (matchesRoute(pathname, "/inbox")) return "inbox";
   if (matchesRoute(pathname, "/kanban")) return "kanban";
   if (matchesRoute(pathname, "/tasks")) return "tasks";

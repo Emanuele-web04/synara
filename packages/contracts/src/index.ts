@@ -1,3 +1,4 @@
+export * from "./canvasLibrary";
 export * from "./account";
 export * from "./hostAuth";
 export * from "./hostSecrets";
@@ -80,3 +81,5 @@ export * from "./accountBilling";
 export * from "./uiLocale";
 
 export * from "./usageLimit";
+
+export * from "./designCanvas";

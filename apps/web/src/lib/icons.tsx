@@ -171,6 +171,15 @@ export const EyeIcon = adaptIcon(IconEye);
 // Markdown Source/Preview toggle glyphs, sourced from the Central set so the
 // file-preview header controls share one visual language with the rest of the
 // chrome (raw source = code brackets, rendered preview = open eye).
+export const CanvasIcon: LucideIcon = centralIconWrapper("canvas-grid");
+export const CursorIcon: LucideIcon = centralIconWrapper("cursor-1");
+export const HandIcon: LucideIcon = centralIconWrapper("hand-5-finger");
+export const FrameToolIcon: LucideIcon = centralIconWrapper("hashtag");
+export const RectangleIcon: LucideIcon = centralIconWrapper("square-placeholder");
+export const TextToolIcon: LucideIcon = centralIconWrapper("text-1");
+export const EyedropperIcon: LucideIcon = centralIconWrapper("color-picker");
+export const LayersIcon: LucideIcon = centralIconWrapper("layers-three");
+export const ImageIcon: LucideIcon = centralIconWrapper("images-1");
 export const CodeIcon: LucideIcon = centralIconWrapper("code");
 export const EYE_OPEN_ICON_NAME = "eye-open";
 export const EyeOpenIcon: LucideIcon = centralIconWrapper(EYE_OPEN_ICON_NAME);

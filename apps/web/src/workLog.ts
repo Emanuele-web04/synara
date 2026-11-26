@@ -8,6 +8,7 @@ import {
   COMPUTER_CONTROL_DENIED_ACTIVITY_KIND,
   COMPUTER_SETUP_REQUIRED_ACTIVITY_KIND,
   INLINE_VISUAL_ACTIVITY_KIND,
+  CANVAS_TURN_ACTIVITY_KIND,
   InlineVisualActivityPayload,
   isToolLifecycleItemType,
   type ModelSelection,
@@ -61,7 +62,7 @@ import {
   type FastModeNotice,
 } from "./lib/fastModeState";
 import { stripProposedPlanBlocksFromText } from "./proposedPlan";
-import { INLINE_VISUALS_ON } from "./betaFeatures";
+import { DESIGN_CANVAS_ON, INLINE_VISUALS_ON } from "./betaFeatures";
 
 import type { ChatMessage, ProposedPlan } from "./types";
 
@@ -177,6 +178,8 @@ export interface WorkLogEntry {
   automation?: WorkLogAutomation;
   connectorProposalId?: string;
   synaraThreadCreation?: WorkLogSynaraThreadCreation;
+  // A canvas the turn's agent wrote to; the transcript shows one card per work.
+  canvasTurn?: WorkLogCanvasTurn;
   // Deterministic coordinator-monitor rows (worker settled / stuck /
   // batch roll-up) render as compact centered pills in the coordinator
   // conversation, each carrying a link into the reported thread.
@@ -272,6 +275,13 @@ export interface WorkLogSynaraCreatedThread {
   model: string;
   environment: "local" | "worktree";
   status: string;
+}
+
+export interface WorkLogCanvasTurn {
+  workId: string;
+  workTitle: string;
+  pageId: string;
+  turnId: string | null;
 }
 
 export interface WorkLogSynaraThreadCreation {
@@ -2096,6 +2106,17 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
       entry.inlineVisual = inlineVisual;
     }
   }
+  if (activity.kind === CANVAS_TURN_ACTIVITY_KIND && DESIGN_CANVAS_ON) {
+    const workId = asTrimmedString(payload?.workId);
+    const pageId = asTrimmedString(payload?.pageId);
+    if (workId && pageId)
+      entry.canvasTurn = {
+        workId,
+        pageId,
+        workTitle: asTrimmedString(payload?.workTitle) ?? "Canvas",
+        turnId: activity.turnId ?? null,
+      };
+  }
   if (activity.kind === "synara.threads.created") {
     const synaraThreadCreation = extractWorkLogSynaraThreadCreation(payload);
     if (synaraThreadCreation) {
@@ -2692,6 +2713,7 @@ function mergeDerivedWorkLogEntries(
   const subagents = next.subagents ?? previous.subagents;
   const subagentAction = next.subagentAction ?? previous.subagentAction;
   const synaraThreadCreation = next.synaraThreadCreation ?? previous.synaraThreadCreation;
+  const canvasTurn = next.canvasTurn ?? previous.canvasTurn;
   const collapseKey = next.collapseKey ?? previous.collapseKey;
   const toolName = next.toolName ?? previous.toolName;
   const mcpServer = next.mcpServer ?? previous.mcpServer;
@@ -2730,6 +2752,7 @@ function mergeDerivedWorkLogEntries(
     ...(subagents ? { subagents } : {}),
     ...(subagentAction ? { subagentAction } : {}),
     ...(synaraThreadCreation ? { synaraThreadCreation } : {}),
+    ...(canvasTurn ? { canvasTurn } : {}),
     ...(collapseKey ? { collapseKey } : {}),
     ...(toolName ? { toolName } : {}),
     ...(mcpServer ? { mcpServer } : {}),

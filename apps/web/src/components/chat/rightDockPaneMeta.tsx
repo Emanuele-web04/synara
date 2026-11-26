@@ -10,6 +10,7 @@ import { basenameOfPath } from "~/file-icons";
 import type { LucideIcon } from "~/lib/icons";
 import {
   BotIcon,
+  CanvasIcon,
   DeviceMobileIcon,
   DiffIcon,
   FileIcon,
@@ -49,6 +50,7 @@ export const RIGHT_DOCK_PANE_META: Record<RightDockPaneKind, RightDockPaneMeta> 
   git: { label: "Git", Icon: GitCommitIcon },
   pullRequest: { label: "Pull request", Icon: GitPullRequestIcon },
   subagents: { label: "Subagents", Icon: BotIcon },
+  canvas: { label: "Canvas", Icon: CanvasIcon },
 };
 
 const RIGHT_DOCK_PANE_LABEL_KEYS: Record<RightDockPaneKind, string> = {
@@ -62,6 +64,7 @@ const RIGHT_DOCK_PANE_LABEL_KEYS: Record<RightDockPaneKind, string> = {
   git: "chat:git",
   pullRequest: "git:general_environmentPullRequest",
   subagents: "chat:subagents",
+  canvas: "workspace:canvasTitle",
 };
 
 // Neutral fallback for any pane kind we no longer recognize (e.g. stale

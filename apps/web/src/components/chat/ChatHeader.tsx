@@ -18,6 +18,7 @@ import React, { useEffect, useRef, useState } from "react";
 import type { ThreadPrimarySurface } from "../../types";
 import GitActionsControl from "../GitActionsControl";
 import {
+  CanvasIcon,
   CheckIcon,
   FoldersIcon,
   HandoffIcon,
@@ -85,6 +86,7 @@ interface ChatHeaderProps {
   activeThreadEntryPoint: ThreadPrimarySurface;
   activeProvider: ProviderKind;
   activeProjectName: string | undefined;
+  onOpenDesignCanvas?: (() => void) | undefined;
   threadBreadcrumbs: ReadonlyArray<{
     threadId: ThreadId;
     title: string;
@@ -436,6 +438,7 @@ export function ChatHeader({
   threadBreadcrumbs,
   className,
   threadTabs,
+  onOpenDesignCanvas,
   hideSidebarControls: hideSidebarControlsProp,
   hideHandoffControls: hideHandoffControlsProp,
   minimalChrome: minimalChromeProp,
@@ -821,6 +824,16 @@ export function ChatHeader({
             hideQuickActionLabel
             visibleWhen="pull-available"
           />
+        ) : null}
+
+        {!minimalChrome && onOpenDesignCanvas ? (
+          <ChatHeaderIconButton
+            label={t("workspace:designCanvas")}
+            title={t("workspace:designCanvas")}
+            onClick={onOpenDesignCanvas}
+          >
+            <CanvasIcon className="size-4" />
+          </ChatHeaderIconButton>
         ) : null}
 
         {/* Environment: one button consolidating Open-in-editor and most git actions into

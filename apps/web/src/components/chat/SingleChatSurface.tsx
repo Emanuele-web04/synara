@@ -136,6 +136,7 @@ const EditorWorkspaceView = lazy(() =>
   })),
 );
 const DockTerminalPane = lazy(() => import("./DockTerminalPane"));
+const CanvasDockPane = lazy(() => import("../canvas/CanvasDockPane"));
 const GitPanel = lazy(() => import("./GitPanel"));
 const DockExplorerPane = lazy(() =>
   import("./DockExplorerPane").then((module) => ({
@@ -1012,6 +1013,20 @@ export function SingleChatSurface(props: {
         );
       case "subagents":
         return <SubagentsDockPane hostThreadId={props.threadId} />;
+      case "canvas":
+        return pane.canvasWorkId ? (
+          <Suspense
+            fallback={<PanelStateMessage>{t("workspace:designLoading")}</PanelStateMessage>}
+          >
+            <CanvasDockPane
+              hostThreadId={props.threadId}
+              workId={pane.canvasWorkId}
+              pageId={pane.canvasPageId ?? null}
+            />
+          </Suspense>
+        ) : (
+          <RightDockPanePlaceholder kind={pane.kind} />
+        );
       case "sidechat":
         return (
           <SidechatDockPane

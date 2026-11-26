@@ -1,4 +1,34 @@
 import {
+  CanvasStreamEvent,
+  CanvasBindChatInput,
+  CanvasCreateInput,
+  CanvasDuplicateInput,
+  CanvasFolder,
+  CanvasListInput,
+  CanvasListResult,
+  CanvasPageChangeInput,
+  CanvasPageLayoutInput,
+  CanvasResource,
+  CanvasResourceUpdateInput,
+  CanvasWork,
+  CanvasWorkInput,
+  CanvasAddFontInput,
+  CanvasAssetData,
+  CanvasAssetInput,
+  CanvasCommentChangeInput,
+  CanvasEditLayersInput,
+  CanvasEditResult,
+  CanvasFontCatalog,
+  CanvasImportImageInput,
+  CanvasRestoreFramesInput,
+  CanvasRestoreTurnInput,
+  CanvasSubmitRenderInput,
+  CanvasSubmitRenderResult,
+  CanvasChatSelectionInput,
+  CanvasTurnActivityInput,
+  CanvasTurnActivityResult,
+} from "./canvasLibrary";
+import {
   ServerDesktopUpdateInput,
   ServerDesktopUpdateResult,
   ServerDesktopUpdateStatus,
@@ -2085,6 +2115,115 @@ export const WsSubscribeAutomationEventsRpc = Rpc.make(WS_METHODS.subscribeAutom
   stream: true,
 });
 
+export const WsSubscribeCanvasEventsRpc = Rpc.make(WS_METHODS.subscribeCanvasEvents, {
+  payload: Schema.Struct({}),
+  success: CanvasStreamEvent,
+  error: WsRpcError,
+  stream: true,
+});
+export const WsCanvasListRpc = Rpc.make(WS_METHODS.canvasList, {
+  payload: CanvasListInput,
+  success: CanvasListResult,
+  error: WsRpcError,
+});
+export const WsCanvasGetRpc = Rpc.make(WS_METHODS.canvasGet, {
+  payload: CanvasWorkInput,
+  success: CanvasWork,
+  error: WsRpcError,
+});
+/** One asset's bytes; works carry only asset metadata. */
+export const WsCanvasGetAssetRpc = Rpc.make(WS_METHODS.canvasGetAsset, {
+  payload: CanvasAssetInput,
+  success: CanvasAssetData,
+  error: WsRpcError,
+});
+export const WsCanvasCreateRpc = Rpc.make(WS_METHODS.canvasCreate, {
+  payload: CanvasCreateInput,
+  success: CanvasWork,
+  error: WsRpcError,
+});
+export const WsCanvasCreateFolderRpc = Rpc.make(WS_METHODS.canvasCreateFolder, {
+  payload: CanvasCreateInput,
+  success: CanvasFolder,
+  error: WsRpcError,
+});
+export const WsCanvasUpdateRpc = Rpc.make(WS_METHODS.canvasUpdate, {
+  payload: CanvasResourceUpdateInput,
+  success: CanvasResource,
+  error: WsRpcError,
+});
+export const WsCanvasDuplicateRpc = Rpc.make(WS_METHODS.canvasDuplicate, {
+  payload: CanvasDuplicateInput,
+  success: CanvasWork,
+  error: WsRpcError,
+});
+export const WsCanvasChangePagesRpc = Rpc.make(WS_METHODS.canvasChangePages, {
+  payload: CanvasPageChangeInput,
+  success: CanvasWork,
+  error: WsRpcError,
+});
+export const WsCanvasBindChatRpc = Rpc.make(WS_METHODS.canvasBindChat, {
+  payload: CanvasBindChatInput,
+  success: CanvasWork,
+  error: WsRpcError,
+});
+export const WsCanvasLayoutRpc = Rpc.make(WS_METHODS.canvasLayout, {
+  payload: CanvasPageLayoutInput,
+  success: CanvasWork,
+  error: WsRpcError,
+});
+
+export const WsCanvasEditLayersRpc = Rpc.make(WS_METHODS.canvasEditLayers, {
+  payload: CanvasEditLayersInput,
+  success: CanvasEditResult,
+  error: WsRpcError,
+});
+export const WsCanvasRestoreFramesRpc = Rpc.make(WS_METHODS.canvasRestoreFrames, {
+  payload: CanvasRestoreFramesInput,
+  success: CanvasWork,
+  error: WsRpcError,
+});
+export const WsCanvasChangeCommentsRpc = Rpc.make(WS_METHODS.canvasChangeComments, {
+  payload: CanvasCommentChangeInput,
+  success: CanvasWork,
+  error: WsRpcError,
+});
+export const WsCanvasImportImageRpc = Rpc.make(WS_METHODS.canvasImportImage, {
+  payload: CanvasImportImageInput,
+  success: CanvasWork,
+  error: WsRpcError,
+});
+export const WsCanvasFontCatalogRpc = Rpc.make(WS_METHODS.canvasFontCatalog, {
+  payload: Schema.Struct({}),
+  success: CanvasFontCatalog,
+  error: WsRpcError,
+});
+export const WsCanvasAddFontRpc = Rpc.make(WS_METHODS.canvasAddFont, {
+  payload: CanvasAddFontInput,
+  success: CanvasWork,
+  error: WsRpcError,
+});
+export const WsCanvasTurnActivityRpc = Rpc.make(WS_METHODS.canvasTurnActivity, {
+  payload: CanvasTurnActivityInput,
+  success: CanvasTurnActivityResult,
+  error: WsRpcError,
+});
+export const WsCanvasRestoreTurnRpc = Rpc.make(WS_METHODS.canvasRestoreTurn, {
+  payload: CanvasRestoreTurnInput,
+  success: CanvasWork,
+  error: WsRpcError,
+});
+export const WsCanvasSubmitRenderRpc = Rpc.make(WS_METHODS.canvasSubmitRender, {
+  payload: CanvasSubmitRenderInput,
+  success: CanvasSubmitRenderResult,
+  error: WsRpcError,
+});
+export const WsCanvasSetChatSelectionRpc = Rpc.make(WS_METHODS.canvasSetChatSelection, {
+  payload: CanvasChatSelectionInput,
+  success: Schema.Struct({}),
+  error: WsRpcError,
+});
+
 export const WsTodoListRpc = Rpc.make(WS_METHODS.todoList, {
   payload: Schema.Struct({}),
   success: TodoListResult,
@@ -2518,6 +2657,27 @@ export type WsFeatureRpc =
   | typeof WsAutomationArchiveRunRpc
   | typeof WsAutomationResolveProposalRpc
   | typeof WsSubscribeAutomationEventsRpc
+  | typeof WsSubscribeCanvasEventsRpc
+  | typeof WsCanvasListRpc
+  | typeof WsCanvasGetRpc
+  | typeof WsCanvasGetAssetRpc
+  | typeof WsCanvasCreateRpc
+  | typeof WsCanvasCreateFolderRpc
+  | typeof WsCanvasUpdateRpc
+  | typeof WsCanvasDuplicateRpc
+  | typeof WsCanvasChangePagesRpc
+  | typeof WsCanvasBindChatRpc
+  | typeof WsCanvasLayoutRpc
+  | typeof WsCanvasEditLayersRpc
+  | typeof WsCanvasRestoreFramesRpc
+  | typeof WsCanvasChangeCommentsRpc
+  | typeof WsCanvasImportImageRpc
+  | typeof WsCanvasFontCatalogRpc
+  | typeof WsCanvasAddFontRpc
+  | typeof WsCanvasTurnActivityRpc
+  | typeof WsCanvasRestoreTurnRpc
+  | typeof WsCanvasSubmitRenderRpc
+  | typeof WsCanvasSetChatSelectionRpc
   | typeof WsTodoListRpc
   | typeof WsTodoCreateRpc
   | typeof WsTodoUpdateRpc
@@ -2723,6 +2883,27 @@ const wsApplicationRpcGroup = RpcGroup.make(
   WsAutomationArchiveRunRpc,
   WsAutomationResolveProposalRpc,
   WsSubscribeAutomationEventsRpc,
+  WsSubscribeCanvasEventsRpc,
+  WsCanvasListRpc,
+  WsCanvasGetRpc,
+  WsCanvasGetAssetRpc,
+  WsCanvasCreateRpc,
+  WsCanvasCreateFolderRpc,
+  WsCanvasUpdateRpc,
+  WsCanvasDuplicateRpc,
+  WsCanvasChangePagesRpc,
+  WsCanvasBindChatRpc,
+  WsCanvasLayoutRpc,
+  WsCanvasEditLayersRpc,
+  WsCanvasRestoreFramesRpc,
+  WsCanvasChangeCommentsRpc,
+  WsCanvasImportImageRpc,
+  WsCanvasFontCatalogRpc,
+  WsCanvasAddFontRpc,
+  WsCanvasTurnActivityRpc,
+  WsCanvasRestoreTurnRpc,
+  WsCanvasSubmitRenderRpc,
+  WsCanvasSetChatSelectionRpc,
   WsTodoListRpc,
   WsTodoCreateRpc,
   WsTodoUpdateRpc,

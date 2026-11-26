@@ -1,8 +1,10 @@
 // FILE: ComposerReferenceAttachments.tsx
 // Purpose: Render assistant-selection, file-comment, pasted-text, pull-request-context,
-//   file, and image composer attachments in one reusable row.
+//   file, and image composer attachments in one reusable row. Surfaces with their own
+//   attachment (the canvas selection) pass it as `leadingAttachment` to share the row.
 // Layer: Chat composer presentation
 
+import type { ReactNode } from "react";
 import {
   type ComposerFileAttachment,
   type ComposerImageAttachment,
@@ -22,6 +24,8 @@ import { FileCommentsSummaryChip } from "./FileCommentsSummaryChip";
 import { BrowserAnnotationStrip } from "./BrowserAnnotationStrip";
 
 interface ComposerReferenceAttachmentsProps {
+  /** An attachment owned elsewhere, shown first in the same row. */
+  leadingAttachment?: ReactNode;
   assistantSelections: ReadonlyArray<ChatAssistantSelectionAttachment>;
   browserAnnotations?: ReadonlyArray<BrowserAnnotationDraft>;
   fileComments: ReadonlyArray<FileCommentDraft>;
@@ -42,6 +46,7 @@ interface ComposerReferenceAttachmentsProps {
 }
 
 export function ComposerReferenceAttachments({
+  leadingAttachment,
   assistantSelections,
   browserAnnotations = [],
   fileComments,
@@ -63,6 +68,7 @@ export function ComposerReferenceAttachments({
   const pastedTexts = pastedTextsProp ?? [];
   const pullRequestContexts = pullRequestContextsProp ?? [];
   if (
+    !leadingAttachment &&
     assistantSelections.length === 0 &&
     browserAnnotations.length === 0 &&
     fileComments.length === 0 &&
@@ -76,6 +82,7 @@ export function ComposerReferenceAttachments({
 
   return (
     <div className="-mx-1.5 -mt-1 mb-2 flex flex-wrap items-start gap-1.5">
+      {leadingAttachment}
       <AssistantSelectionsSummaryChip
         selections={assistantSelections}
         onRemove={assistantSelections.length > 0 ? onRemoveAssistantSelections : undefined}

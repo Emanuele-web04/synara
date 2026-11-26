@@ -1,3 +1,5 @@
+import { openCanvasPane } from "./canvas/canvasPane";
+import { CanvasSelectionCard, useCanvasSelectionCard } from "./canvas/CanvasSelectionChip";
 import { type LegendListRef } from "@legendapp/list/react";
 import {
   parseComputerInvocation,
@@ -135,7 +137,7 @@ import {
   resolveThreadMentionForThreadId,
   useComposerCommandMenuItems,
 } from "../hooks/useComposerCommandMenuItems";
-import { MCP_CONNECTORS_ON } from "../betaFeatures";
+import { DESIGN_CANVAS_ON, MCP_CONNECTORS_ON } from "../betaFeatures";
 import { mcpConnectorsQueryOptions } from "../lib/mcpConnectorsReactQuery";
 import { providerSupportsMcpConnectors } from "@synara/shared/mcpConnectors";
 import { useComposerThreadMentionDrop } from "../hooks/useComposerThreadMentionDrop";
@@ -3674,6 +3676,8 @@ export default function ChatView({
   // Started threads get the single-row composer while the draft is one plain line. Anything
   // that needs the block's room (approvals, questions, plan follow-up, banners, attachment
   // chips) keeps the block layout.
+  // A canvas selection is a composer attachment: it gets the block layout like the others.
+  const canvasSelectionCard = useCanvasSelectionCard(threadId);
   const composerSingleRow = useComposerSingleRow({
     formRef: composerFormRef,
     prompt,
@@ -3691,7 +3695,8 @@ export default function ChatView({
       composerPastedTexts.length === 0 &&
       composerPullRequestContexts.length === 0 &&
       composerFiles.length === 0 &&
-      composerImages.length === 0,
+      composerImages.length === 0 &&
+      canvasSelectionCard === null,
   });
 
   useEffect(() => {
@@ -6637,7 +6642,8 @@ export default function ChatView({
                   )}
                 {!isComposerApprovalState &&
                   pendingUserInputs.length === 0 &&
-                  (composerAssistantSelections.length > 0 ||
+                  (canvasSelectionCard !== null ||
+                    composerAssistantSelections.length > 0 ||
                     composerBrowserAnnotations.length > 0 ||
                     composerFileComments.length > 0 ||
                     composerPastedTexts.length > 0 ||
@@ -6645,6 +6651,11 @@ export default function ChatView({
                     composerFiles.length > 0 ||
                     composerImages.length > 0) && (
                     <ComposerReferenceAttachments
+                      leadingAttachment={
+                        canvasSelectionCard ? (
+                          <CanvasSelectionCard card={canvasSelectionCard} />
+                        ) : null
+                      }
                       assistantSelections={composerAssistantSelections}
                       browserAnnotations={composerBrowserAnnotations}
                       fileComments={composerFileComments}
@@ -6825,6 +6836,32 @@ export default function ChatView({
         )}
       >
         <ChatHeader
+          onOpenDesignCanvas={
+            DESIGN_CANVAS_ON
+              ? () => {
+                  const api = readNativeApi();
+                  if (!api) return;
+                  // The chat's latest canvas opens beside it; with none, pick or create one.
+                  void api.canvas
+                    .list({ threadId: activeThread.id, limit: 1 })
+                    .then(async (linked) => {
+                      const work = linked.works[0];
+                      if (!work) {
+                        await navigate({ to: "/canvas" });
+                        return;
+                      }
+                      const document = await api.canvas.get({ workId: work.id });
+                      const page = document.chats.find(
+                        (chat) => chat.threadId === activeThread.id,
+                      )?.pageId;
+                      openCanvasPane(activeThread.id, work.id, page);
+                    })
+                    .catch(() => {
+                      void navigate({ to: "/canvas" });
+                    });
+                }
+              : undefined
+          }
           activeThreadId={activeThread.id}
           activeThreadTitle={activeThreadDisplayTitle}
           activeThreadEntryPoint={terminalState.entryPoint}

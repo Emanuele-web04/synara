@@ -39,7 +39,7 @@ import { QueryClient, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Throttler } from "@tanstack/react-pacer";
 
 import { APP_DISPLAY_NAME, APP_VERSION } from "../branding";
-import { isBetaFeatureOn } from "../betaFeatures";
+import { DESIGN_CANVAS_ON, isBetaFeatureOn } from "../betaFeatures";
 import { DesktopWindowControls } from "../components/DesktopWindowControls";
 import { RunningChatsQuitCoordinator } from "../components/RunningChatsQuitCoordinator";
 import { AppSnapCoordinator } from "../components/AppSnapCoordinator";
@@ -117,6 +117,7 @@ import {
 import { useProjectRunStore } from "../projectRunStore";
 import { dockTerminalThreadId } from "../lib/dockTerminalScope";
 import { TaskCompletionNotifications } from "../notifications/taskCompletion";
+import { CanvasEventBridge } from "../components/canvas/useCanvasLibrary";
 import { useWorkspacePathsStore } from "../workspacePathsStore";
 import {
   isThreadDetailRetained,
@@ -185,6 +186,7 @@ import { useProviderStatusRefresh } from "../hooks/useProviderStatusRefresh";
 import { resolveSplitViewThreadIds, selectSplitView, useSplitViewStore } from "../splitViewStore";
 import { useRightDockStore } from "../rightDockStore";
 import {
+  canvasDockHostId,
   GITHUB_INBOX_DOCK_HOST_ID,
   resolveVisibleDockSidechatThreadIds,
 } from "../rightDockStore.logic";
@@ -392,6 +394,7 @@ function RootRouteView() {
           {!readWorkspaceFrame() && <HostDiscoverabilityPrompt />}
           {!readWorkspaceFrame() && <GlobalWhatsNewSurface />}
           <TaskCompletionNotifications />
+          {DESIGN_CANVAS_ON && <CanvasEventBridge />}
           <QueuedComposerDrainCoordinator />
           <NewThreadDefaultsSyncCoordinator />
           {!readWorkspaceFrame() && (
@@ -1303,6 +1306,7 @@ function EventRouter() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const pathname = useCommittedPathname();
+  const canvasWorkId = useParams({ strict: false, select: (params) => params.workId ?? null });
   const routeThreadId = useParams({
     strict: false,
     select: (params) => (params.threadId ? ThreadId.makeUnsafe(params.threadId) : null),
@@ -1334,10 +1338,12 @@ function EventRouter() {
         dockStateByThreadId,
         hostThreadIds: isGitHubInboxRoute
           ? [...hostThreadIds, GITHUB_INBOX_DOCK_HOST_ID]
-          : hostThreadIds,
+          : canvasWorkId
+            ? [...hostThreadIds, canvasDockHostId(canvasWorkId)]
+            : hostThreadIds,
       }),
     ],
-    [dockStateByThreadId, hostThreadIds, isGitHubInboxRoute, routeSearch.view],
+    [canvasWorkId, dockStateByThreadId, hostThreadIds, isGitHubInboxRoute, routeSearch.view],
   );
   const retainedThreadIds = useRetainedThreadDetailIds();
   const serverThreadIdSet = useMemo(() => new Set(serverThreadIds), [serverThreadIds]);

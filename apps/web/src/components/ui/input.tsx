@@ -7,8 +7,11 @@ import { cn } from "~/lib/utils";
 import { SOFT_SURFACE_FILL_CLASS_NAME, GLASS_RAISED_SURFACE_CLASS_NAME } from "~/surfaceStyles";
 import { BUTTON_GROUP_SURFACE_CLASS_NAME } from "./button-group";
 
+type InputControlSize = "xs" | "sm" | "default" | "lg";
+
 type InputProps = Omit<ComponentPropsWithoutRef<typeof InputPrimitive>, "size"> & {
-  size?: "sm" | "default" | "lg" | number;
+  // "xs" is the dense 24px field of tool panels (the canvas inspector), on the xs buttons' radius.
+  size?: InputControlSize | number;
   // "soft" gives the field a faint filled background instead of the default
   // surface-matching fill, so it reads as an input even on a flush card.
   variant?: "default" | "soft";
@@ -17,6 +20,29 @@ type InputProps = Omit<ComponentPropsWithoutRef<typeof InputPrimitive>, "size"> 
   unstyled?: boolean;
   nativeInput?: boolean;
 };
+
+const INPUT_CONTROL_BASE_CLASS_NAME =
+  "relative inline-flex w-full min-h-9 items-center rounded-lg border border-border bg-background text-ui text-foreground has-aria-invalid:border-destructive/30 has-focus-visible:has-aria-invalid:border-destructive/50 has-focus-visible:border-foreground/30 has-autofill:bg-foreground/4 has-disabled:opacity-64 sm:min-h-8 sm:text-ui dark:bg-input/32 dark:has-autofill:bg-foreground/8";
+
+const INPUT_CONTROL_SIZE_CLASS_NAMES: Record<InputControlSize, string> = {
+  xs: "min-h-7 rounded-sm text-ui-sm sm:min-h-6 sm:text-ui-sm",
+  sm: "min-h-8 sm:min-h-7",
+  default: "",
+  lg: "min-h-10 sm:min-h-9",
+};
+
+/**
+ * The input control's chrome (border, fill, focus and disabled states) at one of its sizes, for
+ * a composite field that holds an input among other parts (a number field with a scrub handle,
+ * a colour value beside its swatch) and so cannot render `<Input>` itself.
+ */
+export function inputControlClassName(size: InputControlSize = "default"): string {
+  return cn(
+    GLASS_RAISED_SURFACE_CLASS_NAME,
+    INPUT_CONTROL_BASE_CLASS_NAME,
+    INPUT_CONTROL_SIZE_CLASS_NAMES[size],
+  );
+}
 
 // Forward refs so the browser address bar can autofocus and select reliably.
 const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
@@ -39,6 +65,7 @@ const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
   const nativeInput = nativeInputProp ?? false;
   const inputClassName = cn(
     "font-system-ui h-full w-full min-w-0 rounded-[inherit] border-0 bg-transparent px-3 py-1.5 text-ui leading-normal outline-none placeholder:text-muted-foreground/72 [transition:background-color_5000000s_ease-in-out_0s] sm:text-ui",
+    size === "xs" && "px-2 py-0.5 text-ui-sm sm:text-ui-sm",
     size === "sm" && "px-2.5 py-1 text-ui-sm sm:text-ui-sm",
     size === "lg" && "px-3.5 py-2",
     shape === "capsule" && "px-4",
@@ -53,9 +80,8 @@ const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
   const capsule = shape === "capsule";
   const controlClassName = cn(
     !unstyled &&
-      `${capsule ? "" : GLASS_RAISED_SURFACE_CLASS_NAME} relative inline-flex w-full min-h-9 items-center rounded-lg border border-border bg-background text-ui text-foreground has-aria-invalid:border-destructive/30 has-focus-visible:has-aria-invalid:border-destructive/50 has-focus-visible:border-foreground/30 has-autofill:bg-foreground/4 has-disabled:opacity-64 sm:min-h-8 sm:text-ui dark:bg-input/32 dark:has-autofill:bg-foreground/8`,
-    size === "sm" && "min-h-8 sm:min-h-7",
-    size === "lg" && "min-h-10 sm:min-h-9",
+      `${capsule ? "" : GLASS_RAISED_SURFACE_CLASS_NAME} ${INPUT_CONTROL_BASE_CLASS_NAME}`,
+    typeof size === "string" && INPUT_CONTROL_SIZE_CLASS_NAMES[size],
     variant === "soft" && SOFT_SURFACE_FILL_CLASS_NAME,
     className,
     // Last, so a caller's own radius or fill (the browser chrome's rounded-lg) cannot square the

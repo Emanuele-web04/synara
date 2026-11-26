@@ -1,3 +1,4 @@
+import { canvasTurnContext } from "../../canvasTurnContext";
 import { appendAppSnapPromptContext } from "../../provider/appSnapPromptContext.ts";
 import { isServerBetaFeatureEnabled } from "../../betaFeatureGate";
 import { MCP_CONNECTORS_BETA_FEATURE } from "@synara/shared/betaFeatures";
@@ -3454,7 +3455,11 @@ const make = Effect.gen(function* () {
           additionalFolders: threadProject.additionalFolders ?? [],
         })
       : null;
-    const projectContext = [projectContextPacket, projectFoldersPreamble ?? ""]
+    const canvasContext = yield* Effect.tryPromise({
+      try: () => canvasTurnContext(serverConfig.stateDir, input.threadId),
+      catch: (error) => error,
+    }).pipe(Effect.catch(() => Effect.succeed("")));
+    const projectContext = [projectContextPacket, projectFoldersPreamble ?? "", canvasContext]
       .filter((block) => block.trim().length > 0)
       .join("\n\n");
     const debugPromptOverheadChars = debugModePromptOverheadChars(input.interactionMode);

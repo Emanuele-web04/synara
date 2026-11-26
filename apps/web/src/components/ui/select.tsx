@@ -50,6 +50,8 @@ const selectTriggerVariants = cva(
         lg: "min-h-10 px-[calc(--spacing(3)-1px)] sm:min-h-9",
         sm: "min-h-8 gap-1.5 px-[calc(--spacing(2.5)-1px)] sm:min-h-7",
         xs: "h-7 gap-1 rounded-sm px-[calc(--spacing(2)-1px)] text-ui-sm sm:h-6 sm:text-ui-xs [&_svg:not([class*='size-'])]:size-4 sm:[&_svg:not([class*='size-'])]:size-3.5",
+        // A 20px select that sits inside another field (the canvas inspector's sizing mode).
+        chip: "h-5 gap-0.5 rounded-sm px-1 text-ui-xs sm:h-5 sm:text-ui-xs [&_svg:not([class*='size-'])]:size-2.5",
       },
     },
   },

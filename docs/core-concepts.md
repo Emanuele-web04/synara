@@ -34,7 +34,7 @@ decoration pauses while its chat is hidden.
 ## The main surfaces
 
 - **Sidebar** — projects, spaces, tasks, and activity requiring attention. The rail
-  is a fixed column of icon tabs for Home, Spaces, Tasks, Code review, Automations, Hubs, and
+  is a fixed column of icon tabs for Home, Spaces, Tasks, Code review, Canvas, Automations, Hubs, and
   Settings, with the thread panel beside it and the route shown as a card inset from the window.
   The Activity view (the bell, `mod+alt+u`) leads with **Priority**: every chat waiting on an
   answer, then unseen finished or failed work, then running chats, with no cap. Rows keep their
@@ -587,6 +587,23 @@ complete current list.
 
 > **The rule that matters most:** a task is complete only after you understand and verify its result
 > — not when the provider reports that it is finished.
+
+## Canvas
+
+Open **Canvas** from the sidebar to browse named works, folders and Archive. Works
+exist independently of chats and can optionally reference a project. Each work has
+ordered pages, its own saved camera and a native chat panel. Continue an associated
+chat or start another; the normal composer, approvals and provider lifecycle apply.
+
+Ask an agent to **use Synara Canvas** to find or create a work. Agents publish HTML/CSS
+views and update individual child layers by persistent ID. Users edit them with a
+design editor (layers, inspector, comments, export) beside the chat. Changing a
+heading does not replace its siblings or reset frame placement. Designs are static and
+isolated from the host.
+
+The work stays on its execution computer and uses that app's separate Stable or Beta
+state home. Documents from the earlier canvas format are not migrated. See
+[Synara Canvas](design-canvas.md) for ownership, tools, persistence and verification.
 
 ## File previews
 

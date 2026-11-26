@@ -1093,6 +1093,32 @@ export function createWsNativeApi(): NativeApi {
       resolveProposal: (input) => executionRequest(WS_METHODS.automationResolveProposal, input),
       onEvent: automationEventListeners.subscribe,
     },
+    canvas: {
+      onEvent: (listener) =>
+        transport.subscribe(WS_CHANNELS.canvasEvent, (message) => listener(message.data)),
+      list: (input) => executionRequest(WS_METHODS.canvasList, input),
+      get: (input) => executionRequest(WS_METHODS.canvasGet, input),
+      getAsset: (input) => executionRequest(WS_METHODS.canvasGetAsset, input),
+      create: (input) => executionRequest(WS_METHODS.canvasCreate, input),
+      createFolder: (input) => executionRequest(WS_METHODS.canvasCreateFolder, input),
+      update: (input) => executionRequest(WS_METHODS.canvasUpdate, input),
+      duplicate: (input) => executionRequest(WS_METHODS.canvasDuplicate, input),
+      changePages: (input) => executionRequest(WS_METHODS.canvasChangePages, input),
+      bindChat: (input) => executionRequest(WS_METHODS.canvasBindChat, input),
+      layout: (input) => executionRequest(WS_METHODS.canvasLayout, input),
+      editLayers: (input) => executionRequest(WS_METHODS.canvasEditLayers, input),
+      restoreFrames: (input) => executionRequest(WS_METHODS.canvasRestoreFrames, input),
+      changeComments: (input) => executionRequest(WS_METHODS.canvasChangeComments, input),
+      importImage: (input) => executionRequest(WS_METHODS.canvasImportImage, input),
+      fontCatalog: () => executionRequest(WS_METHODS.canvasFontCatalog, {}),
+      addFont: (input) => executionRequest(WS_METHODS.canvasAddFont, input),
+      turnActivity: (input) => executionRequest(WS_METHODS.canvasTurnActivity, input),
+      restoreTurn: (input) => executionRequest(WS_METHODS.canvasRestoreTurn, input),
+      submitRender: (input) => executionRequest(WS_METHODS.canvasSubmitRender, input),
+      setChatSelection: async (input) => {
+        await executionRequest(WS_METHODS.canvasSetChatSelection, input);
+      },
+    },
     todo: {
       list: () => executionRequest(WS_METHODS.todoList, {}),
       create: (input) => executionRequest(WS_METHODS.todoCreate, input),

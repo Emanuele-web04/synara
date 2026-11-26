@@ -12,7 +12,9 @@ import {
   type ResolvedKeybindingRule,
   type ResolvedKeybindingsConfig,
 } from "@synara/contracts";
-import { NATIVE_EDITOR_ON } from "./betaFeatures";
+import { DESIGN_CANVAS_ON, NATIVE_EDITOR_ON } from "./betaFeatures";
+import { canvasShortcutSheetRows } from "./components/canvas/editor/canvasShortcuts";
+import { t } from "./i18n";
 import { isMacPlatform } from "./lib/utils";
 import { formatShortcutLabel, resolveKeybindingForCommand } from "./keybindings";
 import { commandForProjectScript } from "./projectScripts";
@@ -47,6 +49,8 @@ interface BuildShortcutSheetSectionsOptions {
   projectScripts: ReadonlyArray<ProjectScript>;
   platform: string;
   context: ShortcutSheetContext;
+  /** List the canvas's own keys (a Beta feature); defaults to whether the canvas is on. */
+  canvas?: boolean;
 }
 
 interface ShortcutDefinition {
@@ -714,6 +718,25 @@ export function buildShortcutSheetSections(
         entries: composerEntries,
       });
     }
+  }
+
+  // The canvas handles these itself while it has focus. They come from the canvas's own key
+  // rules, so the sheet cannot drift from what the keys do.
+  if (options.canvas ?? DESIGN_CANVAS_ON) {
+    sections.push({
+      id: "canvas",
+      title: t("workspace:canvasShortcutsSection"),
+      description: t("workspace:canvasShortcutsSectionDescription"),
+      tone: "muted",
+      entries: canvasShortcutSheetRows(options.platform).map((row) => ({
+        id: row.id,
+        command: null,
+        binding: null,
+        label: t(row.label),
+        description: "",
+        shortcutLabel: row.shortcutLabel,
+      })),
+    });
   }
 
   return sections;

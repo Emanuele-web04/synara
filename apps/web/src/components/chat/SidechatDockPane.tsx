@@ -43,11 +43,14 @@ export function SidechatDockPane({
   pane,
   runtimeMode,
   threadExists,
+  isFocusedPane = false,
 }: {
   pane: RightDockPane;
   runtimeMode: DockPaneRuntimeMode;
   /** Whether the embedded thread has reached the shell projection yet. */
   threadExists: boolean;
+  /** Canvas hosts a primary chat; other dock hosts retain their existing focus behavior. */
+  isFocusedPane?: boolean;
 }) {
   const { t } = useTranslation();
 
@@ -71,7 +74,7 @@ export function SidechatDockPane({
       paneScopeId={dockSidechatPaneScopeId(pane.id)}
       deferMount={false}
       surfaceMode="split"
-      isFocusedPane={false}
+      isFocusedPane={isFocusedPane}
       panelState={DOCK_EMBEDDED_PANEL_STATE}
       onToggleDiff={noopChatSurfaceAction}
       onToggleBrowser={noopChatSurfaceAction}

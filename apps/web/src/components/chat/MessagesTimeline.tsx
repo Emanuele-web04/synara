@@ -91,6 +91,7 @@ import { ForkSourceDivider, type ForkSourceReference } from "./ForkSourceDivider
 import { ProviderHandoffDivider } from "./ProviderHandoffDivider";
 import { ThreadErrorBanner } from "./ThreadErrorBanner";
 import { SynaraThreadCreationCard } from "./SynaraThreadCreationCard";
+import { CanvasTurnCard } from "../canvas/CanvasTurnCard";
 import { WorkerMonitorNoticePill } from "./WorkerMonitorNoticePill";
 import { buildExpandedImagePreview, ExpandedImagePreview } from "./ExpandedImagePreview";
 import { ProposedPlanCard } from "./ProposedPlanCard";
@@ -1549,6 +1550,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         item.kind !== "work" ||
         !(
           item.entry.synaraThreadCreation ||
+          item.entry.canvasTurn ||
           item.entry.computerSetupRequired ||
           item.entry.computerControlDenied ||
           isPinnedBackgroundTaskEntry(item.entry, turnEndedAt, item.backgroundTaskConsumed)
@@ -1827,6 +1829,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           const groupedEntries = row.groupedEntries.filter(
             (workEntry) =>
               !workEntry.synaraThreadCreation &&
+              !workEntry.canvasTurn &&
               !workEntry.providerHandoff &&
               !workEntry.turnFailure,
           );
@@ -2344,7 +2347,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         (() => {
           const messageText = resolveAssistantMessageDisplayText(row);
           const buildWorkDisplay = (workEntries: WorkLogEntry[], workGroupId: string | null) => {
-            const displayEntries = workEntries.filter((entry) => !entry.synaraThreadCreation);
+            const displayEntries = workEntries.filter(
+              (entry) => !entry.synaraThreadCreation && !entry.canvasTurn,
+            );
             const toolEntries = displayEntries.filter((entry) => entry.tone === "tool");
             const statusEntries = displayEntries.filter((entry) => entry.tone !== "tool");
             const toolGroupId = toolEntries.length > 0 ? workGroupId : null;
@@ -2460,6 +2465,14 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               ),
             ).values(),
           ];
+          // One canvas card per work per turn, available while the turn still runs.
+          const canvasTurnRecaps = [
+            ...new Map(
+              allTurnWorkEntries.flatMap((entry) =>
+                entry.canvasTurn ? [[entry.canvasTurn.workId, entry.canvasTurn] as const] : [],
+              ),
+            ).values(),
+          ];
           // Computer setup/denied cards carry the only affordance to unblock the
           // agent, so a settled turn shows the latest of each after the answer
           // instead of burying it inside the closed "Worked for" disclosure.
@@ -2481,6 +2494,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               item.kind !== "work" ||
               !(
                 item.entry.synaraThreadCreation ||
+                item.entry.canvasTurn ||
                 item.entry.computerSetupRequired ||
                 item.entry.computerControlDenied ||
                 isPinnedBackgroundTaskEntry(item.entry, turnEndedAt, item.backgroundTaskConsumed)
@@ -2784,6 +2798,18 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                       ),
                     )
                   : null}
+                {threadId &&
+                  canvasTurnRecaps.map((canvas) => (
+                    <div key={`canvas:${canvas.workId}`} className="mt-2 mb-4">
+                      <CanvasTurnCard
+                        threadId={ThreadId.makeUnsafe(threadId)}
+                        turnId={canvas.turnId}
+                        workId={canvas.workId}
+                        workTitle={canvas.workTitle}
+                        pageId={canvas.pageId}
+                      />
+                    </div>
+                  ))}
                 {MCP_CONNECTORS_ON &&
                   row.connectorProposalIds?.map((proposalId) => (
                     <div key={proposalId} className="mt-2">

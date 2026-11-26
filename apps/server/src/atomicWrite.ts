@@ -142,12 +142,15 @@ export const writeFileStringAtomically = (input: {
   readonly filePath: string;
   readonly contents: string | Uint8Array;
   readonly mode?: number;
+  /** Revalidate mutation authority after preparing the file, immediately before publication. */
+  readonly beforeCommit?: () => Promise<void>;
 }) => {
   const directoryPath = path.dirname(input.filePath);
   const mode = input.mode ?? PRIVATE_FILE_MODE;
 
   return withTempFile(input.filePath, async (tempPath) => {
     await writeDurableTempFile(directoryPath, tempPath, input.contents, mode);
+    await input.beforeCommit?.();
     await fs.rename(tempPath, input.filePath);
     await syncDirectoryEntry(directoryPath);
   });

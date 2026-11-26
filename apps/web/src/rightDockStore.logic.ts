@@ -22,6 +22,7 @@ const RIGHT_DOCK_PANE_KINDS = [
   "git",
   "pullRequest",
   "subagents",
+  "canvas",
 ] as const;
 
 export type RightDockPaneKind = (typeof RIGHT_DOCK_PANE_KINDS)[number];
@@ -43,6 +44,9 @@ export interface RightDockPane {
   pullRequestRepository: string | null;
   pullRequestNumber: number | null;
   pullRequestInitialTab: PullRequestInitialTab | null;
+  // canvas panes show one design canvas work, on a page (absent on older saved panes).
+  canvasWorkId?: string | null;
+  canvasPageId?: string | null;
 }
 
 /**
@@ -50,8 +54,12 @@ export interface RightDockPane {
  * item. It is keyed by this fixed id, which can never collide with a thread id.
  */
 export const GITHUB_INBOX_DOCK_HOST_ID = "github-inbox";
-/** Who owns a dock: a chat thread, or the GitHub inbox page. */
-export type RightDockHostId = ThreadId | typeof GITHUB_INBOX_DOCK_HOST_ID;
+/** Who owns a dock: a chat thread, the GitHub inbox page, or a full-size canvas (its chat). */
+export const canvasDockHostId = (workId: string): `canvas:${string}` => `canvas:${workId}`;
+export type RightDockHostId =
+  | ThreadId
+  | typeof GITHUB_INBOX_DOCK_HOST_ID
+  | ReturnType<typeof canvasDockHostId>;
 
 export interface RightDockThreadState {
   open: boolean;
@@ -121,6 +129,8 @@ function sanitizePersistedPane(value: unknown): RightDockPane | null {
       candidate.pullRequestInitialTab === "code"
         ? candidate.pullRequestInitialTab
         : null,
+    canvasWorkId: typeof candidate.canvasWorkId === "string" ? candidate.canvasWorkId : null,
+    canvasPageId: typeof candidate.canvasPageId === "string" ? candidate.canvasPageId : null,
   };
 }
 
@@ -179,6 +189,8 @@ export interface OpenPaneInput {
   pullRequestRepository?: string | null;
   pullRequestNumber?: number | null;
   pullRequestInitialTab?: PullRequestInitialTab | null;
+  canvasWorkId?: string | null;
+  canvasPageId?: string | null;
 }
 
 function createPane(input: OpenPaneInput): RightDockPane {
@@ -193,6 +205,8 @@ function createPane(input: OpenPaneInput): RightDockPane {
     pullRequestRepository: input.pullRequestRepository ?? null,
     pullRequestNumber: input.pullRequestNumber ?? null,
     pullRequestInitialTab: input.pullRequestInitialTab ?? null,
+    canvasWorkId: input.canvasWorkId ?? null,
+    canvasPageId: input.canvasPageId ?? null,
   };
 }
 
@@ -202,6 +216,9 @@ function createPane(input: OpenPaneInput): RightDockPane {
 function singletonPaneReopenPatch(input: OpenPaneInput): Partial<RightDockPane> | null {
   if (input.kind === "sidechat" && input.threadId !== undefined) {
     return { threadId: input.threadId ?? null };
+  }
+  if (input.kind === "canvas" && input.canvasWorkId !== undefined) {
+    return { canvasWorkId: input.canvasWorkId ?? null, canvasPageId: input.canvasPageId ?? null };
   }
   if (
     input.kind === "diff" &&

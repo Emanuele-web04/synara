@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  DESIGN_CANVAS_BETA_FEATURE,
   desktopFlavorFromBundleId,
   desktopFlavorFromProtocol,
   GROUPS_BETA_FEATURE,
@@ -50,6 +51,13 @@ describe("isBetaFeatureEnabled", () => {
       "unknown",
     ] as const) {
       expect(isBetaFeatureEnabled(GROUPS_BETA_FEATURE, flavor)).toBe(true);
+    }
+  });
+
+  it("keeps Canvas out of Stable", () => {
+    expect(isBetaFeatureEnabled(DESIGN_CANVAS_BETA_FEATURE, "production")).toBe(false);
+    for (const flavor of ["beta", "remote", "development", "canary", "cua", "unknown"] as const) {
+      expect(isBetaFeatureEnabled(DESIGN_CANVAS_BETA_FEATURE, flavor)).toBe(true);
     }
   });
 

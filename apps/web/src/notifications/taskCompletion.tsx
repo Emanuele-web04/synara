@@ -1,3 +1,4 @@
+import { canvasDockHostId } from "~/rightDockStore.logic";
 // FILE: taskCompletion.tsx
 // Purpose: Bridges thread completion and attention-needed events to in-app toasts and OS notifications.
 // Layer: Notification runtime
@@ -159,6 +160,7 @@ function showThreadToast(
 export function TaskCompletionNotifications() {
   const { settings } = useAppSettings();
   const navigate = useNavigate();
+  const canvasWorkId = useParams({ strict: false, select: (params) => params.workId ?? null });
   const activeThreadId = useParams({
     strict: false,
     select: (params) =>
@@ -169,7 +171,10 @@ export function TaskCompletionNotifications() {
     useMemo(() => selectSplitView(routeSearch.splitViewId ?? null), [routeSearch.splitViewId]),
   );
   const rightDockState = useRightDockStore(
-    useMemo(() => selectRightDockState(activeThreadId), [activeThreadId]),
+    useMemo(
+      () => selectRightDockState(canvasWorkId ? canvasDockHostId(canvasWorkId) : activeThreadId),
+      [activeThreadId, canvasWorkId],
+    ),
   );
   const [allThreadsSelector] = useState(() => createAllThreadsSelector());
   const threads = useStore(allThreadsSelector);

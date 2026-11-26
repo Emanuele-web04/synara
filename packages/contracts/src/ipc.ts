@@ -1,3 +1,33 @@
+import type {
+  CanvasStreamEvent,
+  CanvasBindChatInput,
+  CanvasCreateInput,
+  CanvasDuplicateInput,
+  CanvasFolder,
+  CanvasListInput,
+  CanvasListResult,
+  CanvasPageChangeInput,
+  CanvasPageLayoutInput,
+  CanvasResource,
+  CanvasResourceUpdateInput,
+  CanvasWork,
+  CanvasWorkInput,
+  CanvasAddFontInput,
+  CanvasAssetData,
+  CanvasAssetInput,
+  CanvasCommentChangeInput,
+  CanvasEditLayersInput,
+  CanvasEditResult,
+  CanvasFontCatalog,
+  CanvasImportImageInput,
+  CanvasRestoreFramesInput,
+  CanvasRestoreTurnInput,
+  CanvasSubmitRenderInput,
+  CanvasSubmitRenderResult,
+  CanvasChatSelectionInput,
+  CanvasTurnActivityInput,
+  CanvasTurnActivityResult,
+} from "./canvasLibrary";
 import { UiLanguagePreference } from "./uiLocale";
 import type {
   AccountSaveInboxRecapInput,
@@ -1687,6 +1717,29 @@ export interface NativeApi {
       input: AutomationResolveProposalInput,
     ) => Promise<AutomationResolveProposalResult>;
     onEvent: (callback: (event: AutomationStreamEvent) => void) => () => void;
+  };
+  canvas: {
+    onEvent: (listener: (event: CanvasStreamEvent) => void) => () => void;
+    list: (input: CanvasListInput) => Promise<CanvasListResult>;
+    get: (input: CanvasWorkInput) => Promise<CanvasWork>;
+    getAsset: (input: CanvasAssetInput) => Promise<CanvasAssetData>;
+    create: (input: CanvasCreateInput) => Promise<CanvasWork>;
+    createFolder: (input: CanvasCreateInput) => Promise<CanvasFolder>;
+    update: (input: CanvasResourceUpdateInput) => Promise<CanvasResource>;
+    duplicate: (input: CanvasDuplicateInput) => Promise<CanvasWork>;
+    changePages: (input: CanvasPageChangeInput) => Promise<CanvasWork>;
+    bindChat: (input: CanvasBindChatInput) => Promise<CanvasWork>;
+    layout: (input: CanvasPageLayoutInput) => Promise<CanvasWork>;
+    editLayers: (input: CanvasEditLayersInput) => Promise<CanvasEditResult>;
+    restoreFrames: (input: CanvasRestoreFramesInput) => Promise<CanvasWork>;
+    changeComments: (input: CanvasCommentChangeInput) => Promise<CanvasWork>;
+    importImage: (input: CanvasImportImageInput) => Promise<CanvasWork>;
+    fontCatalog: () => Promise<CanvasFontCatalog>;
+    addFont: (input: CanvasAddFontInput) => Promise<CanvasWork>;
+    turnActivity: (input: CanvasTurnActivityInput) => Promise<CanvasTurnActivityResult>;
+    restoreTurn: (input: CanvasRestoreTurnInput) => Promise<CanvasWork>;
+    submitRender: (input: CanvasSubmitRenderInput) => Promise<CanvasSubmitRenderResult>;
+    setChatSelection: (input: CanvasChatSelectionInput) => Promise<void>;
   };
   todo: {
     list: () => Promise<TodoListResult>;

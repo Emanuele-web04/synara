@@ -42,7 +42,15 @@ function createAppHistory(): RouterHistory {
     replace(href, { ...state, synaraExecution: scope }, options);
   const previousScope = history.location.state.synaraExecution;
   const remembered = executionSessionStorage.getItem("last-route:v1");
-  if (previousScope !== scope && remembered?.startsWith("/") && !remembered.startsWith("//"))
+  // A fresh Canvas deep link names the work the user requested. Do not replace it
+  // with the previously visited work; existing cross-host history still resets.
+  const explicitCanvasEntry = !previousScope && /^\/canvas(?:\/|$)/.test(history.location.pathname);
+  if (
+    !explicitCanvasEntry &&
+    previousScope !== scope &&
+    remembered?.startsWith("/") &&
+    !remembered.startsWith("//")
+  )
     history.replace(remembered);
   else history.replace(previousScope && previousScope !== scope ? "/" : history.location.href);
   history.flush();

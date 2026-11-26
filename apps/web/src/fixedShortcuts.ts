@@ -9,6 +9,7 @@ import type { KeybindingShortcut, KeybindingWhenNode } from "@synara/contracts";
 
 import {
   evaluateWhenNode,
+  isShortcutClaimed,
   matchesShortcut,
   type ShortcutEventLike,
   type ShortcutMatchContext,
@@ -115,6 +116,8 @@ export function matchesFixedShortcut(
   platform = navigator.platform,
   context?: Partial<ShortcutMatchContext>,
 ): boolean {
+  // A surface that handles this press itself (the canvas's ⌘[ / ⌘]) keeps it.
+  if (isShortcutClaimed(event)) return false;
   const whenContext: ShortcutMatchContext = {
     terminalFocus: false,
     terminalOpen: false,

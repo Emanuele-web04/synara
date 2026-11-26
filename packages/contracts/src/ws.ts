@@ -1,4 +1,25 @@
 import {
+  CanvasStreamEvent,
+  CanvasBindChatInput,
+  CanvasCreateInput,
+  CanvasDuplicateInput,
+  CanvasListInput,
+  CanvasPageChangeInput,
+  CanvasPageLayoutInput,
+  CanvasResourceUpdateInput,
+  CanvasWorkInput,
+  CanvasAddFontInput,
+  CanvasAssetInput,
+  CanvasCommentChangeInput,
+  CanvasEditLayersInput,
+  CanvasImportImageInput,
+  CanvasRestoreFramesInput,
+  CanvasRestoreTurnInput,
+  CanvasSubmitRenderInput,
+  CanvasChatSelectionInput,
+  CanvasTurnActivityInput,
+} from "./canvasLibrary";
+import {
   AccountSaveInboxRecapInput,
   ListSavedInboxRecapsInput,
   SavedInboxRecapIdInput,
@@ -483,6 +504,27 @@ export const WS_METHODS = {
   automationResolveProposal: "automation.resolveProposal",
   subscribeAutomationEvents: "automation.subscribe",
 
+  subscribeCanvasEvents: "canvas.subscribe",
+  canvasList: "canvas.list",
+  canvasGet: "canvas.get",
+  canvasGetAsset: "canvas.getAsset",
+  canvasCreate: "canvas.create",
+  canvasCreateFolder: "canvas.createFolder",
+  canvasUpdate: "canvas.update",
+  canvasDuplicate: "canvas.duplicate",
+  canvasChangePages: "canvas.changePages",
+  canvasBindChat: "canvas.bindChat",
+  canvasLayout: "canvas.layout",
+  canvasEditLayers: "canvas.editLayers",
+  canvasRestoreFrames: "canvas.restoreFrames",
+  canvasChangeComments: "canvas.changeComments",
+  canvasImportImage: "canvas.importImage",
+  canvasFontCatalog: "canvas.fontCatalog",
+  canvasAddFont: "canvas.addFont",
+  canvasTurnActivity: "canvas.turnActivity",
+  canvasRestoreTurn: "canvas.restoreTurn",
+  canvasSubmitRender: "canvas.submitRender",
+  canvasSetChatSelection: "canvas.setChatSelection",
   // Todo methods (the Tasks view)
   todoList: "todo.list",
   todoCreate: "todo.create",
@@ -533,6 +575,7 @@ export const WS_METHODS = {
 
 export const WS_CHANNELS = {
   automationEvent: "automation.event",
+  canvasEvent: "canvas.event",
   todoEvent: "todo.event",
   gitActionProgress: "git.actionProgress",
   gitWorktreeSetupProgress: "git.worktreeSetupProgress",
@@ -818,6 +861,27 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.automationResolveProposal, AutomationResolveProposalInput),
   tagRequestBody(WS_METHODS.subscribeAutomationEvents, Schema.Struct({})),
 
+  tagRequestBody(WS_METHODS.subscribeCanvasEvents, Schema.Struct({})),
+  tagRequestBody(WS_METHODS.canvasList, CanvasListInput),
+  tagRequestBody(WS_METHODS.canvasGet, CanvasWorkInput),
+  tagRequestBody(WS_METHODS.canvasGetAsset, CanvasAssetInput),
+  tagRequestBody(WS_METHODS.canvasCreate, CanvasCreateInput),
+  tagRequestBody(WS_METHODS.canvasCreateFolder, CanvasCreateInput),
+  tagRequestBody(WS_METHODS.canvasUpdate, CanvasResourceUpdateInput),
+  tagRequestBody(WS_METHODS.canvasDuplicate, CanvasDuplicateInput),
+  tagRequestBody(WS_METHODS.canvasChangePages, CanvasPageChangeInput),
+  tagRequestBody(WS_METHODS.canvasBindChat, CanvasBindChatInput),
+  tagRequestBody(WS_METHODS.canvasLayout, CanvasPageLayoutInput),
+  tagRequestBody(WS_METHODS.canvasEditLayers, CanvasEditLayersInput),
+  tagRequestBody(WS_METHODS.canvasRestoreFrames, CanvasRestoreFramesInput),
+  tagRequestBody(WS_METHODS.canvasChangeComments, CanvasCommentChangeInput),
+  tagRequestBody(WS_METHODS.canvasImportImage, CanvasImportImageInput),
+  tagRequestBody(WS_METHODS.canvasFontCatalog, Schema.Struct({})),
+  tagRequestBody(WS_METHODS.canvasAddFont, CanvasAddFontInput),
+  tagRequestBody(WS_METHODS.canvasTurnActivity, CanvasTurnActivityInput),
+  tagRequestBody(WS_METHODS.canvasRestoreTurn, CanvasRestoreTurnInput),
+  tagRequestBody(WS_METHODS.canvasSubmitRender, CanvasSubmitRenderInput),
+  tagRequestBody(WS_METHODS.canvasSetChatSelection, CanvasChatSelectionInput),
   // Todo methods
   tagRequestBody(WS_METHODS.todoList, Schema.Struct({})),
   tagRequestBody(WS_METHODS.todoCreate, TodoCreateInput),
@@ -904,6 +968,7 @@ export interface WsPushPayloadByChannel {
   readonly [WS_CHANNELS.serverKeepAwakeUpdated]: typeof ServerKeepAwakeUpdatedPayload.Type;
   readonly [WS_CHANNELS.serverSettingsUpdated]: typeof ServerSettingsUpdatedPayload.Type;
   readonly [WS_CHANNELS.automationEvent]: typeof AutomationStreamEvent.Type;
+  readonly [WS_CHANNELS.canvasEvent]: typeof CanvasStreamEvent.Type;
   readonly [WS_CHANNELS.todoEvent]: typeof TodoStreamEvent.Type;
   readonly [WS_CHANNELS.projectAgentEvent]: typeof ProjectAgentStreamEvent.Type;
   readonly [WS_CHANNELS.gitActionProgress]: typeof GitActionProgressEvent.Type;
@@ -957,6 +1022,7 @@ export const WsPushAutomationEvent = makeWsPushSchema(
   WS_CHANNELS.automationEvent,
   AutomationStreamEvent,
 );
+export const WsPushCanvasEvent = makeWsPushSchema(WS_CHANNELS.canvasEvent, CanvasStreamEvent);
 export const WsPushTodoEvent = makeWsPushSchema(WS_CHANNELS.todoEvent, TodoStreamEvent);
 export const WsPushProjectAgentEvent = makeWsPushSchema(
   WS_CHANNELS.projectAgentEvent,
@@ -1005,6 +1071,7 @@ export const WsPushChannelSchema = Schema.Literals([
   WS_CHANNELS.serverKeepAwakeUpdated,
   WS_CHANNELS.serverSettingsUpdated,
   WS_CHANNELS.automationEvent,
+  WS_CHANNELS.canvasEvent,
   WS_CHANNELS.todoEvent,
   WS_CHANNELS.projectAgentEvent,
   WS_CHANNELS.terminalEvent,
@@ -1025,6 +1092,7 @@ export const WsPush = Schema.Union([
   WsPushServerKeepAwakeUpdated,
   WsPushServerSettingsUpdated,
   WsPushAutomationEvent,
+  WsPushCanvasEvent,
   WsPushTodoEvent,
   WsPushProjectAgentEvent,
   WsPushGitActionProgress,

@@ -25,6 +25,7 @@ export interface RenameDialogProps {
   /** Projects pass empty names to clear the local alias and fall back to folder name. */
   allowEmpty?: boolean | undefined;
   placeholder?: string | undefined;
+  maxLength?: number | undefined;
   saveLabel?: string | undefined;
   /** Snooze reuses this dialog with a native date-time field. */
   inputType?: "text" | "datetime-local" | undefined;
@@ -46,6 +47,7 @@ export function RenameDialog({
   initialValue,
   allowEmpty: allowEmptyProp,
   placeholder,
+  maxLength,
   saveLabel: saveLabelProp,
   inputType,
   isValueValid,
@@ -71,6 +73,7 @@ export function RenameDialog({
           initialValue={initialValue}
           allowEmpty={allowEmpty}
           placeholder={placeholder}
+          maxLength={maxLength}
           saveLabel={saveLabel}
           inputType={inputType ?? "text"}
           isValueValid={isValueValid}
@@ -87,6 +90,7 @@ function RenameDialogForm({
   initialValue,
   allowEmpty,
   placeholder,
+  maxLength,
   saveLabel,
   inputType,
   isValueValid,
@@ -97,6 +101,7 @@ function RenameDialogForm({
   initialValue: string;
   allowEmpty: boolean;
   placeholder: string | undefined;
+  maxLength: number | undefined;
   saveLabel: string;
   inputType: "text" | "datetime-local";
   isValueValid: ((value: string) => boolean) | undefined;
@@ -150,6 +155,7 @@ function RenameDialogForm({
             size="lg"
             value={value}
             placeholder={placeholder}
+            maxLength={maxLength}
             disabled={isSaving}
             onChange={(event) => setValue(event.target.value)}
             onKeyDown={(event) => {

@@ -480,6 +480,31 @@ export function isShortcutDispatchSuspended(): boolean {
   return dispatchSuspensions > 0;
 }
 
+/** Decides whether a surface owns one key press (its target, its chord). */
+export type ShortcutClaim = (event: KeyboardEvent) => boolean;
+const shortcutClaims = new Set<ShortcutClaim>();
+
+/**
+ * Lets a focused surface keep the chords it handles itself from the app's shortcuts, which
+ * listen on the window and see every key first. While the claim says yes for a press, no
+ * binding or fixed shortcut resolves for it, so the press reaches the surface (the canvas
+ * editor's ⌘B bolds text instead of toggling the sidebar). Returns the release.
+ */
+export function claimShortcuts(claim: ShortcutClaim): () => void {
+  shortcutClaims.add(claim);
+  return () => {
+    shortcutClaims.delete(claim);
+  };
+}
+
+/** True when a surface claimed this key press (see {@link claimShortcuts}). */
+export function isShortcutClaimed(event: ShortcutEventLike): boolean {
+  if (shortcutClaims.size === 0 || typeof KeyboardEvent === "undefined") return false;
+  if (!(event instanceof KeyboardEvent)) return false;
+  for (const claim of shortcutClaims) if (claim(event)) return true;
+  return false;
+}
+
 function normalizeEventKey(key: string): string {
   const normalized = key.toLowerCase();
   if (normalized === "esc") return "escape";
@@ -703,7 +728,7 @@ export function resolveShortcutCommand(
   keybindings: ResolvedKeybindingsConfig,
   options?: ShortcutMatchOptions,
 ): string | null {
-  if (dispatchSuspensions > 0) return null;
+  if (dispatchSuspensions > 0 || isShortcutClaimed(event)) return null;
   const command = resolveShortcutCommandUntracked(event, keybindings, options);
   if (command !== null && typeof event === "object" && event !== null) {
     trackShortcutCommand(event, command);

@@ -1,5 +1,7 @@
 "use client";
 
+import { canvasDockHostId } from "~/rightDockStore.logic";
+
 import { Toast, type ToastObject } from "@base-ui/react/toast";
 import { useMemo, useEffect, useState, type CSSProperties } from "react";
 import { useParams } from "@tanstack/react-router";
@@ -154,6 +156,7 @@ function shouldRenderForActiveThread(
 }
 
 function useVisibleThreadIdsFromRoute(): ReadonlySet<ThreadId> {
+  const canvasWorkId = useParams({ strict: false, select: (params) => params.workId ?? null });
   const activeThreadId = useParams({
     strict: false,
     select: (params) =>
@@ -164,7 +167,10 @@ function useVisibleThreadIdsFromRoute(): ReadonlySet<ThreadId> {
     useMemo(() => selectSplitView(routeSearch.splitViewId ?? null), [routeSearch.splitViewId]),
   );
   const rightDockState = useRightDockStore(
-    useMemo(() => selectRightDockState(activeThreadId), [activeThreadId]),
+    useMemo(
+      () => selectRightDockState(canvasWorkId ? canvasDockHostId(canvasWorkId) : activeThreadId),
+      [activeThreadId, canvasWorkId],
+    ),
   );
 
   return resolveVisibleToastThreadIds({

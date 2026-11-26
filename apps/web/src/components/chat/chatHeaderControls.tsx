@@ -18,6 +18,7 @@ import {
   type CSSProperties,
   type MouseEvent,
   type RefObject,
+  type ReactElement,
   type ReactNode,
   useEffect,
   useLayoutEffect,
@@ -226,6 +227,20 @@ const SURFACE_TAB_SELECT_FOCUS_CLASS_NAME =
 const SURFACE_TAB_ACTIVE_SELECTOR = "[data-surface-tab-active]";
 
 /**
+ * `element` as a tooltip trigger when there is a tooltip, else as it is. Tab strips sit at the
+ * top of their surface, so the tooltip opens below.
+ */
+function withTooltip(tooltip: ReactNode, element: ReactElement): ReactElement {
+  if (tooltip === undefined || tooltip === null) return element;
+  return (
+    <Tooltip>
+      <TooltipTrigger render={element} />
+      <TooltipPopup side="bottom">{tooltip}</TooltipPopup>
+    </Tooltip>
+  );
+}
+
+/**
  * Shared flat tab chip for every chat surface that renders a row of closable tabs —
  * the right-dock tab strip, the open-thread strip in the chat header, the editor rail,
  * and both terminal tab bars (pane-local tabs + workspace group tabs).
@@ -256,6 +271,7 @@ export function SurfaceTabChip({
   label,
   active,
   title,
+  tooltip,
   leading,
   trailing,
   className,
@@ -263,16 +279,21 @@ export function SurfaceTabChip({
   closeLabel,
   closePlacement,
   selectionAria,
+  tabId,
+  tabPanelId,
   onSelect,
   onClose,
   onLabelDoubleClick,
   onContextMenu,
   sortable,
 }: {
+  /** `null` leaves the icon slot out (a text-only tab in a narrow strip). */
   icon: ReactNode;
   label: ReactNode;
   active?: boolean | undefined;
   title?: string | undefined;
+  /** The select button's tooltip (a label with its shortcut), in place of the native title. */
+  tooltip?: ReactNode;
   leading?: ReactNode;
   trailing?: ReactNode;
   className?: string | undefined;
@@ -280,8 +301,11 @@ export function SurfaceTabChip({
   closeLabel?: string | undefined;
   closePlacement?: "icon" | "trailing" | undefined;
   // Tool toggles announce selection as pressed; navigation tabs (one per route) as the
-  // current page.
-  selectionAria?: "pressed" | "current" | undefined;
+  // current page; chips of a `role="tablist"` strip that switch panels as selected tabs.
+  selectionAria?: "pressed" | "current" | "tab" | undefined;
+  /** With `selectionAria="tab"`: the tab's id and the id of the panel it shows. */
+  tabId?: string | undefined;
+  tabPanelId?: string | undefined;
   onSelect?: (() => void) | undefined;
   onClose?: (() => void) | undefined;
   onLabelDoubleClick?: (() => void) | undefined;
@@ -347,7 +371,7 @@ export function SurfaceTabChip({
               CHAT_SURFACE_CHIP_CLASS_NAME,
               "relative flex !h-8 min-w-0 items-center rounded-md px-0 squircle",
             )
-          : DOCK_TAB_CHIP_CLASS_NAME,
+          : cn(DOCK_TAB_CHIP_CLASS_NAME, icon === null && "ps-2.5"),
         active && CHAT_SURFACE_CONTROL_ACTIVE_CLASS_NAME,
         className,
       )}
@@ -393,25 +417,35 @@ export function SurfaceTabChip({
           </span>
           <CentralIcon name="cross-small" className={DOCK_TAB_CLOSE_GLYPH_CLASS_NAME} />
         </button>
-      ) : (
+      ) : icon === null ? null : (
         glyph
       )}
       {onSelect ? (
-        <button
-          type="button"
-          className={cn(labelClassNames, SURFACE_TAB_SELECT_FOCUS_CLASS_NAME)}
-          title={title}
-          {...(selectionAria === "current"
-            ? { "aria-current": active ? ("page" as const) : undefined }
-            : { "aria-pressed": active })}
-          onClick={(event) => {
-            event.stopPropagation();
-            onSelect();
-          }}
-          onDoubleClick={onLabelDoubleClick}
-        >
-          {labelContent}
-        </button>
+        withTooltip(
+          tooltip,
+          <button
+            type="button"
+            className={cn(labelClassNames, SURFACE_TAB_SELECT_FOCUS_CLASS_NAME)}
+            title={tooltip ? undefined : title}
+            {...(selectionAria === "current"
+              ? { "aria-current": active ? ("page" as const) : undefined }
+              : selectionAria === "tab"
+                ? {
+                    role: "tab",
+                    id: tabId,
+                    "aria-selected": active ?? false,
+                    "aria-controls": tabPanelId,
+                  }
+                : { "aria-pressed": active })}
+            onClick={(event) => {
+              event.stopPropagation();
+              onSelect();
+            }}
+            onDoubleClick={onLabelDoubleClick}
+          >
+            {labelContent}
+          </button>,
+        )
       ) : (
         // Non-selectable chips (a lone tab that cannot switch to anything) render the
         // label as static text so keyboard/AT users don't land on a button that does

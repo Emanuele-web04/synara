@@ -1,3 +1,4 @@
+import { makeCanvasLibraryTools } from "../canvasLibraryTools";
 import { GatewayToolError } from "../toolRuntime.ts";
 import { makeRemoteAwareTools, receiveRemoteTool } from "../remoteTools";
 import { ServerEnvironment } from "../../environment/Services/ServerEnvironment";
@@ -26,6 +27,7 @@ import {
   COMPUTER_CONTROL_DENIED_ACTIVITY_KIND,
   CommandId,
   INLINE_VISUAL_ACTIVITY_KIND,
+  CANVAS_TURN_ACTIVITY_KIND,
   EventId,
   SYNARA_GATEWAY_MAX_THREADS_PER_OPERATION,
   MessageId,
@@ -45,7 +47,10 @@ import {
   type TurnDispatchMode,
 } from "@synara/contracts";
 import { runtimeModeEscalatesPrivilege } from "@synara/shared/runtimeMode";
-import { INLINE_VISUALS_BETA_FEATURE } from "@synara/shared/betaFeatures";
+import {
+  DESIGN_CANVAS_BETA_FEATURE,
+  INLINE_VISUALS_BETA_FEATURE,
+} from "@synara/shared/betaFeatures";
 import { deriveProviderInstances, isProviderKind } from "@synara/shared/providerInstances";
 import { Effect, Layer, Option } from "effect";
 
@@ -1690,7 +1695,41 @@ export const makeAgentGateway = Effect.gen(function* () {
     },
   });
 
+  const canvasTools = makeCanvasLibraryTools({
+    stateDir: serverConfig.stateDir,
+    requireThreadShell,
+    resolveWorkspaceRoot,
+    appendTurnActivity: ({ threadId, turnId, workId, workTitle, pageId }) => {
+      const createdAt = isoNow();
+      // One card per turn and work: the deterministic ids make every later write a no-op.
+      const key = `${turnId}:${workId}`;
+      return orchestrationEngine
+        .dispatch({
+          type: "thread.activity.append",
+          commandId: CommandId.makeUnsafe(`agent:canvas:${key}`),
+          threadId: ThreadId.makeUnsafe(threadId),
+          activity: {
+            id: EventId.makeUnsafe(`gateway:canvas:${key}`),
+            tone: "info",
+            kind: CANVAS_TURN_ACTIVITY_KIND,
+            summary: `Canvas: ${workTitle}`,
+            payload: { workId, workTitle, pageId },
+            turnId: TurnId.makeUnsafe(turnId),
+            createdAt,
+          },
+          createdAt,
+        })
+        .pipe(
+          Effect.asVoid,
+          Effect.catchTag("OrchestrationCommandIdentityCollisionError", () => Effect.void),
+          Effect.catch(() => Effect.void),
+        );
+    },
+  });
+
   const tools: ReadonlyArray<ToolEntry> = [
+    // Beta only: Stable offers agents no canvas tools.
+    ...(isServerBetaFeatureEnabled(DESIGN_CANVAS_BETA_FEATURE) ? canvasTools : []),
     ...readTools,
     ...diagnosticTools,
     createThreads,

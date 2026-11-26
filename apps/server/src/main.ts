@@ -116,8 +116,12 @@ import { registerAccountUsageReporterNudge } from "./accountUsageReporterRegistr
 import { createAccountLiveActivityReporter } from "./accountLiveActivityReporter";
 import { createAccountInboxReporter } from "./accountInboxReporter";
 import { RecapStatsQuery } from "./recapStats";
+import { canvasTurnEndedThread, endCanvasAgentTurn } from "./agentGateway/canvasLibraryTools";
 import { isServerBetaFeatureEnabled } from "./betaFeatureGate";
-import { ACCOUNT_INBOX_BETA_FEATURE } from "@synara/shared/betaFeatures";
+import {
+  ACCOUNT_INBOX_BETA_FEATURE,
+  DESIGN_CANVAS_BETA_FEATURE,
+} from "@synara/shared/betaFeatures";
 import { fetchSynaraServerStatus, formatSynaraServerStatus } from "./serverStatusCli";
 import {
   embeddedMigrationRuntimeSourceDigest,
@@ -584,6 +588,18 @@ const makeServerProgram = (input: CliInput) =>
     // Start the retention loop after the server is live so startup can serve
     // existing history first, then hide inactive threads from the app in the background.
     yield* startThreadRetentionJob(orchestrationEngine, projectionSnapshotQuery);
+    // Beta only: when an agent's turn ends, its canvas activity (the "agent working" outline
+    // and layer markers) is cleared.
+    if (isServerBetaFeatureEnabled(DESIGN_CANVAS_BETA_FEATURE)) {
+      yield* Effect.forkChild(
+        Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) => {
+          const threadId = canvasTurnEndedThread(event);
+          return threadId
+            ? Effect.sync(() => endCanvasAgentTurn(config.stateDir, threadId))
+            : Effect.void;
+        }),
+      );
+    }
     if (isServerBetaFeatureEnabled(ACCOUNT_INBOX_BETA_FEATURE)) {
       const inboxReporter = createAccountInboxReporter({
         sql: yield* SqlClient.SqlClient,

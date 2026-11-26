@@ -45,6 +45,7 @@ export const WS_TURN_DISPATCH_SETTLEMENT_CAPABILITY = "orchestration.turn-dispat
 export const WS_USAGE_LIMIT_RECOVERY_CAPABILITY = "orchestration.usage-limit-recovery";
 export const WS_THREAD_GOAL_VISIBLE_START_CAPABILITY = "orchestration.thread-goal-visible-start";
 export const WS_SERVER_RUNTIME_STATUS_CAPABILITY = "server.runtime-status";
+export const WS_CANVAS_LIBRARY_CAPABILITY = "canvas.library";
 export const WS_GIT_ACTION_RECOVERY_CAPABILITY = "git.action-recovery";
 
 // Capabilities the current client refuses to run without. Kept separate from
@@ -73,6 +74,7 @@ export const WS_SERVER_CAPABILITIES = [
   WS_USAGE_LIMIT_RECOVERY_CAPABILITY,
   WS_GIT_ACTION_RECOVERY_CAPABILITY,
   WS_SERVER_RUNTIME_STATUS_CAPABILITY,
+  WS_CANVAS_LIBRARY_CAPABILITY,
   // Single-handshake connect: negotiation is available over plain HTTP at
   // WS_NEGOTIATE_HTTP_PATH, so a connect costs exactly one WebSocket upgrade.
   "transport.http-negotiate",

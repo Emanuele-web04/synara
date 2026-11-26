@@ -313,4 +313,36 @@ describe("listShortcutEditorDefinitions", () => {
       );
     }
   });
+
+  it("adds a Canvas section built from the canvas key rules, only when the canvas is on", () => {
+    const build = (canvas: boolean, platform: string) =>
+      buildShortcutSheetSections({
+        keybindings: [],
+        projectScripts: [],
+        platform,
+        context: { terminalFocus: false, terminalOpen: false, terminalWorkspaceOpen: false },
+        canvas,
+      });
+    expect(build(false, "MacIntel").some((section) => section.id === "canvas")).toBe(false);
+
+    const mac = build(true, "MacIntel").find((section) => section.id === "canvas");
+    expect(mac).toMatchObject({ title: "Canvas", tone: "muted" });
+    const macLabels = new Map(mac!.entries.map((entry) => [entry.label, entry.shortcutLabel]));
+    expect(macLabels.get("Strikethrough")).toBe("⇧⌘X");
+    expect(macLabels.get("Deselect")).toBe("⇧Esc");
+    expect(macLabels.get("Hug the content")).toBe("⌥⇧⌘R");
+    expect(macLabels.get("Distribute horizontally")).toBe("⌃⌥H");
+    expect(macLabels.get("Resize the selection")).toBe("⌘Right");
+    // Every row is translated and the ids are unique.
+    expect(mac!.entries.every((entry) => !entry.label.startsWith("workspace:"))).toBe(true);
+    expect(new Set(mac!.entries.map((entry) => entry.id)).size).toBe(mac!.entries.length);
+
+    // Elsewhere Ctrl is the command key, so the ⌃⌥ distribute keys do not exist there.
+    const windows = build(true, "Win32").find((section) => section.id === "canvas")!;
+    const windowsLabels = new Map(
+      windows.entries.map((entry) => [entry.label, entry.shortcutLabel]),
+    );
+    expect(windowsLabels.get("Strikethrough")).toBe("Ctrl+Shift+X");
+    expect(windowsLabels.has("Distribute horizontally")).toBe(false);
+  });
 });

@@ -7,6 +7,7 @@
 export const SIDEBAR_NAV_ITEM_IDS = [
   "newThread",
   "inbox",
+  "canvas",
   "kanban",
   "tasks",
   "pullRequests",
