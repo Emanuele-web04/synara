@@ -11905,3 +11905,130 @@ claudeIdleStopFence.layer("ProviderServiceLive conditional Claude idle Stop fenc
     }),
   );
 });
+
+const idleLruCap = makeProviderServiceLayer({
+  runtimeIdleStopMs: 60_000,
+  maxIdleRuntimes: 2,
+});
+idleLruCap.layer("ProviderServiceLive idle LRU runtime cap", (it) => {
+  it.effect(
+    "hibernates oldest idle resumable provider runtimes beyond cap and seamlessly resumes on next turn",
+    () =>
+      Effect.gen(function* () {
+        const provider = yield* ProviderService;
+        const t1 = asThreadId("thread-lru-1");
+        const t2 = asThreadId("thread-lru-2");
+        const t3 = asThreadId("thread-lru-3");
+
+        for (const threadId of [t1, t2, t3]) {
+          yield* provider.startSession(threadId, {
+            provider: "codex",
+            threadId,
+            runtimeMode: "full-access",
+          });
+          yield* idleLruCap.codex.waitForRuntimeSubscribers();
+          idleLruCap.codex.updateSession(threadId, (session) => ({
+            ...session,
+            resumeCursor: { resume: `cursor-${threadId}` },
+          }));
+          idleLruCap.codex.emit({
+            type: "turn.completed",
+            eventId: asEventId(`lru-complete-${threadId}`),
+            provider: "codex",
+            createdAt: new Date().toISOString(),
+            threadId,
+            turnId: asTurnId(`turn-${threadId}`),
+            payload: { state: "completed" },
+          });
+        }
+
+        // t1 (oldest idle) must be stopped promptly while t2 and t3 remain warm.
+        yield* waitUntilEffect(
+          () => idleLruCap.codex.adapter.hasSession(t1).pipe(Effect.map((has) => !has)),
+          1_000,
+          10,
+          "oldest idle provider runtime hibernated",
+        );
+        assert.isTrue(yield* idleLruCap.codex.adapter.hasSession(t2));
+        assert.isTrue(yield* idleLruCap.codex.adapter.hasSession(t3));
+
+        // Sending a new turn to hibernated t1 transparently recovers it.
+        const resumed = yield* provider.sendTurn({
+          threadId: t1,
+          input: "resume after hibernate",
+          attachments: [],
+        });
+        assert.isDefined(resumed.turnId);
+        assert.isTrue(yield* idleLruCap.codex.adapter.hasSession(t1));
+
+        for (const threadId of [t1, t2, t3]) {
+          yield* provider.stopSession({ threadId }).pipe(Effect.ignore);
+        }
+      }),
+  );
+
+  it.effect("never evicts a running background thread when other threads become idle", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const runningThread = asThreadId("thread-lru-running");
+      const idleA = asThreadId("thread-lru-idle-a");
+      const idleB = asThreadId("thread-lru-idle-b");
+      const idleC = asThreadId("thread-lru-idle-c");
+
+      yield* provider.startSession(runningThread, {
+        provider: "codex",
+        threadId: runningThread,
+        runtimeMode: "full-access",
+      });
+      yield* idleLruCap.codex.waitForRuntimeSubscribers();
+      const activeTurn = yield* provider.sendTurn({
+        threadId: runningThread,
+        input: "keep running",
+        attachments: [],
+      });
+      idleLruCap.codex.emit({
+        type: "turn.started",
+        eventId: asEventId("lru-running-started"),
+        provider: "codex",
+        createdAt: new Date().toISOString(),
+        threadId: runningThread,
+        turnId: activeTurn.turnId,
+        payload: {},
+      });
+
+      for (const threadId of [idleA, idleB, idleC]) {
+        yield* provider.startSession(threadId, {
+          provider: "codex",
+          threadId,
+          runtimeMode: "full-access",
+        });
+        idleLruCap.codex.updateSession(threadId, (session) => ({
+          ...session,
+          resumeCursor: { resume: `cursor-${threadId}` },
+        }));
+        idleLruCap.codex.emit({
+          type: "turn.completed",
+          eventId: asEventId(`lru-bg-complete-${threadId}`),
+          provider: "codex",
+          createdAt: new Date().toISOString(),
+          threadId,
+          turnId: asTurnId(`turn-${threadId}`),
+          payload: { state: "completed" },
+        });
+      }
+
+      // idleA is hibernated by LRU, while the running background thread stays live.
+      yield* waitUntilEffect(
+        () => idleLruCap.codex.adapter.hasSession(idleA).pipe(Effect.map((has) => !has)),
+        1_000,
+        10,
+        "idleA hibernated while running thread untouched",
+      );
+      assert.isTrue(yield* idleLruCap.codex.adapter.hasSession(runningThread));
+
+      for (const threadId of [runningThread, idleA, idleB, idleC]) {
+        yield* provider.stopSession({ threadId }).pipe(Effect.ignore);
+      }
+    }),
+  );
+});

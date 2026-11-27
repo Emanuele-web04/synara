@@ -12,10 +12,9 @@ const THREAD_DETAIL_RETENTION_EVICTION_MS = 15 * 60 * 1000;
 // This is a client-side memory cache, not a stream budget: concurrent server
 // subscriptions stay capped at `WS_STREAM_LIMITS.threadPerClient` by
 // `resolveThreadDetailSubscriptionLeaseIds`, so a larger cache never widens
-// admission. It must exceed everything that retains at once (sidebar prewarm
-// window + split-view threads + a parent's live subagent children), otherwise the
-// map sits permanently over capacity and evicts warm detail on every store write.
-export const MAX_CACHED_THREAD_DETAIL_SUBSCRIPTIONS = 32;
+// admission. Keep it large enough for sidebar prewarm + split-view + active
+// subagents while bounding idle background thread detail retention.
+export const MAX_CACHED_THREAD_DETAIL_SUBSCRIPTIONS = 12;
 
 type RetainedThreadEntry = {
   refCount: number;
@@ -26,8 +25,30 @@ type RetainedThreadEntry = {
 const retainedThreadEntries = new Map<ThreadId, RetainedThreadEntry>();
 const listeners = new Set<() => void>();
 const evictionListeners = new Set<(threadId: ThreadId) => void>();
+const visibleThreadListeners = new Set<() => void>();
 let cachedSnapshot: readonly ThreadId[] = [];
 let visibleThreadIds: ReadonlySet<ThreadId> = new Set();
+
+function isThreadArchivedInStore(threadId: ThreadId): boolean {
+  const state = useStore.getState();
+  const sidebarThread = state.sidebarThreadSummaryById[threadId];
+  if (sidebarThread && sidebarThread.archivedAt != null) {
+    return true;
+  }
+  const threadShell = state.threadShellById?.[threadId];
+  return threadShell?.archivedAt != null;
+}
+
+export function isThreadDetailVisible(threadId: ThreadId): boolean {
+  return visibleThreadIds.has(threadId);
+}
+
+export function subscribeVisibleThreadDetailIds(listener: () => void): () => void {
+  visibleThreadListeners.add(listener);
+  return () => {
+    visibleThreadListeners.delete(listener);
+  };
+}
 
 function emitChange(): void {
   cachedSnapshot = [...retainedThreadEntries.keys()];
@@ -140,6 +161,13 @@ export function setVisibleThreadDetailIds(threadIds: readonly ThreadId[]): void 
     return;
   }
   visibleThreadIds = new Set(threadIds);
+  for (const listener of visibleThreadListeners) {
+    try {
+      listener();
+    } catch {
+      // Visibility listeners must not break retention bookkeeping.
+    }
+  }
   reconcileRetentionEntries();
 }
 
@@ -219,14 +247,23 @@ function evictIdleEntriesToCapacity(): void {
 }
 
 function reconcileRetentionEntries(): void {
-  for (const [threadId, entry] of retainedThreadEntries) {
+  let evictedAny = false;
+  for (const [threadId, entry] of [...retainedThreadEntries.entries()]) {
     if (shouldEvictEntry(threadId, entry)) {
+      if (isThreadArchivedInStore(threadId)) {
+        evictEntry(threadId, entry, { notify: false });
+        evictedAny = true;
+        continue;
+      }
       if (entry.evictionTimeout === null) {
         scheduleEviction(threadId, entry);
       }
     } else {
       clearEvictionTimeout(entry);
     }
+  }
+  if (evictedAny) {
+    emitChange();
   }
   evictIdleEntriesToCapacity();
 }

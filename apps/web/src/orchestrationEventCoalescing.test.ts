@@ -7,7 +7,10 @@ import {
 } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
-import { coalesceOrchestrationUiEvents } from "./orchestrationEventCoalescing";
+import {
+  coalesceOrchestrationUiEvents,
+  isDeferrableBackgroundDomainEvent,
+} from "./orchestrationEventCoalescing";
 import { makeActivity, makeDomainEvent, makeState, makeThread } from "./storeTestFixtures";
 
 import { applyOrchestrationEvents } from "./storeEventReducer";
@@ -150,7 +153,53 @@ describe("coalesceOrchestrationUiEvents", () => {
     expect(messageText(result[4]!)).toBe("partial");
     expect(result[5]!.sequence).toBe(6);
   });
+});
 
+describe("isDeferrableBackgroundDomainEvent", () => {
+  it("never defers streaming deltas for the visible thread so active streaming stays smooth", () => {
+    expect(isDeferrableBackgroundDomainEvent(delta(THREAD_A, MESSAGE_A, "hi", 1), true)).toBe(
+      false,
+    );
+    expect(isDeferrableBackgroundDomainEvent(activity(THREAD_A, 2), true)).toBe(false);
+  });
+
+  it("defers streaming assistant deltas and activities for background threads", () => {
+    expect(
+      isDeferrableBackgroundDomainEvent(delta(THREAD_B, MESSAGE_B, "bg-chunk", 1), false),
+    ).toBe(true);
+    expect(isDeferrableBackgroundDomainEvent(activity(THREAD_B, 2), false)).toBe(true);
+  });
+
+  it("never defers settled messages or lifecycle transitions for background threads", () => {
+    expect(
+      isDeferrableBackgroundDomainEvent(
+        delta(THREAD_B, MESSAGE_B, "done", 3, { streaming: false }),
+        false,
+      ),
+    ).toBe(false);
+    expect(
+      isDeferrableBackgroundDomainEvent(
+        makeDomainEvent(
+          "thread.turn-diff-completed",
+          {
+            threadId: THREAD_B,
+            turnId: TurnId.makeUnsafe("turn-1"),
+            checkpointTurnCount: 1,
+            checkpointRef: CheckpointRef.makeUnsafe("ref-1"),
+            status: "ready",
+            files: [],
+            assistantMessageId: null,
+            completedAt: "2026-01-01T00:00:04.000Z",
+          },
+          { sequence: 4 },
+        ),
+        false,
+      ),
+    ).toBe(false);
+  });
+});
+
+describe("coalesceOrchestrationUiEvents reducer equivalence", () => {
   it("preserves final reducer state for same-turn message switches and activity barriers", () => {
     const cases = [
       [

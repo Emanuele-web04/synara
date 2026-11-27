@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer, webUtils } from "electron";
+import { contextBridge, ipcRenderer, webFrame, webUtils } from "electron";
 import type {
   BrowserAnnotationEvent,
   BrowserUseOpenPanelRequest,
@@ -487,3 +487,24 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     },
   },
 } satisfies DesktopBridge);
+
+// Release decoded Blink WebCache memory after the window stays hidden,
+// keeping foreground switching fast while trimming long-running background RSS.
+const HIDDEN_WEB_CACHE_CLEAR_DELAY_MS = 30_000;
+if (typeof document !== "undefined") {
+  let hiddenCacheClearTimer: ReturnType<typeof setTimeout> | null = null;
+  document.addEventListener("visibilitychange", () => {
+    if (hiddenCacheClearTimer !== null) {
+      clearTimeout(hiddenCacheClearTimer);
+      hiddenCacheClearTimer = null;
+    }
+    if (document.visibilityState === "hidden") {
+      hiddenCacheClearTimer = setTimeout(() => {
+        hiddenCacheClearTimer = null;
+        if (document.visibilityState === "hidden") {
+          webFrame.clearCache();
+        }
+      }, HIDDEN_WEB_CACHE_CLEAR_DELAY_MS);
+    }
+  });
+}

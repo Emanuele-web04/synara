@@ -27,8 +27,11 @@ export { buildTerminalRuntimeKey, type TerminalRuntimeCallbacks } from "./termin
 
 // --- Registry orchestration -------------------------------------------------
 
+export const MAX_PARKED_TERMINAL_RUNTIMES = 2;
+
 class TerminalRuntimeRegistry {
   private entries = new Map<string, TerminalRuntimeEntry>();
+  private maxParkedRuntimes = MAX_PARKED_TERMINAL_RUNTIMES;
 
   attach(
     config: TerminalRuntimeConfig,
@@ -67,6 +70,41 @@ class TerminalRuntimeRegistry {
     const entry = this.entries.get(runtimeKey);
     if (!entry) return;
     detachRuntimeFromContainer(entry);
+    this.evictExcessParkedRuntimes();
+  }
+
+  evictExcessParkedRuntimes(maxRetained = this.maxParkedRuntimes): number {
+    const limit = Math.max(0, maxRetained);
+    const parked: Array<[string, TerminalRuntimeEntry]> = [];
+    for (const pair of this.entries) {
+      const entry = pair[1];
+      if (entry.container === null && !entry.providerAuthInstanceId) {
+        parked.push(pair);
+      }
+    }
+    if (parked.length <= limit) return 0;
+    parked.sort((a, b) => (a[1].lastDetachedAt ?? 0) - (b[1].lastDetachedAt ?? 0));
+    const toEvict = parked.length - limit;
+    for (let i = 0; i < toEvict; i += 1) {
+      this.dispose(parked[i]![0]);
+    }
+    return toEvict;
+  }
+
+  setMaxParkedRuntimesForTests(limit: number): void {
+    this.maxParkedRuntimes = Math.max(0, limit);
+  }
+
+  getRuntimeCount(): number {
+    return this.entries.size;
+  }
+
+  getParkedRuntimeCount(): number {
+    let count = 0;
+    for (const entry of this.entries.values()) {
+      if (entry.container === null) count += 1;
+    }
+    return count;
   }
 
   dispose(runtimeKey: string): void {
