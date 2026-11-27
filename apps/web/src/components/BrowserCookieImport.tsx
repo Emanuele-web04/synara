@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import type { BrowserCookieImportResult, BrowserVaultMethods, ThreadId } from "@synara/contracts";
+import { SettingsSelectControl } from "./settings/SettingControls";
 import { Button } from "./ui/button";
+import { Checkbox } from "./ui/checkbox";
+import { SelectItem } from "./ui/select";
 import { DisclosureRegion } from "./ui/DisclosureRegion";
 import { useTranslation } from "~/i18n";
 
@@ -170,79 +173,87 @@ export function BrowserCookieImport({
       </Button>
       <DisclosureRegion open={open}>
         <div className="space-y-3 pt-3 text-ui leading-snug">
-          <label className="block space-y-1">
+          <div className="space-y-1">
             <span>{t("computer:importScope")}</span>
-            <select
-              aria-label={t("computer:cookieImportScope")}
-              className="h-8 w-full rounded-md border bg-background px-2"
+            <SettingsSelectControl
+              ariaLabel={t("computer:cookieImportScope")}
+              triggerClassName="w-full"
               value={scope}
               disabled={busy}
-              onChange={(event) => {
-                setScope(event.target.value === "profile" ? "profile" : "site");
+              onValueChange={(value) => {
+                setScope(value === "profile" ? "profile" : "site");
                 setConfirmed(false);
                 setStatus(null);
               }}
+              valueContent={
+                scope === "profile"
+                  ? t("computer:allSitesInThisProfile")
+                  : `${t("computer:thisSite")} ${destination.origin ?? ""}`
+              }
             >
               {destination.origin ? (
-                <option value="site">
+                <SelectItem hideIndicator value="site">
                   {t("computer:thisSite")} {destination.origin}
-                </option>
+                </SelectItem>
               ) : null}
-              <option value="profile">{t("computer:allSitesInThisProfile")}</option>
-            </select>
-          </label>
+              <SelectItem hideIndicator value="profile">
+                {t("computer:allSitesInThisProfile")}
+              </SelectItem>
+            </SettingsSelectControl>
+          </div>
           <p className="text-ui leading-snug text-muted-foreground">
             {scope === "profile"
               ? t("computer:importsAllCompatibleCookiesFromTheSelectedProfileEvery")
               : t("computer:importsThisSiteItsSubdomainsAndMatchingParentDomains")}
           </p>
           <div className="grid grid-cols-2 gap-3">
-            <label className="min-w-0 space-y-1">
+            <div className="min-w-0 space-y-1">
               <span>{t("computer:browser")}</span>
-              <select
-                aria-label={t("computer:cookieSourceBrowser")}
-                className="h-8 w-full rounded-md border bg-background px-2"
+              <SettingsSelectControl
+                ariaLabel={t("computer:cookieSourceBrowser")}
+                triggerClassName="w-full"
                 value={source}
                 disabled={busy}
-                onChange={(event) => {
-                  void loadProfiles(event.target.value);
+                onValueChange={(value) => {
+                  void loadProfiles(value);
                 }}
+                valueContent={sources.find(({ id }) => id === source)?.name ?? ""}
               >
                 {sources.map(({ id, name }) => (
-                  <option key={id} value={id}>
+                  <SelectItem hideIndicator key={id} value={id}>
                     {name}
-                  </option>
+                  </SelectItem>
                 ))}
-              </select>
-            </label>
-            <label className="min-w-0 space-y-1">
+              </SettingsSelectControl>
+            </div>
+            <div className="min-w-0 space-y-1">
               <span>{t("computer:nav_profile")}</span>
-              <select
-                aria-label={t("computer:cookieSourceProfile")}
-                className="h-8 w-full rounded-md border bg-background px-2"
+              <SettingsSelectControl
+                ariaLabel={t("computer:cookieSourceProfile")}
+                triggerClassName="w-full"
                 value={profile}
                 disabled={busy}
-                onChange={(event) => {
-                  setProfile(event.target.value);
+                onValueChange={(value) => {
+                  setProfile(value);
                   setConfirmed(false);
                 }}
+                valueContent={profiles.find(({ id }) => id === profile)?.name ?? ""}
               >
                 {profiles.map(({ id, name }) => (
-                  <option key={id} value={id}>
+                  <SelectItem hideIndicator key={id} value={id}>
                     {name}
-                  </option>
+                  </SelectItem>
                 ))}
-              </select>
-            </label>
+              </SettingsSelectControl>
+            </div>
           </div>
           <DisclosureRegion open={scope === "profile"}>
             <label className="flex items-start gap-2 text-ui leading-snug">
-              <input
-                type="checkbox"
+              <Checkbox
                 className="mt-0.5"
                 checked={confirmed}
                 disabled={busy}
-                onChange={(event) => setConfirmed(event.target.checked)}
+                onCheckedChange={(checked) => setConfirmed(checked)}
               />
               <span>{t("computer:iAllowSynaraAndItsAgentsToUseAll")}</span>
             </label>

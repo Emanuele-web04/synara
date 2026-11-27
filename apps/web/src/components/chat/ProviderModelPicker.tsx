@@ -537,7 +537,7 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
       provider === "codex" || provider === "claudeAgent" ? t("chat:accounts") : t("chat:profiles");
     return (
       <>
-        <div className="px-2.5 pb-1 pt-1.5 text-ui-xs font-medium text-muted-foreground uppercase tracking-[0.08em]">
+        <div className="px-2.5 pb-1 pt-1.5 text-ui leading-snug text-muted-foreground">
           {sectionLabel}
         </div>
         <MenuRadioGroup
@@ -551,7 +551,7 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
           {selectedInstanceIsMissing ? (
             <MenuRadioItem value={selectedInstanceId} disabled>
               <span className="truncate">{t("settings:missingAccount")}</span>
-              <span className="ms-auto text-ui-xs text-muted-foreground/80 uppercase tracking-[0.08em]">
+              <span className="ms-auto text-ui-xs text-muted-foreground">
                 {t("chat:providerModelPicker_unavailable")}
               </span>
             </MenuRadioItem>
@@ -566,12 +566,12 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
               >
                 <span className="truncate">{instance.label}</span>
                 {availability.identity ? (
-                  <span className="min-w-0 truncate text-ui-xs text-muted-foreground/80">
+                  <span className="min-w-0 truncate text-ui-xs text-muted-foreground">
                     {availability.identity}
                   </span>
                 ) : null}
                 {availability.label ? (
-                  <span className="ms-auto text-ui-xs text-muted-foreground/80 uppercase tracking-[0.08em]">
+                  <span className="ms-auto text-ui-xs text-muted-foreground">
                     {availability.label}
                   </span>
                 ) : null}
@@ -794,7 +794,7 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
                   className={cn(
                     "size-3 shrink-0",
                     accountAvailability.disabled && "opacity-80",
-                    providerIconClassName(option.value, "text-muted-foreground/85"),
+                    providerIconClassName(option.value, "text-muted-foreground"),
                   )}
                 />
                 <ProviderAccountDot
@@ -817,7 +817,7 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
                 >
                   {accountIcon}
                   <span className="truncate">{accountLabel}</span>
-                  <span className="ms-auto text-ui-sm text-muted-foreground/80">
+                  <span className="ms-auto text-ui-sm text-muted-foreground">
                     {accountAvailability.label}
                   </span>
                 </MenuItem>
@@ -829,7 +829,7 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
                   {accountIcon}
                   <span className="truncate">{accountLabel}</span>
                   {accountAvailability.identity ? (
-                    <span className="ms-auto min-w-0 truncate text-ui-xs text-muted-foreground/80">
+                    <span className="ms-auto min-w-0 truncate text-ui-xs text-muted-foreground">
                       {accountAvailability.identity}
                     </span>
                   ) : null}
@@ -861,13 +861,11 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
                 aria-hidden="true"
                 className={cn(
                   "size-3 shrink-0 opacity-80",
-                  providerIconClassName(option.value, "text-muted-foreground/85"),
+                  providerIconClassName(option.value, "text-muted-foreground"),
                 )}
               />
               <span>{option.label}</span>
-              <span className="ms-auto text-ui-sm text-muted-foreground/80">
-                {availability.label}
-              </span>
+              <span className="ms-auto text-ui-sm text-muted-foreground">{availability.label}</span>
             </MenuItem>
           );
         }
@@ -878,7 +876,7 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
                 aria-hidden="true"
                 className={cn(
                   "size-3 shrink-0",
-                  providerIconClassName(option.value, "text-muted-foreground/85"),
+                  providerIconClassName(option.value, "text-muted-foreground"),
                 )}
               />
               {option.label}
@@ -905,7 +903,7 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
               providerStatus.driver ??
               providerStatus.provider}
           </span>
-          <span className="ms-auto text-ui-xs text-muted-foreground/80 uppercase tracking-[0.08em]">
+          <span className="ms-auto text-ui-xs text-muted-foreground">
             {t("chat:missingDriver")}
           </span>
         </MenuItem>
@@ -915,7 +913,7 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
         <MenuSeparator />
       ) : null}
       <MenuItem onClick={() => appHistory.push("/settings?section=providers")}>
-        <PlusIcon aria-hidden="true" className="size-3 shrink-0 text-muted-foreground/85" />
+        <PlusIcon aria-hidden="true" className="size-3 shrink-0 text-muted-foreground" />
         <span>{t("chat:addProviders")}</span>
       </MenuItem>
     </>
@@ -946,7 +944,7 @@ export function resolveProviderModelLabel(input: {
 
 export function getProviderIconClassName(
   provider: ProviderKind | ProviderPickerKind,
-  fallbackClassName: string = "text-muted-foreground/70",
+  fallbackClassName: string = "text-muted-foreground",
 ): string {
   return providerIconClassName(provider, fallbackClassName);
 }
@@ -1075,7 +1073,7 @@ export const ProviderModelPicker = function ProviderModelPicker(props: ProviderM
             className={cn(
               // opacity-100 opts out of the Button base's [&_svg]:opacity-80 dimming.
               "size-3.5 shrink-0 opacity-100",
-              providerIconClassName(activeProvider, "text-muted-foreground/70"),
+              providerIconClassName(activeProvider, "text-muted-foreground"),
               props.activeProviderIconClassName,
             )}
           />

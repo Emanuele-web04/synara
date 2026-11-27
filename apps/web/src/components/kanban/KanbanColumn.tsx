@@ -172,13 +172,13 @@ function KanbanColumnComponent({
   return (
     <section className="flex min-h-0 min-w-64 flex-1 flex-col">
       <header className="flex shrink-0 items-center gap-2 px-1.5 pb-2">
-        <h3 className="text-ui-lg font-medium text-foreground/90">
+        <h3 className="text-ui-lg font-medium text-foreground">
           {KANBAN_COLUMN_V2_LABELS[columnKey]}
         </h3>
         <span className="text-ui leading-snug text-muted-foreground">{cards.length}</span>
         <span className="ml-auto flex shrink-0 items-center gap-1.5">
           {dispatchTarget ? (
-            <span className="text-ui-sm leading-snug text-sky-600 dark:text-sky-300/90">
+            <span className="text-ui-sm leading-snug text-info">
               {t("common:columnUi_dropToSend")}
             </span>
           ) : null}
@@ -201,8 +201,8 @@ function KanbanColumnComponent({
         ref={setNodeRef}
         className={cn(
           "flex min-h-24 flex-1 flex-col gap-2 overflow-y-auto rounded-xl p-1 transition-colors",
-          dispatchTarget && "bg-sky-500/5 ring-1 ring-sky-400/30",
-          dispatchTarget && isOver && "bg-sky-500/10 ring-sky-400/60",
+          dispatchTarget && "bg-info/5 ring-1 ring-info/30",
+          dispatchTarget && isOver && "bg-info/10 ring-info/60",
         )}
       >
         {sortable ? (
@@ -213,7 +213,7 @@ function KanbanColumnComponent({
           cardElements
         )}
         {cards.length === 0 ? (
-          <li className="list-none rounded-lg border border-dashed border-border/60 px-3 py-4 text-center text-ui leading-snug text-muted-foreground/60">
+          <li className="list-none rounded-lg border border-dashed border-[color:var(--color-border)] px-3 py-4 text-center text-ui leading-snug text-muted-foreground">
             {t("common:columnUi_noCards")}
           </li>
         ) : null}
@@ -222,7 +222,7 @@ function KanbanColumnComponent({
             <button
               type="button"
               onClick={() => setShowAll(true)}
-              className="w-full rounded-lg px-3 py-1.5 text-center text-ui leading-snug text-muted-foreground/80 transition-colors hover:bg-muted/40 hover:text-foreground"
+              className="w-full rounded-lg px-3 py-1.5 text-center text-ui leading-snug text-muted-foreground transition-colors hover:bg-[var(--color-background-elevated-secondary)] hover:text-foreground"
             >
               {t("chat:show")} {hiddenCount} {t("common:more2")}
             </button>

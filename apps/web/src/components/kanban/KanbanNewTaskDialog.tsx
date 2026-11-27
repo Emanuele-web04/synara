@@ -385,7 +385,7 @@ export function KanbanNewTaskDialog({
               selectedProjectId={selectedProjectId}
               onProjectIdChange={setSelectedProjectId}
             />
-            <ChevronRightIcon className="size-3.5 shrink-0 text-muted-foreground/50" aria-hidden />
+            <ChevronRightIcon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
             <DialogTitle className="font-system-ui truncate font-medium text-ui leading-none">
               {t("common:kanban_newTask")}
             </DialogTitle>
@@ -532,7 +532,7 @@ export function KanbanNewTaskDialog({
                   type="button"
                   size="icon-sm"
                   variant="ghost"
-                  className="mr-1 shrink-0 text-muted-foreground/70 hover:text-foreground"
+                  className="mr-1 shrink-0 text-muted-foreground hover:text-foreground"
                   aria-label={t("common:kanban_attachImages")}
                   title={t("common:kanban_attachImages")}
                   onClick={() => fileInputRef.current?.click()}

@@ -4,37 +4,19 @@ import { DisclosureChevron } from "./ui/DisclosureChevron";
 import { DisclosureRegion } from "./ui/DisclosureRegion";
 import { ScrollArea } from "./ui/scroll-area";
 import ChatMarkdown from "./ChatMarkdown";
-import { CheckIcon, ListTodoIcon, LoaderIcon } from "~/lib/icons";
+import { ListTodoIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
+import { MUTED_LABEL_TEXT_CLASS_NAME, SOFT_SURFACE_FILL_CLASS_NAME } from "~/surfaceStyles";
+import { SETTINGS_SECTION_LABEL_CLASS_NAME } from "~/settingsPanelStyles";
 import type { ActiveTaskListState } from "../session-logic";
 import type { LatestProposedPlanState } from "../session-logic";
 import { formatTimestamp } from "../timestampFormat";
 import { proposedPlanTitle, stripDisplayedPlanMarkdown } from "../proposedPlan";
 import { ProposedPlanActions } from "./chat/ProposedPlanActions";
 import { DockPaneHeader } from "./chat/DockPaneHeader";
+import { TaskProgressSteps } from "./chat/TaskProgressSteps";
+import { SettingsEmptyState } from "./settings/SettingsPanelPrimitives";
 import { useTranslation } from "~/i18n";
-
-function stepStatusIcon(status: string): React.ReactNode {
-  if (status === "completed") {
-    return (
-      <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-[color-mix(in_srgb,var(--success)_15%,transparent)] text-[var(--success)]">
-        <CheckIcon className="size-3" />
-      </span>
-    );
-  }
-  if (status === "inProgress") {
-    return (
-      <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-[color-mix(in_srgb,var(--color-accent-blue)_15%,transparent)] text-[var(--color-accent-blue)]">
-        <LoaderIcon className="size-3 animate-spin" />
-      </span>
-    );
-  }
-  return (
-    <span className="flex size-5 shrink-0 items-center justify-center rounded-full border border-border/60 bg-muted/30">
-      <span className="size-1.5 rounded-full bg-muted-foreground/30" />
-    </span>
-  );
-}
 
 interface PlanSidebarProps {
   activeTaskList: ActiveTaskListState | null;
@@ -61,14 +43,14 @@ const PlanSidebar = function PlanSidebar({
   const planTitle = planMarkdown ? proposedPlanTitle(planMarkdown) : null;
 
   return (
-    <div className="flex h-full w-[340px] shrink-0 flex-col border-l border-border/70 bg-card/50">
+    <div className="flex h-full w-[340px] shrink-0 flex-col border-l border-[color:var(--color-border)]">
       {/* Header */}
       <DockPaneHeader
         title={
           <span className="flex min-w-0 items-center gap-2">
             <span>{t("workspace:plan_badge")}</span>
             {activeTaskList ? (
-              <span className="truncate text-ui-sm font-normal text-muted-foreground/60">
+              <span className="truncate text-ui-sm font-normal text-muted-foreground">
                 {formatTimestamp(activeTaskList.createdAt, timestampFormat, formatLocale)}
               </span>
             ) : null}
@@ -81,7 +63,6 @@ const PlanSidebar = function PlanSidebar({
               planMarkdown={planMarkdown}
               workspaceRoot={workspaceRoot}
               variant="ghost"
-              buttonClassName="text-muted-foreground/50 hover:text-foreground/70"
             />
           ) : null
         }
@@ -94,43 +75,23 @@ const PlanSidebar = function PlanSidebar({
         <div className="p-3 space-y-4">
           {/* Explanation */}
           {activeTaskList?.explanation ? (
-            <p className="text-ui-lg leading-relaxed text-muted-foreground/80">
+            <p className="px-2 text-ui leading-relaxed text-muted-foreground">
               {activeTaskList.explanation}
             </p>
           ) : null}
 
           {/* Tasks */}
           {activeTaskList && activeTaskList.tasks.length > 0 ? (
-            <div className="space-y-1">
-              <p className="mb-2 text-ui-xs font-semibold text-muted-foreground/40">
-                {t("workspace:plan_steps")}
-              </p>
-              {activeTaskList.tasks.map((task) => (
-                <div
-                  key={`${task.status}:${task.task}`}
-                  className={cn(
-                    "flex items-start gap-2.5 rounded-lg px-2.5 py-2 transition-colors duration-200",
-                    task.status === "inProgress" &&
-                      "bg-[color-mix(in_srgb,var(--color-accent-blue)_5%,transparent)]",
-                    task.status === "completed" &&
-                      "bg-[color-mix(in_srgb,var(--success)_5%,transparent)]",
-                  )}
-                >
-                  <div className="mt-0.5">{stepStatusIcon(task.status)}</div>
-                  <p
-                    className={cn(
-                      "text-ui-lg leading-snug",
-                      task.status === "completed"
-                        ? "text-muted-foreground/50 line-through decoration-muted-foreground/20"
-                        : task.status === "inProgress"
-                          ? "text-foreground/90"
-                          : "text-muted-foreground/70",
-                    )}
-                  >
-                    {task.task}
-                  </p>
-                </div>
-              ))}
+            <div className="flex flex-col gap-1.5">
+              <p className={SETTINGS_SECTION_LABEL_CLASS_NAME}>{t("workspace:plan_steps")}</p>
+              <TaskProgressSteps
+                className="px-2"
+                steps={activeTaskList.tasks.map((task, index) => ({
+                  id: `${index}:${task.task}`,
+                  text: task.task,
+                  status: task.status,
+                }))}
+              />
             </div>
           ) : null}
 
@@ -139,20 +100,23 @@ const PlanSidebar = function PlanSidebar({
             <div className="space-y-2">
               <button
                 type="button"
-                className="group flex w-full items-center gap-1.5 text-left"
+                className={cn(
+                  "flex w-full items-center gap-1.5 px-2 py-1 text-left text-ui-sm hover:text-foreground",
+                  MUTED_LABEL_TEXT_CLASS_NAME,
+                )}
                 aria-expanded={proposedPlanExpanded}
                 onClick={() => setProposedPlanExpanded((v) => !v)}
               >
-                <DisclosureChevron
-                  open={proposedPlanExpanded}
-                  className="size-3 text-muted-foreground/40"
-                />
-                <span className="text-ui-xs font-semibold text-muted-foreground/40 group-hover:text-muted-foreground/60">
-                  {planTitle ?? t("workspace:fullPlan")}
-                </span>
+                <DisclosureChevron open={proposedPlanExpanded} className="size-3" />
+                <span className="min-w-0 truncate">{planTitle ?? t("workspace:fullPlan")}</span>
               </button>
               <DisclosureRegion open={proposedPlanExpanded}>
-                <div className="rounded-lg border border-border/50 bg-background/50 p-3">
+                <div
+                  className={cn(
+                    "rounded-xl border border-[color:var(--color-border)] p-3",
+                    SOFT_SURFACE_FILL_CLASS_NAME,
+                  )}
+                >
                   <ChatMarkdown
                     text={displayedPlanMarkdown ?? ""}
                     cwd={markdownCwd}
@@ -166,14 +130,10 @@ const PlanSidebar = function PlanSidebar({
 
           {/* Empty state */}
           {!activeTaskList && !planMarkdown ? (
-            <div className="flex flex-col items-center justify-center py-12 text-center">
-              <p className="text-ui-lg text-muted-foreground/40">
-                {t("workspace:noActivePlanYet")}
-              </p>
-              <p className="mt-1 text-ui-sm text-muted-foreground/30">
-                {t("workspace:plansWillAppearHereWhenGenerated")}
-              </p>
-            </div>
+            <SettingsEmptyState>
+              <p className="font-medium text-foreground">{t("workspace:noActivePlanYet")}</p>
+              <p>{t("workspace:plansWillAppearHereWhenGenerated")}</p>
+            </SettingsEmptyState>
           ) : null}
         </div>
       </ScrollArea>

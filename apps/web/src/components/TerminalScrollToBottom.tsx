@@ -78,7 +78,7 @@ export function TerminalScrollToBottom({ terminal }: TerminalScrollToBottomProps
     >
       <IconButton
         onClick={handleClick}
-        className="size-7 rounded-full border-border bg-background text-muted-foreground shadow-sm hover:bg-muted hover:text-foreground sm:size-7"
+        className="size-7 rounded-full border-[color:var(--color-border)] bg-[var(--color-background-elevated-primary-opaque)] text-[var(--color-text-foreground)] hover:bg-[image:linear-gradient(var(--color-background-elevated-secondary),var(--color-background-elevated-secondary))] sm:size-7"
         label={t("common:terminal_scrollToBottom")}
         size="icon-xs"
         variant="outline"

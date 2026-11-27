@@ -133,9 +133,8 @@ describe("browser saved logins", () => {
     await render(<BrowserCookieImport api={api} destination={destination} />);
     await page.getByRole("button", { name: "Import browser cookies" }).click();
     await expect.element(page.getByRole("button", { name: "Import for this site" })).toBeEnabled();
-    const scope = document.querySelector<HTMLSelectElement>('[aria-label="Cookie import scope"]')!;
-    scope.value = "profile";
-    scope.dispatchEvent(new Event("change", { bubbles: true }));
+    await page.getByRole("combobox", { name: "Cookie import scope" }).click();
+    await page.getByRole("option", { name: "All sites in this profile" }).click();
     await expect.element(page.getByRole("button", { name: "Import all sites" })).toBeDisabled();
     await page.getByRole("checkbox").click();
     await page.getByRole("button", { name: "Import all sites" }).click();

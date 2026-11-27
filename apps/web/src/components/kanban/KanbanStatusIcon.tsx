@@ -78,7 +78,7 @@ export function KanbanStatusIcon({
   return (
     <svg
       viewBox="0 0 14 14"
-      className={cn("size-3.5 shrink-0 text-muted-foreground/60", className)}
+      className={cn("size-3.5 shrink-0 text-muted-foreground", className)}
       aria-hidden
     >
       <circle

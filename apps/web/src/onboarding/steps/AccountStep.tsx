@@ -28,7 +28,7 @@ function SideNote(props: {
     >
       <span
         className={cn(
-          "text-ui-xs tracking-[0.1em] uppercase",
+          "text-ui-xs",
           props.inverted ? "text-background/55" : "text-muted-foreground",
         )}
       >
