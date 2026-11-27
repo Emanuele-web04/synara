@@ -6,7 +6,7 @@
 //          animated camera. Never while the user is busy with the canvas, and at most once per
 //          agent turn and frame.
 // Layer: Canvas editor camera
-// Exports: useCanvasAgentReveal, CANVAS_REVEAL_IDLE_MS
+// Exports: useCanvasAgentReveal, mostlyOutOfView, CANVAS_REVEAL_IDLE_MS
 
 import type { DesignFrame, DesignViewport } from "@synara/contracts";
 import { useEffect, useLayoutEffect, useRef, type RefObject } from "react";
@@ -40,6 +40,29 @@ const visibleShare = (rect: Rect, view: DesignViewport, width: number, height: n
 };
 const onScreen = (rect: Rect, view: DesignViewport, width: number, height: number) =>
   visibleShare(rect, view, width, height) > 0;
+
+/**
+ * Whether `rects` together have less than a quarter of their area on the canvas (a box with
+ * nothing in it counts as out of view): the rule for bringing an agent's frame, or what an undo
+ * changed, into view.
+ */
+export function mostlyOutOfView(
+  rects: readonly Rect[],
+  view: DesignViewport,
+  width: number,
+  height: number,
+): boolean {
+  if (rects.length === 0) return false;
+  const left = Math.min(...rects.map((rect) => rect.x));
+  const top = Math.min(...rects.map((rect) => rect.y));
+  const bounds = {
+    x: left,
+    y: top,
+    width: spanOf(rects, "x", "width"),
+    height: spanOf(rects, "y", "height"),
+  };
+  return visibleShare(bounds, view, width, height) < CANVAS_REVEAL_MIN_VISIBLE_SHARE;
+}
 
 /** Focus in a field of the editor (the inspector, a rename, the canvas's own popups). */
 function editingAField(root: HTMLElement): boolean {
@@ -125,7 +148,7 @@ export function useCanvasAgentReveal({
         const view = camera.get();
         if (!current.cameraPlaced || width < 40 || height < 40) continue;
         // Mostly in view already (a quarter or more of it): leave the camera alone.
-        if (visibleShare(frame, view, width, height) >= CANVAS_REVEAL_MIN_VISIBLE_SHARE) continue;
+        if (!mostlyOutOfView([frame], view, width, height)) continue;
         if (
           current.busy() ||
           editingAField(element) ||

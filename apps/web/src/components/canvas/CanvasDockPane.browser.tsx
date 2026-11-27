@@ -42,7 +42,8 @@ import { createDefaultRightDockState, openPaneInState } from "~/rightDockStore.l
 import { RightDock } from "../chat/RightDock";
 import { SidebarProvider } from "../ui/sidebar";
 import CanvasDockPane, { CANVAS_DOCK_INSPECTOR_KEY } from "./CanvasDockPane";
-import { canvasDockPaneIcons } from "./canvasPane";
+import { CANVAS_SAVING_DELAY_MS, canvasDockPaneIcons } from "./canvasPane";
+import { runCanvasWrite } from "./canvasWorkCache";
 import { useCanvasActivityStore } from "./canvasStores";
 import { flushCanvasCameras } from "./editor/canvasCamera";
 import { frameOf, resetCanvasStores, workOf } from "./editor/canvasEditorTestHarness";
@@ -72,7 +73,7 @@ async function mountPane(width: number) {
     </QueryClientProvider>
   );
   const screen = await render(tree(width));
-  return { screen, resize: (next: number) => screen.rerender(tree(next)) };
+  return { screen, client, resize: (next: number) => screen.rerender(tree(next)) };
 }
 
 const inspector = () => document.querySelector('[role="region"][aria-label="Inspector"]');
@@ -89,6 +90,7 @@ function camera() {
 }
 const fitNow = () =>
   fitDesignCanvas(frames, viewport().clientWidth, viewport().clientHeight, { maxZoom: 2 });
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const headerStatus = (kind: string) =>
   document.querySelector(`[data-canvas-header-status="${kind}"]`);
 const otherPageMarker = () => document.querySelector('[data-canvas-page-activity="otherPage"]');
@@ -238,6 +240,52 @@ describe("canvas side pane", () => {
         pageName.compareDocumentPosition(headerStatus("archived")!) &
           Node.DOCUMENT_POSITION_FOLLOWING,
       ).toBeTruthy();
+    } finally {
+      await second.screen.unmount();
+    }
+  });
+
+  it("says Saving… while a write takes a moment, and Unsaved changes while it waits offline", async () => {
+    const first = await mountPane(760);
+    try {
+      await vi.waitFor(() => expect(viewport()).toBeTruthy());
+      // A quick write never shows.
+      await runCanvasWrite(first.client, "work1", async () => work);
+      await sleep(CANVAS_SAVING_DELAY_MS + 200);
+      expect(headerStatus("saving")).toBeNull();
+      // A slow one does, after a moment, and goes once it is saved.
+      let finish!: () => void;
+      const slow = runCanvasWrite(
+        first.client,
+        "work1",
+        () => new Promise<typeof work>((resolve) => (finish = () => resolve(work))),
+      );
+      expect(headerStatus("saving")).toBeNull();
+      await vi.waitFor(() => expect(headerStatus("saving")?.textContent).toBe("Saving..."));
+      expect(headerStatus("saving")!.getAttribute("role")).toBe("status");
+      finish();
+      await slow;
+      await vi.waitFor(() => expect(headerStatus("saving")).toBeNull());
+    } finally {
+      await first.screen.unmount();
+    }
+    // Offline, a write waits for the connection: the header says so at once.
+    shown.disconnected = true;
+    const second = await mountPane(760);
+    try {
+      await vi.waitFor(() => expect(headerStatus("disconnected")).toBeTruthy());
+      expect(headerStatus("unsaved")).toBeNull();
+      let finish!: () => void;
+      const waiting = runCanvasWrite(
+        second.client,
+        "work1",
+        () => new Promise<typeof work>((resolve) => (finish = () => resolve(work))),
+      );
+      await vi.waitFor(() => expect(headerStatus("unsaved")?.textContent).toBe("Unsaved changes"));
+      expect(headerStatus("saving")).toBeNull();
+      finish();
+      await waiting;
+      await vi.waitFor(() => expect(headerStatus("unsaved")).toBeNull());
     } finally {
       await second.screen.unmount();
     }

@@ -39,6 +39,7 @@ export const CanvasFrameView = memo(function CanvasFrameView({
   editingLayerId = null,
   renaming = false,
   onRename,
+  onRenameDone,
   onRegister,
 }: {
   frame: DesignFrame;
@@ -61,6 +62,8 @@ export const CanvasFrameView = memo(function CanvasFrameView({
   renaming?: boolean;
   /** The renamed title, or null when renaming was cancelled. */
   onRename?: (frameId: string, title: string | null) => void;
+  /** After Enter or Escape ended a rename: the canvas takes the keyboard back. */
+  onRenameDone?: () => void;
   onRegister: (frameId: string, dom: FrameDom | null) => void;
 }) {
   const { t } = useTranslation();
@@ -159,6 +162,7 @@ export const CanvasFrameView = memo(function CanvasFrameView({
                 maxLength={120}
                 onCancel={() => onRename(frame.id, null)}
                 onCommit={(value) => onRename(frame.id, value)}
+                onDone={onRenameDone}
               />
             </span>
           ) : (

@@ -26,7 +26,7 @@ import { SidebarProvider } from "../../ui/sidebar";
 import { toastManager } from "../../ui/toast";
 import { useCanvasEditorStore } from "../canvasStores";
 import { CanvasCommentLayer } from "./CanvasComments";
-import { CanvasCommentsPanel } from "./CanvasCommentsPanel";
+import { CanvasCommentsPanel, canvasCommentCount } from "./CanvasCommentsPanel";
 import { CanvasEditorProvider, useCanvasEditor } from "./CanvasEditorContext";
 import { CanvasFrameView } from "./CanvasFrameView";
 
@@ -175,7 +175,8 @@ const askAgent = vi.fn();
 async function mount({
   threads = comments,
   pending = null,
-}: { threads?: CanvasCommentThread[]; pending?: Pending | null } = {}) {
+  readOnly = false,
+}: { threads?: CanvasCommentThread[]; pending?: Pending | null; readOnly?: boolean } = {}) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={client}>
@@ -183,7 +184,7 @@ async function mount({
         <CanvasEditorProvider
           work={workWith(threads)}
           pageId="page1"
-          readOnly={false}
+          readOnly={readOnly}
           onAskAgent={askAgent}
         >
           <div className="flex">
@@ -213,7 +214,10 @@ describe("canvas comments", () => {
     pendingDone.mockReset();
     askAgent.mockReset();
   });
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    useCanvasEditorStore.setState({ commentsHidden: false });
+  });
 
   it("posts a new comment on its layer from the bubble", async () => {
     await mount({ pending: { frameId: "frame1", layerId: "title", x: 10.4, y: 5.6 } });
@@ -429,6 +433,49 @@ describe("canvas comments", () => {
     // It never gets smaller than half.
     stage.style.setProperty("--canvas-zoom", "0.05");
     expect(Math.round(size().width)).toBe(13);
+  });
+
+  it("shows comments hidden with ⇧C again when a thread is opened from the list", async () => {
+    const add = vi.spyOn(toastManager, "add");
+    useCanvasEditorStore.setState({ commentsHidden: true });
+    await mount();
+    await expect.element(pin("Headline feels too heavy")).not.toBeInTheDocument();
+    await page
+      .getByRole("region", { name: "Comments" })
+      .getByText("Headline feels too heavy")
+      .click();
+    await expect.element(page.getByRole("dialog", { name: "Headline" })).toBeVisible();
+    expect(useCanvasEditorStore.getState().commentsHidden).toBe(false);
+    expect(add).toHaveBeenCalledWith(expect.objectContaining({ title: "Comments shown" }));
+  });
+
+  it("keeps an archived work's threads readable without the actions the server refuses", async () => {
+    localStorage.removeItem("synara:canvas-comments-show-resolved");
+    await mount({ readOnly: true });
+    await pin("Full-width, #1F6F4A fill").click();
+    const card = page.getByRole("dialog", { name: "Sign in" });
+    await expect.element(card.getByText("Updated fill and label color.")).toBeVisible();
+    await expect.element(card.getByRole("button", { name: "Close" })).toBeVisible();
+    for (const name of ["Resolve", "Reopen", "More", "Message actions", "Ask agent", "Reply"])
+      await expect.element(card.getByRole("button", { name, exact: true })).not.toBeInTheDocument();
+    await expect.element(card.getByPlaceholder("Reply")).not.toBeInTheDocument();
+    // The list still opens threads, but resolved ones stay resolved.
+    const list = page.getByRole("region", { name: "Comments" });
+    await expect.element(list.getByText("Add the logo")).toBeVisible();
+    await expect.element(list.getByRole("button", { name: "Reopen" })).not.toBeInTheDocument();
+    expect(operations()).toEqual([]);
+  });
+
+  it("places no new comment on an archived work", async () => {
+    await mount({ readOnly: true, pending: { frameId: "frame1", layerId: null, x: 10, y: 5 } });
+    await expect.element(page.getByPlaceholder("Add a comment")).not.toBeInTheDocument();
+  });
+
+  it("counts the open threads of every page beside the Comments tab", () => {
+    const work = workWith(comments);
+    const second = { ...work.pages[0]!, id: "page2", comments: [thread("p2", "Second page")] };
+    expect(canvasCommentCount(work)).toBe(2);
+    expect(canvasCommentCount({ pages: [...work.pages, second] })).toBe(3);
   });
 
   it("keeps a pin inside its layer and hides every pin with ⇧C", async () => {

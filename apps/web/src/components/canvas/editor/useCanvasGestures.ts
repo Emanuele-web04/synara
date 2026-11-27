@@ -799,11 +799,14 @@ export function useCanvasGestures(input: {
       return;
     }
     if (tool === "comment") {
-      // With a thread open, the first click only closes it.
+      // With a thread open, the first click only closes it. Comments hidden with ⇧C showed no
+      // thread: it closes and the click places the comment (which shows comments again).
       if (editor.activeCommentId) {
         editor.openComment(null);
-        return;
+        if (!useCanvasEditorStore.getState().commentsHidden) return;
       }
+      // A read-only work takes no new comments.
+      if (readOnly) return;
       const world = worldAt(point);
       const located = frameAtPoint(frames, world);
       if (!located) return;

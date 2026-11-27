@@ -12,7 +12,7 @@ import {
   designLayerSubtree,
   designStyleKey,
 } from "@synara/shared/designCanvasLayers";
-import type { CanvasSelectionItem } from "../canvasStores";
+import { selectionKey, type CanvasSelectionItem } from "../canvasStores";
 
 /** A change the editor can send and later invert. Only the user's own changes are recorded. */
 export type CanvasChange =
@@ -414,8 +414,56 @@ export class CanvasHistoryRecorder {
 }
 
 export type CanvasReplayResult =
-  | { status: "empty" | "done" }
+  | { status: "empty" }
+  | { status: "done"; entry: CanvasHistoryEntry }
   | { status: "failed"; cause: unknown; reverted: boolean };
+
+/**
+ * The frames and layers an undo or redo of `entry` changes, for the canvas to bring them into
+ * view: edited layers (or their frame when the edit removes them), frames moved, renamed,
+ * flagged, restored or given export rows, and a selection put back.
+ */
+export function canvasHistoryTargets(
+  entry: CanvasHistoryEntry,
+  direction: "undo" | "redo",
+): CanvasSelectionItem[] {
+  const items = new Map<string, CanvasSelectionItem>();
+  const add = (item: CanvasSelectionItem) => items.set(selectionKey(item), item);
+  for (const step of entry.steps)
+    for (const change of step[direction]) {
+      if (change.kind === "selection") change.items.forEach(add);
+      else if (change.kind === "layout")
+        for (const patch of change.frames) add(frameItem(patch.id));
+      else if (change.kind === "restore")
+        for (const frame of change.frames) add(frameItem(frame.id));
+      else if (change.kind === "exports")
+        for (const { key } of change.settings) {
+          const [kind, frameId, layerId] = key.split(":");
+          if (frameId)
+            add(kind === "layer" && layerId ? layerItem(frameId, layerId) : frameItem(frameId));
+        }
+      else {
+        // Layers that are there once the change is made: inserted roots and changed layers.
+        const ids = change.operations.flatMap((operation) =>
+          operation.type === "insert_layers"
+            ? operation.layers.roots
+            : "nodeId" in operation && operation.type !== "delete"
+              ? [operation.nodeId]
+              : [],
+        );
+        if (ids.length === 0) add(frameItem(change.frameId));
+        for (const id of ids) add(layerItem(change.frameId, id));
+      }
+    }
+  return [...items.values()];
+}
+
+const frameItem = (frameId: string): CanvasSelectionItem => ({ kind: "frame", frameId });
+const layerItem = (frameId: string, layerId: string): CanvasSelectionItem => ({
+  kind: "layer",
+  frameId,
+  layerId,
+});
 
 /**
  * Undoes or redoes one entry. When a change fails part-way, every step it touched is put
@@ -440,7 +488,7 @@ export async function replayCanvasHistory(
         started = true;
       }
     }
-    return { status: "done" };
+    return { status: "done", entry };
   } catch (cause) {
     const back = direction === "undo" ? "redo" : "undo";
     try {

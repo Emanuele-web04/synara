@@ -5,6 +5,7 @@ import {
   CANVAS_HISTORY_GRACE_MS,
   CanvasHistory,
   canvasHistoryFor,
+  canvasHistoryTargets,
   CanvasHistoryRecorder,
   deletedLayerRows,
   holdCanvasHistory,
@@ -309,4 +310,57 @@ it("reads declarations as written, including values with semicolons in strings",
   expect(styles.get("font-family")).toBe('"A;B", serif');
   expect(styles.get("background")).toBe('url("data:image/png;base64,AA==")');
   expect(styles.get("color")).toBe("red");
+});
+
+describe("canvasHistoryTargets", () => {
+  it("names what an undo or redo changes, for the canvas to bring into view", () => {
+    const steps: CanvasHistoryStep[] = [
+      {
+        undo: [
+          {
+            kind: "edit",
+            frameId: "f",
+            operations: [
+              { type: "set_styles", nodeId: "a", styles: { color: "red" } },
+              { type: "delete", nodeId: "gone" },
+              {
+                type: "insert_layers",
+                parentId: null,
+                layers: { roots: ["back"], nodes: [] },
+              },
+            ],
+          },
+          { kind: "edit", frameId: "g", operations: [{ type: "set_frame_styles", styles: {} }] },
+        ],
+        redo: [{ kind: "layout", frames: [{ id: "f", x: 10 }] }],
+      },
+      {
+        undo: [
+          { kind: "selection", items: [{ kind: "layer", frameId: "f", layerId: "a" }] },
+          { kind: "restore", frames: [{ ...frame, id: "h" }], removeFrameIds: ["x"] },
+          { kind: "exports", settings: [{ key: "layer:f:b", entries: null }] },
+        ],
+        redo: [{ kind: "exports", settings: [{ key: "frame:g", entries: null }] }],
+      },
+    ];
+    expect(canvasHistoryTargets({ pageId: "p", steps }, "undo")).toEqual([
+      // A deleted layer is gone after the change: an edit with nothing left names its frame.
+      { kind: "layer", frameId: "f", layerId: "a" },
+      { kind: "layer", frameId: "f", layerId: "back" },
+      { kind: "frame", frameId: "g" },
+      { kind: "frame", frameId: "h" },
+      { kind: "layer", frameId: "f", layerId: "b" },
+    ]);
+    expect(canvasHistoryTargets({ pageId: "p", steps }, "redo")).toEqual([
+      { kind: "frame", frameId: "f" },
+      { kind: "frame", frameId: "g" },
+    ]);
+  });
+
+  it("returns the replayed entry, so the editor can show its page", async () => {
+    const history = new CanvasHistory();
+    history.push({ pageId: "page2", steps: [{ undo: [], redo: [] }] });
+    const result = await replayCanvasHistory(history, "undo", async () => {});
+    expect(result).toMatchObject({ status: "done", entry: { pageId: "page2" } });
+  });
 });

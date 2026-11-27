@@ -4,6 +4,8 @@ import { useState } from "react";
 import { useTranslation } from "~/i18n";
 import { RotateCcwIcon } from "~/lib/icons";
 import { ensureNativeApi } from "~/nativeApi";
+import { hasLiveLatestTurn } from "~/session-logic";
+import { useStore } from "~/store";
 import { Button } from "../ui/button";
 import { IconButton } from "../ui/icon-button";
 import {
@@ -16,6 +18,7 @@ import {
 import { Spinner } from "../ui/spinner";
 import { toastManager } from "../ui/toast";
 import { CanvasFrameStrip } from "./CanvasFrameStrip";
+import { CanvasAgentIndicator } from "./editor/CanvasAgentActivity";
 import { useCanvasPreviewContext } from "./canvasAssets";
 import { openCanvasPane, useCanvasWork } from "./canvasPane";
 import { canvasQueryKey, canvasTurnActivityQueryKey, runCanvasWrite } from "./canvasWorkCache";
@@ -25,7 +28,8 @@ const MAX_NAMED_FRAMES = 3;
 
 /**
  * One card per agent turn and canvas: the frames it touched on the canvas backdrop, Open
- * (beside this chat) and Restore (put the frames back as they were before this turn).
+ * (beside this chat) and Restore (put the frames back as they were before this turn). While the
+ * turn still runs, the agent indicator follows the title, as on the work's card in the library.
  */
 export function CanvasTurnCard({
   threadId,
@@ -49,6 +53,14 @@ export function CanvasTurnCard({
     queryKey: canvasTurnActivityQueryKey(threadId),
     queryFn: () => ensureNativeApi().canvas.turnActivity({ threadId }),
     enabled: connection.supported,
+  });
+  const running = useStore((state) => {
+    const thread = state.sidebarThreadSummaryById[threadId];
+    return (
+      turnId !== null &&
+      thread?.latestTurn?.turnId === turnId &&
+      hasLiveLatestTurn(thread.latestTurn, thread.session)
+    );
   });
   const [restoring, setRestoring] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -122,8 +134,11 @@ export function CanvasTurnCard({
       />
       <div className="flex h-11 shrink-0 items-center gap-1.5 border-t border-border ps-3 pe-1.5 transition-colors group-hover/turn-card:bg-[var(--color-background-button-secondary-hover)]">
         <div className="flex min-w-0 flex-1 flex-col gap-px">
-          <span className="truncate text-ui-sm leading-tight font-medium text-foreground">
-            {activity?.workTitle ?? workTitle}
+          <span className="flex min-w-0 items-center gap-1.5">
+            <span className="truncate text-ui-sm leading-tight font-medium text-foreground">
+              {activity?.workTitle ?? workTitle}
+            </span>
+            <CanvasAgentIndicator active={running} scope="work" />
           </span>
           <span className="truncate text-ui-xs leading-tight text-muted-foreground">{summary}</span>
         </div>

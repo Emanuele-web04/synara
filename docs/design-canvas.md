@@ -12,7 +12,7 @@ so Beta data never reaches Stable.
 
 | Surface       | Behavior                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Chat card     | One card per agent turn per work: thumbnail, frames created/updated, **Open** and **Restore previous version**. Built from a `canvas.turn` thread activity the gateway appends with a deterministic ID on the turn's first write.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| Chat card     | One card per agent turn per work: thumbnail, frames created/updated, **Open** and **Restore previous version**. Built from a `canvas.turn` thread activity the gateway appends with a deterministic ID on the turn's first write. While that turn still runs (the chat's latest turn, live), the agent indicator follows the card's title; past four frames the strip shows three and a "+N" tile in the frames' outline (it opens the work too).                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | Side pane     | **Open** shows the work in the chat's right dock (`canvas` pane kind), under the dock family's 44 px pane header (title and page, zoom, inspector, **Open full size**, close). An agent's first write, edit or delete on a work in a turn opens it beside the chat that writes it, through the dock's routing rule for agent-opened panes (`dockPaneOpenRequest.ts`, as the browser and simulator panes): focus stays in the composer, a background chat's pane waits on that chat, and a pane closed during the turn stays closed until the next turn. Editable, with the floating toolbar; a pane at least 560 px wide can show a slim inspector, closed until the viewer opens it from the pane header (remembered per viewer), and opening or closing it keeps the middle of the canvas in place. **Open full size** and **Back to chat** keep the work and page. |
 | Full layout   | `/canvas/$workId?page&chat`: the editor inside Synara's content card: the left panel (**Chat**, **Layers**, **Comments**), the canvas with its floating toolbar, and the inspector. The app's top bar holds the zoom menu, **Back to chat** (collapses to the side pane) and the work's menu on its right.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | Header button | Opens the chat's latest linked work in the side pane, or the library when it has none.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
@@ -189,7 +189,9 @@ The library (`CanvasLibraryView.tsx`, `/canvas`):
   first), Files (one folder at a time: its folders, then its
   works, with a trail back up) and Archive (archived works and folders; a work inside an
   archived folder offers "Restore the parent folder first").
-- **Search** matches titles; in Files it searches every folder. **Grid or list**, remembered
+- **Search** matches titles; in Files it searches every folder. A search, page or section change
+  keeps the works shown until the next list arrives; the first load shows placeholder cards (or
+  rows) with the app's skeleton. **Grid or list**, remembered
   per viewer: cards with the thumbnail, or rows with a small one. A whole card or row opens its
   work (the card's title row tints on hover, as the chat's canvas card does); its menu stays
   its own button. Thumbnails render the work's cover frame through the sanitized renderer, with
@@ -197,7 +199,8 @@ The library (`CanvasLibraryView.tsx`, `/canvas`):
 - **Menu** on a work or folder: Open, Rename (the shared rename dialog), Duplicate (works; a
   "(copy)" suffix, the copy stays in the library), Move to (Files or a folder; a folder never
   into itself or its subfolders), Associated project (works), Archive or Restore.
-  There is no permanent delete.
+  Archiving (here or from the work's menu in the full layout) shows the app's compact Undo
+  toast, as archiving a chat does; Undo restores. There is no permanent delete.
 - **Empty states:** no works yet, an empty folder, an empty archive, no search matches.
 - Pages, dividers, icons and the cover frame: see Model and the editor's Pages list below.
 - The library has no sharing, links or teams: works live in this app data home.
@@ -250,7 +253,7 @@ reads as the rest of Synara.
 | Part          | Synara                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Shell         | `CanvasWorkView.tsx`: one header, the app's top bar (`RouteSurfaceHeader`): back, title and page switcher on the left; the zoom menu, **Back to chat** and the work's menu on the right, on the chat header's own controls (`ChatHeaderButton`, `ChatHeaderIconButton`). Below it the editor, in the same rounded, inset content card as every route. The editor body takes the card's corners (`--app-rail-block-radii`); its columns meet at `border-border` lines.                                                                                                                                                                                                                                                                                                                     |
-| Left panel    | `CanvasSidePanel.tsx`: the app's surface tab strip (`SurfaceTabStrip`, text-only `SurfaceTabChip`s as `role="tab"`) for Chat, Layers and Comments, 240 px for Layers and Comments and 360 px for the chat by default, each width resizable from the panel's edge (drag, arrow keys; double-click resets) and kept per tab. A width change moves the camera the other way, so the frames stay put.                                                                                                                                                                                                                                                                                                                                                                                         |
+| Left panel    | `CanvasSidePanel.tsx`: the app's surface tab strip (`SurfaceTabStrip`, text-only `SurfaceTabChip`s as `role="tab"`) for Chat, Layers and Comments, 240 px for Layers and Comments and 360 px for the chat by default, each width resizable from the panel's edge (drag, arrow keys; double-click resets) and kept per tab. A width change moves the camera the other way, so the frames stay put. The Chat tab carries the chat's state with the sidebar's glyphs (`SidebarStatusTrailingGlyph`: working, waiting for an approval or input, in the background), and the unread dot for a reply that arrived while another tab was open; Comments counts the open threads of every page (what its list shows).                                                                             |
 | Pages, layers | `ui/TreeRow.tsx` rows like the main sidebar's (`sidebarRowStyles.ts`): inset 8 px from the panel edges, rounded, the sidebar's hover, selected and focus-ring treatment; 28 px, the chevron in the indent, a 16 px icon lane and a 48 px actions lane at the row's end at every depth, long names truncated (the label runs under the actions lane until a row is hovered or a flag is on). The open page is the selected row; selected layers use the same selected fill as the open page and the rows inside them the hover tone, and a run of filled rows reads as one block. "Pages" (it collapses the list) and "Layers" are the sidebar's muted section labels. A splitter under the pages list sets its height (drag or arrow keys; double-click fits the pages), kept per viewer. |
 | Toolbar       | `CanvasFloatingToolbar` (`editor/CanvasToolbar.tsx`): one horizontal bar bottom-centre over the canvas, on the opaque popover surface of the app's menus (popover fill, border, menu radius and shadow): the app's `sm` toggles and ghost `icon-sm` buttons for V/H, F/R/T and image insert, C, undo and redo (and the zoom menu where no header shows it), tooltips above with the shortcut in the app's key cap. Only the bar takes pointer events; a narrow pane scrolls it sideways. It fades out (the app's disclosure fade, none with reduced motion) and takes no pointer events while a gesture drags (`data-canvas-dragging` on the viewport, `canvasGestureHidesChrome`), and Hide UI removes it.                                                                               |
 | Inspector     | 280 px (232 px slim in the side pane). It starts with its sections; the side pane adds a row naming what is selected, and a read-only work a Read only row. Sections have 32 px headers in the sidebar's muted label style over 24 px rows: the app's `xs` inputs and selects borderless on the soft secondary fill (`inputControlClassName(size, { filled: true })`, `SelectTrigger variant="filled"`), `icon-xs` buttons, the `sm` `SegmentedPicker` squared off to the fields' radius (`shape="field"`), `subtle` action buttons, the app checkbox. Colour swatches keep a hairline over the colour.                                                                                                                                                                                   |
@@ -276,7 +279,10 @@ Shared components gained only additive options, so every other surface renders a
 value for mixed selections, a per-option `tooltip` and a `shape="field"` (the fields' radius
 instead of a pill), and `SurfaceTabChip` a `selectionAria="tab"` with tab and panel IDs, a
 `tooltip` (below the chip) and `icon={null}` for a text-only chip. `ui/TreeRow.tsx` is used by the
-canvas alone and reuses the sidebar's row tokens.
+canvas alone and reuses the sidebar's row tokens; its rename field takes an `onDone` for where the
+keyboard goes after Enter or Escape (the canvas). The chat's file-drop tint is shared as
+`FILE_DROP_HIGHLIGHT_CLASS_NAME` (`chat/composerPickerStyles.ts`), which the canvas's image drop
+uses too.
 
 **Shortcuts against the app's:** the app's global shortcuts listen on the window, before any
 surface. While the canvas has focus it claims the keys it handles (`claimShortcuts` in
@@ -333,7 +339,11 @@ selection actions (align, distribute, resize to fit or fill, resize by a step) l
   delta, a held Ctrl/⌘ with a mouse wheel 0.002, so a wheel notch is a step. A pan ends where
   it got to when the window loses focus. Zoom stays 5–800%.
 - **Tools:** V move, H hand (Space held), F/A frame, R rectangle, T text, C/Y comment,
-  image insert/drop/paste. Shapes and text drawn inside a frame become absolutely
+  image insert/drop/paste. A drag of files over the canvas is taken (a copy, under the app's
+  file-drop tint) only when it holds an image and the work is editable; anything else is refused
+  (drop effect none), and a file dropped on the canvas never reaches the browser, which would
+  open it. Placing an image runs under the progress toast (see Toasts). Shapes and text drawn
+  inside a frame become absolutely
   positioned layers; drawn on empty canvas they create a frame. While drawing, Shift keeps a
   square, Alt draws from the centre (both combine) and holding Space moves the box's origin
   with the pointer; a plain click makes a 100 × 100 box centred on the click. The tools sit in
@@ -389,7 +399,10 @@ selection actions (align, distribute, resize to fit or fill, resize by a step) l
   chip and the container's outline show the target); flow layers reorder in their layout with
   a drop bar; a layer selected with its frame moves with the frame only. Selection changes
   are undo steps: undo restores the selection before an edit, and a command's own selection
-  change joins its step. Arrow keys nudge freely placed layers (Shift ×8) and reorder flow
+  change joins its step. An undo or redo shows where it happened: a step from another page
+  switches to that page, and what it changed (its layers, else their frames) comes into view
+  through the animated camera when less than a quarter of it is on the canvas (the agent reveal's
+  rule), never zooming in (`canvasHistoryTargets`). Arrow keys nudge freely placed layers (Shift ×8) and reorder flow
   layers; ⌘ arrows resize the selection's width or height by 1 px (Shift 8); locked items stay
   put. 8 resize handles (4 drawn); Shift keeps the aspect ratio, Alt resizes from the centre,
   only the dragged axis changes. While a resize or a padding or gap handle drags, the canvas
@@ -427,8 +440,8 @@ pre-wrap` when the layer would collapse them. An IME composing text keeps every 
   ⌘R rename (frame label or layers panel row), ⌫ delete, ⌘⌫ or ⌘⇧G ungroup, ⌘⌥G wrap, ⇧F frame
   the selection (a plain frame around it), ⇧A add flex / wrap in flex, ⌥⇧A remove flex, ⌥C
   clip content, ⌘⌥C/⌘⌥V copy and paste styles, ⌘⇧H hide, ⌘⇧L lock, ⌘⌥⇧L unlock all, ] / [
-  or ⌘⌥] / ⌘⌥[ front / back, ⌘] / ⌘[ or ⌘⌥↑ / ⌘⌥↓ one step, ⌘A siblings (else all frames), ⌘⇧A
-  the others, ⇧Enter or \ parent, `+`/`=`/⌘= and `-`/⌘- zoom, ⇧0/⌘0 100%, ⇧1 fit all, ⇧2 fit
+  or ⌘⌥] / ⌘⌥[ front / back, ⌘] / ⌘[ or ⌘⌥↑ / ⌘⌥↓ one step, ⌘A siblings (else every frame within reach),
+  ⌘⇧A the others, ⇧Enter or \ parent, `+`/`=`/⌘= and `-`/⌘- zoom, ⇧0/⌘0 100%, ⇧1 fit all, ⇧2 fit
   selection, PageUp/PageDown pages, N/⇧N next/previous frame, ⌘⇧D library, `.` or ⌘\ hide the
   panels and tools, ⌥1 Layers, ⌥L collapse every layer, ⇧C hide comments, ⌘⇧E export, ⇧⌘C copy
   PNG, ⌥T/⌥R copy code. Several items: ⌥A / ⌥D / ⌥W / ⌥S align left, right, top and bottom,
@@ -446,11 +459,21 @@ pre-wrap` when the layer would collapse them. An IME composing text keeps every 
   card's Restore button, which shows the app's spinner while the restore runs.
 - **Toasts:** actions with no visible result on the canvas confirm with the app's toast:
   styles copied and pasted, opacity set by a digit, every layer unlocked, comments hidden or
-  shown, and Hide UI (with the key that shows it again). A new one replaces the last.
-- **Header status:** both layouts' headers say, after the page switcher, when the work is
-  archived ("Archived") and while canvas updates are unavailable because the connection is down
-  ("Canvas updates unavailable. Reconnecting…", as the library says), from one
-  `CanvasHeaderStatus`.
+  shown (also when the Comment tool or a thread opened from the Comments panel brings hidden
+  comments back), and Hide UI (with the key that shows it again). A new one replaces the last.
+  Long jobs (page PNG and work PDF export, ⌘⇧E and every Export button or menu, placing an
+  image by insert, drop or paste) run under the app's loading toast once they have taken 300 ms,
+  which turns into their success or error toast (`runCanvasJob`; a placed image has no success
+  toast, it shows on the canvas); a quicker job shows only its outcome.
+- **Header status:** both layouts' headers say, after the page switcher, while the work's changes
+  are being saved ("Saving...", once this client's writes have been pending 400 ms, so quick
+  ones never flicker) or wait for the connection ("Unsaved changes"; the file editor's wording),
+  when the work is archived ("Archived") and while canvas updates are unavailable because the
+  connection is down ("Canvas updates unavailable. Reconnecting…", as the library says), from one
+  `CanvasHeaderStatus`. The canvas stays editable while disconnected: the transport holds a
+  write and sends it when the connection is back, within the request's 60 s deadline; after that
+  the write fails with the editor's error toast, and a write in flight when the connection drops
+  fails the same way.
 - **Clipboard:** a copy writes the layers' HTML source as plain text and, as `text/html`, a
   charset meta tag, the copied frames or layer trees as base64 JSON in a
   `<!--synara-canvas:v1:…-->` comment, then the HTML, so a paste after a reload or in another
@@ -480,7 +503,8 @@ pre-wrap` when the layer would collapse them. An IME composing text keeps every 
 - **Layers panel:** paint order (front first), 28 px rows indented 16 px a level. Click
   selects, Shift a range, ⌘ toggles; locked rows cannot be selected. Double-click or ⌘R renames
   inline (layers as `data-name`, frames by title); Tab and ⇧Tab save the name and rename the
-  next or previous row. Double-clicking a row's icon centres the camera on it. A chevron opens
+  next or previous row. Enter or Escape ends a rename (here, on a frame label or a page row) with
+  the keyboard back on the canvas, so single-key shortcuts work at once. Double-clicking a row's icon centres the camera on it. A chevron opens
   or closes a row; Alt-click opens or closes its whole subtree. Rows drag to reorder or nest:
   the top or bottom 24% drops beside a row, the middle inside it only while the pointer moves
   slowly (under 0.3 px/ms), and moving sideways in 15 px steps picks the depth among the
@@ -488,7 +512,9 @@ pre-wrap` when the layer would collapse them. An IME composing text keeps every 
   selected row moves the whole selection, also into another frame (inserted there with its IDs
   unless taken, then deleted from the source, one undo step). Frame rows rename, reorder, hide
   and lock (`hidden`/`locked` on the frame, `order` in `canvas.layout`; hidden frames are off
-  the canvas, locked ones out of reach). Eye and lock buttons show on hover and stay while on;
+  the canvas, locked ones out of reach: ⌘A, ⌘⇧A and N/⇧N skip both, fit all and fit selection
+  leave hidden frames out, and ⌫ never deletes a locked frame or layer, however it was
+  selected). Eye and lock buttons show on hover and stay while on;
   a lock inherited from a parent shows a dot; hidden layers and everything under them are
   dimmed. ⌥L collapses every row, and so does **Collapse all** from a right-click on the
   panel's empty area; ⌥1 shows the Layers tab. Hovering a row outlines the layer. An inline SVG
@@ -594,11 +620,16 @@ pre-wrap` when the layer would collapse them. An IME composing text keeps every 
   "Discard changes?" before Escape or closing drops it. Each of the user's messages has Edit
   and Delete (the first message's Delete removes the thread). A thread with an agent reply
   newer than `readAt` is unread (a dot on the pin and its row); opening it marks it read.
-  Reply, resolve (with an 8 s Undo), reopen, delete. The Comments panel lists every page's
+  Reply, resolve (with an 8 s Undo), reopen, delete. On a read-only (archived) work a thread
+  can be read but not changed: the card has no Resolve or Reopen, menu, message actions, Ask
+  agent or reply field, the panel no Reopen, and the Comment tool places nothing. Closing a card
+  that held the focus (Escape, Close, Resolve, a sent comment) gives the keyboard back to the
+  canvas. The Comments panel lists every page's
   threads with Search, a Sort and filter menu (Newest first, Oldest first, By page; author
   Anyone/You/Agent; Any page/This page) and a Show resolved toggle kept per execution host;
   a row on another page switches to it and opens the thread. ⇧C, or **Show comments** in the
-  zoom menu, hides or shows every pin. **Ask agent** seeds the canvas chat's composer with the
+  zoom menu, hides or shows every pin; choosing the Comment tool, a click with it, or opening a
+  thread from the panel shows hidden pins again (with the "Comments shown" toast). **Ask agent** seeds the canvas chat's composer with the
   comment and IDs; the user sends it. The card is placed with the camera's CSS variables so it
   follows a pan or zoom without a render, which an anchored popover would not.
 - **Agent activity:** frames an agent wrote, edited or deleted in during the last 40 s get a
@@ -844,7 +875,8 @@ page; the header switcher and its indicator for an agent on another page; Use as
 Remove cover; the pages splitter, remembered, and its double-click fit),
 `CanvasLibraryView.browser.tsx` (Recent, Files with its trail, Archive; search across folders
 and its empty state; grid and list remembered; Move to, folder cycles, the rename dialog; the
-agent indicator on a work's card and row; the whole card opening its work), `canvasWorkCache.test.ts` (deltas, including the `duplicate` and `replace_html`
+agent indicator on a work's card and row; the whole card opening its work; placeholders on the
+first load and the works kept while a search loads; archive with the Undo toast restoring), `canvasWorkCache.test.ts` (deltas, including the `duplicate` and `replace_html`
 shapes, refetch of one work on a gap, own-write echo, newest-wins), `canvasStores.test.ts`
 (activity kinds, per-layer entries, reads leaving the outline alone, `ended`; the side pane
 asked for once per work and turn, never for a read), `CanvasPaneAutoOpen.browser.tsx` (agent
@@ -861,9 +893,10 @@ empty pages, per-page cameras, no server writes while idle),
 viewer, no toggle where it does not fit, the canvas's middle kept when it opens and closes,
 Open full size on the same work and page, the first fit at the size the pane opens to, the
 header's page name marked for an agent on another page; Archived and the connection status in
-its header; the dock's Canvas tab showing the agent indicator from behind another tab and its
+its header; Saving... only for a write that takes a moment, Unsaved changes while one waits
+offline; the dock's Canvas tab showing the agent indicator from behind another tab and its
 unchanged glyph when idle), `CanvasTurnCard.browser.tsx` (the Restore button's tooltip and its
-spinner while the restore runs),
+spinner while the restore runs; the agent indicator while its own turn runs),
 `editor/CanvasGestures.browser.tsx` (pan, wheel zoom, layer and frame drag, resize and
 marquee with zero React commits while the pointer moves, measured with a `Profiler`, the
 resize cursor held through the drag; cancel; flow reorder; keyboard tree walking and tools;
@@ -902,7 +935,11 @@ ID kept; typing inside a range keeping its style; pasted HTML inserting plain te
 agent's restyle of a sibling keeping the caret and the spans; a span never selected by a click,
 a Cmd-click or the layers panel; ⌘B on selected blocks, clearing their ranges, and off again).
 `editor/CanvasEditorBugs.browser.tsx` (one reproduction per fixed editor bug, against an
-in-memory stand-in for the store in `editor/canvasEditorTestHarness.tsx`),
+in-memory stand-in for the store in `editor/canvasEditorTestHarness.tsx`, which can also switch
+pages: B24 hidden and locked frames out of ⌘A, ⌘⇧A, N, fit all and ⌫; B25 an undo on another
+page showing it and the change; B26 image-only drops with the tint and no fall-through; B27 the
+Comment tool showing hidden comments and placing none on a read-only work; B28 and B29 the
+keyboard back on the canvas after a rename or a closed comment card),
 `editor/CanvasEditorInteractions.browser.tsx` (real pointer and key events: frame
 body and label clicks, the 4 px tolerance, siblings at the selection's depth, locked layers
 on canvas and in the panel, double-click by time and distance with Shift, deep text,
@@ -927,11 +964,14 @@ the cover marker and hidden blocked labels; Alt-click subtree toggles, Tab renam
 Collapse all in the layers panel) and
 `editor/CanvasComments.browser.tsx` (also discard confirmation, read on open, message edit
 and delete, panel search, filters and the stored toggle, pin clamping, the pin shrinking below
-50% zoom, ⇧C), `editor/CanvasAgentReveal.browser.tsx` (an off-screen frame an agent writes
+50% zoom, ⇧C and a panel row showing hidden comments, a read-only work's card and panel without
+their mutating actions, the open-thread count of every page), `editor/CanvasAgentReveal.browser.tsx` (an off-screen frame an agent writes
 comes into view with the frames in view, a few commits rather than one per animation step, once
 per turn; a sliver at the edge is revealed, a half-visible frame is not; never during a text edit
 or a drag), `CanvasFrameStrip.browser.tsx` (turn-card
-thumbnails and the composer's selection chip with the work's fonts and images), `editor/CanvasAppShortcuts.browser.tsx` (the app's real shortcut resolver and
+thumbnails and the composer's selection chip with the work's fonts and images; three frames and
+a "+N" tile past four), `CanvasSidePanel.browser.tsx` (the Chat tab's working, approval and
+unread-reply glyphs), `editor/CanvasAppShortcuts.browser.tsx` (the app's real shortcut resolver and
 default bindings on a window capture listener: ⌘B in a text edit bolds, ⌘B / ⌘I / ⌘D / ⌘[ on a
 focused canvas run the canvas commands, and outside the canvas the app's commands run), the
 Page section and the picker's uncut channel rows in `inspector/CanvasInspector.browser.tsx`,
@@ -942,8 +982,10 @@ the digit rule, and every guide press replayed through the rules with every shor
 `canvasMeasure` (drawn boxes, the size badge, blocked labels), `canvasGestures`,
 `canvasSelection` (hit stack, click and drill rules, double-click, locks, marquee rules,
 Shift toggle), `canvasLayerDrop` (zones, depth steps, slow inside, frames), `canvasCommands`
-(arrange order), `canvasClipboard` (embedding, untrusted trees, paste order, offsets),
-`canvasHistory` (groups, replay, lifetime, several inserts in one edit),
+(arrange order, frames within reach), `canvasClipboard` (embedding, untrusted trees, paste order, offsets),
+`canvasHistory` (groups, replay, lifetime, several inserts in one edit, the targets an undo
+brings into view), `canvasToasts` (the progress toast turning into the outcome, quick jobs, hidden
+comments shown),
 `useCanvasTextEditing` (text edits, empty deletes, line breaks, Tab order). Server:
 `canvasLibraryStore.test.ts` also covers frame flags and order, message edit and delete
 permissions and `mark_read`.

@@ -6,6 +6,7 @@ import { claimShortcuts } from "~/keybindings";
 import { screenToWorld } from "~/lib/designCanvas";
 import { cn } from "~/lib/utils";
 import { useStore } from "~/store";
+import { FILE_DROP_HIGHLIGHT_CLASS_NAME } from "../../chat/composerPickerStyles";
 import { useShallow } from "zustand/react/shallow";
 import {
   selectionKey,
@@ -29,7 +30,7 @@ import {
   type ClipboardContent,
 } from "./canvasClipboard";
 import { showCanvasContextMenu, showCanvasEmptyMenu } from "./canvasContextMenu";
-import { showCanvasToast } from "./canvasToasts";
+import { showCanvasToast, showHiddenCanvasComments } from "./canvasToasts";
 import {
   alignSelection,
   distributeSelection,
@@ -55,10 +56,16 @@ import {
   type CanvasFrameDrafts,
   type CanvasPendingComment,
 } from "./useCanvasGestures";
-import { useCanvasAgentReveal } from "./useCanvasAgentReveal";
+import { mostlyOutOfView, useCanvasAgentReveal } from "./useCanvasAgentReveal";
 import { isCanvasTextEditChord, useCanvasTextEditing } from "./useCanvasTextEditing";
 
 const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
+
+/** Set on the canvas while an image it takes is dragged over it (the drop highlight shows). */
+const FILE_DROP_ATTRIBUTE = "data-canvas-file-drop";
+
+/** Whether a drag carries files (a text or layer drag does not). */
+const isFileDrag = (transfer: DataTransfer) => [...transfer.types].includes("Files");
 
 /**
  * The canvas: frames on an infinite world under this client's camera, with selection chrome,
@@ -88,6 +95,12 @@ export function CanvasViewport({
   const tool = useCanvasEditorStore((state) => state.tool);
   const setTool = useCanvasEditorStore((state) => state.setTool);
   const root = useRef<HTMLDivElement>(null);
+  // The editor gives the keyboard back to this element after a rename (focusCanvas).
+  const { attachViewport } = editor;
+  useLayoutEffect(() => {
+    attachViewport(root.current);
+    return () => attachViewport(null);
+  }, [attachViewport]);
   const world = useRef<HTMLDivElement>(null);
   const live = useRef<HTMLDivElement>(null);
   const reveals = useRef<HTMLDivElement>(null);
@@ -162,7 +175,11 @@ export function CanvasViewport({
     setDrafts,
     setHover,
     text,
-    onComment: setPendingComment,
+    // Comments hidden with ⇧C come back for the comment being placed.
+    onComment: (pending) => {
+      showHiddenCanvasComments(t);
+      setPendingComment(pending);
+    },
     onRenameFrame: setRenaming,
     onHandleDoubleClick: (axes, fill) =>
       void resizeSelectionTo(inspectorModelOf(editor), fill ? "fill" : "fit", axes),
@@ -178,6 +195,12 @@ export function CanvasViewport({
   const viewportElement = useCallback(() => root.current, []);
   const zoom = useCanvasCameraCommands(viewportElement);
   const exports = useMemo(() => makeCanvasExportActions(editor, t), [editor, t]);
+  // Choosing the Comment tool shows comments hidden with ⇧C.
+  useEffect(() => {
+    if (tool === "comment") showHiddenCanvasComments(t);
+    // Only a change of tool counts; ⇧C while the tool is on still hides them.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tool]);
 
   /** The camera's centre, in world pixels: where pastes and inserted images land. */
   const center = () => {
@@ -432,6 +455,32 @@ export function CanvasViewport({
     commands: zoom,
     busy: () => gestureRef.current.active() || claim.current.editing || pendingRef.current !== null,
   });
+  // An undo or redo shows what it changed: once its page shows, the camera brings it into view
+  // when less than a quarter of it is on the canvas (the agent reveal's rule), never zooming in.
+  const revealRequest = useCanvasEditorStore((state) => state.revealRequest);
+  const revealed = useRef(revealRequest?.nonce ?? 0);
+  useEffect(() => {
+    const request = revealRequest;
+    const element = root.current;
+    if (!request || !element || request.nonce === revealed.current) return;
+    if (request.workId !== work.id || request.pageId !== page.id || !editor.cameraPlaced) return;
+    revealed.current = request.nonce;
+    const origin = element.getBoundingClientRect();
+    const view = camera.get();
+    const rects = request.items.flatMap((item) => {
+      const frame = frameById.get(item.frameId);
+      if (!frame) return [];
+      const layer = item.kind === "layer" ? editor.elementFor(item) : null;
+      const box = layer ? elementBox(layer, origin) : null;
+      return [
+        box
+          ? screenToWorldRect(box, view)
+          : { x: frame.x, y: frame.y, width: frame.width, height: frame.height },
+      ];
+    });
+    if (mostlyOutOfView(rects, view, element.clientWidth, element.clientHeight))
+      zoom.fit(rects, { maxZoom: view.zoom });
+  }, [camera, editor, frameById, page.id, revealRequest, work.id, zoom]);
   useEffect(() => {
     if (!altHeld) return;
     const release = (event: KeyboardEvent) => {
@@ -477,10 +526,38 @@ export function CanvasViewport({
     return () => document.removeEventListener("paste", onPaste);
   }, [editingText]);
 
+  /**
+   * Files dragged over the canvas: an image on an editable work is taken (a copy, with the drop
+   * highlight); anything else is refused, and the browser never opens a file dropped here.
+   */
+  const fileDrop = useRef(0);
+  const setFileDropShown = (shown: boolean) => {
+    if (!shown) fileDrop.current = 0;
+    root.current?.toggleAttribute(FILE_DROP_ATTRIBUTE, shown);
+  };
+  const takesFiles = (transfer: DataTransfer) =>
+    !readOnly &&
+    [...transfer.items].some((item) => item.kind === "file" && item.type.startsWith("image/"));
+  const onDragEnter = (event: React.DragEvent<HTMLDivElement>) => {
+    if (!isFileDrag(event.dataTransfer)) return;
+    fileDrop.current++;
+    if (takesFiles(event.dataTransfer)) setFileDropShown(true);
+  };
+  const onDragLeave = (event: React.DragEvent<HTMLDivElement>) => {
+    if (!isFileDrag(event.dataTransfer)) return;
+    if (--fileDrop.current <= 0) setFileDropShown(false);
+  };
+  const onDragOver = (event: React.DragEvent<HTMLDivElement>) => {
+    if (!isFileDrag(event.dataTransfer)) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = takesFiles(event.dataTransfer) ? "copy" : "none";
+  };
   const onDrop = (event: React.DragEvent<HTMLDivElement>) => {
+    if (!isFileDrag(event.dataTransfer)) return;
+    event.preventDefault();
+    setFileDropShown(false);
     const file = [...event.dataTransfer.files].find((item) => item.type.startsWith("image/"));
     if (!file || readOnly) return;
-    event.preventDefault();
     const box = root.current!.getBoundingClientRect();
     const at = screenToWorld(camera.get(), event.clientX - box.left, event.clientY - box.top);
     void commands.placeImage(file, at, center());
@@ -554,6 +631,8 @@ export function CanvasViewport({
     if (value && value !== current.frame(frameId)?.title)
       void current.run({ kind: "layout", frames: [{ id: frameId, title: value }] });
   }, []);
+  /** A rename ended with Enter or Escape: the canvas takes the keyboard back. */
+  const focusViewport = useCallback(() => root.current?.focus({ preventScroll: true }), []);
 
   // Labels that would cover a neighbouring frame stay hidden (unless the frame is selected).
   const labelBlockKey = frames
@@ -626,10 +705,9 @@ export function CanvasViewport({
       onPointerUp={gestures.onPointerUp}
       onPointerCancel={gestures.onPointerCancel}
       onPointerLeave={gestures.onPointerLeave}
-      onDragOver={(event) => {
-        if ([...event.dataTransfer.items].some((item) => item.kind === "file"))
-          event.preventDefault();
-      }}
+      onDragEnter={onDragEnter}
+      onDragLeave={onDragLeave}
+      onDragOver={onDragOver}
       onDrop={onDrop}
       onContextMenu={onContextMenu}
     >
@@ -651,6 +729,7 @@ export function CanvasViewport({
             editingLayerId={editingText?.frameId === frame.id ? editingText.layerId : null}
             renaming={renaming === frame.id}
             onRename={renameFrame}
+            onRenameDone={focusViewport}
             onRegister={editor.registerFrame}
           />
         ))}
@@ -681,6 +760,15 @@ export function CanvasViewport({
           <CanvasZoomMenu viewportElement={viewportElement} />
         </div>
       )}
+      {/* The app's file-drop tint (the chat's composer drop), while an image is dragged in. */}
+      <div
+        aria-hidden
+        data-canvas-file-drop-highlight=""
+        className={cn(
+          FILE_DROP_HIGHLIGHT_CLASS_NAME,
+          "opacity-0 [[data-canvas-file-drop]_&]:opacity-100",
+        )}
+      />
       <CanvasCommentLayer
         frameRect={(frameId) => {
           const frame = frameById.get(frameId);

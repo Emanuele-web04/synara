@@ -38,6 +38,7 @@ import {
 import { makeCanvasCommands, type CanvasCommands } from "./canvasCommands";
 import {
   canvasHistoryFor,
+  canvasHistoryTargets,
   CanvasHistoryRecorder,
   deletedLayerRows,
   holdCanvasHistory,
@@ -50,6 +51,7 @@ import {
   type CanvasChange,
 } from "./canvasHistory";
 import { indexLayers, type LayerIndex } from "./canvasSelection";
+import { runCanvasJob, showHiddenCanvasComments } from "./canvasToasts";
 
 export type FrameDom = {
   host: HTMLElement;
@@ -124,7 +126,10 @@ export type CanvasEditorApi = {
   cameraPlaced: boolean;
   editingText: Extract<CanvasSelectionItem, { kind: "layer" }> | null;
   setEditingText: (item: Extract<CanvasSelectionItem, { kind: "layer" }> | null) => void;
-  /** Opens a thread by ID (on its page, switching to it), or closes the open one. */
+  /**
+   * Opens a thread by ID (on its page, switching to it; comments hidden with ⇧C show again), or
+   * closes the open one.
+   */
   openComment: (target: { threadId: string; pageId?: string } | null) => void;
   activeCommentId: string | null;
   onAskAgent: ((prompt: string) => void) | null;
@@ -132,6 +137,13 @@ export type CanvasEditorApi = {
   selectPage: ((pageId: string) => void) | null;
   /** Opens the canvas library (⌘⇧D); null where the host cannot. */
   openLibrary: (() => void) | null;
+  /**
+   * Gives the keyboard back to the canvas (a rename ended with Enter or Escape), so single-key
+   * shortcuts work again.
+   */
+  focusCanvas: () => void;
+  /** The canvas element `focusCanvas` focuses; CanvasViewport sets it. */
+  attachViewport: (element: HTMLElement | null) => void;
 };
 
 export type CanvasChangeResult = { work: CanvasWork; createdNodeIds: readonly string[] };
@@ -202,6 +214,8 @@ export function CanvasEditorProvider({
   // A camera previewed when the editor closes is still this page's.
   useLayoutEffect(() => () => liveCamera.commit(), [liveCamera]);
 
+  /** The editor as last rendered, for callbacks that run after an await (commands, undo). */
+  const latestEditor = useRef<CanvasEditorApi | null>(null);
   const [editingText, setEditingText] = useState<CanvasEditorApi["editingText"]>(null);
   const [activeCommentId, setActiveCommentId] = useState<string | null>(null);
   const queue = useRef<Promise<unknown>>(Promise.resolve());
@@ -260,6 +274,7 @@ export function CanvasEditorProvider({
   }, [page.id]);
   const openComment = useCallback<CanvasEditorApi["openComment"]>(
     (target) => {
+      if (target) showHiddenCanvasComments(t);
       if (target?.pageId && target.pageId !== page.id && onSelectPage) {
         pendingComment.current = target.threadId;
         onSelectPage(target.pageId);
@@ -267,7 +282,15 @@ export function CanvasEditorProvider({
       }
       setActiveCommentId(target?.threadId ?? null);
     },
-    [onSelectPage, page.id],
+    [onSelectPage, page.id, t],
+  );
+  const viewportElement = useRef<HTMLElement | null>(null);
+  const attachViewport = useCallback((element: HTMLElement | null) => {
+    viewportElement.current = element;
+  }, []);
+  const focusCanvas = useCallback(
+    () => viewportElement.current?.focus({ preventScroll: true }),
+    [],
   );
 
   const fonts = useCanvasFonts(work.id, work.assets);
@@ -448,6 +471,17 @@ export function CanvasEditorProvider({
           send(change, entryPage, false),
         );
         if (result.status === "failed") fail(result.cause);
+        if (result.status !== "done") return;
+        // The step shows where it happened: on its page (switched to when it is another one),
+        // with what it changed brought into view when it is off screen.
+        const { pageId: target } = result.entry;
+        const current = latestEditor.current;
+        if (target !== current?.page.id && current?.selectPage) current.selectPage(target);
+        useCanvasEditorStore.getState().requestReveal({
+          workId: workRef.current.id,
+          pageId: target,
+          items: canvasHistoryTargets(result.entry, direction),
+        });
       });
     },
     [enqueue, fail, history, readOnly, send],
@@ -520,15 +554,14 @@ export function CanvasEditorProvider({
   );
 
   // Commands are built once and read the editor as it is when they run.
-  const latest = useRef<CanvasEditorApi | null>(null);
   const commands = useMemo(
     () =>
-      makeCanvasCommands(() => latest.current!, {
+      makeCanvasCommands(() => latestEditor.current!, {
         frameTitle: (number) => `${t("workspace:canvasFrame")} ${number}`,
         importImage: (input) =>
           runCanvasWrite(client, input.workId, () => ensureNativeApi().canvas.importImage(input)),
         saveCover: (cover) => {
-          const workId = latest.current!.work.id;
+          const workId = latestEditor.current!.work.id;
           return runCanvasWrite(
             client,
             workId,
@@ -536,6 +569,13 @@ export function CanvasEditorProvider({
             (saved) => saved as CanvasWork,
           );
         },
+        imageJob: (job) =>
+          runCanvasJob(t("workspace:canvasAddingImage"), job, {
+            failure: (cause) => ({
+              title: t("workspace:canvasOperationFailed"),
+              description: cause instanceof Error ? cause.message : undefined,
+            }),
+          }),
         fail,
       }),
     [client, fail, t],
@@ -576,8 +616,12 @@ export function CanvasEditorProvider({
       onAskAgent,
       selectPage: onSelectPage,
       openLibrary: onOpenLibrary,
+      focusCanvas,
+      attachViewport,
     }),
     [
+      focusCanvas,
+      attachViewport,
       onSelectPage,
       onOpenLibrary,
       openComment,
@@ -611,6 +655,6 @@ export function CanvasEditorProvider({
     ],
   );
   // Before any effect or event handler of this render runs, commands see this render's editor.
-  latest.current = value;
+  latestEditor.current = value;
   return <CanvasEditorContext.Provider value={value}>{children}</CanvasEditorContext.Provider>;
 }

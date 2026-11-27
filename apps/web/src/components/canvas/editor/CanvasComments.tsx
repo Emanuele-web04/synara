@@ -139,7 +139,8 @@ export function CanvasCommentLayer({
           </div>
         );
       })}
-      {pending && pendingPoint && (
+      {/* A read-only work takes no new comments (the server refuses them). */}
+      {pending && pendingPoint && !editor.readOnly && (
         <div className="absolute z-10" style={pinStyle(pendingPoint)}>
           <CommentPin author={{ kind: "user" }} userInitial={userInitial} />
           <NewCommentComposer pending={pending} onDone={onPendingDone} />
@@ -345,7 +346,9 @@ function useCommentDismiss(
 
 /**
  * The floating surface of a comment card, positioned beside its pin. Pointer, key and wheel
- * input stays with the card instead of reaching the canvas underneath.
+ * input stays with the card instead of reaching the canvas underneath. When the card goes while
+ * it holds the focus (Escape, Close, Resolve, a sent comment), the canvas takes the keyboard
+ * back, so single-key shortcuts keep working; focus the user moved elsewhere stays there.
  */
 function CommentSurface({
   label,
@@ -374,6 +377,17 @@ function CommentSurface({
     };
     element.addEventListener("wheel", wheel, { passive: false });
     return () => element.removeEventListener("wheel", wheel);
+  }, []);
+  useLayoutEffect(() => {
+    const element = ref.current;
+    const viewport = element?.closest<HTMLElement>("[data-canvas-viewport]") ?? null;
+    // Runs while the card is still in the document, before it takes the focus with it.
+    return () => {
+      const active = document.activeElement;
+      if (!element || !viewport) return;
+      if (active === null || active === document.body || element.contains(active))
+        viewport.focus({ preventScroll: true });
+    };
   }, []);
   return (
     <div
@@ -557,7 +571,9 @@ function CommentThreadCard({
     ).then((discard) => {
       if (discard) onClose();
     });
-  const canAsk = editor.onAskAgent !== null && open;
+  // An archived work is read only: the thread can be read, not changed (the server refuses).
+  const writable = !editor.readOnly;
+  const canAsk = editor.onAskAgent !== null && open && writable;
   const title = canvasCommentTarget(editor, thread);
   const ask = (extra?: string) =>
     askAgent(
@@ -599,7 +615,7 @@ function CommentThreadCard({
         <span className="min-w-0 flex-1 truncate text-ui-sm font-medium text-foreground">
           {title}
         </span>
-        {open ? (
+        {!writable ? null : open ? (
           <IconButton
             label={t("workspace:canvasCommentResolve")}
             tooltip={t("workspace:canvasCommentResolve")}
@@ -620,38 +636,40 @@ function CommentThreadCard({
             <RotateCcwIcon className="size-3.5" />
           </IconButton>
         )}
-        <Menu>
-          <MenuTrigger
-            render={
-              <IconButton label={t("common:more")} tooltip={t("common:more")}>
-                <MoreHorizontalIcon className="size-3.5" />
-              </IconButton>
-            }
-          >
-            <MoreHorizontalIcon className="size-3.5" />
-          </MenuTrigger>
-          <ComposerPickerMenuPopup align="start">
-            {canAsk && (
-              <>
-                <MenuItem onClick={() => void send(true)}>
-                  {t("workspace:canvasCommentAskAgent")}
-                  <MenuShortcut>{mac ? "⌘↵" : "Ctrl ↵"}</MenuShortcut>
-                </MenuItem>
-                <MenuSeparator />
-              </>
-            )}
-            <MenuItem
-              variant="destructive"
-              onClick={() =>
-                void actions.remove(thread).then((removed) => {
-                  if (removed) onClose();
-                })
+        {writable && (
+          <Menu>
+            <MenuTrigger
+              render={
+                <IconButton label={t("common:more")} tooltip={t("common:more")}>
+                  <MoreHorizontalIcon className="size-3.5" />
+                </IconButton>
               }
             >
-              {t("workspace:canvasDelete")}
-            </MenuItem>
-          </ComposerPickerMenuPopup>
-        </Menu>
+              <MoreHorizontalIcon className="size-3.5" />
+            </MenuTrigger>
+            <ComposerPickerMenuPopup align="start">
+              {canAsk && (
+                <>
+                  <MenuItem onClick={() => void send(true)}>
+                    {t("workspace:canvasCommentAskAgent")}
+                    <MenuShortcut>{mac ? "⌘↵" : "Ctrl ↵"}</MenuShortcut>
+                  </MenuItem>
+                  <MenuSeparator />
+                </>
+              )}
+              <MenuItem
+                variant="destructive"
+                onClick={() =>
+                  void actions.remove(thread).then((removed) => {
+                    if (removed) onClose();
+                  })
+                }
+              >
+                {t("workspace:canvasDelete")}
+              </MenuItem>
+            </ComposerPickerMenuPopup>
+          </Menu>
+        )}
         <IconButton
           label={t("workspace:canvasClose")}
           tooltip={t("workspace:canvasClose")}
@@ -670,44 +688,40 @@ function CommentThreadCard({
                   <CommentMeta author={message.author} createdAt={message.createdAt} />
                 </span>
                 {/* Each message has Edit and Delete, for its author. */}
-                {message.author.kind === "user" &&
-                  !editor.readOnly &&
-                  editing?.id !== message.id && (
-                    <Menu>
-                      <MenuTrigger
-                        render={
-                          <IconButton
-                            label={t("workspace:canvasCommentMessageActions")}
-                            tooltip={t("workspace:canvasCommentMessageActions")}
-                            className="opacity-0 group-hover/message:opacity-100 focus-visible:opacity-100 data-popup-open:opacity-100"
-                          >
-                            <MoreHorizontalIcon className="size-3" />
-                          </IconButton>
+                {message.author.kind === "user" && writable && editing?.id !== message.id && (
+                  <Menu>
+                    <MenuTrigger
+                      render={
+                        <IconButton
+                          label={t("workspace:canvasCommentMessageActions")}
+                          tooltip={t("workspace:canvasCommentMessageActions")}
+                          className="opacity-0 group-hover/message:opacity-100 focus-visible:opacity-100 data-popup-open:opacity-100"
+                        >
+                          <MoreHorizontalIcon className="size-3" />
+                        </IconButton>
+                      }
+                    >
+                      <MoreHorizontalIcon className="size-3" />
+                    </MenuTrigger>
+                    <ComposerPickerMenuPopup align="end">
+                      <MenuItem onClick={() => setEditing({ id: message.id, text: message.text })}>
+                        {t("workspace:canvasCommentEdit")}
+                      </MenuItem>
+                      <MenuItem
+                        variant="destructive"
+                        onClick={() =>
+                          void (at === 0
+                            ? actions.remove(thread).then((removed) => {
+                                if (removed) onClose();
+                              })
+                            : actions.deleteMessage(thread, message.id))
                         }
                       >
-                        <MoreHorizontalIcon className="size-3" />
-                      </MenuTrigger>
-                      <ComposerPickerMenuPopup align="end">
-                        <MenuItem
-                          onClick={() => setEditing({ id: message.id, text: message.text })}
-                        >
-                          {t("workspace:canvasCommentEdit")}
-                        </MenuItem>
-                        <MenuItem
-                          variant="destructive"
-                          onClick={() =>
-                            void (at === 0
-                              ? actions.remove(thread).then((removed) => {
-                                  if (removed) onClose();
-                                })
-                              : actions.deleteMessage(thread, message.id))
-                          }
-                        >
-                          {t("workspace:canvasDelete")}
-                        </MenuItem>
-                      </ComposerPickerMenuPopup>
-                    </Menu>
-                  )}
+                        {t("workspace:canvasDelete")}
+                      </MenuItem>
+                    </ComposerPickerMenuPopup>
+                  </Menu>
+                )}
               </div>
               {editing?.id === message.id ? (
                 <div className="flex flex-col gap-1.5">
@@ -752,23 +766,25 @@ function CommentThreadCard({
           </li>
         ))}
       </ol>
-      <div className="flex items-center gap-1.5 border-t border-border py-2 ps-3 pe-2">
-        <Textarea
-          unstyled
-          rows={1}
-          value={reply}
-          placeholder={t("workspace:canvasCommentReply")}
-          className={COMMENT_FIELD_CLASS_NAME}
-          onChange={(event) => setReply(event.target.value)}
-          onKeyDown={(event) => onCommentFieldKeyDown(event, (withAgent) => void send(withAgent))}
-        />
-        {canAsk && <AskAgentChip disabled={busy} onClick={() => void send(true)} />}
-        <SendButton
-          label={t("workspace:canvasCommentReply")}
-          disabled={!reply.trim() || busy}
-          onClick={() => void send(false)}
-        />
-      </div>
+      {writable && (
+        <div className="flex items-center gap-1.5 border-t border-border py-2 ps-3 pe-2">
+          <Textarea
+            unstyled
+            rows={1}
+            value={reply}
+            placeholder={t("workspace:canvasCommentReply")}
+            className={COMMENT_FIELD_CLASS_NAME}
+            onChange={(event) => setReply(event.target.value)}
+            onKeyDown={(event) => onCommentFieldKeyDown(event, (withAgent) => void send(withAgent))}
+          />
+          {canAsk && <AskAgentChip disabled={busy} onClick={() => void send(true)} />}
+          <SendButton
+            label={t("workspace:canvasCommentReply")}
+            disabled={!reply.trim() || busy}
+            onClick={() => void send(false)}
+          />
+        </div>
+      )}
     </CommentSurface>
   );
 }

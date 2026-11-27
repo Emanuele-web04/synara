@@ -7,7 +7,8 @@
 // Layer: Canvas editor UI
 // Exports: CanvasSidePanel, CanvasSideTab, CANVAS_SIDE_TABS
 
-import { useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import type { ThreadId } from "@synara/contracts";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "~/i18n";
 import { executionStorage } from "~/lib/hosts/executionStorage";
 import {
@@ -16,7 +17,13 @@ import {
   removePanelResizeOverlay,
 } from "~/lib/panelResize";
 import { cn } from "~/lib/utils";
+import { useStore } from "~/store";
 import { SurfaceTabChip, SurfaceTabStrip } from "../chat/chatHeaderControls";
+import { resolveThreadStatusPill } from "../Sidebar.logic";
+import {
+  SidebarStatusTrailingGlyph,
+  SidebarUnreadCompletionGlyph,
+} from "../SidebarStatusTrailingGlyph";
 import { useCanvasEditor } from "./editor/CanvasEditorContext";
 import { canvasShortcutLabelFor } from "./editor/canvasShortcuts";
 import { ShortcutTooltip } from "./editor/ShortcutTooltip";
@@ -54,15 +61,46 @@ function saveWidth(tab: CanvasSideTab, width: number) {
   }
 }
 
+/**
+ * The chat's state on the Chat tab, with the sidebar's glyphs: running, waiting for an answer
+ * (approval or input) or in the background as its sidebar row shows them, and a reply that
+ * arrived while another tab was open (the chat panel itself reads it, so the row's unread state
+ * cannot say).
+ */
+function ChatTabStatus({ threadId, active }: { threadId: ThreadId; active: boolean }) {
+  const summary = useStore((state) => state.sidebarThreadSummaryById[threadId]);
+  const completedAt = summary?.latestTurn?.completedAt ?? null;
+  const [seenCompletion, setSeenCompletion] = useState(completedAt);
+  useEffect(() => {
+    if (active) setSeenCompletion(completedAt);
+  }, [active, completedAt]);
+  const status = summary
+    ? resolveThreadStatusPill({
+        thread: summary,
+        hasPendingApprovals: summary.hasPendingApprovals,
+        hasPendingUserInput: summary.hasPendingUserInput,
+      })
+    : null;
+  if (status && status.label !== "Completed" && status.label !== "Reminder")
+    return <SidebarStatusTrailingGlyph status={status} />;
+  return !active && completedAt !== null && completedAt !== seenCompletion ? (
+    <SidebarUnreadCompletionGlyph />
+  ) : null;
+}
+
 export function CanvasSidePanel({
   tab,
   onTab,
+  chatThreadId = null,
   commentCount,
   hidden,
   panels,
 }: {
   tab: CanvasSideTab;
   onTab: (tab: CanvasSideTab) => void;
+  /** The chat the Chat tab shows: its state shows on the tab. */
+  chatThreadId?: ThreadId | null;
+  /** Open threads on every page, beside "Comments" (what the panel lists). */
   commentCount: number;
   /** `.` hides the editor chrome: the panel steps aside with it. */
   hidden: boolean;
@@ -169,6 +207,8 @@ export function CanvasSidePanel({
                 <span className="shrink-0 text-ui-2xs text-muted-foreground tabular-nums">
                   {commentCount}
                 </span>
+              ) : value === "chat" && chatThreadId ? (
+                <ChatTabStatus threadId={chatThreadId} active={tab === "chat"} />
               ) : undefined
             }
             onSelect={() => onTab(value)}

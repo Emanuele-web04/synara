@@ -77,6 +77,10 @@ const FIT_MAX_ZOOM = 2;
  */
 export const CANVAS_FIRST_FIT_SETTLE_MS = 800;
 
+/** The frames on the canvas: hidden ones (the layers panel's eye) are not on it. */
+const shownFrames = (frames: readonly DesignFrame[]) =>
+  frames.filter((frame) => frame.hidden !== true);
+
 const sameView = (a: DesignViewport, b: DesignViewport) =>
   Math.abs(a.x - b.x) < 0.5 && Math.abs(a.y - b.y) < 0.5 && Math.abs(a.zoom - b.zoom) < 1e-6;
 
@@ -135,12 +139,16 @@ export function useCanvasCameraCommands(element: () => HTMLElement | null) {
       /** To an absolute zoom around the centre (the zoom field). */
       zoomTo: (zoom: number) => zoomBy(zoom / camera.get().zoom),
       actualSize: () => zoomBy(1 / camera.get().zoom),
-      fitAll: () => fit(editor.page.frames),
-      /** ⇧2: the selected frames and layers, else everything. */
+      /** ⇧1: every frame on the canvas (hidden frames are not on it). */
+      fitAll: () => fit(shownFrames(editor.page.frames)),
+      /** ⇧2: the selected frames and layers, else everything (hidden frames left out). */
       fitSelection: () => {
         const viewport = element();
-        const rects = viewport ? selectionWorldRects(editor, editor.selection, viewport) : [];
-        fit(rects.length ? rects : editor.page.frames);
+        const shown = editor.selection.filter(
+          (item) => editor.frame(item.frameId)?.hidden !== true,
+        );
+        const rects = viewport ? selectionWorldRects(editor, shown, viewport) : [];
+        fit(rects.length ? rects : shownFrames(editor.page.frames));
       },
       fit,
     };
@@ -233,7 +241,8 @@ export function useCanvasViewportCamera({
   // A page this client has not placed yet: its frames are fitted on the first visit;
   // an empty page centres the origin at 100% and fits once its first frames arrive. It runs
   // before paint, so the default camera never flashes.
-  const savedFrames = editor.page.frames;
+  const pageFrames = editor.page.frames;
+  const savedFrames = useMemo(() => shownFrames(pageFrames), [pageFrames]);
   /** The first fit while the canvas may still be taking its size (see the settle effect). */
   const settling = useRef<{
     fitted: DesignViewport;

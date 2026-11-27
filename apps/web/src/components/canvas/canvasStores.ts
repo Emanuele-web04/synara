@@ -20,6 +20,17 @@ export type CanvasPanelRequest = {
   nonce: number;
 };
 
+/**
+ * What an undo or redo changed, for the canvas to bring into view on its page once that page
+ * shows. The nonce makes the same request twice count twice.
+ */
+export type CanvasRevealRequest = {
+  workId: string;
+  pageId: string;
+  items: readonly CanvasSelectionItem[];
+  nonce: number;
+};
+
 type CanvasEditorState = {
   /** The latest selection per work; the composer chip and inspector read it. */
   selection: Readonly<Record<string, PageSelection>>;
@@ -44,6 +55,8 @@ type CanvasEditorState = {
    */
   panelRequest: CanvasPanelRequest | null;
   requestPanel: (request: Omit<CanvasPanelRequest, "nonce">) => void;
+  revealRequest: CanvasRevealRequest | null;
+  requestReveal: (request: Omit<CanvasRevealRequest, "nonce">) => void;
   /** Which work is open beside which chat (side pane or full layout), by mount count. */
   shownBeside: Readonly<Record<string, { workId: string; count: number }>>;
   showBeside: (threadId: ThreadId, workId: string) => () => void;
@@ -82,6 +95,11 @@ export const useCanvasEditorStore = create<CanvasEditorState>((set) => ({
   requestPanel: (request) =>
     set((state) => ({
       panelRequest: { ...request, nonce: (state.panelRequest?.nonce ?? 0) + 1 },
+    })),
+  revealRequest: null,
+  requestReveal: (request) =>
+    set((state) => ({
+      revealRequest: { ...request, nonce: (state.revealRequest?.nonce ?? 0) + 1 },
     })),
   shownBeside: {},
   showBeside: (threadId, workId) => {

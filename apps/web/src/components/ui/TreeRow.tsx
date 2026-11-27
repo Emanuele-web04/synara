@@ -229,7 +229,8 @@ export function TreeRow({
 /**
  * Inline rename field for a {@link TreeRow}: the text stays where the label was, Enter or
  * leaving the field saves, Escape cancels. With `onTab`, Tab and Shift+Tab save and hand the
- * rename on to the next or previous row.
+ * rename on to the next or previous row. `onDone` runs after Enter or Escape ended the rename,
+ * to hand the keyboard on (a blur went somewhere on purpose and is left alone).
  */
 export function TreeRowRenameInput({
   defaultValue,
@@ -238,6 +239,7 @@ export function TreeRowRenameInput({
   onCommit,
   onCancel,
   onTab,
+  onDone,
 }: {
   defaultValue: string;
   label: string;
@@ -245,6 +247,7 @@ export function TreeRowRenameInput({
   onCommit: (value: string) => void;
   onCancel: () => void;
   onTab?: ((backward: boolean) => void) | undefined;
+  onDone?: (() => void) | undefined;
 }) {
   // Set once the field has saved or cancelled, so the blur that follows does nothing.
   const cancelled = useRef(false);
@@ -262,8 +265,10 @@ export function TreeRowRenameInput({
       onDoubleClick={(event) => event.stopPropagation()}
       onKeyDown={(event) => {
         event.stopPropagation();
-        if (event.key === "Enter") event.currentTarget.blur();
-        else if (event.key === "Tab" && onTab) {
+        if (event.key === "Enter") {
+          event.currentTarget.blur();
+          onDone?.();
+        } else if (event.key === "Tab" && onTab) {
           event.preventDefault();
           cancelled.current = true;
           onCommit(event.currentTarget.value);
@@ -271,6 +276,7 @@ export function TreeRowRenameInput({
         } else if (event.key === "Escape") {
           cancelled.current = true;
           onCancel();
+          onDone?.();
         }
       }}
       onBlur={(event) => {

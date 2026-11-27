@@ -19,7 +19,7 @@ import type {
 } from "@synara/contracts";
 import { applyDesignLayerEdits } from "@synara/shared/designCanvasLayers";
 import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
-import { Profiler, type ReactNode } from "react";
+import { Profiler, useState, type ReactNode } from "react";
 import { vi } from "vitest";
 import { render } from "vitest-browser-react";
 import { SidebarProvider } from "../../ui/sidebar";
@@ -319,18 +319,26 @@ function Window({
   layers,
   inspector,
   toolbar,
+  pages,
   children,
 }: {
   readOnly: boolean;
   layers: boolean;
   inspector: boolean;
   toolbar: boolean;
+  pages: boolean;
   children?: ReactNode;
 }) {
   const { data } = useQuery({ ...canvasWorkQueryOptions("work1"), enabled: false });
+  const [pageId, setPageId] = useState("page1");
   if (!data) return null;
   return (
-    <CanvasEditorProvider work={data} pageId="page1" readOnly={readOnly}>
+    <CanvasEditorProvider
+      work={data}
+      pageId={pageId}
+      readOnly={readOnly}
+      onSelectPage={pages ? setPageId : null}
+    >
       <Probe />
       <div className="flex">
         {layers && <CanvasLayersPanel className="h-[400px] w-[220px] shrink-0" />}
@@ -356,7 +364,8 @@ const host = (frameId: string) =>
 
 /**
  * Mounts one editor on `work` (page1) with its viewport at 600×400 and the camera at 0,0 100%;
- * `toolbar` adds the floating toolbar (with the zoom menu in it).
+ * `toolbar` adds the floating toolbar (with the zoom menu in it), `pages` lets the editor switch
+ * pages (PageUp / PageDown, a comment or undo on another page).
  */
 export async function mountCanvas(
   work: CanvasWork,
@@ -365,14 +374,27 @@ export async function mountCanvas(
     layers = false,
     inspector = false,
     toolbar = false,
-  }: { readOnly?: boolean; layers?: boolean; inspector?: boolean; toolbar?: boolean } = {},
+    pages = false,
+  }: {
+    readOnly?: boolean;
+    layers?: boolean;
+    inspector?: boolean;
+    toolbar?: boolean;
+    pages?: boolean;
+  } = {},
 ) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   client.setQueryData(canvasWorkQueryKey("work1"), work);
   const screen = await render(
     <QueryClientProvider client={client}>
       <SidebarProvider>
-        <Window readOnly={readOnly} layers={layers} inspector={inspector} toolbar={toolbar} />
+        <Window
+          readOnly={readOnly}
+          layers={layers}
+          inspector={inspector}
+          toolbar={toolbar}
+          pages={pages}
+        />
       </SidebarProvider>
     </QueryClientProvider>,
   );
@@ -442,6 +464,7 @@ export function resetCanvasStores() {
     uiHidden: false,
     commentsHidden: false,
     panelRequest: null,
+    revealRequest: null,
   });
   select([]);
   mounted.editor = null;

@@ -73,10 +73,13 @@ export function CanvasPagesSection({
   work,
   pageId,
   onSelect,
+  onRenameDone,
 }: {
   work: CanvasWork;
   pageId: string;
   onSelect: (pageId: string) => void;
+  /** After Enter or Escape ended a rename: where the keyboard goes (the canvas). */
+  onRenameDone?: (() => void) | undefined;
 }) {
   const { t } = useTranslation();
   const activePages = useActiveAgentPages(work.id);
@@ -290,6 +293,7 @@ export function CanvasPagesSection({
                       label={t("workspace:canvasRenamePage")}
                       maxLength={CANVAS_PAGE_TITLE_MAX_LENGTH}
                       onCancel={() => setRenaming(null)}
+                      onDone={onRenameDone}
                       onCommit={(value) => {
                         setRenaming(null);
                         const title = value.trim();

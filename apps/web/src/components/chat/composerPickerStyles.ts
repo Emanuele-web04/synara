@@ -83,6 +83,13 @@ export const COMPOSER_MAX_WIDTH_CLASS_NAME = "max-w-[var(--app-chat-max-width,46
  *  whole window is translucent (see `.app-content-surface` in index.css). */
 export const CHAT_BACKGROUND_CLASS_NAME = "app-content-surface";
 
+/**
+ * The tint over a surface while a file it takes is dragged over it (the chat's composer drop,
+ * the canvas's image drop): an absolutely placed layer that fades in by opacity.
+ */
+export const FILE_DROP_HIGHLIGHT_CLASS_NAME =
+  "pointer-events-none absolute inset-0 transition-opacity duration-150 bg-info/8 ring-1 ring-inset ring-info/30";
+
 /** Turns the main content column into a distinct, opaque surface over the
  *  (optionally translucent) sidebar instead of sharing one continuous material with it.
  *  - The square 1px seam divider and depth shadow live in `index.css` and are visible

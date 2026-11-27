@@ -25,7 +25,9 @@ vi.mock("../../../nativeApi", async (importOriginal) => ({
   readNativeApi: () => undefined,
 }));
 
+import { fitDesignCanvas } from "~/lib/designCanvas";
 import { SidebarProvider } from "../../ui/sidebar";
+import { toastManager } from "../../ui/toast";
 import { useCanvasEditorStore } from "../canvasStores";
 import { canvasWorkQueryKey, canvasWorkQueryOptions } from "../canvasWorkCache";
 import { CanvasEditorProvider, useCanvasEditor, type CanvasEditorApi } from "./CanvasEditorContext";
@@ -119,6 +121,36 @@ async function drag(
   }
   pointer(target, "pointerup", start.x + dx, start.y + dy);
 }
+
+/** A file drag event on the canvas; what it asked of the browser. */
+const dragFiles = (target: HTMLElement, type: string, files: File[]) => {
+  const data = new DataTransfer();
+  for (const file of files) data.items.add(file);
+  // A script-made DataTransfer keeps "none"; record what the canvas asks for instead.
+  let effect = "none";
+  Object.defineProperty(data, "dropEffect", {
+    configurable: true,
+    get: () => effect,
+    set: (value: string) => {
+      effect = value;
+    },
+  });
+  const event = new DragEvent(type, {
+    bubbles: true,
+    cancelable: true,
+    dataTransfer: data,
+    clientX: 300,
+    clientY: 200,
+  });
+  target.dispatchEvent(event);
+  return { prevented: event.defaultPrevented, effect: data.dropEffect };
+};
+
+/** A key pressed in a field (React sees it; the browser does nothing more). */
+const pressKey = (target: Element, value: string) =>
+  target.dispatchEvent(
+    new KeyboardEvent("keydown", { key: value, bubbles: true, cancelable: true }),
+  );
 
 describe("canvas editor bugs", () => {
   beforeEach(() => {
@@ -594,6 +626,252 @@ describe("canvas editor bugs", () => {
       await nextFrame();
       await mounted.editor!.undo();
       expect(server.work.pages[0]!.frames.map((frame) => frame.id)).toEqual(["f1"]);
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("B24: select-all, select-others, N and fit all leave hidden and locked frames alone", async () => {
+    const shown = frameOf("f3", [], [], { x: 450, y: 0, width: 100, height: 100 });
+    const locked = frameOf("lk", [], [], { x: 0, y: 330, width: 100, height: 60, locked: true });
+    const hidden = frameOf("hd", [], [], { x: 3000, y: 3000, width: 100, height: 100 });
+    const reach = workOf([f1, shown, locked, { ...hidden, hidden: true }]);
+    const server = serveCanvas(native, reach);
+    const { screen, root } = await mountCanvas(reach);
+    try {
+      root.focus();
+      key(root, { key: "a", code: "KeyA", ...mod });
+      await vi.waitFor(() => expect(selection()).toEqual(["frame:f1", "frame:f3"]));
+      select([{ kind: "frame", frameId: "f1" }]);
+      await nextFrame();
+      key(root, { key: "A", code: "KeyA", shiftKey: true, ...mod });
+      await vi.waitFor(() => expect(selection()).toEqual(["frame:f3"]));
+      key(root, { key: "n", code: "KeyN" });
+      await vi.waitFor(() => expect(selection()).toEqual(["frame:f1"]));
+      key(root, { key: "N", code: "KeyN", shiftKey: true });
+      await vi.waitFor(() => expect(selection()).toEqual(["frame:f3"]));
+      // ⇧1 fits the frames on the canvas, not the hidden one far away.
+      key(root, { key: "!", code: "Digit1", shiftKey: true });
+      const fitted = fitDesignCanvas([f1, shown, locked], 600, 400, { maxZoom: 2 });
+      await vi.waitFor(() => expect(mounted.editor!.viewport).toEqual(fitted));
+      // A locked frame selected anyway (locked while selected) is never deleted…
+      select([{ kind: "frame", frameId: "lk" }]);
+      await nextFrame();
+      key(root, { key: "Backspace", code: "Backspace" });
+      await sleep(50);
+      expect(native.canvas.layout).not.toHaveBeenCalled();
+      // …and ⌘A then ⌫ deletes only the frames within reach.
+      key(root, { key: "a", code: "KeyA", ...mod });
+      await vi.waitFor(() => expect(selection()).toEqual(["frame:f1", "frame:f3"]));
+      key(root, { key: "Backspace", code: "Backspace" });
+      await vi.waitFor(() =>
+        expect(server.work.pages[0]!.frames.map((frame) => frame.id)).toEqual(["lk", "hd"]),
+      );
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("B25: undoing a change on another page shows that page and brings the change into view", async () => {
+    const far = frameOf("g1", [], [], { x: 2000, y: 2000, width: 200, height: 150 });
+    const base = workOf([f1]);
+    const twoPages: CanvasWork = {
+      ...base,
+      pages: [
+        base.pages[0]!,
+        { ...base.pages[0]!, id: "page2", title: "Page 2", frames: [far], comments: [] },
+      ],
+    };
+    const server = serveCanvas(native, twoPages);
+    const { screen, root } = await mountCanvas(twoPages, { pages: true });
+    try {
+      mounted.editor!.selectPage!("page2");
+      await vi.waitFor(() => expect(mounted.editor!.page.id).toBe("page2"));
+      await mounted.editor!.run({ kind: "layout", frames: [{ id: "g1", x: 2100 }] });
+      expect(server.frame("g1", "page2").x).toBe(2100);
+      // This page's camera moves away from the frame, then the user goes back to page 1.
+      mounted.editor!.setViewport({ x: 0, y: 0, zoom: 1 });
+      mounted.editor!.selectPage!("page1");
+      await vi.waitFor(() => expect(mounted.editor!.page.id).toBe("page1"));
+      await mounted.editor!.undo();
+      expect(server.frame("g1", "page2").x).toBe(2000);
+      await vi.waitFor(() => expect(mounted.editor!.page.id).toBe("page2"));
+      // The frame comes into view at no more than the zoom it had.
+      await vi.waitFor(() => {
+        const { x, y, zoom } = mounted.editor!.viewport;
+        expect(zoom).toBeLessThanOrEqual(1);
+        expect(x + 2000 * zoom).toBeGreaterThanOrEqual(0);
+        expect(x + 2200 * zoom).toBeLessThanOrEqual(root.clientWidth);
+        expect(y + 2000 * zoom).toBeGreaterThanOrEqual(0);
+        expect(y + 2150 * zoom).toBeLessThanOrEqual(root.clientHeight);
+      });
+      // Redo stays on this page; the frame is in view already, so the camera stays.
+      const before = mounted.editor!.viewport;
+      await mounted.editor!.redo();
+      expect(server.frame("g1", "page2").x).toBe(2100);
+      await sleep(300);
+      expect(mounted.editor!.page.id).toBe("page2");
+      expect(mounted.editor!.viewport).toEqual(before);
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("B26: only images dragged over an editable canvas are taken; no drop falls through", async () => {
+    const image = new File([new Uint8Array([137, 80, 78, 71])], "a.png", { type: "image/png" });
+    const notes = new File(["hello"], "notes.txt", { type: "text/plain" });
+    const editable = await mountCanvas(workOf([f1]));
+    try {
+      const { root } = editable;
+      const place = vi.spyOn(mounted.editor!.commands, "placeImage").mockResolvedValue(undefined);
+      // A text file: refused, no highlight, and the browser does not open it.
+      dragFiles(root, "dragenter", [notes]);
+      expect(dragFiles(root, "dragover", [notes])).toEqual({ prevented: true, effect: "none" });
+      expect(root.hasAttribute("data-canvas-file-drop")).toBe(false);
+      expect(dragFiles(root, "drop", [notes]).prevented).toBe(true);
+      expect(place).not.toHaveBeenCalled();
+      // An image: copied, with the drop highlight until it leaves or lands.
+      dragFiles(root, "dragenter", [image]);
+      expect(root.hasAttribute("data-canvas-file-drop")).toBe(true);
+      const highlight = root.querySelector<HTMLElement>("[data-canvas-file-drop-highlight]")!;
+      await vi.waitFor(() => expect(getComputedStyle(highlight).opacity).toBe("1"));
+      expect(dragFiles(root, "dragover", [image])).toEqual({ prevented: true, effect: "copy" });
+      dragFiles(root, "dragleave", [image]);
+      expect(root.hasAttribute("data-canvas-file-drop")).toBe(false);
+      dragFiles(root, "dragenter", [image]);
+      expect(dragFiles(root, "drop", [image]).prevented).toBe(true);
+      expect(root.hasAttribute("data-canvas-file-drop")).toBe(false);
+      expect(place).toHaveBeenCalledTimes(1);
+      expect(place.mock.calls[0]![0]).toBe(image);
+    } finally {
+      await editable.screen.unmount();
+    }
+    // An archived work takes nothing, and still keeps the browser from opening the file.
+    const archived = await mountCanvas(workOf([f1]), { readOnly: true });
+    try {
+      const { root } = archived;
+      const place = vi.spyOn(mounted.editor!.commands, "placeImage").mockResolvedValue(undefined);
+      dragFiles(root, "dragenter", [image]);
+      expect(root.hasAttribute("data-canvas-file-drop")).toBe(false);
+      expect(dragFiles(root, "dragover", [image])).toEqual({ prevented: true, effect: "none" });
+      expect(dragFiles(root, "drop", [image]).prevented).toBe(true);
+      expect(place).not.toHaveBeenCalled();
+    } finally {
+      await archived.screen.unmount();
+    }
+  });
+
+  it("B27: the Comment tool shows hidden comments and places one; a read-only work takes none", async () => {
+    const add = vi.spyOn(toastManager, "add");
+    serveCanvas(native, workOf([f1]));
+    const editable = await mountCanvas(workOf([f1]));
+    try {
+      const { root, host } = editable;
+      // Choosing the tool shows them.
+      useCanvasEditorStore.setState({ commentsHidden: true });
+      useCanvasEditorStore.getState().setTool("comment");
+      await vi.waitFor(() => expect(useCanvasEditorStore.getState().commentsHidden).toBe(false));
+      // Hidden again while the tool is on: the click shows them and opens the composer.
+      useCanvasEditorStore.setState({ commentsHidden: true });
+      await nextFrame();
+      click(root, host("f1"), 200, 150);
+      await vi.waitFor(() =>
+        expect(root.querySelector('[placeholder="Add a comment"]')).toBeTruthy(),
+      );
+      expect(useCanvasEditorStore.getState().commentsHidden).toBe(false);
+      expect(add).toHaveBeenCalledWith(expect.objectContaining({ title: "Comments shown" }));
+    } finally {
+      await editable.screen.unmount();
+    }
+    resetCanvasStores();
+    const archived = await mountCanvas(workOf([f1]), { readOnly: true });
+    try {
+      const { root, host } = archived;
+      useCanvasEditorStore.getState().setTool("comment");
+      await nextFrame();
+      click(root, host("f1"), 200, 150);
+      await sleep(100);
+      expect(root.querySelector('[placeholder="Add a comment"]')).toBeNull();
+    } finally {
+      await archived.screen.unmount();
+    }
+  });
+
+  it("B28: a frame label or layer row rename ended with Enter or Escape hands the keyboard back", async () => {
+    serveCanvas(native, workOf([f1]));
+    const { screen, root } = await mountCanvas(workOf([f1]), { layers: true });
+    try {
+      // The frame's label, renamed with ⌘R and saved with Enter.
+      root.focus();
+      select([{ kind: "frame", frameId: "f1" }]);
+      await nextFrame();
+      key(root, { key: "r", code: "KeyR", ...mod });
+      const label = await vi.waitFor(() => {
+        const found = root.querySelector<HTMLInputElement>("[data-canvas-frame-label] input");
+        expect(found).toBeTruthy();
+        return found!;
+      });
+      expect(document.activeElement).toBe(label);
+      label.value = "Home";
+      pressKey(label, "Enter");
+      await vi.waitFor(() =>
+        expect(root.querySelector("[data-canvas-frame-label] input")).toBeNull(),
+      );
+      expect(document.activeElement).toBe(root);
+      await vi.waitFor(() => expect(native.canvas.layout).toHaveBeenCalledTimes(1));
+      // A layer row, renamed with ⌘R and left with Escape.
+      select([{ kind: "layer", frameId: "f1", layerId: "a" }]);
+      await nextFrame();
+      key(root, { key: "r", code: "KeyR", ...mod });
+      const row = await vi.waitFor(() => {
+        const found = document.querySelector<HTMLInputElement>(
+          '[data-layer-row="layer:f1:a"] input',
+        );
+        expect(found).toBeTruthy();
+        return found!;
+      });
+      await vi.waitFor(() => expect(document.activeElement).toBe(row));
+      pressKey(row, "Escape");
+      await vi.waitFor(() =>
+        expect(document.querySelector('[data-layer-row="layer:f1:a"] input')).toBeNull(),
+      );
+      expect(document.activeElement).toBe(root);
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("B29: closing a comment card hands the keyboard back to the canvas", async () => {
+    const thread: CanvasCommentThread = {
+      id: "t1",
+      frameId: "f1",
+      layerId: null,
+      x: 200,
+      y: 150,
+      status: "open",
+      createdAt: "2026-11-10T00:00:01.000Z",
+      updatedAt: "2026-11-10T00:00:01.000Z",
+      messages: [
+        { id: "m1", author: { kind: "user" }, text: "Hi", createdAt: "2026-11-10T00:00:01.000Z" },
+      ],
+    };
+    const commented = workOf([f1], { comments: [thread] });
+    serveCanvas(native, commented);
+    const { screen, root } = await mountCanvas(commented);
+    try {
+      mounted.editor!.openComment({ threadId: "t1" });
+      const reply = await vi.waitFor(() => {
+        const found = root.querySelector<HTMLTextAreaElement>('[placeholder="Reply"]');
+        expect(found).toBeTruthy();
+        return found!;
+      });
+      reply.focus();
+      await userEvent.keyboard("{Escape}");
+      await vi.waitFor(() => expect(root.querySelector('[placeholder="Reply"]')).toBeNull());
+      expect(document.activeElement).toBe(root);
+      // Single-key shortcuts work again: C picks the Comment tool.
+      key(root, { key: "c", code: "KeyC" });
+      await vi.waitFor(() => expect(useCanvasEditorStore.getState().tool).toBe("comment"));
     } finally {
       await screen.unmount();
     }

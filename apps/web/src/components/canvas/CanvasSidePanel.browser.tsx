@@ -17,6 +17,9 @@ vi.mock("../../nativeApi", async (importOriginal) => ({
   readNativeApi: () => undefined,
 }));
 
+import { ThreadId } from "@synara/contracts";
+import { useStore } from "~/store";
+import type { SidebarThreadSummary } from "~/types";
 import { SidebarProvider } from "../ui/sidebar";
 import { CanvasSidePanel, type CanvasSideTab } from "./CanvasSidePanel";
 import { canvasWorkQueryKey } from "./canvasWorkCache";
@@ -32,7 +35,9 @@ const work = workOf([
   }),
 ]);
 
-function Layout() {
+const chat = ThreadId.makeUnsafe("chat1");
+
+function Layout({ chatThreadId = null }: { chatThreadId?: ThreadId | null }) {
   const [tab, setTab] = useState<CanvasSideTab>("chat");
   return (
     <CanvasEditorProvider work={work} pageId="page1" readOnly={false}>
@@ -40,6 +45,7 @@ function Layout() {
         <CanvasSidePanel
           tab={tab}
           onTab={setTab}
+          chatThreadId={chatThreadId}
           commentCount={0}
           hidden={false}
           panels={{ chat: <p>Chat</p>, layers: <p>Layers</p>, comments: <p>Comments</p> }}
@@ -114,6 +120,65 @@ describe("canvas side panel", () => {
       expect(frameLeft()).toBeCloseTo(before, 0);
     } finally {
       await screen.unmount();
+    }
+  });
+
+  it("shows the chat's state on the Chat tab while another tab is open", async () => {
+    const now = new Date().toISOString();
+    const summary = (patch: Partial<SidebarThreadSummary>) =>
+      useStore.setState({
+        sidebarThreadSummaryById: {
+          [chat]: {
+            id: chat,
+            hasPendingApprovals: false,
+            hasPendingUserInput: false,
+            hasLiveTailWork: false,
+            pendingBackgroundWorkCount: 0,
+            session: null,
+            latestTurn: null,
+            ...patch,
+          } as SidebarThreadSummary,
+        },
+      });
+    const running = {
+      session: { status: "running", orchestrationStatus: "running" },
+      latestTurn: { turnId: "turn1", state: "running", startedAt: now, completedAt: null },
+    } as unknown as Partial<SidebarThreadSummary>;
+    summary({});
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    client.setQueryData(canvasWorkQueryKey("work1"), work);
+    const screen = await render(
+      <QueryClientProvider client={client}>
+        <SidebarProvider>
+          <Layout chatThreadId={chat} />
+        </SidebarProvider>
+      </QueryClientProvider>,
+    );
+    const chatTab = page.getByRole("tab", { name: /^Chat/ });
+    try {
+      await page.getByRole("tab", { name: "Layers" }).click();
+      expect(chatTab.element().querySelector('[role="img"]')).toBeNull();
+      // Working: the sidebar's spinner.
+      summary(running);
+      await expect.element(chatTab.getByRole("img", { name: "Working" })).toBeVisible();
+      // Waiting for an approval: the sidebar's dot.
+      summary({ ...running, hasPendingApprovals: true });
+      await expect.element(chatTab.getByRole("img", { name: "Pending approval" })).toBeVisible();
+      // A reply arrived while Layers was open: the unread dot, until the chat is shown.
+      summary({
+        session: { status: "ready", orchestrationStatus: "idle" },
+        latestTurn: { turnId: "turn1", state: "completed", startedAt: now, completedAt: now },
+      } as unknown as Partial<SidebarThreadSummary>);
+      await expect.element(chatTab.getByRole("img", { name: "Unread completion" })).toBeVisible();
+      await chatTab.click();
+      await expect
+        .element(chatTab.getByRole("img", { name: "Unread completion" }))
+        .not.toBeInTheDocument();
+      await page.getByRole("tab", { name: "Layers" }).click();
+      expect(chatTab.element().querySelector('[role="img"]')).toBeNull();
+    } finally {
+      await screen.unmount();
+      useStore.setState({ sidebarThreadSummaryById: {} });
     }
   });
 

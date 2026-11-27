@@ -1,5 +1,5 @@
 import type { ThreadId } from "@synara/contracts";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "~/i18n";
@@ -28,6 +28,7 @@ import {
   CanvasHeaderStatus,
   CanvasStatus,
   openCanvasPane,
+  showCanvasArchiveUndo,
   useCanvasWork,
 } from "./canvasPane";
 import { CanvasChatPanel } from "./CanvasChatPanel";
@@ -43,6 +44,7 @@ import { CanvasLayersPanel } from "./editor/CanvasLayersPanel";
 import { loadCanvasAssets } from "./canvasAssets";
 import { canvasQueryKey } from "./canvasWorkCache";
 import { useCanvasEditorStore } from "./canvasStores";
+import { runCanvasJob } from "./editor/canvasToasts";
 
 const LEFT_TAB_KEY = "synara:canvas-left-tab";
 
@@ -63,6 +65,7 @@ export default function CanvasWorkView({
 }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const client = useQueryClient();
   const { connection, query } = useCanvasWork(workId);
   const work = query.data;
   const [organizing, setOrganizing] = useState(false);
@@ -96,7 +99,7 @@ export default function CanvasWorkView({
   });
   const page =
     work?.pages.find((candidate) => candidate.id === (pageId ?? rememberedPage)) ?? work?.pages[0];
-  const commentCount = page ? canvasCommentCount(page) : 0;
+  const commentCount = work ? canvasCommentCount(work) : 0;
   useEffect(() => {
     if (!page) return;
     try {
@@ -143,31 +146,44 @@ export default function CanvasWorkView({
       });
     }
   };
-  const exportWork = (format: "json" | "png" | "pdf") =>
+  const exportJson = () =>
     action(async () => {
       const snapshot = await ensureNativeApi().canvas.get({ workId });
-      const filename = snapshot.title.replace(/[/\\]/g, "-");
-      if (format === "json") {
-        downloadBlob(
-          new Blob([JSON.stringify(snapshot, null, 2)], { type: "application/json" }),
-          `${filename}.synara-canvas.json`,
-        );
-        return;
-      }
-      const { exportCanvasPagePng, exportCanvasWorkPdf } = await import("~/lib/canvasExport");
-      if (format === "png") {
-        const selected = snapshot.pages.find((candidate) => candidate.id === page?.id);
-        if (!selected) throw new Error(t("workspace:designLoadFailed"));
-        downloadBlob(
-          await exportCanvasPagePng(selected, await loadCanvasAssets(workId, snapshot.assets)),
-          `${filename}-${selected.title.replace(/[/\\]/g, "-")}.png`,
-        );
-      } else
-        downloadBlob(
-          await exportCanvasWorkPdf(snapshot, await loadCanvasAssets(workId, snapshot.assets)),
-          `${filename}.pdf`,
-        );
+      downloadBlob(
+        new Blob([JSON.stringify(snapshot, null, 2)], { type: "application/json" }),
+        `${snapshot.title.replace(/[/\\]/g, "-")}.synara-canvas.json`,
+      );
     });
+  /** The page as PNG or the work as PDF: rendered under the app's progress toast. */
+  const exportWork = (format: "png" | "pdf") =>
+    runCanvasJob(
+      t("workspace:canvasExporting"),
+      async () => {
+        const snapshot = await ensureNativeApi().canvas.get({ workId });
+        const filename = snapshot.title.replace(/[/\\]/g, "-");
+        const { exportCanvasPagePng, exportCanvasWorkPdf } = await import("~/lib/canvasExport");
+        if (format === "png") {
+          const selected = snapshot.pages.find((candidate) => candidate.id === page?.id);
+          if (!selected) throw new Error(t("workspace:designLoadFailed"));
+          downloadBlob(
+            await exportCanvasPagePng(selected, await loadCanvasAssets(workId, snapshot.assets)),
+            `${filename}-${selected.title.replace(/[/\\]/g, "-")}.png`,
+          );
+        } else
+          downloadBlob(
+            await exportCanvasWorkPdf(snapshot, await loadCanvasAssets(workId, snapshot.assets)),
+            `${filename}.pdf`,
+          );
+        return 1;
+      },
+      {
+        success: (files) => t("workspace:canvasExportedFiles", { count: files }),
+        failure: (cause) => ({
+          title: t("workspace:canvasExportFailed"),
+          description: cause instanceof Error ? cause.message : undefined,
+        }),
+      },
+    );
 
   // The work's own controls, at the end of the top bar.
   const actionsLabel = work ? t("workspace:canvasActions", { title: work.title }) : "";
@@ -209,9 +225,7 @@ export default function CanvasWorkView({
               <MenuItem onClick={() => void exportWork("pdf")}>
                 {t("workspace:canvasExportPdf")}
               </MenuItem>
-              <MenuItem onClick={() => void exportWork("json")}>
-                {t("workspace:canvasExport")}
-              </MenuItem>
+              <MenuItem onClick={() => void exportJson()}>{t("workspace:canvasExport")}</MenuItem>
             </ComposerPickerMenuSubPopup>
           </MenuSub>
           <MenuItem
@@ -236,11 +250,16 @@ export default function CanvasWorkView({
             disabled={readOnly && !work.archivedAt}
             onClick={() =>
               void action(async () => {
-                await ensureNativeApi().canvas.update({
-                  id: workId,
-                  archived: !work.archivedAt,
-                });
+                const archiving = !work.archivedAt;
+                await ensureNativeApi().canvas.update({ id: workId, archived: archiving });
                 await query.refetch();
+                // Archiving offers the app's compact Undo, as archiving a chat does.
+                if (archiving)
+                  showCanvasArchiveUndo(client, {
+                    id: workId,
+                    message: t("workspace:canvasArchivedToast"),
+                    failedTitle: t("workspace:canvasOperationFailed"),
+                  });
               })
             }
           >
@@ -273,7 +292,9 @@ export default function CanvasWorkView({
         {work && page && (
           <CanvasPageMenu work={work} pageId={page.id} onSelect={(id) => void selectPage(id)} />
         )}
-        {work && <CanvasHeaderStatus readOnly={readOnly} connection={connection} />}
+        {work && (
+          <CanvasHeaderStatus workId={work.id} readOnly={readOnly} connection={connection} />
+        )}
       </div>
       {trailing ? (
         <div className="flex shrink-0 items-center gap-2 [-webkit-app-region:no-drag]">
@@ -325,6 +346,7 @@ export default function CanvasWorkView({
                 <CanvasSidePanel
                   tab={tab}
                   onTab={setTab}
+                  chatThreadId={activeChat}
                   commentCount={commentCount}
                   hidden={uiHidden}
                   panels={{
@@ -343,6 +365,7 @@ export default function CanvasWorkView({
                           work={work}
                           pageId={page.id}
                           onSelect={(id) => void selectPage(id)}
+                          onRenameDone={() => viewportElement()?.focus({ preventScroll: true })}
                         />
                         <CanvasLayersPanel className="flex-1" />
                       </>

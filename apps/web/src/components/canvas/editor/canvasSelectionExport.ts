@@ -16,6 +16,7 @@ import { loadCanvasAssets } from "../canvasAssets";
 import { selectionKey, type CanvasSelectionItem } from "../canvasStores";
 import type { CanvasEditorApi } from "./CanvasEditorContext";
 import { isTextOnly, layerLabel } from "./canvasSelection";
+import { runCanvasJob } from "./canvasToasts";
 
 /** A frame or layer ready to render, with its box on the canvas for ordering and copying. */
 export type CanvasExportNode = {
@@ -214,26 +215,27 @@ export async function copySelectionAsCode(
 const clipboardDenied = (cause: unknown) =>
   cause instanceof DOMException && cause.name === "NotAllowedError";
 
-/** The shared feedback for export and copy commands, wherever they are started. */
+/**
+ * The shared feedback for export and copy commands, wherever they are started. Exports run
+ * under the app's progress toast, which turns into their success or error toast.
+ */
 export function makeCanvasExportActions(editor: CanvasEditorApi, t: typeof translate) {
+  const failure = (title: string) => (cause: unknown) => ({
+    title: clipboardDenied(cause) ? t("workspace:canvasClipboardDenied") : title,
+    description: clipboardDenied(cause) || !(cause instanceof Error) ? undefined : cause.message,
+  });
   const failed = (title: string) => (cause: unknown) =>
-    toastManager.add({
-      type: "error",
-      title: clipboardDenied(cause) ? t("workspace:canvasClipboardDenied") : title,
-      description: clipboardDenied(cause) || !(cause instanceof Error) ? undefined : cause.message,
+    toastManager.add({ type: "error", ...failure(title)(cause) });
+  const exportJob = (job: () => Promise<number>) =>
+    runCanvasJob(t("workspace:canvasExporting"), job, {
+      success: (files) => (files > 0 ? t("workspace:canvasExportedFiles", { count: files }) : null),
+      failure: failure(t("workspace:canvasExportFailed")),
     });
-  const exported = (files: number) => {
-    if (files > 0)
-      toastManager.add({
-        type: "success",
-        title: t("workspace:canvasExportedFiles", { count: files }),
-      });
-  };
   return {
     exportFiles: (items: readonly CanvasSelectionItem[]) =>
-      exportNodeFiles(editor, items).then(exported, failed(t("workspace:canvasExportFailed"))),
+      exportJob(() => exportNodeFiles(editor, items)),
     exportCombinedPdf: (items: readonly CanvasSelectionItem[]) =>
-      exportCombinedPdf(editor, items).then(exported, failed(t("workspace:canvasExportFailed"))),
+      exportJob(() => exportCombinedPdf(editor, items)),
     copyPng: (items: readonly CanvasSelectionItem[]) =>
       copySelectionAsPng(editor, items).then(
         (copied) => {

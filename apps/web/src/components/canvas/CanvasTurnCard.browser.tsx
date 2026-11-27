@@ -28,6 +28,8 @@ vi.mock("./canvasPane", async (importOriginal) => ({
   }),
 }));
 
+import { useStore } from "~/store";
+import type { SidebarThreadSummary } from "~/types";
 import { CanvasTurnCard } from "./CanvasTurnCard";
 import { at, frameOf, workOf } from "./editor/canvasEditorTestHarness";
 
@@ -48,6 +50,7 @@ const activity = (restoredAt: string | null): CanvasTurnActivity => ({
   restorable: restoredAt === null,
   restoredAt,
 });
+const indicator = () => document.querySelector('[data-canvas-page-activity="work"]');
 const restoreButton = () =>
   document.querySelector<HTMLButtonElement>('button[aria-label="Restore previous version"]');
 
@@ -58,6 +61,52 @@ describe("canvas turn card", () => {
   });
   afterEach(() => {
     document.body.innerHTML = "";
+  });
+
+  it("shows the agent indicator by its title while its turn still runs", async () => {
+    native.canvas.turnActivity.mockResolvedValue({ activities: [activity(null)] });
+    const turn = (state: "running" | "completed", turnId = "turn1") =>
+      useStore.setState({
+        sidebarThreadSummaryById: {
+          [thread]: {
+            id: thread,
+            session: { status: state === "running" ? "running" : "ready" },
+            latestTurn: {
+              turnId,
+              state,
+              startedAt: at(1),
+              completedAt: state === "running" ? null : at(5),
+            },
+          } as unknown as SidebarThreadSummary,
+        },
+      });
+    turn("running");
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const screen = await render(
+      <QueryClientProvider client={client}>
+        <CanvasTurnCard
+          threadId={thread}
+          turnId="turn1"
+          workId="work1"
+          workTitle="Work"
+          pageId="page1"
+        />
+      </QueryClientProvider>,
+    );
+    try {
+      await vi.waitFor(() => expect(indicator()).toBeTruthy());
+      expect(indicator()!.getAttribute("aria-label")).toBe("An agent is working on this canvas");
+      // The turn ends: the indicator fades away.
+      turn("completed");
+      await vi.waitFor(() => expect(indicator()).toBeNull());
+      // A later turn running does not light an earlier turn's card.
+      turn("running", "turn2");
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(indicator()).toBeNull();
+    } finally {
+      await screen.unmount();
+      useStore.setState({ sidebarThreadSummaryById: {} });
+    }
   });
 
   it("names its restore button on hover and shows a spinner while the restore runs", async () => {

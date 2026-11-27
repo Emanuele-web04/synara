@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { arrangedOrder } from "./canvasCommands";
+import { arrangedOrder, reachableFrames } from "./canvasCommands";
 
 const order = ["a", "b", "c", "d", "e"];
 
@@ -20,5 +20,29 @@ describe("arrangedOrder (B18)", () => {
     ]);
     // Already at the end: nothing to step past.
     expect(arrangedOrder(order, new Set(["d", "e"]), "forward")).toEqual(order);
+  });
+});
+
+const frame = (id: string, flags: { hidden?: boolean; locked?: boolean } = {}) => ({
+  id,
+  title: id,
+  x: 0,
+  y: 0,
+  width: 10,
+  height: 10,
+  revision: 1,
+  layers: { roots: [], nodes: [] },
+  ...flags,
+});
+
+describe("reachableFrames", () => {
+  it("leaves hidden and locked frames out of select-all, select-others and N", () => {
+    const frames = [
+      frame("a"),
+      frame("h", { hidden: true }),
+      frame("l", { locked: true }),
+      frame("b"),
+    ];
+    expect(reachableFrames(frames).map((item) => item.id)).toEqual(["a", "b"]);
   });
 });

@@ -1,4 +1,4 @@
-import type { CanvasCommentThread, CanvasPage } from "@synara/contracts";
+import type { CanvasCommentThread, CanvasWork } from "@synara/contracts";
 import { useState } from "react";
 import { useTranslation } from "~/i18n";
 import { executionStorage } from "~/lib/hosts/executionStorage";
@@ -34,9 +34,15 @@ import {
   useCommentUserInitial,
 } from "./CommentPin";
 
-/** Threads on a page, for the count beside the panel's "Comments" tab. */
-export function canvasCommentCount(page: Pick<CanvasPage, "comments">): number {
-  return page.comments.length;
+/**
+ * The count beside the panel's "Comments" tab: the open threads the panel lists, on every page
+ * of the work (resolved ones are listed apart and not counted).
+ */
+export function canvasCommentCount(work: Pick<CanvasWork, "pages">): number {
+  return work.pages.reduce(
+    (count, page) => count + page.comments.filter((thread) => thread.status === "open").length,
+    0,
+  );
 }
 
 type Sort = "newest" | "oldest" | "page";
@@ -59,7 +65,8 @@ const readShowResolved = () => {
  * The Comments panel: every thread of the work,
  * with Search, Sort (Newest first, Oldest first, By page), author and page filters and a stored
  * Show resolved toggle; unread threads carry a dot. A row opens its thread on the canvas,
- * switching to its page, and pans to the pin; resolved rows reopen in place.
+ * switching to its page, and pans to the pin (showing comments again if ⇧C hid them); resolved
+ * rows reopen in place unless the work is read only.
  */
 export function CanvasCommentsPanel({ className }: { className?: string }) {
   const { t } = useTranslation();
@@ -114,7 +121,8 @@ export function CanvasCommentsPanel({ className }: { className?: string }) {
           ? revealCanvasComment(editor, thread)
           : editor.openComment({ threadId: thread.id, pageId: owner.id })
       }
-      onReopen={owner.id === page.id ? () => void actions.reopen(thread) : null}
+      // A read-only (archived) work keeps its threads as they are.
+      onReopen={owner.id === page.id && !editor.readOnly ? () => void actions.reopen(thread) : null}
     />
   );
   return (

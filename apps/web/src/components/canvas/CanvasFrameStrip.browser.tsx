@@ -95,6 +95,53 @@ const serveAssets = () =>
 describe("canvas frame strip", () => {
   afterEach(() => native.canvas.getAsset.mockReset());
 
+  it("shows three frames and a +N tile in the strip's style past four frames", async () => {
+    const many = Array.from({ length: 6 }, (_, index) => ({
+      ...frame,
+      id: `f${index}`,
+      title: `Frame ${index}`,
+      x: index * 400,
+    }));
+    const opened = vi.fn();
+    const screen = await render(
+      <div className="w-[300px]">
+        <CanvasFrameStrip frames={many} onOpenFrame={opened} />
+      </div>,
+    );
+    try {
+      const strip = screen.container.firstElementChild!.firstElementChild as HTMLElement;
+      const more = await vi.waitFor(() => {
+        const found = strip.querySelector<HTMLButtonElement>("[data-canvas-strip-more]");
+        expect(found).toBeTruthy();
+        return found!;
+      });
+      expect(strip.querySelectorAll("button:not([data-canvas-strip-more])")).toHaveLength(3);
+      expect(more.querySelector("span.rounded-sm")!.textContent).toBe("+3");
+      expect(more.getAttribute("aria-label")).toBe("3 more frames");
+      // The tile is the frames' height and stays inside the strip.
+      const thumb = strip.querySelector("button span.rounded-sm")!.getBoundingClientRect();
+      const tile = more.querySelector("span.rounded-sm")!.getBoundingClientRect();
+      expect(Math.round(tile.height)).toBe(Math.round(thumb.height));
+      expect(tile.top).toBeCloseTo(thumb.top, 0);
+      expect(tile.right).toBeLessThanOrEqual(strip.getBoundingClientRect().right);
+      more.click();
+      expect(opened).toHaveBeenCalledWith(many[3]);
+    } finally {
+      await screen.unmount();
+    }
+    // Four frames still fit, with no tile.
+    const four = await render(
+      <CanvasFrameStrip
+        frames={Array.from({ length: 4 }, (_, index) => ({ ...frame, id: `g${index}` }))}
+      />,
+    );
+    try {
+      expect(document.querySelector("[data-canvas-strip-more]")).toBeNull();
+    } finally {
+      await four.unmount();
+    }
+  });
+
   it("draws a turn card's thumbnails with the work's fonts and images", async () => {
     serveAssets();
     const screen = await render(<TurnCardStrip />);

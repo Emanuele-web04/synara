@@ -12,7 +12,12 @@ import type {
   CanvasWorkSummary,
   ProjectId,
 } from "@synara/contracts";
-import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
+import {
+  keepPreviousData,
+  useQuery,
+  useQueryClient,
+  type QueryClient,
+} from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "~/i18n";
@@ -46,7 +51,9 @@ import {
   MenuTrigger,
 } from "../ui/menu";
 import { SearchInput } from "../ui/search-input";
+import { Skeleton } from "../ui/skeleton";
 import { CanvasResourceDialog, type CanvasResourceFields } from "./CanvasResourceDialog";
+import { showCanvasArchiveUndo } from "./canvasPane";
 import { useActiveAgentPages } from "./canvasStores";
 import { canvasQueryKey } from "./canvasWorkCache";
 import { useCanvasLibrary } from "./useCanvasLibrary";
@@ -119,6 +126,43 @@ function WorkAgentIndicator({ workId }: { workId: string }) {
   return <CanvasAgentIndicator active={useActiveAgentPages(workId).size > 0} scope="work" />;
 }
 
+/**
+ * The library's first load: placeholder cards or rows in the shape of the works to come, with
+ * the app's skeleton shimmer.
+ */
+function CanvasLibrarySkeleton({ view, label }: { view: View; label: string }) {
+  const placeholders = ["1", "2", "3", "4", "5", "6"];
+  return (
+    <div role="status" aria-label={label} data-canvas-library-loading="">
+      {view === "grid" ? (
+        <div className="grid grid-cols-[repeat(auto-fill,minmax(256px,1fr))] gap-6">
+          {placeholders.map((key) => (
+            <div key={key} className="rounded-lg border border-border bg-card p-1">
+              <Skeleton className="aspect-[256/168] w-full rounded-md" />
+              <div className="flex flex-col gap-1.5 ps-2 pe-1.5 pt-2 pb-2">
+                <Skeleton className="h-3 w-2/3" />
+                <Skeleton className="h-2.5 w-1/3" />
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="-mx-2 flex flex-col">
+          {placeholders.map((key) => (
+            <div key={key} className="flex items-center gap-4 p-2">
+              <Skeleton className="aspect-[256/168] w-24 shrink-0 rounded-md" />
+              <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+                <Skeleton className="h-3 w-1/3" />
+                <Skeleton className="h-2.5 w-1/5" />
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** Creating a work or a folder (renaming has its own dialog). */
 type DialogState = { kind: "work" | "folder"; id: string };
 
@@ -189,7 +233,11 @@ export default function CanvasLibraryView() {
     queryKey: [...canvasQueryKey, "list", input],
     queryFn: () => ensureNativeApi().canvas.list(input),
     enabled: connection.supported,
+    // A search, page or section change keeps the shown works until the next list arrives.
+    placeholderData: keepPreviousData,
   });
+  /** Nothing listed yet: the first load shows placeholder cards. */
+  const firstLoad = connection.supported && query.data === undefined && !query.isError;
   const folders = query.data?.folders ?? [];
   const works = query.data?.works ?? [];
   const folderById = new Map(folders.map((folder) => [folder.id, folder]));
@@ -233,6 +281,20 @@ export default function CanvasLibraryView() {
   };
   const update = (id: string, fields: Omit<CanvasResourceUpdateInput, "id">) =>
     void action(() => ensureNativeApi().canvas.update({ ...fields, id }));
+  /** Archives a work or folder and offers Undo, as archiving a chat does. */
+  const archive = (resource: Resource) =>
+    void action(async () => {
+      await ensureNativeApi().canvas.update({ id: resource.id, archived: true });
+      showCanvasArchiveUndo(client, {
+        id: resource.id,
+        message: t(
+          resource.kind === "folder"
+            ? "workspace:canvasFolderArchivedToast"
+            : "workspace:canvasArchivedToast",
+        ),
+        failedTitle: t("workspace:canvasOperationFailed"),
+      });
+    });
 
   const resourceMenu = (resource: Resource) => {
     const blockedByFolder = archived && !resource.archivedAt;
@@ -334,7 +396,9 @@ export default function CanvasLibraryView() {
           <MenuSeparator />
           <MenuItem
             disabled={busy || blockedByFolder}
-            onClick={() => update(resource.id, { archived: !resource.archivedAt })}
+            onClick={() =>
+              resource.archivedAt ? update(resource.id, { archived: false }) : archive(resource)
+            }
           >
             {blockedByFolder
               ? t("workspace:canvasRestoreFolderFirst")
@@ -507,7 +571,9 @@ export default function CanvasLibraryView() {
                 {t("workspace:canvasUnreadable", { count: query.data.unavailableIds.length })}
               </p>
             ) : null}
-            {empty ? (
+            {firstLoad ? (
+              <CanvasLibrarySkeleton view={view} label={t("workspace:designLoading")} />
+            ) : empty ? (
               <div className="flex flex-col items-center gap-3 py-20 text-center" role="status">
                 <CanvasIcon className="size-10 text-muted-foreground/72" />
                 <h2 className="text-ui-lg font-medium">{emptyTitle}</h2>

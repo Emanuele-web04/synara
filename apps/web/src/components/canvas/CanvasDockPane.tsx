@@ -141,7 +141,7 @@ export default function CanvasDockPane({
                   onSelect={(next) => openCanvasPane(hostThreadId, work.id, next)}
                 />
                 {/* As in the full layout's header: archived, or updates unavailable. */}
-                <CanvasHeaderStatus readOnly={readOnly} connection={connection} />
+                <CanvasHeaderStatus workId={work.id} readOnly={readOnly} connection={connection} />
               </span>
             }
             actions={

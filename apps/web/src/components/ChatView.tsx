@@ -447,6 +447,7 @@ import {
   COMPOSER_TOOLBAR_TRIGGER_TEXT_CLASS_NAME,
   ENVIRONMENT_CONTENT_INSET_MOTION_CLASS,
   COMPOSER_PLACEHOLDER_TEXT_CLASS_NAME,
+  FILE_DROP_HIGHLIGHT_CLASS_NAME,
 } from "./chat/composerPickerStyles";
 import { getComposerTraitSelection } from "./chat/composerTraits";
 import { deriveFastModeNotice } from "~/lib/fastModeState";
@@ -6814,8 +6815,8 @@ export default function ChatView({
       <div
         aria-hidden
         className={cn(
-          "pointer-events-none absolute inset-0 z-50 transition-opacity duration-150",
-          "bg-info/8 ring-1 ring-inset ring-info/30",
+          FILE_DROP_HIGHLIGHT_CLASS_NAME,
+          "z-50",
           isDragOverComposer ? "opacity-100" : "opacity-0",
         )}
       />

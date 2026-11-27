@@ -5,7 +5,7 @@
 //          the editor as it is when it runs, so a menu opened right after a click acts on
 //          that click's selection. Every command is one undo step.
 // Layer: Canvas editor commands
-// Exports: makeCanvasCommands, arrangedOrder, CanvasCommands
+// Exports: makeCanvasCommands, arrangedOrder, reachableFrames, CanvasCommands
 
 import type {
   CanvasFrameLayoutPatch,
@@ -131,6 +131,11 @@ export type CanvasCommandOptions = {
   fail: (cause: unknown) => void;
   /** Saves the work's cover frame (its library thumbnail); null goes back to the first frame. */
   saveCover?: ((cover: CanvasWorkCover | null) => Promise<unknown>) | undefined;
+  /**
+   * Runs placing an image (read, stored, inserted) under the app's progress toast, reporting a
+   * failure; without it a failure goes to `fail`.
+   */
+  imageJob?: ((job: () => Promise<void>) => Promise<unknown>) | undefined;
 };
 
 let copiedStyle: string | null = null;
@@ -148,6 +153,13 @@ function withFreshIds(tree: ReturnType<typeof subtreeOf>): ReturnType<typeof sub
   };
 }
 
+/**
+ * The page's frames that select-all, select-others and N / ⇧N reach: hidden frames are off the
+ * canvas and locked ones out of reach.
+ */
+export const reachableFrames = (frames: readonly DesignFrame[]) =>
+  frames.filter((frame) => frame.hidden !== true && frame.locked !== true);
+
 export function makeCanvasCommands(
   getEditor: () => CanvasEditorApi,
   options: CanvasCommandOptions,
@@ -155,10 +167,19 @@ export function makeCanvasCommands(
   const writable = () => !getEditor().readOnly;
   const elementFlag = (item: LayerItem, name: string) =>
     layerFlag(getEditor().layers(item.frameId), item.layerId, name);
+  /** A locked frame, or a locked layer (or one in a locked frame or under a locked parent). */
+  const isLocked = (item: CanvasSelectionItem) => {
+    const editor = getEditor();
+    return (
+      editor.frame(item.frameId)?.locked === true ||
+      (item.kind === "layer" && isLayerLocked(editor.layers(item.frameId), item.layerId))
+    );
+  };
 
   const remove = () => {
     const editor = getEditor();
-    const { selection } = editor;
+    // Locked items stay, however they were selected (a lock set while selected, say).
+    const selection = editor.selection.filter((item) => !isLocked(item));
     return editor.batch(async () => {
       if (editor.readOnly || selection.length === 0) return;
       const frameIds = selection
@@ -306,11 +327,7 @@ export function makeCanvasCommands(
         for (const item of selection) {
           const key = selectionKey(item);
           // Locked frames and layers stay where they are.
-          if (
-            editor.frame(item.frameId)?.locked ||
-            (item.kind === "layer" && isLayerLocked(editor.layers(item.frameId), item.layerId))
-          )
-            continue;
+          if (isLocked(item)) continue;
           if (item.kind === "frame") {
             const frame = editor.frame(item.frameId);
             if (!frame) continue;
@@ -596,10 +613,10 @@ export function makeCanvasCommands(
     });
   };
 
-  /** N / ⇧N: the next or previous frame on the page, selected. */
+  /** N / ⇧N: the next or previous frame on the page (hidden and locked ones skipped), selected. */
   const stepFrame = (step: 1 | -1) => {
     const editor = getEditor();
-    const frames = editor.page.frames;
+    const frames = reachableFrames(editor.page.frames);
     if (frames.length === 0) return null;
     const current = editor.selection[0]?.frameId;
     const at = frames.findIndex((frame) => frame.id === current);
@@ -718,7 +735,7 @@ export function makeCanvasCommands(
       );
   };
 
-  /** ⌘A: the selected layer's siblings, otherwise every frame on the page. */
+  /** ⌘A: the selected layer's siblings, otherwise every frame on the page within reach. */
   const selectSiblings = () => {
     const editor = getEditor();
     const first = editor.selection[0];
@@ -731,10 +748,13 @@ export function makeCanvasCommands(
           .filter((id) => index.nodes.get(id)?.type === "element" && !isLayerLocked(index, id))
           .map((layerId) => ({ kind: "layer", frameId: first.frameId, layerId })),
       );
-    } else editor.select(editor.page.frames.map((item) => ({ kind: "frame", frameId: item.id })));
+    } else
+      editor.select(
+        reachableFrames(editor.page.frames).map((item) => ({ kind: "frame", frameId: item.id })),
+      );
   };
 
-  /** ⌘⇧A: the selection's siblings that are not selected (frames for frames). */
+  /** ⌘⇧A: the selection's siblings that are not selected (frames within reach for frames). */
   const selectOthers = () => {
     const editor = getEditor();
     const { selection } = editor;
@@ -743,7 +763,7 @@ export function makeCanvasCommands(
     const chosen = new Set(selection.map(selectionKey));
     if (first.kind === "frame") {
       editor.select(
-        editor.page.frames
+        reachableFrames(editor.page.frames)
           .map((frame): CanvasSelectionItem => ({ kind: "frame", frameId: frame.id }))
           .filter((item) => !chosen.has(selectionKey(item))),
       );
@@ -886,10 +906,6 @@ export function makeCanvasCommands(
     });
   };
 
-  /**
-   * An image file as a work asset, placed inside the frame under `at` (a world point) as an
-   * absolute layer, or as a new frame there; without a point, at `center`.
-   */
   /** An image file stored as a work asset (the inspector's image fill); null if refused. */
   const importImageAsset = async (file: File): Promise<string | null> => {
     const editor = getEditor();
@@ -904,32 +920,44 @@ export function makeCanvasCommands(
     }
   };
 
+  /** An image placed on the canvas (insert, drop, paste), under the progress toast. */
   const placeImage = async (file: File, at: Point | null, center: Point) => {
     const editor = getEditor();
     if (editor.readOnly) return;
+    const job = () => insertImage(file, at, center);
+    if (options.imageJob) return void (await options.imageJob(job));
     try {
-      const image = await prepareCanvasImage(file, editor.work.id);
-      await options.importImage(image.input);
-      const scale = Math.min(1, IMAGE_MAX_SIDE / Math.max(image.width, image.height));
-      const width = Math.round(image.width * scale);
-      const height = Math.round(image.height * scale);
-      const alt = image.input.name.replaceAll('"', "");
-      const style = `width:${width}px;height:${height}px;object-fit:cover;display:block`;
-      const target = at ? frameAtPoint(getEditor().page.frames, at) : null;
-      if (target)
-        await insertIntoFrame(
-          target.frame.id,
-          `<img src="synara-asset:${image.input.assetId}" alt="${alt}" style="position:absolute;left:${Math.round(target.x)}px;top:${Math.round(target.y)}px;${style}">`,
-          { select: true },
-        );
-      else
-        await createFrame(
-          { ...(at ?? center), width, height },
-          `<img src="synara-asset:${image.input.assetId}" alt="${alt}" style="${style}">`,
-        );
+      await job();
     } catch (cause) {
       options.fail(cause);
     }
+  };
+
+  /**
+   * An image file as a work asset, placed inside the frame under `at` (a world point) as an
+   * absolute layer, or as a new frame there; without a point, at `center`. Throws when the
+   * image cannot be read or stored.
+   */
+  const insertImage = async (file: File, at: Point | null, center: Point) => {
+    const image = await prepareCanvasImage(file, getEditor().work.id);
+    await options.importImage(image.input);
+    const scale = Math.min(1, IMAGE_MAX_SIDE / Math.max(image.width, image.height));
+    const width = Math.round(image.width * scale);
+    const height = Math.round(image.height * scale);
+    const alt = image.input.name.replaceAll('"', "");
+    const style = `width:${width}px;height:${height}px;object-fit:cover;display:block`;
+    const target = at ? frameAtPoint(getEditor().page.frames, at) : null;
+    if (target)
+      await insertIntoFrame(
+        target.frame.id,
+        `<img src="synara-asset:${image.input.assetId}" alt="${alt}" style="position:absolute;left:${Math.round(target.x)}px;top:${Math.round(target.y)}px;${style}">`,
+        { select: true },
+      );
+    else
+      await createFrame(
+        { ...(at ?? center), width, height },
+        `<img src="synara-asset:${image.input.assetId}" alt="${alt}" style="${style}">`,
+      );
   };
 
   return {

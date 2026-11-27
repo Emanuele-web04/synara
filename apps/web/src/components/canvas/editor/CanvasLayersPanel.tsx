@@ -570,6 +570,7 @@ export function CanvasLayersPanel({ className }: { className?: string }) {
                       maxLength={120}
                       onCancel={() => setRenaming(null)}
                       onTab={(backward) => renameNext(row.key, backward)}
+                      onDone={editor.focusCanvas}
                       onCommit={(value) => {
                         const item = row.item;
                         setRenaming(null);

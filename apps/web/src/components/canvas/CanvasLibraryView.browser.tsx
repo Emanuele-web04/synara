@@ -44,6 +44,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { page, userEvent } from "vitest/browser";
 import { render } from "vitest-browser-react";
+import { toastManager } from "../ui/toast";
 import CanvasLibraryView from "./CanvasLibraryView";
 import { useCanvasActivityStore } from "./canvasStores";
 
@@ -109,6 +110,9 @@ function serveList() {
             ...item,
             ...(input.title ? { title: input.title } : {}),
             ...(input.folderId !== undefined ? { folderId: input.folderId } : {}),
+            ...(input.archived !== undefined
+              ? { archivedAt: input.archived ? time(20) : null }
+              : {}),
           }
         : item,
     );
@@ -320,6 +324,80 @@ describe("canvas library", () => {
       // The turn ends: it fades and goes.
       agent(true);
       await vi.waitFor(() => expect(marker("loose")).toBeNull());
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("shows placeholders on the first load and keeps the works shown while a search loads", async () => {
+    // The first list waits until released: placeholder cards meanwhile, no empty state.
+    const serve = native.canvas.list.getMockImplementation()!;
+    let release!: () => void;
+    native.canvas.list.mockImplementationOnce(
+      (input: CanvasListInput) => new Promise((resolve) => (release = () => resolve(serve(input)))),
+    );
+    const screen = await mountLibrary();
+    try {
+      await vi.waitFor(() =>
+        expect(document.querySelector("[data-canvas-library-loading]")).toBeTruthy(),
+      );
+      expect(
+        document.querySelectorAll("[data-canvas-library-loading] [data-slot=skeleton]").length,
+      ).toBeGreaterThan(0);
+      expect(shownWorks()).toEqual([]);
+      expect(document.querySelector('[role="status"] h2')).toBeNull();
+      release();
+      await vi.waitFor(() => expect(shownWorks()).toEqual(["filed", "loose", "deep"]));
+      expect(document.querySelector("[data-canvas-library-loading]")).toBeNull();
+      // A search that takes a while: the works stay until its list arrives.
+      native.canvas.list.mockImplementationOnce(
+        (input: CanvasListInput) =>
+          new Promise((resolve) => (release = () => resolve(serve(input)))),
+      );
+      await userEvent.fill(page.getByRole("textbox", { name: "Search works" }), "dee");
+      await vi.waitFor(() => expect(lastInput()).toMatchObject({ search: "dee" }));
+      expect(shownWorks()).toEqual(["filed", "loose", "deep"]);
+      expect(document.querySelector("[data-canvas-library-loading]")).toBeNull();
+      release();
+      await vi.waitFor(() => expect(shownWorks()).toEqual(["deep"]));
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("archives a work with the app's Undo toast, and Undo restores it", async () => {
+    const add = vi.spyOn(toastManager, "add");
+    const screen = await mountLibrary();
+    try {
+      await vi.waitFor(() => expect(shownWorks()).toHaveLength(3));
+      await page.getByRole("button", { name: "Actions for LOOSE" }).click();
+      await page.getByRole("menuitem", { name: "Archive" }).click();
+      await vi.waitFor(() =>
+        expect(native.canvas.update).toHaveBeenCalledWith({ id: "loose", archived: true }),
+      );
+      await vi.waitFor(() => expect(shownWorks()).toEqual(["filed", "deep"]));
+      const toast = add.mock.calls
+        .map(
+          ([options]) =>
+            options as {
+              data?: { archiveUndo?: { message?: string; onUndo: () => Promise<boolean> } };
+            },
+        )
+        .find((options) => options.data?.archiveUndo)!;
+      expect(toast.data!.archiveUndo!.message).toBe("Canvas archived");
+      await expect(toast.data!.archiveUndo!.onUndo()).resolves.toBe(true);
+      expect(native.canvas.update).toHaveBeenLastCalledWith({ id: "loose", archived: false });
+      await vi.waitFor(() => expect(shownWorks()).toEqual(["filed", "loose", "deep"]));
+      // Restoring from the archive is not undone: no toast for it.
+      add.mockClear();
+      await page.getByRole("radio", { name: "Archive" }).click();
+      await vi.waitFor(() => expect(shownWorks()).toEqual(["old"]));
+      await page.getByRole("button", { name: "Actions for OLD" }).click();
+      await page.getByRole("menuitem", { name: "Restore" }).click();
+      await vi.waitFor(() =>
+        expect(native.canvas.update).toHaveBeenLastCalledWith({ id: "old", archived: false }),
+      );
+      expect(add.mock.calls.some(([options]) => "data" in (options as object))).toBe(false);
     } finally {
       await screen.unmount();
     }

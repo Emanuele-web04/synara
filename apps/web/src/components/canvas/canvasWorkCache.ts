@@ -4,7 +4,7 @@
 //          while this client's own writes are in flight, and never lets a work go backwards.
 // Layer: Canvas data (React Query)
 // Exports: query keys and options, storeCanvasWork, runCanvasWrite, handleCanvasChanged,
-//          applyCanvasFrameDelta
+//          applyCanvasFrameDelta, canvasWritesInFlight, subscribeCanvasWrites
 
 import type { CanvasChangedEvent, CanvasWork } from "@synara/contracts";
 import { applyDesignLayerEdits } from "@synara/shared/designCanvasLayers";
@@ -52,6 +52,22 @@ type WorkSync = {
   queue: CanvasChangedEvent[];
 };
 const syncs = new WeakMap<QueryClient, Map<string, WorkSync>>();
+const writeListeners = new Set<() => void>();
+
+/** This client's writes to a work that have not settled yet (the header's saving state). */
+export const canvasWritesInFlight = (client: QueryClient, workId: string) =>
+  syncs.get(client)?.get(workId)?.writes ?? 0;
+
+/** Calls `listener` whenever a write starts or settles; returns the unsubscribe. */
+export function subscribeCanvasWrites(listener: () => void) {
+  writeListeners.add(listener);
+  return () => {
+    writeListeners.delete(listener);
+  };
+}
+const writesChanged = () => {
+  for (const listener of writeListeners) listener();
+};
 const listTimers = new WeakMap<QueryClient, ReturnType<typeof setTimeout>>();
 /** Events beyond this while busy are dropped in favour of one refetch. */
 const MAX_QUEUED_EVENTS = 64;
@@ -185,12 +201,14 @@ export async function runCanvasWrite<A>(
 ): Promise<A> {
   const sync = syncFor(client, workId);
   sync.writes++;
+  writesChanged();
   try {
     const result = await task();
     storeCanvasWork(client, savedWork(result));
     return result;
   } finally {
     sync.writes--;
+    writesChanged();
     drain(client, workId, sync);
   }
 }
