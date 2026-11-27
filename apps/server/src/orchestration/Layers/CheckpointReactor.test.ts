@@ -5812,12 +5812,12 @@ describe("CheckpointReactor", () => {
       );
       expect(nextDiff.diff).toContain("+next");
       expect(nextDiff.diff).not.toContain("+live");
-      expect(
-        gitRefExists(
-          harness.cwd,
-          checkpointRefForThreadTurnLive(threadId, turnId, "evt-item-file-change-live"),
-        ),
-      ).toBe(false);
+      // The superseded live ref retires only after the replacement publishes, so
+      // observing the projection does not imply the cleanup already ran.
+      await waitForGitRefMissing(
+        harness.cwd,
+        checkpointRefForThreadTurnLive(threadId, turnId, "evt-item-file-change-live"),
+      );
       // Each probe scans only new journal rows; the real repository test also
       // verifies its lower bound excludes the previously checked prefix.
       const liveProbes = terminalReads.mock.calls.map(([input]) => input);
@@ -5985,7 +5985,9 @@ describe("CheckpointReactor", () => {
           checkpointRefForThreadTurnLive(threadId, turnId, "evt-item-file-change-live"),
         ),
       ).toBe(false);
-      expect(gitRefExists(harness.cwd, lastLiveRef)).toBe(false);
+      // The terminal capture publishes the canonical ref before retiring the live
+      // preview ref, so the projection settles ahead of the cleanup.
+      await waitForGitRefMissing(harness.cwd, lastLiveRef);
       expect(detailReads).not.toHaveBeenCalled();
     },
   );
