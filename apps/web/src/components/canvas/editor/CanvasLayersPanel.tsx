@@ -1,5 +1,13 @@
 import type { DesignFrame } from "@synara/contracts";
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ComponentProps,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
 import { useTranslation } from "~/i18n";
 import { CentralIcon } from "~/lib/central-icons";
 import {
@@ -521,8 +529,9 @@ export function CanvasLayersPanel({ className }: { className?: string }) {
             const lockedHere = row.locked || row.lockedByParent;
             const lineHere = drop?.line.key === row.key ? drop.line.edge : null;
             return (
-              <TreeRow
+              <LayerTreeRow
                 key={row.key}
+                rowKey={row.key}
                 {...EXPLORER_ROW_PROPS}
                 role="treeitem"
                 aria-selected={isSelected}
@@ -587,18 +596,32 @@ export function CanvasLayersPanel({ className }: { className?: string }) {
                   ) : undefined
                 }
                 actions={
-                  writable ? (
+                  !writable ? (
+                    // Read only: the flags that are on stay as markers, in the buttons' places.
+                    row.locked || row.lockedByParent || row.hidden ? (
+                      <>
+                        {row.locked ? (
+                          <LayerFlagMarker label={t("workspace:canvasFlagLocked")} flag="locked">
+                            <CentralIcon name="lock" className="size-3 opacity-80" />
+                          </LayerFlagMarker>
+                        ) : row.lockedByParent ? (
+                          <InheritedLockDot label={t("workspace:canvasLayerInheritedLock")} />
+                        ) : (
+                          <span className="size-6" />
+                        )}
+                        {row.hidden ? (
+                          <LayerFlagMarker label={t("workspace:canvasFlagHidden")} flag="hidden">
+                            <CentralIcon name="eye-closed" className="size-3 opacity-80" />
+                          </LayerFlagMarker>
+                        ) : (
+                          <span className="size-6" />
+                        )}
+                      </>
+                    ) : null
+                  ) : (
                     <>
                       {row.lockedByParent && !row.locked ? (
-                        // A lock inherited from a parent shows a dot.
-                        <span
-                          role="img"
-                          aria-label={t("workspace:canvasLayerInheritedLock")}
-                          data-inherited-lock=""
-                          className="flex size-6 items-center justify-center"
-                        >
-                          <span className="size-1 rounded-full bg-muted-foreground" />
-                        </span>
+                        <InheritedLockDot label={t("workspace:canvasLayerInheritedLock")} />
                       ) : (
                         <LayerFlagButton
                           label={
@@ -628,7 +651,7 @@ export function CanvasLayersPanel({ className }: { className?: string }) {
                         )}
                       </LayerFlagButton>
                     </>
-                  ) : null
+                  )
                 }
                 onClick={(event) => pick(row, event)}
                 onDoubleClick={() => {
@@ -689,6 +712,56 @@ export function CanvasLayersPanel({ className }: { className?: string }) {
         )}
       </div>
     </div>
+  );
+}
+
+/**
+ * A row that takes the row hover while the canvas pointer is over its layer. Each row subscribes
+ * to whether it is the hovered one, so a hover change renders the last and the new row only.
+ */
+function LayerTreeRow({ rowKey, ...props }: ComponentProps<typeof TreeRow> & { rowKey: string }) {
+  const hovered = useCanvasEditorStore(
+    (state) => state.canvasHover !== null && selectionKey(state.canvasHover) === rowKey,
+  );
+  return <TreeRow {...props} hovered={hovered} />;
+}
+
+/** A lock inherited from a parent: a dot in the lock's place. */
+function InheritedLockDot({ label }: { label: string }) {
+  return (
+    <span
+      role="img"
+      aria-label={label}
+      data-inherited-lock=""
+      className="flex size-6 items-center justify-center"
+    >
+      <span className="size-1 rounded-full bg-muted-foreground" />
+    </span>
+  );
+}
+
+/**
+ * A lock or hidden flag on a read-only work: the glyph its button shows while on, in the button's
+ * place and tone, with nothing to press.
+ */
+function LayerFlagMarker({
+  label,
+  flag,
+  children,
+}: {
+  label: string;
+  flag: "locked" | "hidden";
+  children: ReactNode;
+}) {
+  return (
+    <span
+      role="img"
+      aria-label={label}
+      data-layer-flag-marker={flag}
+      className="flex size-6 items-center justify-center text-[var(--color-text-foreground-secondary)]"
+    >
+      {children}
+    </span>
   );
 }
 

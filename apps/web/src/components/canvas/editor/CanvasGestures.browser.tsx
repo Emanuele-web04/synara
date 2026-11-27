@@ -168,6 +168,28 @@ describe("canvas gestures render nothing while the pointer moves", () => {
     }
   });
 
+  it("shows each tool's cursor: a crosshair to draw, a caret for Text, a pin for Comment", async () => {
+    serveCanvas(native, work());
+    const { screen, root } = await mountCanvas(work());
+    const cursorWith = async (tool: "move" | "frame" | "rectangle" | "text" | "comment") => {
+      useCanvasEditorStore.getState().setTool(tool);
+      await nextFrame();
+      return getComputedStyle(root).cursor;
+    };
+    try {
+      expect(await cursorWith("move")).toBe("default");
+      expect(await cursorWith("frame")).toBe("crosshair");
+      expect(await cursorWith("rectangle")).toBe("crosshair");
+      expect(await cursorWith("text")).toBe("text");
+      // The pin's shape, its hotspot on the corner a pin anchors to; a crosshair if it cannot load.
+      expect(await cursorWith("comment")).toMatch(
+        /^url\("data:image\/svg\+xml,.+"\) 2 22, crosshair$/,
+      );
+    } finally {
+      await screen.unmount();
+    }
+  });
+
   it("drags a frame and resizes it without rendering until release, the cursor held", async () => {
     serveCanvas(native, work());
     const { screen, root, host } = await mountCanvas(work());
@@ -437,11 +459,35 @@ describe("floating toolbar", () => {
     vi.restoreAllMocks();
   });
 
+  it("names the zoom percentage in the app's tooltip, above the bar", async () => {
+    serveCanvas(native, work());
+    const { screen, root } = await mountCanvas(work(), { toolbar: true });
+    try {
+      const zoom = [...toolbarOf(root).querySelectorAll("button")].find((item) =>
+        item.textContent?.includes("100%"),
+      )!;
+      await userEvent.hover(zoom);
+      await vi.waitFor(() =>
+        expect(document.querySelector('[data-slot="tooltip-popup"]')?.textContent).toBe(
+          "Zoom level",
+        ),
+      );
+      const tip = document.querySelector('[data-slot="tooltip-popup"]')!.getBoundingClientRect();
+      expect(tip.bottom).toBeLessThanOrEqual(zoom.getBoundingClientRect().top);
+      await userEvent.unhover(zoom);
+    } finally {
+      await screen.unmount();
+    }
+  });
+
   it("fades out while a layer drags, without a render, and comes back on release", async () => {
     serveCanvas(native, work());
     const { screen, root, layer } = await mountCanvas(work(), { toolbar: true });
     try {
       expect(toolbarOf(root)).toBeTruthy();
+      // The real pointer rests off the bar (a drag starts on a layer, never on the bar), so the
+      // bar giving up the pointer as it fades does not move its tooltips.
+      await userEvent.unhover(toolbarOf(root));
       expect(takesPointer(root)).toBe("auto");
       // The zoom menu rides in the toolbar when no header shows it.
       expect(root.querySelector("[data-canvas-zoom-corner]")).toBeNull();

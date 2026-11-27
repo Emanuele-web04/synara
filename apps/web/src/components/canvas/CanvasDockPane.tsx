@@ -21,8 +21,10 @@ import {
   askInChat,
   CanvasHeaderStatus,
   CanvasStatus,
+  CanvasWorkTitle,
   openCanvasPane,
   useCanvasWork,
+  useCanvasWorkArchiving,
 } from "./canvasPane";
 import { CanvasPageMenu } from "./CanvasPageMenu";
 
@@ -112,10 +114,43 @@ export default function CanvasDockPane({
   const work: CanvasWork | undefined = query.data;
   const page = work?.pages.find((item) => item.id === pageId) ?? work?.pages[0];
   const readOnly = work?.readOnly === true || (work !== undefined && work.archivedAt !== null);
+  const reload = () => query.refetch();
+  const setArchived = useCanvasWorkArchiving(workId, reload);
+  // Open full size and close stay in the header while the work loads or fails to.
+  const openFullSize = (
+    <IconButton
+      variant="chrome"
+      size="icon-xs"
+      label={t("workspace:canvasExpand")}
+      tooltip={t("workspace:canvasExpand")}
+      tooltipSide="bottom"
+      className={DOCK_HEADER_ICON_BUTTON_CLASS}
+      onClick={() =>
+        void navigate({
+          to: "/canvas/$workId",
+          params: { workId },
+          search: { page: page?.id ?? pageId ?? undefined, chat: hostThreadId },
+        })
+      }
+    >
+      <OpenFullSizeIcon className="size-3.5" />
+    </IconButton>
+  );
   return (
     <div ref={setElement} className="flex min-h-0 flex-1 flex-col">
       {!work || !page ? (
-        <CanvasStatus connection={connection} error={query.isError} />
+        <>
+          <DockPaneHeader
+            title={t("workspace:canvasTitle")}
+            actions={openFullSize}
+            onClose={() => closeCanvasPane(hostThreadId)}
+          />
+          <CanvasStatus
+            connection={connection}
+            error={query.isError && !query.isFetching}
+            onRetry={() => void reload()}
+          />
+        </>
       ) : (
         <CanvasEditorProvider
           work={work}
@@ -131,7 +166,13 @@ export default function CanvasDockPane({
           <DockPaneHeader
             title={
               <span className="flex min-w-0 items-center gap-0.5">
-                <span className="min-w-0 truncate pe-1">{work.title}</span>
+                <CanvasWorkTitle
+                  workId={work.id}
+                  title={work.title}
+                  editable={!readOnly}
+                  className="pe-1"
+                  reload={reload}
+                />
                 <span aria-hidden="true" className="font-normal text-muted-foreground/60">
                   /
                 </span>
@@ -141,7 +182,12 @@ export default function CanvasDockPane({
                   onSelect={(next) => openCanvasPane(hostThreadId, work.id, next)}
                 />
                 {/* As in the full layout's header: archived, or updates unavailable. */}
-                <CanvasHeaderStatus workId={work.id} readOnly={readOnly} connection={connection} />
+                <CanvasHeaderStatus
+                  workId={work.id}
+                  readOnly={readOnly}
+                  connection={connection}
+                  onRestore={work.archivedAt ? () => setArchived(false) : undefined}
+                />
               </span>
             }
             actions={
@@ -184,23 +230,7 @@ export default function CanvasDockPane({
                     )}
                   </IconButton>
                 )}
-                <IconButton
-                  variant="chrome"
-                  size="icon-xs"
-                  label={t("workspace:canvasExpand")}
-                  tooltip={t("workspace:canvasExpand")}
-                  tooltipSide="bottom"
-                  className={DOCK_HEADER_ICON_BUTTON_CLASS}
-                  onClick={() =>
-                    void navigate({
-                      to: "/canvas/$workId",
-                      params: { workId: work.id },
-                      search: { page: page.id, chat: hostThreadId },
-                    })
-                  }
-                >
-                  <OpenFullSizeIcon className="size-3.5" />
-                </IconButton>
+                {openFullSize}
               </>
             }
             onClose={() => closeCanvasPane(hostThreadId)}

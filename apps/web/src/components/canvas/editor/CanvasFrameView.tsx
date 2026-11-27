@@ -6,6 +6,7 @@ import {
   type DesignFrameRenderer,
   type DesignRenderContext,
 } from "~/lib/designCanvas";
+import { CentralIcon } from "~/lib/central-icons";
 import { ImageIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { TreeRowRenameInput } from "../../ui/TreeRow";
@@ -113,6 +114,8 @@ export const CanvasFrameView = memo(function CanvasFrameView({
   // The viewport's live `--canvas-zoom` keeps it right while a pan or zoom has not settled yet,
   // and `100%` follows the frame's width while it is being resized.
   const labelWidth = frame.width * zoom;
+  // A locked frame is out of reach: its label neither lights up nor offers a rename.
+  const locked = frame.locked === true;
   const liveZoom = `var(--canvas-zoom, ${zoom})`;
   const rain = useFadePresence(agentActive);
   return (
@@ -134,14 +137,16 @@ export const CanvasFrameView = memo(function CanvasFrameView({
       >
         <div
           // The frame label: the title muted on the canvas, full ink on hover, in the accent
-          // while selected; no fill of its own.
+          // while selected; no fill of its own. A locked frame's stays muted.
           className={cn(
             "flex h-[22px] min-w-0 items-center gap-1.5 rounded-md px-1.5 text-ui-sm",
             selected
               ? "text-(--canvas-accent)"
-              : hovered
-                ? "text-foreground"
-                : "text-muted-foreground hover:text-foreground",
+              : locked
+                ? "text-muted-foreground"
+                : hovered
+                  ? "text-foreground"
+                  : "text-muted-foreground hover:text-foreground",
           )}
         >
           {cover && (
@@ -168,12 +173,23 @@ export const CanvasFrameView = memo(function CanvasFrameView({
           ) : (
             <span className="truncate">{frame.title}</span>
           )}
+          {/* The layers panel's lock glyph, in the label's colour. */}
+          {locked && (
+            <span
+              role="img"
+              aria-label={t("workspace:canvasFlagLocked")}
+              data-canvas-frame-locked=""
+              className="flex shrink-0"
+            >
+              <CentralIcon name="lock" className="size-3" />
+            </span>
+          )}
           {agentName && agentActive && (
             <span className="min-w-0 shrink-0 truncate text-ui-xs text-muted-foreground">
               {agentName}
             </span>
           )}
-          {canRename && !renaming && (
+          {canRename && !locked && !renaming && (
             <span className="ms-0.5 hidden shrink-0 text-ui-xs text-muted-foreground/72 group-hover/frame-label:inline">
               {t("workspace:canvasFrameRenameHint")}
             </span>

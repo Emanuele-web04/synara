@@ -43,6 +43,12 @@ type CanvasEditorState = {
   /** A layer the layers panel points at; the canvas outlines it like a hover. */
   panelHover: CanvasSelectionItem | null;
   setPanelHover: (item: CanvasSelectionItem | null) => void;
+  /**
+   * The layer or frame the pointer is over on the canvas; its layers panel row takes the row
+   * hover. Each row subscribes to whether it is the one, so a change renders two rows at most.
+   */
+  canvasHover: CanvasSelectionItem | null;
+  setCanvasHover: (item: CanvasSelectionItem | null) => void;
   /** `.` / ⌘\\: the canvas alone, without its panels and tools. */
   uiHidden: boolean;
   toggleUi: () => void;
@@ -87,6 +93,8 @@ export const useCanvasEditorStore = create<CanvasEditorState>((set) => ({
     set((state) => ({ dismissedChip: { ...state.dismissedChip, [threadId]: signature } })),
   panelHover: null,
   setPanelHover: (panelHover) => set({ panelHover }),
+  canvasHover: null,
+  setCanvasHover: (canvasHover) => set({ canvasHover }),
   uiHidden: false,
   toggleUi: () => set((state) => ({ uiHidden: !state.uiHidden })),
   commentsHidden: false,

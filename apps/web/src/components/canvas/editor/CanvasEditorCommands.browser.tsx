@@ -506,6 +506,44 @@ describe("canvas editor commands", () => {
       await screen.unmount();
     }
   });
+
+  it("marks a locked frame's label with the lock, which neither lights up nor offers a rename", async () => {
+    const withLocked = workOf([f1, { ...f2, locked: true }]);
+    serveCanvas(native, withLocked);
+    const { screen, root } = await mountCanvas(withLocked);
+    const label = (frameId: string) =>
+      root.querySelector<HTMLElement>(`[data-canvas-frame-label="${frameId}"]`)!;
+    const point = async (frameId: string) => {
+      const box = label(frameId).getBoundingClientRect();
+      pointer(label(frameId), "pointermove", box.left + 5, box.top + 5, { buttons: 0 });
+      await nextFrame();
+      await nextFrame();
+    };
+    try {
+      await vi.waitFor(() => expect(label("f2")).toBeTruthy());
+      expect(
+        label("f2").querySelector("[data-canvas-frame-locked]")?.getAttribute("aria-label"),
+      ).toBe("Locked");
+      expect(label("f1").querySelector("[data-canvas-frame-locked]")).toBeNull();
+      // Only an unlocked label hints at the rename and lights up under the pointer.
+      expect(label("f1").textContent).toContain("Double-click to rename");
+      expect(label("f2").textContent).not.toContain("Double-click to rename");
+      expect(label("f2").firstElementChild!.className).not.toContain("hover:text-foreground");
+      await point("f2");
+      expect(useCanvasEditorStore.getState().canvasHover).toBeNull();
+      await point("f1");
+      await vi.waitFor(() =>
+        expect(useCanvasEditorStore.getState().canvasHover).toEqual({
+          kind: "frame",
+          frameId: "f1",
+        }),
+      );
+      // The hovered label is in full ink.
+      expect(label("f1").firstElementChild!.className).not.toContain("text-muted-foreground");
+    } finally {
+      await screen.unmount();
+    }
+  });
 });
 
 describe("canvas layers panel", () => {

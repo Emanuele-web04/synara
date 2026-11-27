@@ -461,6 +461,7 @@ export function resetCanvasStores() {
   useCanvasEditorStore.setState({
     tool: "move",
     panelHover: null,
+    canvasHover: null,
     uiHidden: false,
     commentsHidden: false,
     panelRequest: null,

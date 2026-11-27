@@ -1,5 +1,5 @@
 import type { ThreadId } from "@synara/contracts";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "~/i18n";
@@ -19,7 +19,7 @@ import {
 } from "../chat/ComposerPickerMenuPopup";
 import { RouteInsetSurface } from "../RouteInsetSurface";
 import { RouteSurface, RouteSurfaceHeader } from "../RouteSurface";
-import { Button } from "../ui/button";
+import { IconButton } from "../ui/icon-button";
 import { Menu, MenuItem, MenuSub, MenuSubTrigger, MenuTrigger } from "../ui/menu";
 import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -27,9 +27,10 @@ import {
   askInChat,
   CanvasHeaderStatus,
   CanvasStatus,
+  CanvasWorkTitle,
   openCanvasPane,
-  showCanvasArchiveUndo,
   useCanvasWork,
+  useCanvasWorkArchiving,
 } from "./canvasPane";
 import { CanvasChatPanel } from "./CanvasChatPanel";
 import { CanvasPageMenu } from "./CanvasPageMenu";
@@ -65,7 +66,6 @@ export default function CanvasWorkView({
 }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const client = useQueryClient();
   const { connection, query } = useCanvasWork(workId);
   const work = query.data;
   const [organizing, setOrganizing] = useState(false);
@@ -135,6 +135,7 @@ export default function CanvasWorkView({
     () => body.current?.querySelector<HTMLElement>("[data-canvas-viewport]") ?? null,
     [],
   );
+  const setArchived = useCanvasWorkArchiving(workId, () => query.refetch());
   const action = async (run: () => Promise<void>) => {
     try {
       await run();
@@ -248,20 +249,8 @@ export default function CanvasWorkView({
           </MenuItem>
           <MenuItem
             disabled={readOnly && !work.archivedAt}
-            onClick={() =>
-              void action(async () => {
-                const archiving = !work.archivedAt;
-                await ensureNativeApi().canvas.update({ id: workId, archived: archiving });
-                await query.refetch();
-                // Archiving offers the app's compact Undo, as archiving a chat does.
-                if (archiving)
-                  showCanvasArchiveUndo(client, {
-                    id: workId,
-                    message: t("workspace:canvasArchivedToast"),
-                    failedTitle: t("workspace:canvasOperationFailed"),
-                  });
-              })
-            }
+            // Archiving offers the app's compact Undo, as archiving a chat does.
+            onClick={() => void setArchived(!work.archivedAt)}
           >
             {readOnly && !work.archivedAt
               ? t("workspace:canvasRestoreFolderFirst")
@@ -278,22 +267,37 @@ export default function CanvasWorkView({
   const header = (trailing: ReactNode) => (
     <RouteSurfaceHeader>
       <div className="no-drag flex min-w-0 flex-1 items-center gap-1">
-        <Button
-          variant="ghost"
+        <IconButton
           size="icon-sm"
-          aria-label={t("workspace:canvasAllWorks")}
+          label={t("workspace:canvasAllWorks")}
+          tooltip={t("workspace:canvasAllWorks")}
+          tooltipSide="bottom"
           onClick={() => void navigate({ to: "/canvas" })}
         >
           <ArrowLeftIcon className="size-4" />
-        </Button>
-        <h1 className="truncate px-1 text-ui-lg font-medium">
-          {work?.title ?? t("workspace:canvasTitle")}
-        </h1>
+        </IconButton>
+        {work ? (
+          <CanvasWorkTitle
+            heading
+            workId={work.id}
+            title={work.title}
+            editable={!readOnly}
+            className="px-1 text-ui-lg font-medium"
+            reload={() => query.refetch()}
+          />
+        ) : (
+          <h1 className="truncate px-1 text-ui-lg font-medium">{t("workspace:canvasTitle")}</h1>
+        )}
         {work && page && (
           <CanvasPageMenu work={work} pageId={page.id} onSelect={(id) => void selectPage(id)} />
         )}
         {work && (
-          <CanvasHeaderStatus workId={work.id} readOnly={readOnly} connection={connection} />
+          <CanvasHeaderStatus
+            workId={work.id}
+            readOnly={readOnly}
+            connection={connection}
+            onRestore={work.archivedAt ? () => setArchived(false) : undefined}
+          />
         )}
       </div>
       {trailing ? (
@@ -311,7 +315,11 @@ export default function CanvasWorkView({
           {!work || !page ? (
             <>
               {header(actions)}
-              <CanvasStatus connection={connection} error={query.isError} />
+              <CanvasStatus
+                connection={connection}
+                error={query.isError && !query.isFetching}
+                onRetry={() => void query.refetch()}
+              />
             </>
           ) : (
             <CanvasEditorProvider

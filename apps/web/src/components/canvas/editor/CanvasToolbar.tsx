@@ -340,27 +340,36 @@ export function CanvasZoomMenu({
       run: zoom.fitSelection,
     },
   ];
+  const zoomLabel = t("workspace:canvasZoomLevel");
   return (
     <Menu open={open} onOpenChange={setOpen}>
-      <MenuTrigger
-        render={
-          variant === "topbar" ? (
-            <ChatHeaderButton tone="plain" className={cn("gap-1 tabular-nums", className)} />
-          ) : (
-            <Button
-              variant="ghost"
-              size={variant === "default" ? "sm" : "xs"}
-              data-canvas-ui=""
-              className={cn("tabular-nums", variant === "default" && "px-2", className)}
-            />
-          )
-        }
-      >
-        <ZoomPercent camera={camera} zoom={viewport.zoom} />
-        {variant !== "header" && (
-          <ChevronDownIcon aria-hidden className="size-3 text-muted-foreground" />
-        )}
-      </MenuTrigger>
+      {/* The app's tooltip names the percentage: below a header, above the canvas's own bar. */}
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <MenuTrigger
+              render={
+                variant === "topbar" ? (
+                  <ChatHeaderButton tone="plain" className={cn("gap-1 tabular-nums", className)} />
+                ) : (
+                  <Button
+                    variant="ghost"
+                    size={variant === "default" ? "sm" : "xs"}
+                    data-canvas-ui=""
+                    className={cn("tabular-nums", variant === "default" && "px-2", className)}
+                  />
+                )
+              }
+            >
+              <ZoomPercent camera={camera} zoom={viewport.zoom} />
+              {variant !== "header" && (
+                <ChevronDownIcon aria-hidden className="size-3 text-muted-foreground" />
+              )}
+            </MenuTrigger>
+          }
+        />
+        <TooltipPopup side={variant === "default" ? "top" : "bottom"}>{zoomLabel}</TooltipPopup>
+      </Tooltip>
       <ComposerPickerMenuPopup align="end" className="w-54">
         <CanvasZoomField
           autoFocus

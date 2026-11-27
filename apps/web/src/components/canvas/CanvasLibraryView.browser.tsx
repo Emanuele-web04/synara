@@ -44,6 +44,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { page, userEvent } from "vitest/browser";
 import { render } from "vitest-browser-react";
+import { getFormatLocale } from "~/i18n";
 import { toastManager } from "../ui/toast";
 import CanvasLibraryView from "./CanvasLibraryView";
 import { useCanvasActivityStore } from "./canvasStores";
@@ -154,6 +155,20 @@ const agentOn = (workId: string, ended: boolean) =>
 /** How far in from a menu row's start its icon sits. */
 const inset = (row: Element) =>
   (row.querySelector("svg")?.getBoundingClientRect().left ?? 0) - row.getBoundingClientRect().left;
+
+/** A right-click inside an element, as the browser sends it. */
+const rightClick = (target: Element) => {
+  const box = target.getBoundingClientRect();
+  target.dispatchEvent(
+    new MouseEvent("contextmenu", {
+      bubbles: true,
+      cancelable: true,
+      button: 2,
+      clientX: box.left + 20,
+      clientY: box.top + 20,
+    }),
+  );
+};
 
 describe("canvas library", () => {
   beforeEach(() => {
@@ -427,6 +442,101 @@ describe("canvas library", () => {
       await page.getByRole("button", { name: "Actions for LOOSE" }).click();
       await expect.element(page.getByRole("menuitem", { name: "Rename" })).toBeVisible();
       expect(navigate).not.toHaveBeenCalled();
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("opens a card's, a row's or a folder's menu on right-click, as its … button does", async () => {
+    const screen = await mountLibrary();
+    try {
+      await vi.waitFor(() => expect(shownWorks()).toHaveLength(3));
+      // The … button names itself in the app's tooltip.
+      await userEvent.hover(page.getByRole("button", { name: "Actions for LOOSE" }));
+      await vi.waitFor(() =>
+        expect(document.querySelector('[data-slot="tooltip-popup"]')?.textContent).toBe(
+          "Actions for LOOSE",
+        ),
+      );
+      await userEvent.unhover(page.getByRole("button", { name: "Actions for LOOSE" }));
+      rightClick(document.querySelector('[data-canvas-work="loose"]')!);
+      await expect.element(page.getByRole("menuitem", { name: "Duplicate" })).toBeVisible();
+      await page.getByRole("menuitem", { name: "Rename" }).click();
+      await expect
+        .element(page.getByRole("textbox", { name: "Rename canvas" }))
+        .toHaveValue("LOOSE");
+      await userEvent.keyboard("{Escape}");
+      await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull());
+      expect(navigate).not.toHaveBeenCalled();
+
+      await page.getByRole("radio", { name: "Files" }).click();
+      await vi.waitFor(() => expect(shownFolders()).toEqual(["outer"]));
+      rightClick(document.querySelector('[data-canvas-folder="outer"]')!);
+      await page.getByRole("menuitem", { name: "Open" }).click();
+      await vi.waitFor(() => expect(shownWorks()).toEqual(["filed"]));
+
+      await page.getByRole("radio", { name: "List" }).click();
+      await vi.waitFor(() => expect(document.querySelector("li[data-canvas-work]")).toBeTruthy());
+      rightClick(document.querySelector('li[data-canvas-work="filed"]')!);
+      await page.getByRole("menuitem", { name: "Archive" }).click();
+      await vi.waitFor(() =>
+        expect(native.canvas.update).toHaveBeenCalledWith({ id: "filed", archived: true }),
+      );
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("says when a work last changed as the sidebar does, the full date in a tooltip", async () => {
+    const changed = new Date(Date.now() - 3 * 3_600_000).toISOString();
+    works = [{ ...work("loose", null, 5), updatedAt: changed }];
+    folders = [folder("outer", null)];
+    const screen = await mountLibrary();
+    try {
+      const updated = await vi.waitFor(() => {
+        const found = document.querySelector<HTMLElement>('[data-canvas-work="loose"] time');
+        expect(found).toBeTruthy();
+        return found!;
+      });
+      expect(updated.textContent).toBe("3h");
+      expect(updated.getAttribute("datetime")).toBe(changed);
+      expect(updated.parentElement!.textContent).toBe("1 page · 3h");
+      await userEvent.hover(updated);
+      await vi.waitFor(() =>
+        expect(document.querySelector('[data-slot="tooltip-popup"]')?.textContent).toBe(
+          new Date(changed).toLocaleString(getFormatLocale(), {
+            dateStyle: "medium",
+            timeStyle: "short",
+          }),
+        ),
+      );
+      // On a card it still opens the work.
+      updated.click();
+      expect(navigate).toHaveBeenCalledWith({
+        to: "/canvas/$workId",
+        params: { workId: "loose" },
+        search: { page: undefined, chat: undefined },
+      });
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("tints a folder card on hover as a work card's title row is tinted", async () => {
+    const screen = await mountLibrary();
+    try {
+      await page.getByRole("radio", { name: "Files" }).click();
+      await vi.waitFor(() => expect(shownFolders()).toEqual(["outer"]));
+      const folderCard = document.querySelector<HTMLElement>('[data-canvas-folder="outer"]')!;
+      const folderFill = folderCard.firstElementChild as HTMLElement;
+      const workCard = document.querySelector<HTMLElement>('article[data-canvas-work="loose"]')!;
+      const titleRow = workCard.children[1] as HTMLElement;
+      const resting = getComputedStyle(folderFill).backgroundColor;
+      await userEvent.hover(workCard);
+      await vi.waitFor(() => expect(getComputedStyle(titleRow).backgroundColor).not.toBe(resting));
+      const tint = getComputedStyle(titleRow).backgroundColor;
+      await userEvent.hover(folderCard);
+      await vi.waitFor(() => expect(getComputedStyle(folderFill).backgroundColor).toBe(tint));
     } finally {
       await screen.unmount();
     }

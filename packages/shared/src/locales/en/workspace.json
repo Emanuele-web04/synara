@@ -1513,6 +1513,8 @@
   "canvasMenuPasteOnTop": "Paste on top",
   "canvasMenuPasteReplace": "Paste to replace",
   "canvasLayerInheritedLock": "Locked by a parent layer",
+  "canvasFlagLocked": "Locked",
+  "canvasFlagHidden": "Hidden",
   "canvasMenuHide": "Hide",
   "canvasMenuShow": "Show",
   "canvasMenuLock": "Lock",

@@ -47,6 +47,9 @@ export const TREE_SECTION_LABEL_CLASS_NAME = cn(
 
 // Rows inside a selected subtree take the hover tone.
 const TREE_ROW_TINT_CLASS_NAME = "bg-[var(--color-background-button-secondary-hover)]";
+// The sidebar's row hover, held while something else points at the row (the canvas pointer).
+const TREE_ROW_HOVERED_CLASS_NAME =
+  "bg-[var(--sidebar-accent)] text-[var(--sidebar-accent-foreground)]";
 
 /** `deep` (an Alt-click on the chevron) opens or closes the whole subtree. */
 type TreeRowDisclosure = { open: boolean; onToggle: (deep?: boolean) => void };
@@ -67,6 +70,7 @@ export function TreeRow({
   indent,
   selected = false,
   tinted = false,
+  hovered = false,
   run,
   actionsPinned = false,
   muted = false,
@@ -89,6 +93,8 @@ export function TreeRow({
   selected?: boolean | undefined;
   /** Inside a selected subtree. */
   tinted?: boolean | undefined;
+  /** Shown hovered while the pointer is elsewhere on the same thing (its layer on the canvas). */
+  hovered?: boolean | undefined;
   /** The row's place in a run of filled rows, which square the corners between them. */
   run?: TreeRowRun | undefined;
   /** Hidden content: the label fades to 40% and the leading glyphs to half strength. */
@@ -119,6 +125,7 @@ export function TreeRow({
   return (
     <div
       {...props}
+      data-hovered={hovered || undefined}
       className={cn(
         "group/tree-row relative mx-2 flex h-7 shrink-0 cursor-default select-none items-center pe-1 text-ui-sm",
         SIDEBAR_ROW_RADIUS_CLASS_NAME,
@@ -127,7 +134,11 @@ export function TreeRow({
           ? SIDEBAR_ROW_ACTIVE_CLASS_NAME
           : tinted
             ? cn("text-foreground", TREE_ROW_TINT_CLASS_NAME)
-            : cn(SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME, SIDEBAR_ROW_HOVER_CLASS_NAME),
+            : cn(
+                SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME,
+                SIDEBAR_ROW_HOVER_CLASS_NAME,
+                hovered && TREE_ROW_HOVERED_CLASS_NAME,
+              ),
         run && RUN_CORNER_CLASS_NAMES[run],
         drop === "inside" && "ring-1 ring-inset ring-ring",
         className,

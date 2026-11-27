@@ -450,6 +450,52 @@ describe("layers panel", () => {
     }
   });
 
+  it("keeps the lock and hidden flags on a read-only work as markers with nothing to press", async () => {
+    const shown = frameOf(
+      "shown",
+      [
+        element("plain", "position:absolute;left:0;top:0;width:10px;height:10px"),
+        element("pinned", "position:absolute;left:20px;top:0;width:10px;height:10px", [], "div", {
+          "data-locked": "true",
+        }),
+        element("gone", "position:absolute;left:40px;top:0;width:10px;height:10px", [], "div", {
+          "data-hidden": "true",
+        }),
+      ],
+      ["plain", "pinned", "gone"],
+    );
+    const locked = frameOf(
+      "locked",
+      [element("inner", "position:absolute;left:0;top:0;width:10px;height:10px")],
+      ["inner"],
+      { x: 450, locked: true },
+    );
+    const hidden = frameOf("hidden", [], [], { x: 600, hidden: true });
+    const archived = workOf([shown, locked, hidden]);
+    serveCanvas(native, archived);
+    const { screen } = await mountCanvas(archived, { layers: true, readOnly: true });
+    try {
+      select([{ kind: "layer", frameId: "shown", layerId: "plain" }]);
+      await vi.waitFor(() => expect(row("layer:shown:pinned")).toBeTruthy());
+      const marker = (key: string, flag: string) =>
+        row(key)!.querySelector<HTMLElement>(`[data-layer-flag-marker="${flag}"]`);
+      expect(marker("layer:shown:pinned", "locked")!.getAttribute("aria-label")).toBe("Locked");
+      expect(marker("layer:shown:gone", "hidden")!.getAttribute("aria-label")).toBe("Hidden");
+      expect(marker("frame:locked", "locked")).toBeTruthy();
+      expect(marker("frame:hidden", "hidden")).toBeTruthy();
+      // A row with no flag on shows nothing, and no flag can be toggled.
+      expect(row("layer:shown:plain")!.querySelector("[data-layer-flag-marker]")).toBeNull();
+      expect(document.querySelector("[data-layer-row] button[aria-pressed]")).toBeNull();
+      // A lock from the frame still shows as the dot on its layers.
+      row("frame:locked")!.querySelector("button")!.click();
+      await vi.waitFor(() =>
+        expect(row("layer:locked:inner")!.querySelector("[data-inherited-lock]")).toBeTruthy(),
+      );
+    } finally {
+      await screen.unmount();
+    }
+  });
+
   it("renames with ⌘R, collapses everything with ⌥L and centres the camera from the icon", async () => {
     serveCanvas(native, work());
     const { screen, root } = await mountCanvas(work(), { layers: true });

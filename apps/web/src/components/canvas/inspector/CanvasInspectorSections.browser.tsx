@@ -35,6 +35,7 @@ import {
   text,
   workOf,
 } from "../editor/canvasEditorTestHarness";
+import { toastManager } from "../../ui/toast";
 
 const f1 = frameOf(
   "f1",
@@ -523,6 +524,36 @@ describe("colour picker", () => {
         .toBeVisible();
     } finally {
       await screen.unmount();
+    }
+  });
+
+  it("copies a channel row with the copied state, and says when the clipboard refuses", async () => {
+    const write = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue(undefined);
+    const toast = vi.spyOn(toastManager, "add");
+    const { screen } = await mount();
+    try {
+      select([layer("badge")]);
+      await page.getByRole("button", { name: "Open the color picker for Fill" }).click();
+      await page.getByRole("button", { name: "Copy as RGB" }).click();
+      await vi.waitFor(() => expect(write).toHaveBeenCalledTimes(1));
+      expect(write.mock.calls[0]![0]).toMatch(/^rgb\(/);
+      // The button turns into a check and says so, as the app's copy buttons do.
+      const copied = page.getByRole("button", { name: "Copied RGB" });
+      await expect.element(copied).toBeVisible();
+      expect(copied.element().getAttribute("data-copied")).toBe("true");
+      // A refused clipboard (and no fallback) is reported, not swallowed.
+      write.mockRejectedValue(new Error("Write permission denied."));
+      vi.spyOn(document, "execCommand").mockReturnValue(false);
+      await page.getByRole("button", { name: "Copy as HSL" }).click();
+      await vi.waitFor(() =>
+        expect(toast).toHaveBeenCalledWith(
+          expect.objectContaining({ type: "error", title: "Copy failed" }),
+        ),
+      );
+      expect(document.querySelector('[aria-label="Copied HSL"]')).toBeNull();
+    } finally {
+      await screen.unmount();
+      vi.restoreAllMocks();
     }
   });
 });

@@ -1513,6 +1513,8 @@
   "canvasMenuPasteOnTop": "Pegar encima",
   "canvasMenuPasteReplace": "Pegar para reemplazar",
   "canvasLayerInheritedLock": "Bloqueada por una capa superior",
+  "canvasFlagLocked": "Bloqueado",
+  "canvasFlagHidden": "Oculto",
   "canvasMenuHide": "Ocultar",
   "canvasMenuShow": "Mostrar",
   "canvasMenuLock": "Bloquear",

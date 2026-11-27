@@ -1513,6 +1513,8 @@
   "canvasMenuPasteOnTop": "粘贴到上方",
   "canvasMenuPasteReplace": "粘贴并替换",
   "canvasLayerInheritedLock": "已被父图层锁定",
+  "canvasFlagLocked": "已锁定",
+  "canvasFlagHidden": "已隐藏",
   "canvasMenuHide": "隐藏",
   "canvasMenuShow": "显示",
   "canvasMenuLock": "锁定",

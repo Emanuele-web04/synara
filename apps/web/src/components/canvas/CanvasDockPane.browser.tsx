@@ -3,7 +3,7 @@ import "../../index.css";
 import { CANVAS_DEFAULT_VIEWPORT, ThreadId } from "@synara/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { page } from "vitest/browser";
+import { page, userEvent } from "vitest/browser";
 import { render } from "vitest-browser-react";
 
 const native = vi.hoisted(() => ({
@@ -14,6 +14,7 @@ const native = vi.hoisted(() => ({
     getAsset: vi.fn(),
     setChatSelection: vi.fn(),
     fontCatalog: vi.fn(),
+    update: vi.fn(),
   },
   contextMenu: { show: vi.fn() },
   dialogs: { confirm: vi.fn() },
@@ -23,12 +24,17 @@ vi.mock("../../nativeApi", async (importOriginal) => ({
   ensureNativeApi: () => native,
   readNativeApi: () => undefined,
 }));
-const shown = vi.hoisted(() => ({ work: null as unknown, disconnected: false }));
+const shown = vi.hoisted(() => ({
+  work: null as unknown,
+  disconnected: false,
+  error: false,
+  refetch: vi.fn(),
+}));
 vi.mock("./canvasPane", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./canvasPane")>()),
   useCanvasWork: () => ({
     connection: { supported: true, negotiating: false, disconnected: shown.disconnected },
-    query: { data: shown.work, isError: false },
+    query: { data: shown.work, isError: shown.error, isFetching: false, refetch: shown.refetch },
   }),
 }));
 const navigate = vi.hoisted(() => vi.fn());
@@ -93,6 +99,10 @@ const fitNow = () =>
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const headerStatus = (kind: string) =>
   document.querySelector(`[data-canvas-header-status="${kind}"]`);
+const paneHeader = () => document.querySelector<HTMLElement>("[data-testid='pane'] header")!;
+const restoreButton = () =>
+  document.querySelector<HTMLButtonElement>("[data-canvas-header-restore]");
+const workTitle = () => document.querySelector<HTMLElement>("[data-canvas-work-title]")!;
 const otherPageMarker = () => document.querySelector('[data-canvas-page-activity="otherPage"]');
 const dockTab = (label: string) =>
   [...document.querySelectorAll<HTMLElement>("[data-surface-tab]")].find((item) =>
@@ -116,6 +126,11 @@ describe("canvas side pane", () => {
     resetCanvasStores();
     shown.work = work;
     shown.disconnected = false;
+    shown.error = false;
+    shown.refetch.mockReset();
+    shown.refetch.mockResolvedValue(undefined);
+    native.canvas.update.mockReset();
+    navigate.mockReset();
   });
   afterEach(() => {
     flushCanvasCameras();
@@ -242,6 +257,108 @@ describe("canvas side pane", () => {
       ).toBeTruthy();
     } finally {
       await second.screen.unmount();
+    }
+  });
+
+  it("keeps its header while the work loads and after a failed load, which offers Retry", async () => {
+    shown.work = undefined;
+    const loading = await mountPane(760);
+    try {
+      await vi.waitFor(() => expect(paneHeader()).toBeTruthy());
+      expect(paneHeader().textContent).toContain("Canvas");
+      expect(paneHeader().querySelector('button[aria-label="Close panel"]')).toBeTruthy();
+      expect(document.querySelector('[role="status"]')!.textContent).toBe("Loading canvas…");
+      // Open full size works before the work has loaded.
+      paneHeader().querySelector<HTMLButtonElement>('button[aria-label="Open full size"]')!.click();
+      expect(navigate).toHaveBeenCalledWith({
+        to: "/canvas/$workId",
+        params: { workId: "work1" },
+        search: { page: "page1", chat: "t1" },
+      });
+    } finally {
+      await loading.screen.unmount();
+    }
+    shown.error = true;
+    const failed = await mountPane(760);
+    try {
+      await vi.waitFor(() => expect(document.querySelector('[role="alert"]')).toBeTruthy());
+      expect(paneHeader().querySelector('button[aria-label="Open full size"]')).toBeTruthy();
+      const alert = document.querySelector<HTMLElement>('[role="alert"]')!;
+      expect(alert.textContent).toContain("Could not load this canvas.");
+      [...alert.querySelectorAll("button")].find((item) => item.textContent === "Retry")!.click();
+      expect(shown.refetch).toHaveBeenCalledTimes(1);
+    } finally {
+      await failed.screen.unmount();
+    }
+  });
+
+  it("offers Restore beside Archived, restoring the work as its menu does", async () => {
+    shown.work = { ...work, archivedAt: "2026-11-20T00:00:00.000Z" };
+    native.canvas.update.mockResolvedValue(undefined);
+    const archived = await mountPane(760);
+    try {
+      await vi.waitFor(() => expect(restoreButton()).toBeTruthy());
+      expect(restoreButton()!.textContent).toBe("Restore");
+      // Right after the Archived status.
+      expect(headerStatus("archived")!.nextElementSibling).toBe(restoreButton());
+      restoreButton()!.click();
+      await vi.waitFor(() =>
+        expect(native.canvas.update).toHaveBeenCalledWith({ id: "work1", archived: false }),
+      );
+      await vi.waitFor(() => expect(shown.refetch).toHaveBeenCalledTimes(1));
+    } finally {
+      await archived.screen.unmount();
+    }
+    // Read only because its folder is archived: the folder is restored first, not the work.
+    shown.work = { ...work, readOnly: true };
+    const inFolder = await mountPane(760);
+    try {
+      await vi.waitFor(() => expect(headerStatus("archived")).toBeTruthy());
+      expect(restoreButton()).toBeNull();
+    } finally {
+      await inFolder.screen.unmount();
+    }
+  });
+
+  it("shows a cut-off title whole in a tooltip and renames it on a double-click", async () => {
+    const long = `A very long canvas title ${"that keeps going ".repeat(12)}until the end`;
+    shown.work = { ...work, title: long };
+    native.canvas.update.mockResolvedValue(undefined);
+    const first = await mountPane(760);
+    try {
+      await vi.waitFor(() => expect(workTitle()).toBeTruthy());
+      expect(workTitle().scrollWidth).toBeGreaterThan(workTitle().clientWidth);
+      await userEvent.hover(workTitle());
+      await vi.waitFor(() =>
+        expect(document.querySelector('[data-slot="tooltip-popup"]')?.textContent).toBe(long),
+      );
+      await userEvent.unhover(workTitle());
+      workTitle().dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+      const field = await vi.waitFor(() => {
+        const found = document.querySelector<HTMLInputElement>('[role="dialog"] input');
+        expect(found).toBeTruthy();
+        return found!;
+      });
+      expect(field.value).toBe(long);
+      await userEvent.fill(field, "Landing");
+      await userEvent.click(page.getByRole("button", { name: "Save" }));
+      await vi.waitFor(() =>
+        expect(native.canvas.update).toHaveBeenCalledWith({ id: "work1", title: "Landing" }),
+      );
+      await vi.waitFor(() => expect(shown.refetch).toHaveBeenCalled());
+    } finally {
+      await first.screen.unmount();
+    }
+    // A read-only work keeps its name.
+    shown.work = { ...work, archivedAt: "2026-11-20T00:00:00.000Z" };
+    const archived = await mountPane(760);
+    try {
+      await vi.waitFor(() => expect(workTitle()).toBeTruthy());
+      workTitle().dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+      await sleep(100);
+      expect(document.querySelector('[role="dialog"]')).toBeNull();
+    } finally {
+      await archived.screen.unmount();
     }
   });
 

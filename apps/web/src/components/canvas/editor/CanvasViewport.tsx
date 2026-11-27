@@ -114,6 +114,11 @@ export function CanvasViewport({
   // Holding ⌥ measures from the selection to the hovered layer (or its parent).
   const [altHeld, setAltHeld] = useState(false);
   const [hover, setHover] = useState<CanvasSelectionItem | null>(null);
+  // The layers panel marks the hovered layer's row too (only that row and the last one render).
+  useEffect(() => {
+    useCanvasEditorStore.getState().setCanvasHover(hover);
+  }, [hover]);
+  useEffect(() => () => useCanvasEditorStore.getState().setCanvasHover(null), []);
   const [drafts, setDrafts] = useState<CanvasFrameDrafts>({});
   const [pendingComment, setPendingComment] = useState<CanvasPendingComment | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
@@ -693,7 +698,11 @@ export function CanvasViewport({
           ? "cursor-grab data-[canvas-gesture=pan]:cursor-grabbing"
           : tool === "move"
             ? "cursor-default"
-            : "cursor-crosshair",
+            : tool === "text"
+              ? "cursor-text"
+              : tool === "comment"
+                ? "cursor-(--canvas-comment-cursor)"
+                : "cursor-crosshair",
         className,
       )}
       onKeyDown={onKeyDown}

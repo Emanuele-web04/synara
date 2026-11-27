@@ -9,14 +9,16 @@
 import { Slider as SliderPrimitive } from "@base-ui/react/slider";
 import * as Schema from "effect/Schema";
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
+import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { useTranslation } from "~/i18n";
-import { ChevronDownIcon, CopyIcon } from "~/lib/icons";
+import { CheckIcon, ChevronDownIcon, CopyIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { ComposerPickerMenuPopup } from "../../chat/ComposerPickerMenuPopup";
 import { Button } from "../../ui/button";
 import { IconButton } from "../../ui/icon-button";
 import { Menu, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "../../ui/menu";
+import { toastManager } from "../../ui/toast";
 import { INSPECTOR_FIELD_CLASS_NAME, INSPECTOR_INPUT_CLASS_NAME } from "./InspectorControls";
 import {
   colorChannels,
@@ -326,9 +328,34 @@ function VerticalSlider({
   );
 }
 
-/** Copies a colour's text; clipboard access can be refused, and nothing depends on it. */
-function copyText(text: string) {
-  void navigator.clipboard?.writeText(text).catch(() => undefined);
+/**
+ * Copies one channel row's colour: the app's copied state (a check for a moment, "Copied" in the
+ * tooltip), or the error toast when the clipboard refuses.
+ */
+function CopyColorButton({ format, text }: { format: string; text: string }) {
+  const { t } = useTranslation();
+  const { copyToClipboard, isCopied } = useCopyToClipboard({
+    onError: (cause) =>
+      toastManager.add({
+        type: "error",
+        title: t("workspace:canvasCopyCodeFailed"),
+        description: cause.message,
+      }),
+  });
+  const label = isCopied
+    ? t("common:copied", { value0: format })
+    : t("workspace:canvasInspectorCopyColor", { format });
+  return (
+    <IconButton
+      label={label}
+      tooltip={label}
+      className="-me-1"
+      data-copied={isCopied || undefined}
+      onClick={() => copyToClipboard(text, undefined)}
+    >
+      {isCopied ? <CheckIcon /> : <CopyIcon />}
+    </IconButton>
+  );
 }
 
 /** The right column: Previous/New, Clipped, the channel rows and the text field. */
@@ -399,14 +426,7 @@ function ColorDetails({
           >
             {channels[name].join(" ")}
           </span>
-          <IconButton
-            label={t("workspace:canvasInspectorCopyColor", { format: FORMAT_LABELS[name] })}
-            tooltip={t("workspace:canvasInspectorCopyColor", { format: FORMAT_LABELS[name] })}
-            className="-me-1"
-            onClick={() => copyText(formatColor(color, name))}
-          >
-            <CopyIcon />
-          </IconButton>
+          <CopyColorButton format={FORMAT_LABELS[name]} text={formatColor(color, name)} />
         </div>
       ))}
       <ColorTextField

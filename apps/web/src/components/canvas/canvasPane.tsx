@@ -1,18 +1,28 @@
 import type { ThreadId } from "@synara/contracts";
 import { useDebouncedValue } from "@tanstack/react-pacer";
 import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
-import { useEffect, useEffectEvent, useSyncExternalStore, type ReactNode } from "react";
+import {
+  useEffect,
+  useEffectEvent,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type ReactNode,
+} from "react";
 import { requestComposerFocus } from "~/composerFocusRequestStore";
 import { useComposerDraftStore } from "~/composerDraftStore";
 import { useTranslation } from "~/i18n";
 import { showUndoToast } from "~/lib/threadUndoToast";
-import { randomUUID } from "~/lib/utils";
+import { cn, randomUUID } from "~/lib/utils";
 import { ensureNativeApi } from "~/nativeApi";
 import { useRightDockStore } from "~/rightDockStore";
 import type { RightDockPane } from "~/rightDockStore.logic";
 import { routeSingleDockPaneOpenRequest } from "../chat/dockPaneOpenRequest";
 import { resolveRightDockPaneIcon } from "../chat/rightDockPaneMeta";
+import { RenameDialog } from "../RenameDialog";
+import { Button } from "../ui/button";
 import { toastManager } from "../ui/toast";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { CanvasAgentIconSlot } from "./editor/CanvasAgentActivity";
 import {
   useActiveAgentPages,
@@ -174,13 +184,17 @@ export function CanvasHeaderStatus({
   workId,
   readOnly,
   connection,
+  onRestore,
 }: {
   workId: string;
   readOnly: boolean;
   connection: ReturnType<typeof useCanvasLibrary>;
+  /** An archived work's Restore, beside "Archived" (the same restore as the work's menu). */
+  onRestore?: (() => Promise<void>) | undefined;
 }) {
   const { t } = useTranslation();
   const saveState = useCanvasSaveState(workId, connection.disconnected);
+  const [restoring, setRestoring] = useState(false);
   return (
     <>
       {connection.disconnected && (
@@ -210,18 +224,52 @@ export function CanvasHeaderStatus({
           {t("workspace:canvasArchived")}
         </span>
       )}
+      {readOnly && onRestore && (
+        <Button
+          variant="ghost"
+          size="xs"
+          className="shrink-0"
+          data-canvas-header-restore=""
+          disabled={restoring}
+          onClick={() => {
+            setRestoring(true);
+            void onRestore().finally(() => setRestoring(false));
+          }}
+        >
+          {t("workspace:canvasRestore")}
+        </Button>
+      )}
     </>
   );
 }
 
+/**
+ * Where the work is not shown yet: loading, the host without canvas, or a failed load with Retry
+ * (the library's and the canvas chat's error and Retry).
+ */
 export function CanvasStatus({
   connection,
   error,
+  onRetry,
 }: {
   connection: ReturnType<typeof useCanvasLibrary>;
   error: boolean;
+  onRetry?: (() => void) | undefined;
 }) {
   const { t } = useTranslation();
+  if (error && onRetry)
+    return (
+      <div
+        className="m-auto flex flex-col items-center gap-3 p-6 text-center text-ui-sm text-destructive"
+        role="alert"
+        data-canvas-load-error=""
+      >
+        <p>{t("workspace:designLoadFailed")}</p>
+        <Button variant="outline" size="sm" onClick={onRetry}>
+          {t("workspace:designRetry")}
+        </Button>
+      </div>
+    );
   return (
     <p className="m-auto p-6 text-center text-ui text-muted-foreground" role="status">
       {error
@@ -230,5 +278,108 @@ export function CanvasStatus({
           ? t("workspace:canvasHostUnavailable")
           : t("workspace:designLoading")}
     </p>
+  );
+}
+
+/**
+ * Archives or restores a work (the work's menu, the header's Restore): saved, then the work
+ * reloads. Archiving offers the app's Undo toast; a failure shows the error toast.
+ */
+export function useCanvasWorkArchiving(workId: string, reload: () => Promise<unknown>) {
+  const { t } = useTranslation();
+  const client = useQueryClient();
+  return async (archiving: boolean) => {
+    try {
+      await ensureNativeApi().canvas.update({ id: workId, archived: archiving });
+      await reload();
+      if (archiving)
+        showCanvasArchiveUndo(client, {
+          id: workId,
+          message: t("workspace:canvasArchivedToast"),
+          failedTitle: t("workspace:canvasOperationFailed"),
+        });
+    } catch (cause) {
+      toastManager.add({
+        type: "error",
+        title: t("workspace:canvasOperationFailed"),
+        description: cause instanceof Error ? cause.message : undefined,
+      });
+    }
+  };
+}
+
+/**
+ * The work's title in both layouts' headers, as the chat header shows a chat's: truncated, with
+ * the whole title in the app's tooltip when it does not fit, and a double-click opening the
+ * shared rename dialog while the work is editable.
+ */
+export function CanvasWorkTitle({
+  workId,
+  title,
+  editable,
+  heading = false,
+  className,
+  reload,
+}: {
+  workId: string;
+  title: string;
+  editable: boolean;
+  /** The full layout's page heading (`h1`); the side pane's title is a plain span. */
+  heading?: boolean;
+  className?: string;
+  reload: () => Promise<unknown>;
+}) {
+  const { t } = useTranslation();
+  const element = useRef<HTMLElement | null>(null);
+  const [tooltipOpen, setTooltipOpen] = useState(false);
+  const [renaming, setRenaming] = useState(false);
+  const props = {
+    ref: (node: HTMLElement | null) => {
+      element.current = node;
+    },
+    "data-canvas-work-title": "",
+    className: cn("min-w-0 truncate", className),
+    onDoubleClick: editable ? () => setRenaming(true) : undefined,
+  };
+  return (
+    <>
+      <Tooltip
+        open={tooltipOpen}
+        // Only a title cut short has anything more to show.
+        onOpenChange={(open) => {
+          const node = element.current;
+          setTooltipOpen(open && node !== null && node.scrollWidth > node.clientWidth);
+        }}
+      >
+        <TooltipTrigger render={heading ? <h1 {...props} /> : <span {...props} />}>
+          {title}
+        </TooltipTrigger>
+        <TooltipPopup side="bottom" className="max-w-96 break-words">
+          {title}
+        </TooltipPopup>
+      </Tooltip>
+      <RenameDialog
+        open={renaming}
+        title={t("workspace:canvasRenameWork")}
+        initialValue={title}
+        maxLength={120}
+        onOpenChange={setRenaming}
+        onSave={async (next) => {
+          if (next === title) return;
+          try {
+            await ensureNativeApi().canvas.update({ id: workId, title: next });
+            await reload();
+          } catch (cause) {
+            toastManager.add({
+              type: "error",
+              title: t("workspace:canvasOperationFailed"),
+              description: cause instanceof Error ? cause.message : undefined,
+            });
+            // The dialog stays open with the typed name.
+            throw cause;
+          }
+        }}
+      />
+    </>
   );
 }

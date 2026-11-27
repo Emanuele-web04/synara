@@ -38,6 +38,7 @@ import {
 } from "@synara/shared/designCanvasPages";
 import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { useState } from "react";
+import { userEvent } from "vitest/browser";
 import { render } from "vitest-browser-react";
 import { CanvasPageMenu } from "./CanvasPageMenu";
 import { CanvasPagesSection } from "./CanvasPagesSection";
@@ -500,6 +501,46 @@ describe("canvas page list", () => {
       native.contextMenu.show.mockResolvedValueOnce("delete-divider");
       rightClick(popup.querySelector<HTMLElement>("[data-page-divider]")!);
       await vi.waitFor(() => expect(popup.querySelectorAll("[data-page-divider]")).toHaveLength(1));
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("names the switcher's add, rename and delete buttons in the app's tooltip", async () => {
+    const { screen } = await mountPages();
+    const tooltipShows = async (target: HTMLElement, text: string) => {
+      await userEvent.hover(target);
+      await vi.waitFor(() =>
+        expect(
+          [...document.querySelectorAll('[data-slot="tooltip-popup"]')].map(
+            (item) => item.textContent,
+          ),
+        ).toContain(text),
+      );
+    };
+    try {
+      await screen.getByRole("button", { name: /P1/ }).click();
+      const popup = await vi.waitFor(() => {
+        const found = document.querySelector<HTMLElement>('[role="menu"]');
+        expect(found).toBeTruthy();
+        return found!;
+      });
+      const add = popup.querySelector<HTMLElement>('[aria-label="Add page"]')!;
+      // The app's tooltip, not the browser's.
+      expect(add.getAttribute("title")).toBeNull();
+      await tooltipShows(add, "Add page");
+      const second = [...popup.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((item) =>
+        item.textContent?.includes("P2"),
+      )!;
+      await userEvent.hover(second);
+      await tooltipShows(
+        second.querySelector<HTMLElement>('[aria-label="Rename page"]')!,
+        "Rename page",
+      );
+      await tooltipShows(
+        second.querySelector<HTMLElement>('[aria-label="Delete page"]')!,
+        "Delete page",
+      );
     } finally {
       await screen.unmount();
     }

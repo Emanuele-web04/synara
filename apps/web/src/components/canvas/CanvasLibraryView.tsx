@@ -19,10 +19,12 @@ import {
   type QueryClient,
 } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { useEffect, useRef, useState } from "react";
-import { useTranslation } from "~/i18n";
+import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
+import { getFormatLocale, useTranslation } from "~/i18n";
+import { createClientPointMenuAnchor } from "~/lib/clientPointMenuAnchor";
 import { CentralIcon } from "~/lib/central-icons";
 import { executionStorage } from "~/lib/hosts/executionStorage";
+import { formatRelativeTime } from "~/lib/relativeTime";
 import { CanvasIcon, FolderIcon, MoreHorizontalIcon, PlusIcon } from "~/lib/icons";
 import { cn, randomUUID } from "~/lib/utils";
 import { ensureNativeApi } from "~/nativeApi";
@@ -52,6 +54,7 @@ import {
 } from "../ui/menu";
 import { SearchInput } from "../ui/search-input";
 import { Skeleton } from "../ui/skeleton";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { CanvasResourceDialog, type CanvasResourceFields } from "./CanvasResourceDialog";
 import { showCanvasArchiveUndo } from "./canvasPane";
 import { useActiveAgentPages } from "./canvasStores";
@@ -202,6 +205,14 @@ export default function CanvasLibraryView() {
   const [dialog, setDialog] = useState<DialogState | null>(null);
   const [renaming, setRenaming] = useState<Resource | null>(null);
   const [renameOpen, setRenameOpen] = useState(false);
+  const [contextMenu, setContextMenu] = useState<{
+    resource: Resource;
+    position: { x: number; y: number };
+  } | null>(null);
+  const contextAnchor = useMemo(
+    () => (contextMenu ? createClientPointMenuAnchor(contextMenu.position) : null),
+    [contextMenu],
+  );
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   useEffect(() => {
@@ -296,7 +307,15 @@ export default function CanvasLibraryView() {
       });
     });
 
-  const resourceMenu = (resource: Resource) => {
+  /**
+   * A work's or folder's menu: behind its "…" button, or at `anchor`, where a right-click on its
+   * card, row or folder card opened it.
+   */
+  const resourceMenu = (
+    resource: Resource,
+    anchor?: ReturnType<typeof createClientPointMenuAnchor>,
+  ) => {
+    const label = t("workspace:canvasActions", { title: resource.title });
     const blockedByFolder = archived && !resource.archivedAt;
     const blocked = resource.kind === "folder" ? descendantsOf(resource.id, folders) : new Set();
     // Folders as their tree: a subfolder sits under its parent, indented a level.
@@ -304,18 +323,23 @@ export default function CanvasLibraryView() {
       folders.filter((folder) => !folder.archivedAt && !blocked.has(folder.id)),
     );
     return (
-      <Menu>
-        <MenuTrigger
-          render={
-            <IconButton
-              label={t("workspace:canvasActions", { title: resource.title })}
-              className="shrink-0"
-            >
-              <MoreHorizontalIcon />
-            </IconButton>
-          }
-        />
-        <ComposerPickerMenuPopup>
+      <Menu
+        {...(anchor
+          ? { open: true, onOpenChange: (next: boolean) => !next && setContextMenu(null) }
+          : {})}
+      >
+        {anchor ? null : (
+          <MenuTrigger
+            render={
+              <IconButton label={label} tooltip={label} className="shrink-0">
+                <MoreHorizontalIcon />
+              </IconButton>
+            }
+          />
+        )}
+        <ComposerPickerMenuPopup
+          {...(anchor ? { anchor, align: "start", side: "bottom", sideOffset: 0 } : {})}
+        >
           <MenuItem onClick={() => open(resource)}>{t("workspace:canvasOpen")}</MenuItem>
           {!archived && (
             <MenuItem
@@ -410,6 +434,37 @@ export default function CanvasLibraryView() {
       </Menu>
     );
   };
+  /** A right-click on a card, row or folder card: its menu at the pointer, as in the sidebar. */
+  const openContextMenu = (resource: Resource) => (event: MouseEvent) => {
+    event.preventDefault();
+    setContextMenu({ resource, position: { x: event.clientX, y: event.clientY } });
+  };
+  /**
+   * A work's last change, as the sidebar and the comments say it; the full date in a tooltip. On a
+   * card it sits above the card's open overlay so it can be hovered, and a click still opens it.
+   */
+  const updatedAt = (work: CanvasWorkSummary) => (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <time
+            dateTime={work.updatedAt}
+            data-canvas-work-updated=""
+            className={cn("tabular-nums", view === "grid" && "relative")}
+            onClick={view === "grid" ? () => open(work) : undefined}
+          />
+        }
+      >
+        {formatRelativeTime(work.updatedAt)}
+      </TooltipTrigger>
+      <TooltipPopup side="bottom">
+        {new Date(work.updatedAt).toLocaleString(getFormatLocale(), {
+          dateStyle: "medium",
+          timeStyle: "short",
+        })}
+      </TooltipPopup>
+    </Tooltip>
+  );
   const saveResource = async (fields: CanvasResourceFields) => {
     if (!dialog) return;
     const api = ensureNativeApi().canvas;
@@ -425,8 +480,11 @@ export default function CanvasLibraryView() {
     }
     await refreshList(client);
   };
-  const subtitle = (work: CanvasWorkSummary) =>
-    `${t("workspace:canvasPageCount", { count: work.pageCount })} · ${new Date(work.updatedAt).toLocaleDateString()}`;
+  const subtitle = (work: CanvasWorkSummary) => (
+    <>
+      {t("workspace:canvasPageCount", { count: work.pageCount })} · {updatedAt(work)}
+    </>
+  );
   const empty = query.data !== undefined && works.length === 0 && shownFolders.length === 0;
   const emptyTitle = searching
     ? t("workspace:canvasSearchEmpty", { query: debouncedSearch })
@@ -586,20 +644,24 @@ export default function CanvasLibraryView() {
                 {shownFolders.length > 0 && (
                   <div className="grid grid-cols-[repeat(auto-fill,minmax(256px,1fr))] gap-6">
                     {shownFolders.map((folder) => (
+                      // The card tints inside its border on hover, as a work card's title row does.
                       <div
                         key={folder.id}
                         data-canvas-folder={folder.id}
-                        className="flex h-12 items-center gap-1 rounded-lg border border-border bg-card ps-1 pe-3"
+                        className="group/folder-card h-12 rounded-lg border border-border bg-card p-1"
+                        onContextMenu={openContextMenu(folder)}
                       >
-                        <button
-                          type="button"
-                          className="flex h-full min-w-0 flex-1 items-center gap-3 rounded-lg px-2 text-start text-ui-sm font-medium outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                          onClick={() => open(folder)}
-                        >
-                          <FolderIcon className="size-4 shrink-0 text-muted-foreground" />
-                          <span className="truncate">{folder.title}</span>
-                        </button>
-                        {resourceMenu(folder)}
+                        <div className="flex h-full items-center gap-1 rounded-md pe-2 transition-colors group-hover/folder-card:bg-[var(--color-background-button-secondary-hover)]">
+                          <button
+                            type="button"
+                            className="flex h-full min-w-0 flex-1 items-center gap-3 rounded-md px-2 text-start text-ui-sm font-medium outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                            onClick={() => open(folder)}
+                          >
+                            <FolderIcon className="size-4 shrink-0 text-muted-foreground" />
+                            <span className="truncate">{folder.title}</span>
+                          </button>
+                          {resourceMenu(folder)}
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -613,6 +675,7 @@ export default function CanvasLibraryView() {
                       key={work.id}
                       className="group/work-card relative overflow-hidden rounded-lg border border-border bg-card p-1"
                       data-canvas-work={work.id}
+                      onContextMenu={openContextMenu(work)}
                     >
                       <button
                         className="block aspect-[256/168] w-full overflow-hidden rounded-md text-start outline-none after:absolute after:inset-0 focus-visible:ring-1 focus-visible:ring-ring"
@@ -648,6 +711,7 @@ export default function CanvasLibraryView() {
                       ? { "data-canvas-work": resource.id }
                       : { "data-canvas-folder": resource.id })}
                     className="flex items-center gap-4 rounded-md p-2 hover:bg-[var(--color-background-button-secondary-hover)]"
+                    onContextMenu={openContextMenu(resource)}
                   >
                     <button
                       className="flex min-w-0 flex-1 items-center gap-4 rounded-md text-start outline-none focus-visible:ring-1 focus-visible:ring-ring"
@@ -731,6 +795,7 @@ export default function CanvasLibraryView() {
             onSave={saveResource}
           />
         )}
+        {contextMenu && contextAnchor ? resourceMenu(contextMenu.resource, contextAnchor) : null}
         <RenameDialog
           open={renameOpen}
           title={t(

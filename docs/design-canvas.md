@@ -193,10 +193,15 @@ The library (`CanvasLibraryView.tsx`, `/canvas`):
   keeps the works shown until the next list arrives; the first load shows placeholder cards (or
   rows) with the app's skeleton. **Grid or list**, remembered
   per viewer: cards with the thumbnail, or rows with a small one. A whole card or row opens its
-  work (the card's title row tints on hover, as the chat's canvas card does); its menu stays
-  its own button. Thumbnails render the work's cover frame through the sanitized renderer, with
-  the fonts and images it uses (`previewAssets`).
-- **Menu** on a work or folder: Open, Rename (the shared rename dialog), Duplicate (works; a
+  work (the card's title row tints on hover, as the chat's canvas card does, and a folder card
+  tints inside its border the same way); its menu stays its own button, named in the app's
+  tooltip. A work's subtitle gives its page count and its last change as relative time (the
+  sidebar's and the Comments panel's `formatRelativeTime`), the full date and time in a tooltip.
+  Thumbnails render the work's cover frame through the sanitized renderer, with the fonts and
+  images it uses (`previewAssets`).
+- **Menu** on a work or folder, from its "…" button or a right-click on its card, row or folder
+  card (the same menu at the pointer, as the sidebar's project menu opens:
+  `createClientPointMenuAnchor`): Open, Rename (the shared rename dialog), Duplicate (works; a
   "(copy)" suffix, the copy stays in the library), Move to (Files or a folder; a folder never
   into itself or its subfolders), Associated project (works), Archive or Restore.
   Archiving (here or from the work's menu in the full layout) shows the app's compact Undo
@@ -250,16 +255,16 @@ its shapes by layer ID.
 The editor is built from the app's own components and tokens, at their densest sizes, so it
 reads as the rest of Synara.
 
-| Part          | Synara                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Shell         | `CanvasWorkView.tsx`: one header, the app's top bar (`RouteSurfaceHeader`): back, title and page switcher on the left; the zoom menu, **Back to chat** and the work's menu on the right, on the chat header's own controls (`ChatHeaderButton`, `ChatHeaderIconButton`). Below it the editor, in the same rounded, inset content card as every route. The editor body takes the card's corners (`--app-rail-block-radii`); its columns meet at `border-border` lines.                                                                                                                                                                                                                                                                                                                     |
-| Left panel    | `CanvasSidePanel.tsx`: the app's surface tab strip (`SurfaceTabStrip`, text-only `SurfaceTabChip`s as `role="tab"`) for Chat, Layers and Comments, 240 px for Layers and Comments and 360 px for the chat by default, each width resizable from the panel's edge (drag, arrow keys; double-click resets) and kept per tab. A width change moves the camera the other way, so the frames stay put. The Chat tab carries the chat's state with the sidebar's glyphs (`SidebarStatusTrailingGlyph`: working, waiting for an approval or input, in the background), and the unread dot for a reply that arrived while another tab was open; Comments counts the open threads of every page (what its list shows).                                                                             |
-| Pages, layers | `ui/TreeRow.tsx` rows like the main sidebar's (`sidebarRowStyles.ts`): inset 8 px from the panel edges, rounded, the sidebar's hover, selected and focus-ring treatment; 28 px, the chevron in the indent, a 16 px icon lane and a 48 px actions lane at the row's end at every depth, long names truncated (the label runs under the actions lane until a row is hovered or a flag is on). The open page is the selected row; selected layers use the same selected fill as the open page and the rows inside them the hover tone, and a run of filled rows reads as one block. "Pages" (it collapses the list) and "Layers" are the sidebar's muted section labels. A splitter under the pages list sets its height (drag or arrow keys; double-click fits the pages), kept per viewer. |
-| Toolbar       | `CanvasFloatingToolbar` (`editor/CanvasToolbar.tsx`): one horizontal bar bottom-centre over the canvas, on the opaque popover surface of the app's menus (popover fill, border, menu radius and shadow): the app's `sm` toggles and ghost `icon-sm` buttons for V/H, F/R/T and image insert, C, undo and redo (and the zoom menu where no header shows it), tooltips above with the shortcut in the app's key cap. Only the bar takes pointer events; a narrow pane scrolls it sideways. It fades out (the app's disclosure fade, none with reduced motion) and takes no pointer events while a gesture drags (`data-canvas-dragging` on the viewport, `canvasGestureHidesChrome`), and Hide UI removes it.                                                                               |
-| Inspector     | 280 px (232 px slim in the side pane). It starts with its sections; the side pane adds a row naming what is selected, and a read-only work a Read only row. Sections have 32 px headers in the sidebar's muted label style over 24 px rows: the app's `xs` inputs and selects borderless on the soft secondary fill (`inputControlClassName(size, { filled: true })`, `SelectTrigger variant="filled"`), `icon-xs` buttons, the `sm` `SegmentedPicker` squared off to the fields' radius (`shape="field"`), `subtle` action buttons, the app checkbox. Colour swatches keep a hairline over the colour.                                                                                                                                                                                   |
-| Popups        | The app's menus (`ComposerPickerMenuPopup`), selects, combobox (font picker), popovers (colour picker, formatting, export settings) and the default tooltip. The comment card uses the app's popover surface, placed with the camera's CSS variables so it follows a pan without a render.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| Library       | Cards and rows on the app's card surface and border (`bg-card`, `border-border`), 256 px cards 24 px apart, thumbnails in a muted well (the canvas backdrop), the section tabs as a `SegmentedPicker`, grid or list as the neutral icon `SegmentedPicker`; the Move to menu lists folders as their tree.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| Comment pins  | Keep their 26 px screen size down to 50% zoom, then shrink with the canvas to half size at 25% (`--canvas-pin-scale`), from their anchor corner. A pin that would cover the selection's size badge steps aside, the shortest way left, right or down (`editor/canvasPinPlacement.ts`); the badge keeps its place.                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| Part          | Synara                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Shell         | `CanvasWorkView.tsx`: one header, the app's top bar (`RouteSurfaceHeader`): back, title and page switcher on the left; the zoom menu, **Back to chat** and the work's menu on the right, on the chat header's own controls (`ChatHeaderButton`, `ChatHeaderIconButton`). Below it the editor, in the same rounded, inset content card as every route. The editor body takes the card's corners (`--app-rail-block-radii`); its columns meet at `border-border` lines.                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| Left panel    | `CanvasSidePanel.tsx`: the app's surface tab strip (`SurfaceTabStrip`, text-only `SurfaceTabChip`s as `role="tab"`) for Chat, Layers and Comments, 240 px for Layers and Comments and 360 px for the chat by default, each width resizable from the panel's edge (drag, arrow keys; double-click resets) and kept per tab. A width change moves the camera the other way, so the frames stay put. The Chat tab carries the chat's state with the sidebar's glyphs (`SidebarStatusTrailingGlyph`: working, waiting for an approval or input, in the background), and the unread dot for a reply that arrived while another tab was open; Comments counts the open threads of every page (what its list shows).                                                                                                                                                                          |
+| Pages, layers | `ui/TreeRow.tsx` rows like the main sidebar's (`sidebarRowStyles.ts`): inset 8 px from the panel edges, rounded, the sidebar's hover, selected and focus-ring treatment; 28 px, the chevron in the indent, a 16 px icon lane and a 48 px actions lane at the row's end at every depth, long names truncated (the label runs under the actions lane until a row is hovered or a flag is on). The open page is the selected row; selected layers use the same selected fill as the open page and the rows inside them the hover tone, and a run of filled rows reads as one block. The row of the layer the canvas pointer is over takes the row hover (`TreeRow`'s `hovered`). "Pages" (it collapses the list) and "Layers" are the sidebar's muted section labels. A splitter under the pages list sets its height (drag or arrow keys; double-click fits the pages), kept per viewer. |
+| Toolbar       | `CanvasFloatingToolbar` (`editor/CanvasToolbar.tsx`): one horizontal bar bottom-centre over the canvas, on the opaque popover surface of the app's menus (popover fill, border, menu radius and shadow): the app's `sm` toggles and ghost `icon-sm` buttons for V/H, F/R/T and image insert, C, undo and redo (and the zoom menu where no header shows it), tooltips above with the shortcut in the app's key cap. Only the bar takes pointer events; a narrow pane scrolls it sideways. It fades out (the app's disclosure fade, none with reduced motion) and takes no pointer events while a gesture drags (`data-canvas-dragging` on the viewport, `canvasGestureHidesChrome`), and Hide UI removes it.                                                                                                                                                                            |
+| Inspector     | 280 px (232 px slim in the side pane). It starts with its sections; the side pane adds a row naming what is selected, and a read-only work a Read only row. Sections have 32 px headers in the sidebar's muted label style over 24 px rows: the app's `xs` inputs and selects borderless on the soft secondary fill (`inputControlClassName(size, { filled: true })`, `SelectTrigger variant="filled"`), `icon-xs` buttons, the `sm` `SegmentedPicker` squared off to the fields' radius (`shape="field"`), `subtle` action buttons, the app checkbox. Colour swatches keep a hairline over the colour.                                                                                                                                                                                                                                                                                |
+| Popups        | The app's menus (`ComposerPickerMenuPopup`), selects, combobox (font picker), popovers (colour picker, formatting, export settings) and the default tooltip. The comment card uses the app's popover surface, placed with the camera's CSS variables so it follows a pan without a render.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| Library       | Cards and rows on the app's card surface and border (`bg-card`, `border-border`), 256 px cards 24 px apart, thumbnails in a muted well (the canvas backdrop), the section tabs as a `SegmentedPicker`, grid or list as the neutral icon `SegmentedPicker`; the Move to menu lists folders as their tree.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| Comment pins  | Keep their 26 px screen size down to 50% zoom, then shrink with the canvas to half size at 25% (`--canvas-pin-scale`), from their anchor corner. A pin that would cover the selection's size badge steps aside, the shortest way left, right or down (`editor/canvasPinPlacement.ts`); the badge keeps its place.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 
 **Tokens.** The canvas backdrop (`--canvas-backdrop`) is the app's `--background` with the muted
 tint (4% of `--foreground`), so white frames keep their edges on it; a page's colour replaces it.
@@ -279,7 +284,8 @@ Shared components gained only additive options, so every other surface renders a
 value for mixed selections, a per-option `tooltip` and a `shape="field"` (the fields' radius
 instead of a pill), and `SurfaceTabChip` a `selectionAria="tab"` with tab and panel IDs, a
 `tooltip` (below the chip) and `icon={null}` for a text-only chip. `ui/TreeRow.tsx` is used by the
-canvas alone and reuses the sidebar's row tokens; its rename field takes an `onDone` for where the
+canvas alone and reuses the sidebar's row tokens (a `hovered` row holds the sidebar's hover fill
+while the canvas points at its layer); its rename field takes an `onDone` for where the
 keyboard goes after Enter or Escape (the canvas). The chat's file-drop tint is shared as
 `FILE_DROP_HIGHLIGHT_CLASS_NAME` (`chat/composerPickerStyles.ts`), which the canvas's image drop
 uses too.
@@ -339,7 +345,9 @@ selection actions (align, distribute, resize to fit or fill, resize by a step) l
   delta, a held Ctrl/⌘ with a mouse wheel 0.002, so a wheel notch is a step. A pan ends where
   it got to when the window loses focus. Zoom stays 5–800%.
 - **Tools:** V move, H hand (Space held), F/A frame, R rectangle, T text, C/Y comment,
-  image insert/drop/paste. A drag of files over the canvas is taken (a copy, under the app's
+  image insert/drop/paste. Frame and Rectangle show a crosshair, Text the text caret and Comment
+  a cursor in a comment pin's shape (white with a dark edge, its hotspot on the corner the pin
+  anchors to; `--canvas-comment-cursor`, a crosshair if it cannot load). A drag of files over the canvas is taken (a copy, under the app's
   file-drop tint) only when it holds an image and the work is editable; anything else is refused
   (drop effect none), and a file dropped on the canvas never reaches the browser, which would
   open it. Placing an image runs under the progress toast (see Toasts). Shapes and text drawn
@@ -388,7 +396,9 @@ selection actions (align, distribute, resize to fit or fill, resize by a step) l
   Holding ⌥ measures to the hovered layer.
 - **Frame labels:** the title over the frame's top-left corner at screen size, muted, full ink
   on hover, in the accent while selected; the frame's size at the right while it is not
-  selected; the work's cover frame leads with a cover marker. A label that would cover another
+  selected; the work's cover frame leads with a cover marker. A locked frame's label is out of
+  reach like the frame: it stays muted, takes no hover, offers no "Double-click to rename" hint
+  and shows the layers panel's lock glyph after the title, in the label's colour. A label that would cover another
   frame (a neighbour close above it or reaching into its label row at the current zoom) stays
   hidden until its frame is selected.
 - **Drag:** a drag follows the pointer in world coordinates, so a wheel pan or zoom during it
@@ -456,7 +466,10 @@ pre-wrap` when the layer would collapse them. An IME composing text keeps every 
   toolbar, the Layers tab, the layer rows' eye and lock and the inspector's align, resize,
   flex and text-alignment buttons show the key. Every icon-only inspector button names itself
   in a tooltip (`inspector/inspectorIconButtons.test.ts` keeps it so), and so does the chat
-  card's Restore button, which shows the app's spinner while the restore runs.
+  card's Restore button, which shows the app's spinner while the restore runs. The zoom
+  percentage (below a header, above the floating toolbar), the page switcher's Add page and its
+  rows' rename and delete, the full layout's back arrow and the library's "…" buttons use the
+  app's tooltip too.
 - **Toasts:** actions with no visible result on the canvas confirm with the app's toast:
   styles copied and pasted, opacity set by a digit, every layer unlocked, comments hidden or
   shown (also when the Comment tool or a thread opened from the Comments panel brings hidden
@@ -468,9 +481,15 @@ pre-wrap` when the layer would collapse them. An IME composing text keeps every 
 - **Header status:** both layouts' headers say, after the page switcher, while the work's changes
   are being saved ("Saving...", once this client's writes have been pending 400 ms, so quick
   ones never flicker) or wait for the connection ("Unsaved changes"; the file editor's wording),
-  when the work is archived ("Archived") and while canvas updates are unavailable because the
+  when the work is archived ("Archived", followed by a ghost `xs` **Restore** button that runs
+  the work menu's restore, `useCanvasWorkArchiving`; not offered when only the work's folder is
+  archived) and while canvas updates are unavailable because the
   connection is down ("Canvas updates unavailable. Reconnecting…", as the library says), from one
-  `CanvasHeaderStatus`. The canvas stays editable while disconnected: the transport holds a
+  `CanvasHeaderStatus`. The work's title (`CanvasWorkTitle`) truncates as the chat header's
+  does, shows the whole title in the app's tooltip only when it is cut off, and a double-click
+  opens the shared rename dialog while the work is editable. The side pane keeps its header
+  (title, Open full size, close) while the work loads and after a failed load, whose message
+  offers Retry as the library and the canvas chat do (the full layout's failed load too). The canvas stays editable while disconnected: the transport holds a
   write and sends it when the connection is back, within the request's 60 s deadline; after that
   the write fails with the editor's error toast, and a write in flight when the connection drops
   fails the same way.
@@ -516,8 +535,12 @@ pre-wrap` when the layer would collapse them. An IME composing text keeps every 
   leave hidden frames out, and ⌫ never deletes a locked frame or layer, however it was
   selected). Eye and lock buttons show on hover and stay while on;
   a lock inherited from a parent shows a dot; hidden layers and everything under them are
-  dimmed. ⌥L collapses every row, and so does **Collapse all** from a right-click on the
-  panel's empty area; ⌥1 shows the Layers tab. Hovering a row outlines the layer. An inline SVG
+  dimmed. On a read-only work the flags that are on stay as markers in the buttons' places
+  (lock, inherited-lock dot, closed eye) with nothing to press. ⌥L collapses every row, and so does **Collapse all** from a right-click on the
+  panel's empty area; ⌥1 shows the Layers tab. Hovering a row outlines the layer, and pointing at a
+  layer on the canvas gives its row the row hover; each row subscribes to whether it is the one
+  (`canvasHover` in `canvasStores.ts`), so a hover change renders the row it left and the row it
+  reached, nothing else. An inline SVG
   is one row (vector icon, no expander); nothing drops inside it.
 - **Inspector** (`apps/web/src/components/canvas/inspector/`): sections in a fixed order, each
   shown only when a selected node can take it and dimmed until set (clicking the dimmed header
@@ -577,7 +600,9 @@ pre-wrap` when the layer would collapse them. An IME composing text keeps every 
     editing one rewrites each place it is set as one step. Inherited text colour is edited
     where it is declared inside the selection, or on the selected layer.
   - Colour picker: an OKHSV area (right-click for classic HSV, remembered per viewer), vertical
-    alpha and hue sliders, Previous/New (Previous reverts), OKLCH, HSL and RGB rows with copy,
+    alpha and hue sliders, Previous/New (Previous reverts), OKLCH, HSL and RGB rows with copy
+    (the app's `useCopyToClipboard`: a check and "Copied …" for a moment, the error toast when the
+    clipboard refuses),
     a field that takes any CSS colour with arrow keys nudging the number under the caret and
     a format menu (OKLCH, HSL, RGB, Hex; it changes the field, values are stored as hex), the
     eyedropper (`I`), Enter or Esc to close. A colour typed outside sRGB is stored as written
@@ -871,12 +896,16 @@ Web: `CanvasPageList.browser.tsx` (real drag, key and context-menu events: pages
 in one order with icons, the check and agent rain cross-fading with the icon (a switcher row's
 title staying in line); drag reorder with the drop line; Alt+arrow
 moves; the page and divider menus, icons, Add divider below, rename, delete opening the next
-page; the header switcher and its indicator for an agent on another page; Use as cover and
+page; the header switcher and its indicator for an agent on another page, and the app's tooltips
+on its Add page, rename and delete; Use as cover and
 Remove cover; the pages splitter, remembered, and its double-click fit),
 `CanvasLibraryView.browser.tsx` (Recent, Files with its trail, Archive; search across folders
 and its empty state; grid and list remembered; Move to, folder cycles, the rename dialog; the
 agent indicator on a work's card and row; the whole card opening its work; placeholders on the
-first load and the works kept while a search loads; archive with the Undo toast restoring), `canvasWorkCache.test.ts` (deltas, including the `duplicate` and `replace_html`
+first load and the works kept while a search loads; archive with the Undo toast restoring; the
+same menu from a right-click on a card, a folder card and a list row, and the "…" tooltip;
+relative time with the full date in a tooltip; the folder card's hover tint matching a work
+card's), `canvasWorkCache.test.ts` (deltas, including the `duplicate` and `replace_html`
 shapes, refetch of one work on a gap, own-write echo, newest-wins), `canvasStores.test.ts`
 (activity kinds, per-layer entries, reads leaving the outline alone, `ended`; the side pane
 asked for once per work and turn, never for a read), `CanvasPaneAutoOpen.browser.tsx` (agent
@@ -893,8 +922,10 @@ empty pages, per-page cameras, no server writes while idle),
 viewer, no toggle where it does not fit, the canvas's middle kept when it opens and closes,
 Open full size on the same work and page, the first fit at the size the pane opens to, the
 header's page name marked for an agent on another page; Archived and the connection status in
-its header; Saving... only for a write that takes a moment, Unsaved changes while one waits
-offline; the dock's Canvas tab showing the agent indicator from behind another tab and its
+its header; Restore beside Archived (none when only the folder is archived); the header with
+Open full size while loading and after a failed load with Retry; a cut-off title whole in a
+tooltip and renamed on a double-click, not on a read-only work; Saving... only for a write that
+takes a moment, Unsaved changes while one waits offline; the dock's Canvas tab showing the agent indicator from behind another tab and its
 unchanged glyph when idle), `CanvasTurnCard.browser.tsx` (the Restore button's tooltip and its
 spinner while the restore runs; the agent indicator while its own turn runs),
 `editor/CanvasGestures.browser.tsx` (pan, wheel zoom, layer and frame drag, resize and
@@ -902,7 +933,9 @@ marquee with zero React commits while the pointer moves, measured with a `Profil
 resize cursor held through the drag; cancel; flow reorder; keyboard tree walking and tools;
 the floating toolbar fading out for a drag, marquee, pan, resize and draw but not a click,
 with zero commits, taking presses only in its own box and leaving with Hide UI; Undo and Redo
-enabled only with something to undo or redo), `editor/canvasGestures.test.ts` (the hide rule) and
+enabled only with something to undo or redo; the zoom tooltip above the bar; each tool's
+cursor), `editor/CanvasLayerHover.browser.tsx` (pointing at layers on the canvas marks their
+rows, rendering only the row left and the row reached, counted per row), `editor/canvasGestures.test.ts` (the hide rule) and
 `editor/canvasPinPlacement.test.ts` (a pin stepping off the size badge),
 `inspector/CanvasInspector.browser.tsx` and `inspector/CanvasInspectorSections.browser.tsx`
 (real pointer and key events against the in-memory store: rotation and the 90° button, one
@@ -910,8 +943,8 @@ undo step for several patches, Shift ×8 and arithmetic, constraints, align and 
 flex wrap and line gap, the fill stack with a gradient and a drag reorder, mixed fills,
 vertical text alignment, wrap, truncation and italics, Underline, Outline, Text stroke,
 shadows, drop shadows and inner shadows, layer and backdrop filters, Selection colors, the
-picker's area, Previous, wide colours and the gamut badge, format and space, and font
-Favorites), `inspector/inspectorValues.test.ts` and `inspector/inspectorColor.test.ts` (the
+picker's area, Previous, wide colours and the gamut badge, format and space, a channel row's
+copied state and refused-clipboard toast, and font Favorites), `inspector/inspectorValues.test.ts` and `inspector/inspectorColor.test.ts` (the
 pure rules and colour spaces), `lib/designCanvas.browser.ts` and
 `designCanvasInline.test.ts` (every declaration the inspector writes passes both sanitizers;
 `app-region` is dropped everywhere, and prefixed names outside the inspector's list are
@@ -951,7 +984,8 @@ created text in one step, line breaks), `editor/CanvasEditorKeys.browser.tsx`
 (ungroup, frame selection, remove flex, clip, opacity digits, others, N, ⇧C, `.`, text keys;
 copy with the embedded tree and a paste from another window, paste on top and to replace;
 panel indent, slow inside drop, multi-row cross-frame move with undo, frame hide/lock/rename/
-reorder, inherited lock dot, dimmed children, ⌘R, ⌥L, icon centring; the Comment tool's
+reorder, inherited lock dot, dimmed children, a read-only work's lock and hidden markers, ⌘R,
+⌥L, icon centring; the Comment tool's
 first click and pointer-up composer; agent outline radius, rain, fades, edit and delete
 flashes, the indicator on the frame's layers row; animated zoom with zero commits, pinch versus Ctrl, pan
 end on blur; live inspector X during a frame drag with zero commits),
@@ -960,7 +994,8 @@ drawing; ⌘ arrow resizes and fit or fill from the keys and handle double-click
 ⌃⌥ distribute; ⇧Esc and the Deselect row; ⌘⇧X and the Adjust text submenu; toasts, Hide UI's
 included; the
 sizing badge; Show comments in the zoom menu; dashed flex outlines and the 2 px hover outline;
-the cover marker and hidden blocked labels; Alt-click subtree toggles, Tab renames and
+the cover marker and hidden blocked labels; a locked frame's label with its lock glyph, no hover
+and no rename hint; Alt-click subtree toggles, Tab renames and
 Collapse all in the layers panel) and
 `editor/CanvasComments.browser.tsx` (also discard confirmation, read on open, message edit
 and delete, panel search, filters and the stored toggle, pin clamping, the pin shrinking below

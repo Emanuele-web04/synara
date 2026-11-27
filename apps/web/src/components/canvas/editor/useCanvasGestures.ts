@@ -995,9 +995,11 @@ export function useCanvasGestures(input: {
     if (!current) {
       if (tool !== "move" || panning) return setHover(null);
       if ((event.target as HTMLElement).closest("[data-canvas-ui]")) return;
-      const label =
+      const labelled =
         (event.target as HTMLElement).closest<HTMLElement>("[data-canvas-frame-label]")?.dataset
           .canvasFrameLabel ?? null;
+      // A locked frame's label is out of reach, as a press on it is.
+      const label = labelled && !frameById.get(labelled)?.locked ? labelled : null;
       // The hit test waits for a frame.
       throttled.current!.hover.schedule(
         { x: event.clientX, y: event.clientY },

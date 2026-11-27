@@ -17,6 +17,7 @@ import { IconButton } from "../ui/icon-button";
 import { CanvasAgentIconSlot, CanvasAgentIndicator } from "./editor/CanvasAgentActivity";
 import { CanvasPageGlyph } from "./canvasPageIcons";
 import { Menu, MenuGroup, MenuItem, MenuSeparator, MenuTrigger } from "../ui/menu";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { TreeRowRenameInput } from "../ui/TreeRow";
 
 /** A row of the list: a page, or a divider line between groups of pages. */
@@ -114,19 +115,25 @@ export function PageListPopover({
             {t("workspace:canvasPages")}
           </span>
           {!readOnly && (
-            <MenuItem
-              aria-label={t("workspace:canvasAddPage")}
-              title={t("workspace:canvasAddPage")}
-              closeOnClick={false}
-              disabled={!canAdd}
-              onClick={() =>
-                void onAdd().then((id) => {
-                  if (id) startRename(id);
-                })
-              }
-            >
-              <AddPlusIcon className="size-3" />
-            </MenuItem>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <MenuItem
+                    aria-label={t("workspace:canvasAddPage")}
+                    closeOnClick={false}
+                    disabled={!canAdd}
+                    onClick={() =>
+                      void onAdd().then((id) => {
+                        if (id) startRename(id);
+                      })
+                    }
+                  />
+                }
+              >
+                <AddPlusIcon className="size-3" />
+              </TooltipTrigger>
+              <TooltipPopup side="top">{t("workspace:canvasAddPage")}</TooltipPopup>
+            </Tooltip>
           )}
         </div>
         <MenuGroup aria-labelledby={headingId}>
@@ -203,6 +210,7 @@ export function PageListPopover({
                     <IconButton
                       size="icon-xs"
                       label={t("workspace:canvasRenamePage")}
+                      tooltip={t("workspace:canvasRenamePage")}
                       {...rowAction(() => startRename(page.id))}
                     >
                       <PencilIcon className="size-3" />
@@ -210,6 +218,7 @@ export function PageListPopover({
                     <IconButton
                       size="icon-xs"
                       label={t("workspace:canvasDeletePage")}
+                      tooltip={t("workspace:canvasDeletePage")}
                       disabled={!canDelete}
                       {...rowAction(() => onDelete(page.id))}
                     >
