@@ -4420,7 +4420,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
     const result = await Effect.runPromise(
       Effect.gen(function* () {
         const adapter = yield* OpenCodeAdapter;
-        const eventsFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 5)).pipe(
+        const eventsFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 7)).pipe(
           Effect.forkChild,
         );
 
@@ -4487,14 +4487,33 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
       }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
     );
 
+    // Registering the child session opens a second (child) turn that carries the
+    // provider refs ingestion turns into a child thread, and seeds its brief.
     expect(result.map((event) => event.type)).toEqual([
       "session.started",
       "thread.started",
       "turn.started",
+      "turn.started",
+      "item.completed",
       "item.updated",
       "item.completed",
     ]);
     expect(result[3]).toMatchObject({
+      type: "turn.started",
+      providerRefs: {
+        providerThreadId: "child-session-1",
+        providerParentThreadId: "thread-child-session-tools",
+      },
+    });
+    expect(result[4]).toMatchObject({
+      type: "item.completed",
+      payload: {
+        itemType: "user_message",
+        status: "completed",
+        detail: "Explore changelog files.",
+      },
+    });
+    expect(result[5]).toMatchObject({
       type: "item.updated",
       payload: {
         itemType: "collab_agent_tool_call",
@@ -4502,9 +4521,8 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
         title: "Find changelog implementation",
       },
     });
-    expect(result[4]).toMatchObject({
+    expect(result[6]).toMatchObject({
       type: "item.completed",
-      turnId: result[2]?.turnId,
       payload: {
         itemType: "dynamic_tool_call",
         status: "completed",
@@ -5554,7 +5572,7 @@ describe("OpenCode background subagent tasks", () => {
       payload: {
         taskId: "child-session-1",
         description: "Explore the codebase",
-        taskType: "subagent",
+        taskType: "local_agent",
         subagentType: "explore",
         toolUseId: "call-child-session-1",
       },
@@ -5843,5 +5861,124 @@ describe("OpenCode background subagent tasks", () => {
     expect(events[0]).toMatchObject({
       payload: { taskId: "child-session-1", status: "stopped" },
     });
+  });
+
+  it("routes a task child session to its own child thread turn and brief", async () => {
+    const eventQueue = createSubscribedEventQueue();
+    const runtime = createMockOpenCodeRuntime();
+
+    const events = await runWithAdapter(runtime, eventQueue, (adapter, threadId) =>
+      Effect.gen(function* () {
+        const eventsFiber = yield* Stream.runCollect(
+          Stream.takeUntil(
+            adapter.streamEvents,
+            (event) =>
+              event.type === "turn.completed" &&
+              event.providerRefs?.providerThreadId === "child-session-1",
+          ),
+        ).pipe(Effect.forkChild);
+
+        yield* startFullAccess(adapter, threadId);
+        yield* sendTestTurn(adapter, threadId, "delegate this");
+
+        pushOpenCodePart(eventQueue, {
+          id: "parent-task-part",
+          messageID: "assistant-message-1",
+          sessionID: "opencode-session-1",
+          type: "tool",
+          tool: "task",
+          callID: "task-call-1",
+          state: {
+            status: "running",
+            title: "Audit storage",
+            input: {
+              description: "Audit storage",
+              prompt: "Find where sessions are stored",
+              subagent_type: "explore",
+            },
+            metadata: { sessionId: "child-session-1", parentSessionId: "opencode-session-1" },
+            time: { start: 1 },
+          },
+        } as unknown as Part);
+
+        eventQueue.push({
+          type: "message.updated",
+          properties: {
+            sessionID: "child-session-1",
+            info: { id: "child-message-1", role: "assistant" },
+          },
+        });
+        pushOpenCodePart(
+          eventQueue,
+          {
+            id: "child-text-part",
+            messageID: "child-message-1",
+            sessionID: "child-session-1",
+            type: "text",
+            text: "Found it.",
+            time: { start: 2, end: 3 },
+          } as unknown as Part,
+          "child-session-1",
+        );
+
+        eventQueue.push({
+          type: "session.idle",
+          properties: { sessionID: "child-session-1" },
+        });
+
+        const collected = Array.from(yield* Fiber.join(eventsFiber));
+        eventQueue.close();
+        return collected;
+      }),
+    );
+
+    const childRefs = {
+      providerThreadId: "child-session-1",
+      providerParentThreadId: "thread-background-tasks",
+    };
+    const childTurnStarted = events.find(
+      (event) =>
+        event.type === "turn.started" && event.providerRefs?.providerThreadId === "child-session-1",
+    );
+    expect(childTurnStarted?.providerRefs).toMatchObject(childRefs);
+
+    const brief = events.find(
+      (event) =>
+        event.type === "item.completed" &&
+        (event.payload as { itemType?: string }).itemType === "user_message",
+    );
+    expect(brief?.providerRefs).toMatchObject(childRefs);
+    expect((brief?.payload as { detail?: string }).detail).toBe("Find where sessions are stored");
+
+    const childText = events.find(
+      (event) =>
+        event.type === "content.delta" &&
+        event.providerRefs?.providerThreadId === "child-session-1",
+    );
+    expect((childText?.payload as { delta?: string }).delta).toBe("Found it.");
+
+    const childTurnCompleted = events.find(
+      (event) =>
+        event.type === "turn.completed" &&
+        event.providerRefs?.providerThreadId === "child-session-1",
+    );
+    expect(childTurnCompleted?.payload).toMatchObject({ state: "completed" });
+
+    // The launching thread's collab entry names the child session so the web
+    // creates and lists the child thread.
+    const collabItem = events.find(
+      (event) =>
+        event.type === "item.updated" &&
+        (event.payload as { itemType?: string }).itemType === "collab_agent_tool_call",
+    );
+    const data = (collabItem?.payload as { data?: Record<string, unknown> }).data;
+    expect(data).toMatchObject({ receiverThreadId: "child-session-1" });
+
+    // The child's idle never completes the launching turn.
+    const parentTurnCompleted = events.find(
+      (event) =>
+        event.type === "turn.completed" && event.providerRefs?.providerThreadId === undefined,
+    );
+    expect(parentTurnCompleted).toBeUndefined();
   });
 });

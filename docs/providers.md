@@ -499,8 +499,8 @@ session and lets its child work continue. Older or unidentified runtimes use int
 Antigravity shows native launch roles and prompts in the transcript. Child details appear when
 the active provider profile records that the child belongs to that launch.
 
-Each subagent a Claude or Codex agent launches gets its own child thread under the task. Its
-brief, and any later message its launcher sends it on resume, opens the child thread as a
+Each subagent a Claude, Codex or OpenCode agent launches gets its own child thread under the
+task. Its brief, and any later message its launcher sends it on resume, opens the child thread as a
 message marked as sent by the agent. A resumed Claude subagent continues on the same child
 thread while its routing identity is retained. Claude bounds each inactive ownership cache to
 200 recent entries, keeping live work, nested launchers and unfinished task owners pinned.
@@ -679,6 +679,12 @@ The `opencode` executable resolves from `PATH` first, then the standard install
 locations (`~/.opencode/bin`, `~/.bun/bin`, npm/pnpm/yarn global bins, Homebrew,
 Volta, asdf, mise, proto, Deno, nvm/fnm). Set an explicit binary path in
 provider settings only when the install lives somewhere else entirely.
+
+OpenCode's `task` tool creates a child session per subagent. Synara routes that session to its own
+child thread, so it appears in the Environment panel's **Subagents** row and the right-dock list
+whether it ran in the foreground or the background, instead of being listed as a background command.
+The child thread's brief, streamed reply, tool rows and turn outcome arrive on that thread; stopping
+the parent session aborts its child sessions too.
 
 ### Claude turn plan
 

@@ -250,6 +250,18 @@ interface OpenCodeSessionContext extends OpenCodeMessageState<Part> {
     }
   >;
   readonly backgroundTaskIdBySessionId: Map<string, string>;
+  // Native subagent sessions launched by OpenCode's task tool. The root context
+  // owns the registry (keyed by the child OpenCode session id); each child gets
+  // its own context with `subagentRefs`/`subagentRoot` and per-child turn and
+  // message state, while sharing the root's registries (see ensureSubagentSession).
+  readonly subagentSessions: Map<string, OpenCodeSessionContext>;
+  // Set only on a child context: the provider refs ingestion turns into a child
+  // thread, and the root context the child is attached to.
+  readonly subagentRefs?: {
+    readonly providerThreadId: string;
+    readonly providerParentThreadId: string;
+  };
+  readonly subagentRoot?: OpenCodeSessionContext;
   readonly modelContextLimitBySlug: Map<string, number>;
   lastKnownTokenUsage: ThreadTokenUsageSnapshot | undefined;
   lastEmittedTokenUsageKey: string | undefined;
@@ -1153,6 +1165,41 @@ function rememberRelatedOpenCodeSession(
   context.relatedSessionIds.add(childSessionId);
 }
 
+interface OpenCodeSubagentSpawn {
+  readonly childSessionId: string;
+  readonly description: string | undefined;
+  readonly subagentType: string | undefined;
+  readonly prompt: string | undefined;
+  readonly background: boolean;
+}
+
+// A tool part that launched a native subagent session through OpenCode's task
+// tool. It reads the child session id the same way rememberRelatedOpenCodeSession
+// does, but also keeps the launch identity so Synara can create and title the
+// child thread instead of flattening the work onto the parent.
+function openCodeSubagentSpawnFromPart(
+  part: Extract<Part, { type: "tool" }>,
+): OpenCodeSubagentSpawn | null {
+  if (toToolLifecycleItemType(part.tool) !== "collab_agent_tool_call") {
+    return null;
+  }
+  const state = openCodeRecord(part.state);
+  const metadata = openCodeRecord(state?.metadata) ?? openCodeRecord(part.metadata);
+  const childSessionId =
+    trimNonEmptyString(metadata?.sessionId) ?? trimNonEmptyString(metadata?.sessionID);
+  if (!childSessionId) {
+    return null;
+  }
+  const input = openCodeRecord(state?.input);
+  return {
+    childSessionId,
+    description: trimNonEmptyString(state?.title) ?? trimNonEmptyString(input?.description),
+    subagentType: trimNonEmptyString(input?.subagent_type) ?? trimNonEmptyString(input?.agent),
+    prompt: trimNonEmptyString(input?.prompt) ?? trimNonEmptyString(input?.message),
+    background: metadata?.background === true,
+  };
+}
+
 function subscribedEventSessionId(event: OpenCodeSubscribedEvent): string | undefined {
   if (!("properties" in event)) {
     return undefined;
@@ -1196,6 +1243,18 @@ function isOpenCodeBackgroundSessionLifecycleEvent(event: OpenCodeSubscribedEven
   );
 }
 
+// A child session reaching idle ends its synthetic turn; every other event keeps
+// (or starts) it. Errors still flow through the normal turn-completion path.
+function isSubagentIdleEvent(event: OpenCodeSubscribedEvent): boolean {
+  if (event.type === "session.idle") {
+    return true;
+  }
+  if (event.type === "session.status") {
+    return event.properties.status.type === "idle";
+  }
+  return false;
+}
+
 function shouldHandleSubscribedEvent(
   context: OpenCodeSessionContext,
   event: OpenCodeSubscribedEvent,
@@ -1204,6 +1263,9 @@ function shouldHandleSubscribedEvent(
   if (sessionId !== undefined) {
     return (
       sessionId === context.openCodeSessionId ||
+      // A native subagent session is routed like the root's own session: every
+      // event type is admitted, then handleSubscribedEvent resolves the child context.
+      context.subagentSessions.has(sessionId) ||
       (context.relatedSessionIds.has(sessionId) &&
         shouldHandleRelatedOpenCodeSessionEvent(event)) ||
       (context.backgroundTaskIdBySessionId.has(sessionId) &&
@@ -1384,6 +1446,7 @@ const releaseOpenCodeSessionResources = Effect.fn("releaseOpenCodeSessionResourc
     yield* clearActiveTurnState(context);
     context.backgroundTasks.clear();
     context.backgroundTaskIdBySessionId.clear();
+    context.subagentSessions.clear();
   }).pipe(
     Effect.ensuring(
       Scope.close(context.sessionScope, Exit.void).pipe(
@@ -1400,6 +1463,15 @@ const stopOpenCodeContext = Effect.fn("stopOpenCodeContext")(function* (
   if (yield* Ref.getAndSet(context.stopped, true)) {
     return;
   }
+  // Child sessions belong to this runtime; their provider work must stop too.
+  yield* Effect.forEach(
+    [...context.subagentSessions.values()],
+    (child) =>
+      runOpenCodeSdk("session.abort", () =>
+        child.client.session.abort({ sessionID: child.openCodeSessionId }),
+      ).pipe(Effect.ignore({ log: true })),
+    { concurrency: "unbounded", discard: true },
+  );
 
   yield* runOpenCodeSdk("session.abort", () =>
     context.client.session.abort({ sessionID: context.openCodeSessionId }),
@@ -1484,6 +1556,16 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
       const emit = (context: OpenCodeSessionContext, event: ProviderRuntimeEvent) =>
         Queue.offer(runtimeEvents, {
           ...event,
+          // A child context routes its events to the child thread by stamping the
+          // provider refs ingestion keys on; the threadId stays the root thread.
+          ...(context.subagentRefs
+            ? {
+                providerRefs: {
+                  ...context.subagentRefs,
+                  ...event.providerRefs,
+                },
+              }
+            : {}),
           ...(context.session.providerInstanceId &&
           event.providerInstanceId !== context.session.providerInstanceId
             ? { providerInstanceId: context.session.providerInstanceId }
@@ -1841,7 +1923,9 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         if (context.activeTurnId !== input.turnId) {
           return false;
         }
-        yield* clearActiveTurnState(context);
+        yield* clearActiveTurnState(context, {
+          cancelGatewayTurn: context.subagentRefs === undefined,
+        });
         updateProviderSession(
           context,
           input.errorMessage
@@ -2306,28 +2390,104 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         }
       });
 
-      const handleSubscribedEvent = Effect.fn("handleSubscribedEvent")(function* (
+      // Registers (or returns) the child context for a native subagent session.
+      // The child shares the root's provider connection and shared registries but
+      // owns its turn, message and related-session state.
+      const ensureSubagentSession = (
+        rootContext: OpenCodeSessionContext,
+        childSessionId: string,
+      ): OpenCodeSessionContext => {
+        const existing = rootContext.subagentSessions.get(childSessionId);
+        if (existing !== undefined) {
+          return existing;
+        }
+        const childContext: OpenCodeSessionContext = {
+          ...rootContext,
+          openCodeSessionId: childSessionId,
+          subagentRefs: {
+            providerThreadId: childSessionId,
+            providerParentThreadId: rootContext.session.threadId,
+          },
+          subagentRoot: rootContext,
+          relatedSessionIds: new Set(),
+          pendingTextDeltasByPartId: new Map(),
+          partById: new OpenCodePartIndex(),
+          partSnapshotKeyById: new Map(),
+          emittedTextByPartId: new Map(),
+          messageRoleById: new Map(),
+          messageSnapshotKeyById: new Map(),
+          completedAssistantPartIds: new Set(),
+          lastKnownTokenUsage: undefined,
+          lastEmittedTokenUsageKey: undefined,
+          latestTurnCostUsd: undefined,
+          activeTurnId: undefined,
+          activeTurnEventSerial: 0,
+          activeTurnProviderActivitySerial: 0,
+          activeTurnCompletionActivitySerial: 0,
+          activeTurnSawToolCallFinish: false,
+          activeTurnSawFinalAssistant: false,
+          activeTurnFinalAssistantMessageId: undefined,
+          activeTurnToolCallIdleWatchdogStarted: false,
+          activeInteractionMode: undefined,
+          activeAgent: undefined,
+          activeVariant: undefined,
+        };
+        rootContext.subagentSessions.set(childSessionId, childContext);
+        return childContext;
+      };
+
+      // Opens the child's synthetic turn on its first activity so ingestion tracks
+      // the child thread's status like any other provider turn.
+      const ensureSubagentTurn = Effect.fn("ensureSubagentTurn")(function* (
         context: OpenCodeSessionContext,
+      ) {
+        if (context.activeTurnId !== undefined) {
+          return context.activeTurnId;
+        }
+        const turnId = TurnId.makeUnsafe(`${adapterConfig.turnIdPrefix}-${randomUUID()}`);
+        context.activeTurnId = turnId;
+        context.activeInteractionMode = context.appliedPermissionInteractionMode;
+        yield* emit(context, {
+          ...buildEventBase({ threadId: context.session.threadId, turnId }),
+          type: "turn.started",
+          payload: { model: context.session.model },
+        });
+        return turnId;
+      });
+
+      const handleSubscribedEvent = Effect.fn("handleSubscribedEvent")(function* (
+        rootContext: OpenCodeSessionContext,
         event: OpenCodeSubscribedEvent,
       ) {
         const eventSessionId = subscribedEventSessionId(event);
-        if (!shouldHandleSubscribedEvent(context, event)) {
+        if (!shouldHandleSubscribedEvent(rootContext, event)) {
           const canBelongToUndiscoveredChild =
             eventSessionId !== undefined &&
             (event.type === "permission.asked" || event.type === "question.asked");
           if (!canBelongToUndiscoveredChild) {
             return;
           }
-          const refreshExit = yield* Effect.exit(refreshRelatedOpenCodeSessions(context));
+          const refreshExit = yield* Effect.exit(refreshRelatedOpenCodeSessions(rootContext));
           if (Exit.isFailure(refreshExit)) {
             yield* Effect.logWarning(
               `${adapterConfig.displayName} failed to reconcile child sessions`,
               Cause.squash(refreshExit.cause),
             );
           }
-          if (!shouldHandleSubscribedEvent(context, event)) {
+          if (!shouldHandleSubscribedEvent(rootContext, event)) {
             return;
           }
+        }
+
+        // A native subagent session has its own context; route its events through
+        // that context so its transcript, turn and provider refs stay separate
+        // from the launching thread.
+        const context =
+          eventSessionId !== undefined
+            ? (rootContext.subagentSessions.get(eventSessionId) ?? rootContext)
+            : rootContext;
+        if (context.subagentRefs !== undefined && !isSubagentIdleEvent(event)) {
+          yield* ensureSubagentTurn(context);
         }
 
         const turnId = context.activeTurnId;
@@ -2616,65 +2776,101 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
 
             if (part.type === "tool") {
               rememberRelatedOpenCodeSession(context, part);
-              const backgroundTaskStart = detectOpenCodeBackgroundTaskStart(part);
-              const previousBackgroundTask =
-                backgroundTaskStart === null
-                  ? undefined
-                  : context.backgroundTasks.get(backgroundTaskStart.taskId);
-              if (
-                backgroundTaskStart !== null &&
-                (previousBackgroundTask === undefined ||
-                  (previousBackgroundTask.settled &&
-                    previousBackgroundTask.toolUseId !== part.callID))
-              ) {
-                context.backgroundTasks.set(backgroundTaskStart.taskId, {
-                  childSessionId: backgroundTaskStart.childSessionId,
-                  toolUseId: part.callID,
-                  settled: false,
-                });
-                if (backgroundTaskStart.childSessionId !== null) {
-                  context.relatedSessionIds.add(backgroundTaskStart.childSessionId);
-                  context.backgroundTaskIdBySessionId.set(
-                    backgroundTaskStart.childSessionId,
+              const subagentSpawn = openCodeSubagentSpawnFromPart(part);
+              const isSubagentChild =
+                subagentSpawn !== null &&
+                subagentSpawn.childSessionId !== context.openCodeSessionId;
+              if (isSubagentChild && subagentSpawn) {
+                // A task tool created an OpenCode child session: route it as a
+                // Synara child thread instead of only a background task. Register
+                // the child context, open its turn, and seed its brief on first
+                // sight; the background-task bookkeeping below still runs so the
+                // subagent keeps its own task lifecycle and status.
+                const alreadyRegistered = context.subagentSessions.has(
+                  subagentSpawn.childSessionId,
+                );
+                const childContext = ensureSubagentSession(context, subagentSpawn.childSessionId);
+                if (!alreadyRegistered) {
+                  yield* ensureSubagentTurn(childContext);
+                  if (subagentSpawn.prompt !== undefined) {
+                    yield* emit(childContext, {
+                      ...buildEventBase({
+                        threadId: childContext.session.threadId,
+                        itemId: `subagent-brief:${subagentSpawn.childSessionId}`,
+                        raw: event,
+                      }),
+                      type: "item.completed",
+                      payload: {
+                        itemType: "user_message",
+                        status: "completed" as const,
+                        title: "Subagent brief",
+                        detail: subagentSpawn.prompt,
+                      },
+                    });
+                  }
+                }
+              }
+              {
+                const backgroundTaskStart = detectOpenCodeBackgroundTaskStart(part);
+                const previousBackgroundTask =
+                  backgroundTaskStart === null
+                    ? undefined
+                    : context.backgroundTasks.get(backgroundTaskStart.taskId);
+                if (
+                  backgroundTaskStart !== null &&
+                  (previousBackgroundTask === undefined ||
+                    (previousBackgroundTask.settled &&
+                      previousBackgroundTask.toolUseId !== part.callID))
+                ) {
+                  context.backgroundTasks.set(backgroundTaskStart.taskId, {
+                    childSessionId: backgroundTaskStart.childSessionId,
+                    toolUseId: part.callID,
+                    settled: false,
+                  });
+                  if (backgroundTaskStart.childSessionId !== null) {
+                    context.relatedSessionIds.add(backgroundTaskStart.childSessionId);
+                    context.backgroundTaskIdBySessionId.set(
+                      backgroundTaskStart.childSessionId,
+                      backgroundTaskStart.taskId,
+                    );
+                  }
+                  const backgroundTaskRuntimeId = RuntimeTaskId.makeUnsafe(
                     backgroundTaskStart.taskId,
                   );
+                  yield* emit(context, {
+                    ...buildEventBase({
+                      threadId: context.session.threadId,
+                      turnId,
+                      raw: event,
+                    }),
+                    type: "task.started",
+                    payload: {
+                      taskId: backgroundTaskRuntimeId,
+                      ...(backgroundTaskStart.description !== undefined
+                        ? { description: backgroundTaskStart.description }
+                        : {}),
+                      taskType: isSubagentChild ? "local_agent" : "subagent",
+                      ...(backgroundTaskStart.subagentType !== undefined
+                        ? { subagentType: backgroundTaskStart.subagentType }
+                        : {}),
+                      toolUseId: part.callID,
+                    },
+                  });
+                  yield* emit(context, {
+                    ...buildEventBase({
+                      threadId: context.session.threadId,
+                      turnId,
+                      raw: event,
+                    }),
+                    type: "task.updated",
+                    payload: {
+                      taskId: backgroundTaskRuntimeId,
+                      status: "running",
+                      isBackgrounded: true,
+                      toolUseId: part.callID,
+                    },
+                  });
                 }
-                const backgroundTaskRuntimeId = RuntimeTaskId.makeUnsafe(
-                  backgroundTaskStart.taskId,
-                );
-                yield* emit(context, {
-                  ...buildEventBase({
-                    threadId: context.session.threadId,
-                    turnId,
-                    raw: event,
-                  }),
-                  type: "task.started",
-                  payload: {
-                    taskId: backgroundTaskRuntimeId,
-                    ...(backgroundTaskStart.description !== undefined
-                      ? { description: backgroundTaskStart.description }
-                      : {}),
-                    taskType: "subagent",
-                    ...(backgroundTaskStart.subagentType !== undefined
-                      ? { subagentType: backgroundTaskStart.subagentType }
-                      : {}),
-                    toolUseId: part.callID,
-                  },
-                });
-                yield* emit(context, {
-                  ...buildEventBase({
-                    threadId: context.session.threadId,
-                    turnId,
-                    raw: event,
-                  }),
-                  type: "task.updated",
-                  payload: {
-                    taskId: backgroundTaskRuntimeId,
-                    status: "running",
-                    isBackgrounded: true,
-                    toolUseId: part.callID,
-                  },
-                });
               }
               const itemType = toToolLifecycleItemType(part.tool);
               const title =
@@ -2696,6 +2892,25 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                   callID: part.callID,
                   ...("input" in part.state ? { input: part.state.input } : {}),
                   state: part.state,
+                  ...(isSubagentChild && subagentSpawn
+                    ? {
+                        receiverThreadId: subagentSpawn.childSessionId,
+                        receiverAgents: [
+                          {
+                            threadId: subagentSpawn.childSessionId,
+                            ...(subagentSpawn.description !== undefined
+                              ? { nickname: subagentSpawn.description }
+                              : {}),
+                            ...(subagentSpawn.subagentType !== undefined
+                              ? { agentType: subagentSpawn.subagentType }
+                              : {}),
+                            ...(subagentSpawn.prompt !== undefined
+                              ? { prompt: subagentSpawn.prompt }
+                              : {}),
+                          },
+                        ],
+                      }
+                    : {}),
                 },
               };
               const runtimeEvent: ProviderRuntimeEvent = {
@@ -2920,6 +3135,13 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                   status: "completed",
                   raw: event,
                 });
+                if (context.subagentRefs !== undefined && turnId) {
+                  yield* completeOpenCodeTurn(context, {
+                    turnId,
+                    raw: event,
+                    totalCostUsd: context.latestTurnCostUsd,
+                  });
+                }
               }
               break;
             }
@@ -2968,6 +3190,16 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                 status: "completed",
                 raw: event,
               });
+              // The same session can be a native subagent thread: its own turn
+              // settles alongside the background-task bookkeeping, never the
+              // parent turn's.
+              if (context.subagentRefs !== undefined && turnId) {
+                yield* completeOpenCodeTurn(context, {
+                  turnId,
+                  raw: event,
+                  totalCostUsd: context.latestTurnCostUsd,
+                });
+              }
               break;
             }
             if (turnId) {
@@ -4116,6 +4348,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                   relatedSessionIds: new Set(),
                   backgroundTasks: new Map(),
                   backgroundTaskIdBySessionId: new Map(),
+                  subagentSessions: new Map(),
                   modelContextLimitBySlug: started.modelContextLimitBySlug,
                   lastKnownTokenUsage: undefined,
                   lastEmittedTokenUsageKey: undefined,
