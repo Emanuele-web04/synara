@@ -1680,6 +1680,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
 
     let runtimeCursorWriteVersion = 0;
     let shutdownStartedAt: string | undefined;
+    let shutdownRetryDeadline: number | undefined;
     let shutdownSessionExits:
       | {
           readonly pending: Map<
@@ -2766,6 +2767,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         },
         processEvent: processRuntimeEvent,
         updateHealth: runtimeEventPumpHealth.update,
+        shutdownRetryDeadline: () => shutdownRetryDeadline,
         isPermanentFailure: (cause) =>
           Option.match(Cause.findErrorOption(cause), {
             onNone: () => false,
@@ -5709,6 +5711,8 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       Effect.gen(function* () {
         const stoppedAt = new Date().toISOString();
         shutdownStartedAt = stoppedAt;
+        shutdownRetryDeadline =
+          performance.now() + Duration.toMillis(PROVIDER_SHUTDOWN_EXIT_DRAIN_TIMEOUT);
         const runtimeCursorWriteBaseline = runtimeCursorWriteVersion;
         const activeSessionByThreadId = new Map(
           (yield* Effect.forEach(adapters, (adapter) =>

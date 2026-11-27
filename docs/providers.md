@@ -54,9 +54,14 @@ older automatic continuation; it must not be submitted again by that record.
 At graceful shutdown, provider exit events have a bounded one-second drain
 window to reach the durable journal before the event consumer closes. Only the
 matching root session/provider/lifecycle exit satisfies that drain; a child-task
-exit or an early persisted stop intent does not prove clean completion. If the
-deadline expires, normal crash recovery remains available. This does not prove
+exit or an early persisted stop intent does not prove clean completion. When
+the journal keeps rejecting writes during shutdown, runtime consumers end their
+retries after the grace period so provider teardown can finish. On restart,
+Synara replays journaled events and reconciles interrupted turns. This does not prove
 native process cleanup on every platform or survive an immediate process kill.
+The desktop app also bounds its native-input and local-service shutdown stages
+so a stalled helper can release the desktop instance lock. The backend retains
+its own graceful shutdown and process-exit checks.
 Opted-in desktop installations report fixed recovery failure categories through
 the [anonymous reliability lane](diagnostics.md#anonymous-reliability-reports).
 

@@ -11,6 +11,7 @@ import {
   requireWindowsBackendExit,
   runAfterDesktopShutdown,
   shouldDeferDesktopWindowClose,
+  shutdownDesktopServices,
   startDesktopBackendShutdownRequest,
   stopPosixBackendAndWait,
   stopWindowsBackendAndWait,
@@ -716,6 +717,54 @@ describe("runAfterDesktopShutdown", () => {
       }),
     ).rejects.toBe(shutdownError);
     expect(afterFailedShutdown).toHaveBeenCalledOnce();
+  });
+});
+
+describe("shutdownDesktopServices", () => {
+  it("still stops the backend and completes desktop teardown after native input stalls", async () => {
+    vi.useFakeTimers();
+    try {
+      const stopBackend = vi.fn(async () => {});
+      const disposeDesktop = vi.fn(async () => {});
+      const shutdown = shutdownDesktopServices({
+        suspendNativeInput: () => new Promise(() => {}),
+        stopBackend,
+        disposeDesktop,
+        auxiliaryTimeoutMs: 100,
+      });
+      const failure = expect(shutdown).rejects.toThrow("native input");
+      expect(stopBackend).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(100);
+      await failure;
+      expect(stopBackend).toHaveBeenCalledOnce();
+      expect(disposeDesktop).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("finishes with a timeout if desktop services stall after backend exit", async () => {
+    vi.useFakeTimers();
+    try {
+      const stopBackend = vi.fn(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 200));
+      });
+      const disposeDesktop = vi.fn(() => new Promise<void>(() => {}));
+      const shutdown = shutdownDesktopServices({
+        suspendNativeInput: () => {},
+        stopBackend,
+        disposeDesktop,
+        auxiliaryTimeoutMs: 100,
+      });
+      const failure = expect(shutdown).rejects.toThrow("desktop services");
+      await vi.advanceTimersByTimeAsync(100);
+      expect(disposeDesktop).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(200);
+      await failure;
+      expect(disposeDesktop).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
