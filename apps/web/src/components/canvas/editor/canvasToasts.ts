@@ -1,8 +1,9 @@
 // FILE: canvasToasts.ts
 // Purpose: The app's toast for canvas actions that change nothing visible on the canvas
-//          (styles copied, opacity set by a digit, layers unlocked, comments hidden). A new
-//          one replaces the last, so quick repeats (two opacity digits) show one toast. Also the
-//          progress toast of the canvas's long jobs (exports, image imports).
+//          (styles copied, opacity set by a digit, layers unlocked, comments hidden), or a hint
+//          for a click that did nothing (a comment beside every frame). A new one replaces the
+//          last, so quick repeats (two opacity digits) show one toast. Also the progress toast of
+//          the canvas's long jobs (exports, image imports).
 // Layer: Canvas editor UI
 // Exports: showCanvasToast, showHiddenCanvasComments, runCanvasJob, CANVAS_JOB_TOAST_DELAY_MS
 
@@ -13,9 +14,10 @@ import { toastManager } from "../../ui/toast";
 
 let last: string | null = null;
 
-export function showCanvasToast(title: string) {
+/** A confirmation, or with `info` a hint about a click that did nothing. */
+export function showCanvasToast(title: string, type: "success" | "info" = "success") {
   if (last !== null) toastManager.close(last);
-  last = toastManager.add({ type: "success", title, timeout: 2000 });
+  last = toastManager.add({ type, title, timeout: 2000 });
 }
 
 /**

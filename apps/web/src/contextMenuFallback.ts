@@ -1,5 +1,7 @@
 import { FLOATING_OVERLAY_SURFACE_CLASS_NAME } from "~/surfaceStyles";
 import type { ContextMenuItem } from "@synara/contracts";
+import { createShortcutKbdElement } from "./components/ui/kbd";
+import { formatShortcutLabel } from "./keybindings";
 import { createCentralIconElement } from "./lib/central-icons";
 import { isInlineSvgMenuIcon } from "./lib/nativeMenuIcons";
 
@@ -35,7 +37,8 @@ interface MenuLevel<T extends string> {
  * Imperative DOM-based context menu that matches the app's Base UI menu styling.
  * Shows a positioned dropdown and returns a promise that resolves
  * with the clicked item id, or null if dismissed. Rows with `children` open a
- * flyout submenu on hover or ArrowRight, mirroring the native desktop menu.
+ * flyout submenu on hover or ArrowRight, mirroring the native desktop menu; a row's
+ * `shortcut` shows at its end in the app's key cap, display only.
  */
 export function showContextMenuFallback<T extends string>(
   items: readonly ContextMenuItem<T>[],
@@ -210,6 +213,11 @@ export function showContextMenuFallback<T extends string>(
           btn.setAttribute("aria-haspopup", "menu");
           const chevron = createCentralIconElement("chevron-right", "ms-auto opacity-60");
           if (chevron) btn.appendChild(chevron);
+        } else if (item.shortcut) {
+          // The key that does the same where the menu opened, as the app's React menus show it.
+          btn.appendChild(
+            createShortcutKbdElement(formatShortcutLabel(item.shortcut), "ms-auto shrink-0"),
+          );
         }
 
         btn.addEventListener("click", () => activate(depth, i));

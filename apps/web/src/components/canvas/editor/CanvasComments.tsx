@@ -19,6 +19,7 @@ import {
   RotateCcwIcon,
   XIcon,
 } from "~/lib/icons";
+import { POPOVER_ENTER_MOTION_CLASS } from "~/lib/disclosureMotion";
 import { cn, isMacNavigatorPlatform } from "~/lib/utils";
 import { ensureNativeApi } from "~/nativeApi";
 import { ComposerPickerMenuPopup } from "../../chat/ComposerPickerMenuPopup";
@@ -399,6 +400,8 @@ function CommentSurface({
         // The app's popover, filled solid: the card floats over the user's design, whose
         // colors would otherwise show through.
         APP_TRANSLUCENT_POPUP_SURFACE_CLASS_NAME,
+        // It opens as the app's popovers do (reduced motion: at once).
+        POPOVER_ENTER_MOTION_CLASS,
         "pointer-events-auto absolute flex text-ui-sm [--app-overlay-surface:var(--popover)]",
         className,
       )}
@@ -505,7 +508,7 @@ function NewCommentComposer({ pending, onDone }: { pending: Pending; onDone: () 
     <CommentSurface
       label={t("workspace:canvasComment")}
       // As wide as the text, so a short comment stays one line.
-      className="min-h-9 w-max max-w-104 min-w-72 items-center gap-1.5 rounded-bl-sm py-1.25 ps-3 pe-1.25"
+      className="min-h-9 w-max max-w-104 min-w-72 origin-left items-center gap-1.5 rounded-bl-sm py-1.25 ps-3 pe-1.25"
       // Vertically centred on the pin.
       style={{ left: PIN + CARD_GAP, top: -PIN - 5 }}
       // Unsent text asks first ("Discard changes?").
@@ -606,7 +609,7 @@ function CommentThreadCard({
   return (
     <CommentSurface
       label={title}
-      className="w-68 flex-col"
+      className="w-68 origin-top-left flex-col"
       style={{ left: PIN + CARD_GAP, top: -PIN }}
       onEscape={close}
       onOutsidePress={close}

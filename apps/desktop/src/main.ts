@@ -5506,6 +5506,7 @@ function registerIpcHandlers(): void {
 
       return new Promise<string | null>((resolve) => {
         const template = buildContextMenuTemplate(items, {
+          platform: process.platform,
           decorateLabel: (label) =>
             process.platform === "darwin"
               ? `${label}${MAC_CONTEXT_MENU_LABEL_TRAILING_PADDING}`

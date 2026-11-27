@@ -7,6 +7,7 @@ import { screenToWorld } from "~/lib/designCanvas";
 import { cn } from "~/lib/utils";
 import { useStore } from "~/store";
 import { FILE_DROP_HIGHLIGHT_CLASS_NAME } from "../../chat/composerPickerStyles";
+import { Empty, EmptyDescription, EmptyHeader } from "../../ui/empty";
 import { useShallow } from "zustand/react/shallow";
 import {
   selectionKey,
@@ -121,6 +122,11 @@ export function CanvasViewport({
   useEffect(() => () => useCanvasEditorStore.getState().setCanvasHover(null), []);
   const [drafts, setDrafts] = useState<CanvasFrameDrafts>({});
   const [pendingComment, setPendingComment] = useState<CanvasPendingComment | null>(null);
+  // The comment being written, for code that runs outside a render (gestures, agent reveals).
+  const pendingRef = useRef(pendingComment);
+  useLayoutEffect(() => {
+    pendingRef.current = pendingComment;
+  });
   const [renaming, setRenaming] = useState<string | null>(null);
   const agentFrames = useActiveAgentFrames(work.id, page.id);
   // Same `${workId}/${pageId}` key as the activity store: which chat writes each active frame.
@@ -184,6 +190,11 @@ export function CanvasViewport({
     onComment: (pending) => {
       showHiddenCanvasComments(t);
       setPendingComment(pending);
+    },
+    // A comment attaches to a frame; a click beside every frame says where to click instead,
+    // unless it only dismissed the comment being written.
+    onCommentMissed: () => {
+      if (!pendingRef.current) showCanvasToast(t("workspace:canvasToastCommentNeedsFrame"), "info");
     },
     onRenameFrame: setRenaming,
     onHandleDoubleClick: (axes, fill) =>
@@ -446,10 +457,6 @@ export function CanvasViewport({
   );
   // The canvas shows what an agent works on: a frame it starts writing off screen comes into view,
   // unless the user is mid-gesture, typing into a layer or writing a comment.
-  const pendingRef = useRef(pendingComment);
-  useLayoutEffect(() => {
-    pendingRef.current = pendingComment;
-  });
   useCanvasAgentReveal({
     root,
     workId: work.id,
@@ -743,6 +750,18 @@ export function CanvasViewport({
           />
         ))}
       </div>
+      {/* A blank page says how to start; it takes no pointer, so drawing works through it. */}
+      {page.frames.length === 0 && !readOnly && !uiHidden ? (
+        <Empty data-canvas-empty-hint="" className="pointer-events-none absolute inset-0">
+          <EmptyHeader>
+            <EmptyDescription className="text-ui-sm">
+              {t("workspace:canvasEmptyPageHint", {
+                key: canvasShortcutLabelFor({ id: "tool", tool: "frame" }),
+              })}
+            </EmptyDescription>
+          </EmptyHeader>
+        </Empty>
+      ) : null}
       <div ref={reveals} className="pointer-events-none absolute inset-0" aria-hidden />
       <CanvasAgentReveals editor={editor} container={reveals} viewport={root} />
       <CanvasOverlay

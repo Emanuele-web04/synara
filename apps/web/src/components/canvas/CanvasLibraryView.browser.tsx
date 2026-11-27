@@ -156,6 +156,11 @@ const agentOn = (workId: string, ended: boolean) =>
 const inset = (row: Element) =>
   (row.querySelector("svg")?.getBoundingClientRect().left ?? 0) - row.getBoundingClientRect().left;
 
+/** How far in from a select row's start its content sits. */
+const start = (row: Element) =>
+  row.querySelector("[data-slot=select-item-text] > span")!.getBoundingClientRect().left -
+  row.getBoundingClientRect().left;
+
 /** A right-click inside an element, as the browser sends it. */
 const rightClick = (target: Element) => {
   const box = target.getBoundingClientRect();
@@ -309,6 +314,97 @@ describe("canvas library", () => {
           item.textContent?.includes("Folder inner"),
         ),
       ).toBe(false);
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("lists the new canvas dialog's folders as their tree, as Move to does", async () => {
+    const screen = await mountLibrary();
+    try {
+      await vi.waitFor(() => expect(shownWorks()).toHaveLength(3));
+      await page.getByRole("button", { name: "New canvas" }).click();
+      await page.getByRole("combobox", { name: "Folder" }).click();
+      const files = page.getByRole("option", { name: "Files" }).element();
+      const outerRow = page.getByRole("option", { name: "Folder outer" }).element();
+      const innerRow = page.getByRole("option", { name: "Folder inner" }).element();
+      expect(outerRow.compareDocumentPosition(innerRow) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
+        Node.DOCUMENT_POSITION_FOLLOWING,
+      );
+      // A top-level folder lines up with Files; its subfolder sits a level in.
+      expect(start(outerRow)).toBeCloseTo(start(files), 0);
+      expect(start(innerRow) - start(outerRow)).toBeCloseTo(16, 0);
+      await page.getByRole("option", { name: "Folder inner" }).click();
+      await expect
+        .element(page.getByRole("combobox", { name: "Folder" }))
+        .toHaveTextContent("Folder inner");
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("reports a failed action in the error toast, naming it, and keeps the list's line for loading", async () => {
+    const add = vi.spyOn(toastManager, "add");
+    const screen = await mountLibrary();
+    const errors = () =>
+      add.mock.calls
+        .map(([options]) => options as { type?: string; title?: string; description?: string })
+        .filter((options) => options.type === "error");
+    try {
+      await vi.waitFor(() => expect(shownWorks()).toHaveLength(3));
+      native.canvas.update.mockRejectedValueOnce(new Error("The folder is gone."));
+      await page.getByRole("button", { name: "Actions for LOOSE" }).click();
+      await page.getByRole("menuitem", { name: "Move to" }).click();
+      await page.getByRole("menuitem", { name: "Folder outer" }).click();
+      await vi.waitFor(() =>
+        expect(errors().at(-1)).toMatchObject({
+          title: "Could not move LOOSE",
+          description: "The folder is gone.",
+        }),
+      );
+      native.canvas.duplicate.mockRejectedValueOnce(new Error("Disk full."));
+      await page.getByRole("button", { name: "Actions for LOOSE" }).click();
+      await page.getByRole("menuitem", { name: "Duplicate" }).click();
+      await vi.waitFor(() =>
+        expect(errors().at(-1)).toMatchObject({ title: "Could not duplicate LOOSE" }),
+      );
+      native.canvas.update.mockRejectedValueOnce(new Error("Read only."));
+      await page.getByRole("button", { name: "Actions for LOOSE" }).click();
+      await page.getByRole("menuitem", { name: "Archive" }).click();
+      await vi.waitFor(() =>
+        expect(errors().at(-1)).toMatchObject({ title: "Could not archive LOOSE" }),
+      );
+      // A failed rename keeps its dialog open, so Save can try again.
+      native.canvas.update.mockRejectedValueOnce(new Error("Name taken."));
+      await page.getByRole("button", { name: "Actions for LOOSE" }).click();
+      await page.getByRole("menuitem", { name: "Rename" }).click();
+      await userEvent.fill(page.getByRole("textbox", { name: "Rename canvas" }), "Landing");
+      await page.getByRole("button", { name: "Save" }).click();
+      await vi.waitFor(() =>
+        expect(errors().at(-1)).toMatchObject({
+          title: "Could not rename LOOSE",
+          description: "Name taken.",
+        }),
+      );
+      await expect.element(page.getByRole("textbox", { name: "Rename canvas" })).toBeVisible();
+      await page.getByRole("button", { name: "Cancel" }).click();
+      // No action failure stays behind on the page.
+      expect(document.querySelector('[role="alert"]')).toBeNull();
+      expect(errors()).toHaveLength(4);
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("keeps the list's failure line, whose Retry reloads the list", async () => {
+    native.canvas.list.mockRejectedValueOnce(new Error("offline"));
+    const screen = await mountLibrary();
+    try {
+      const line = page.getByRole("alert");
+      await expect.element(line).toHaveTextContent("Could not load this canvas.");
+      await line.getByRole("button", { name: "Retry" }).click();
+      await vi.waitFor(() => expect(shownWorks()).toHaveLength(3));
+      await expect.element(page.getByRole("alert")).not.toBeInTheDocument();
     } finally {
       await screen.unmount();
     }

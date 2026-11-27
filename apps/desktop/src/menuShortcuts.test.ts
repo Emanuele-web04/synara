@@ -319,6 +319,20 @@ describe("keybindingShortcutToAccelerator", () => {
     expect(keybindingShortcutToAccelerator(shortcut("b"), "darwin")).toBeNull();
     expect(keybindingShortcutToAccelerator(shortcut("b", { shiftKey: true }), "darwin")).toBeNull();
   });
+
+  it("spells plain keys for a display-only accelerator, never keys Electron cannot express", () => {
+    const displayOnly = { displayOnly: true };
+    expect(keybindingShortcutToAccelerator(shortcut("backspace"), "darwin", displayOnly)).toBe(
+      "Backspace",
+    );
+    expect(keybindingShortcutToAccelerator(shortcut("]"), "win32", displayOnly)).toBe("]");
+    expect(
+      keybindingShortcutToAccelerator(shortcut("n", { shiftKey: true }), "darwin", displayOnly),
+    ).toBe("Shift+N");
+    expect(
+      keybindingShortcutToAccelerator(shortcut("ß", { altKey: true }), "darwin", displayOnly),
+    ).toBeNull();
+  });
 });
 
 describe("resolveReportedMenuAccelerators", () => {

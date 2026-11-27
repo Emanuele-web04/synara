@@ -54,6 +54,7 @@ import {
 } from "../ui/menu";
 import { SearchInput } from "../ui/search-input";
 import { Skeleton } from "../ui/skeleton";
+import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { CanvasResourceDialog, type CanvasResourceFields } from "./CanvasResourceDialog";
 import { showCanvasArchiveUndo } from "./canvasPane";
@@ -61,7 +62,7 @@ import { useActiveAgentPages } from "./canvasStores";
 import { canvasQueryKey } from "./canvasWorkCache";
 import { useCanvasLibrary } from "./useCanvasLibrary";
 import { useCanvasPreviewContext } from "./canvasAssets";
-import { canvasFolderTree } from "./canvasFolderTree";
+import { canvasFolderRowIndent, canvasFolderTree } from "./canvasFolderTree";
 import { CANVAS_SURFACE_CLASS_NAME } from "./CanvasFrameStrip";
 
 const PAGE_SIZE = 50;
@@ -213,7 +214,6 @@ export default function CanvasLibraryView() {
     () => (contextMenu ? createClientPointMenuAnchor(contextMenu.position) : null),
     [contextMenu],
   );
-  const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -277,24 +277,37 @@ export default function CanvasLibraryView() {
       search: { page: undefined, chat: undefined },
     });
   };
-  const action = async (run: () => Promise<unknown>) => {
+  /**
+   * A failed action on a work or folder says which, in the app's error toast as the editor's
+   * failures do; the list's own line is only for a list that did not load.
+   */
+  const reportFailure = (failedTitle: string, cause: unknown) =>
+    toastManager.add({
+      type: "error",
+      title: failedTitle,
+      description: cause instanceof Error ? cause.message : undefined,
+    });
+  const action = async (failedTitle: string, run: () => Promise<unknown>) => {
     if (busy) return;
     setBusy(true);
-    setError(null);
     try {
       await run();
       await refreshList(client);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : t("workspace:canvasOperationFailed"));
+      reportFailure(failedTitle, cause);
     } finally {
       setBusy(false);
     }
   };
-  const update = (id: string, fields: Omit<CanvasResourceUpdateInput, "id">) =>
-    void action(() => ensureNativeApi().canvas.update({ ...fields, id }));
+  const update = (
+    resource: Resource,
+    failedTitle: string,
+    fields: Omit<CanvasResourceUpdateInput, "id">,
+  ) =>
+    void action(failedTitle, () => ensureNativeApi().canvas.update({ ...fields, id: resource.id }));
   /** Archives a work or folder and offers Undo, as archiving a chat does. */
   const archive = (resource: Resource) =>
-    void action(async () => {
+    void action(t("workspace:canvasArchiveFailed", { title: resource.title }), async () => {
       await ensureNativeApi().canvas.update({ id: resource.id, archived: true });
       showCanvasArchiveUndo(client, {
         id: resource.id,
@@ -316,6 +329,7 @@ export default function CanvasLibraryView() {
     anchor?: ReturnType<typeof createClientPointMenuAnchor>,
   ) => {
     const label = t("workspace:canvasActions", { title: resource.title });
+    const moveFailed = t("workspace:canvasMoveFailed", { title: resource.title });
     const blockedByFolder = archived && !resource.archivedAt;
     const blocked = resource.kind === "folder" ? descendantsOf(resource.id, folders) : new Set();
     // Folders as their tree: a subfolder sits under its parent, indented a level.
@@ -356,7 +370,7 @@ export default function CanvasLibraryView() {
             <MenuItem
               disabled={busy}
               onClick={() =>
-                void action(() =>
+                void action(t("workspace:canvasDuplicateFailed", { title: resource.title }), () =>
                   ensureNativeApi().canvas.duplicate({
                     workId: resource.id,
                     id: randomUUID(),
@@ -374,7 +388,7 @@ export default function CanvasLibraryView() {
               <ComposerPickerMenuSubPopup>
                 <MenuItem
                   disabled={resource.folderId === null}
-                  onClick={() => update(resource.id, { folderId: null })}
+                  onClick={() => update(resource, moveFailed, { folderId: null })}
                 >
                   <CanvasIcon className="size-3.5 shrink-0 opacity-70" />
                   {t("workspace:canvasFiles")}
@@ -385,10 +399,8 @@ export default function CanvasLibraryView() {
                     key={folder.id}
                     data-folder-depth={depth}
                     disabled={resource.folderId === folder.id}
-                    style={{
-                      paddingInlineStart: `calc(var(--picker-option-px, 8px) + ${depth * 16}px)`,
-                    }}
-                    onClick={() => update(resource.id, { folderId: folder.id })}
+                    style={canvasFolderRowIndent(depth)}
+                    onClick={() => update(resource, moveFailed, { folderId: folder.id })}
                   >
                     <FolderIcon className="size-3.5 shrink-0 opacity-70" />
                     <span className="truncate">{folder.title}</span>
@@ -404,7 +416,11 @@ export default function CanvasLibraryView() {
                 <MenuRadioGroup
                   value={resource.projectId ?? ""}
                   onValueChange={(value: string) =>
-                    update(resource.id, { projectId: (value || null) as ProjectId | null })
+                    update(
+                      resource,
+                      t("workspace:canvasProjectChangeFailed", { title: resource.title }),
+                      { projectId: (value || null) as ProjectId | null },
+                    )
                   }
                 >
                   <MenuRadioItem value="">{t("workspace:canvasStandalone")}</MenuRadioItem>
@@ -421,7 +437,11 @@ export default function CanvasLibraryView() {
           <MenuItem
             disabled={busy || blockedByFolder}
             onClick={() =>
-              resource.archivedAt ? update(resource.id, { archived: false }) : archive(resource)
+              resource.archivedAt
+                ? update(resource, t("workspace:canvasRestoreFailed", { title: resource.title }), {
+                    archived: false,
+                  })
+                : archive(resource)
             }
           >
             {blockedByFolder
@@ -606,12 +626,11 @@ export default function CanvasLibraryView() {
                 )}
               </div>
             )}
-            {(error || query.isError || connection.disconnected) && (
+            {(query.isError || connection.disconnected) && (
               <div className="flex items-center gap-3 text-ui-sm text-destructive" role="alert">
-                {error ??
-                  (connection.disconnected
-                    ? t("workspace:designSyncFailed")
-                    : t("workspace:designLoadFailed"))}
+                {connection.disconnected
+                  ? t("workspace:designSyncFailed")
+                  : t("workspace:designLoadFailed")}
                 <Button variant="outline" size="sm" onClick={() => void query.refetch()}>
                   {t("workspace:designRetry")}
                 </Button>
@@ -809,13 +828,11 @@ export default function CanvasLibraryView() {
           onSave={async (title) => {
             const resource = renaming;
             if (!resource || title === resource.title) return;
-            setError(null);
             try {
               await ensureNativeApi().canvas.update({ id: resource.id, title });
             } catch (cause) {
-              setError(
-                cause instanceof Error ? cause.message : t("workspace:canvasOperationFailed"),
-              );
+              // The dialog stays open with the name, so Save can try again.
+              reportFailure(t("workspace:canvasRenameFailed", { title: resource.title }), cause);
               throw cause;
             }
             await refreshList(client);

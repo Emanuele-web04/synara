@@ -85,6 +85,15 @@ export function disclosureChevronClassName(open: boolean, className?: string) {
 }
 
 /**
+ * The app's popover entrance (`ui/popover.tsx`: a fade and a 98% scale from the popup's origin,
+ * on the default transition timing) for a floating card mounted without a base-ui popup, such as
+ * the canvas's comment card. It plays through CSS `@starting-style` when the card mounts; like the
+ * popover, the card closes at once. Reduced motion shows it without the transition.
+ */
+export const POPOVER_ENTER_MOTION_CLASS =
+  "transition-[scale,opacity] motion-reduce:transition-none starting:scale-98 starting:opacity-0";
+
+/**
  * Pop reveal for a floating card that materializes from its top-right corner.
  * Asymmetric timing: slow deliberate arrival, snappy exit. Same ease-out
  * curve as the other disclosures.

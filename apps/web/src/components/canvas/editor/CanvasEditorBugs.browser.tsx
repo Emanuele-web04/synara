@@ -797,6 +797,77 @@ describe("canvas editor bugs", () => {
     }
   });
 
+  it("B27b: a Comment tool click beside every frame says comments attach to a frame", async () => {
+    const add = vi.spyOn(toastManager, "add");
+    serveCanvas(native, workOf([f1]));
+    const { screen, root, host } = await mountCanvas(workOf([f1]));
+    const hint = "Comments attach to a frame. Click inside one.";
+    const hints = () =>
+      add.mock.calls.filter(([options]) => (options as { title?: string }).title === hint);
+    try {
+      useCanvasEditorStore.getState().setTool("comment");
+      await nextFrame();
+      // f1 covers 0–400 × 0–300 of the 600 × 400 viewport.
+      click(root, root, 500, 350);
+      await vi.waitFor(() => expect(hints()).toHaveLength(1));
+      expect(add).toHaveBeenLastCalledWith(
+        expect.objectContaining({ type: "info", title: hint, timeout: 2000 }),
+      );
+      expect(root.querySelector('[placeholder="Add a comment"]')).toBeNull();
+      expect(useCanvasEditorStore.getState().tool).toBe("comment");
+      // Inside a frame the click places a comment, with no hint.
+      click(root, host("f1"), 200, 150);
+      await vi.waitFor(() =>
+        expect(root.querySelector('[placeholder="Add a comment"]')).toBeTruthy(),
+      );
+      // A click away that only dismisses the empty comment says nothing either.
+      click(root, root, 500, 350);
+      await vi.waitFor(() =>
+        expect(root.querySelector('[placeholder="Add a comment"]')).toBeNull(),
+      );
+      await nextFrame();
+      expect(hints()).toHaveLength(1);
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("B27c: a blank editable page says how to start, and draws through the hint", async () => {
+    serveCanvas(native, workOf([]));
+    const { screen, root, cached } = await mountCanvas(workOf([]));
+    const hint = () => root.querySelector<HTMLElement>("[data-canvas-empty-hint]");
+    try {
+      await vi.waitFor(() => expect(hint()).toBeTruthy());
+      expect(hint()!.textContent).toBe("Press F to draw a frame, or ask the agent in the chat.");
+      expect(getComputedStyle(hint()!).pointerEvents).toBe("none");
+      // Hide UI hides it with the rest of the chrome.
+      useCanvasEditorStore.setState({ uiHidden: true });
+      await vi.waitFor(() => expect(hint()).toBeNull());
+      useCanvasEditorStore.setState({ uiHidden: false });
+      await vi.waitFor(() => expect(hint()).toBeTruthy());
+      // A Frame tool click at the hint draws there; the hint goes once the page has a frame.
+      useCanvasEditorStore.getState().setTool("frame");
+      await nextFrame();
+      const box = hint()!.querySelector("[data-slot=empty-description]")!.getBoundingClientRect();
+      const centre = { x: box.left + box.width / 2, y: box.top + box.height / 2 };
+      pointer(root, "pointerdown", centre.x, centre.y);
+      pointer(root, "pointerup", centre.x, centre.y);
+      await vi.waitFor(() => expect(native.canvas.restoreFrames).toHaveBeenCalled());
+      await vi.waitFor(() => expect(cached().pages[0]!.frames).toHaveLength(1));
+      await vi.waitFor(() => expect(hint()).toBeNull());
+    } finally {
+      await screen.unmount();
+    }
+    resetCanvasStores();
+    const archived = await mountCanvas(workOf([]), { readOnly: true });
+    try {
+      await nextFrame();
+      expect(archived.root.querySelector("[data-canvas-empty-hint]")).toBeNull();
+    } finally {
+      await archived.screen.unmount();
+    }
+  });
+
   it("B28: a frame label or layer row rename ended with Enter or Escape hands the keyboard back", async () => {
     serveCanvas(native, workOf([f1]));
     const { screen, root } = await mountCanvas(workOf([f1]), { layers: true });

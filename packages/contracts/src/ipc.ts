@@ -462,7 +462,11 @@ import type {
   StatsGetRecapResult,
 } from "./stats";
 import type { BrowserAnnotationMethods } from "./browserAnnotations";
-import { type KeybindingCommand, MAX_KEYBINDING_VALUE_LENGTH } from "./keybindings";
+import {
+  type KeybindingCommand,
+  type KeybindingShortcut,
+  MAX_KEYBINDING_VALUE_LENGTH,
+} from "./keybindings";
 
 export interface ContextMenuItem<T extends string = string> {
   id: T;
@@ -472,6 +476,12 @@ export interface ContextMenuItem<T extends string = string> {
   destructive?: boolean;
   /** Central icon basename from the reversed set (e.g. `"pencil"`) or inline `<svg>` markup. */
   icon?: string;
+  /**
+   * The key that runs the same action where the menu was opened, shown at the row's end and
+   * spelled for the platform (`modKey` is ⌘ on macOS, Ctrl elsewhere). Display only: the menu
+   * never registers or handles it. Ignored on a row with `children`.
+   */
+  shortcut?: KeybindingShortcut;
   /**
    * Opens a submenu instead of resolving this row. Related actions (handoff targets, copy
    * variants, fork targets) belong in one parent row rather than a flat run of siblings.

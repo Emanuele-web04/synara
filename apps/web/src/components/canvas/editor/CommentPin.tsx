@@ -134,14 +134,17 @@ export function CommentPin({
   author: CanvasCommentAuthor;
   userInitial: string | null;
   active?: boolean;
-  /** A reply the user has not read yet: a dot on the pin. */
+  /** A reply the user has not read yet: a dot on the pin, and "unread" in its name. */
   unread?: boolean;
   label?: string;
   onClick?: () => void;
 }) {
+  const { t } = useTranslation();
   const [hovered, setHovered] = useState(false);
   const first = thread?.messages[0];
   const resolved = thread?.status === "resolved";
+  // The unread dot is visual; screen readers hear it in the pin's name.
+  const unreadShown = unread && !resolved;
   const agentReply = thread ? agentReplies(thread).at(-1)?.author : undefined;
   const preview = hovered && !active && first;
   const shadow = active
@@ -182,7 +185,7 @@ export function CommentPin({
           <CommentAgentGlyph author={agentReply} className="size-2" />
         </span>
       )}
-      {unread && !resolved && (
+      {unreadShown && (
         <span
           data-comment-unread=""
           className="absolute -start-0.5 -top-0.5 size-2 rounded-full bg-primary ring-2 ring-popover"
@@ -196,7 +199,7 @@ export function CommentPin({
       type="button"
       data-canvas-ui=""
       data-canvas-comment-pin=""
-      aria-label={label}
+      aria-label={unreadShown && label ? t("workspace:canvasCommentPinUnread", { label }) : label}
       aria-expanded={active}
       className="pointer-events-auto absolute bottom-0 left-0 flex rounded-full rounded-bl-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
       onPointerEnter={() => setHovered(true)}

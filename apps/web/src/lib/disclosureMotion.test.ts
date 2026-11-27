@@ -11,6 +11,7 @@ import {
   DISCLOSURE_POP_OPEN_CLASS,
   DISCLOSURE_POP_OPEN_MS,
   DISCLOSURE_SHELL_MOTION_CLASS,
+  POPOVER_ENTER_MOTION_CLASS,
 } from "./disclosureMotion";
 
 describe("disclosureMotion", () => {
@@ -62,5 +63,12 @@ describe("disclosureMotion", () => {
     expect(disclosurePopClassName(false)).toContain("duration-160");
     expect(disclosurePopClassName(false)).not.toContain("duration-280");
     expect(disclosurePopClassName(false)).toContain("motion-reduce:transition-none");
+  });
+
+  it("enters a self-mounted card from the popover's 98% scale and fade, none with reduced motion", () => {
+    expect(POPOVER_ENTER_MOTION_CLASS).toContain("transition-[scale,opacity]");
+    expect(POPOVER_ENTER_MOTION_CLASS).toContain("starting:scale-98");
+    expect(POPOVER_ENTER_MOTION_CLASS).toContain("starting:opacity-0");
+    expect(POPOVER_ENTER_MOTION_CLASS).toContain("motion-reduce:transition-none");
   });
 });

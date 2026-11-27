@@ -23,6 +23,7 @@ vi.mock("../../../nativeApi", async (importOriginal) => ({
   readNativeApi: () => undefined,
 }));
 
+import { formatShortcutLabel } from "~/keybindings";
 import { toastManager } from "../../ui/toast";
 import { useCanvasEditorStore } from "../canvasStores";
 import { flushCanvasCameras } from "./canvasCamera";
@@ -312,6 +313,71 @@ describe("canvas editor commands", () => {
       select([layerItem("pin")]);
       await userEvent.hover(page.getByRole("button", { name: "Hug the content" }));
       await vi.waitFor(() => expect(kbd(isMac ? "⌥⇧⌘R" : "Ctrl+Alt+Shift+R")).toBeTruthy());
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("names each menu row's key, spelled for the platform, and keeps parent rows without one", async () => {
+    serveCanvas(native, work());
+    const { screen, root, layer } = await mountCanvas(work());
+    /** The rows' keys as the menu shows them, by row id. */
+    const keys = (items: ContextMenuItem<string>[]) => {
+      const shown: Record<string, string | undefined> = {};
+      const spelled = (item: ContextMenuItem<string>) =>
+        item.shortcut && formatShortcutLabel(item.shortcut);
+      for (const item of items) {
+        shown[item.children ? `${item.id}/parent` : item.id] = spelled(item);
+        for (const child of item.children ?? []) shown[child.id] = spelled(child);
+      }
+      return shown;
+    };
+    const spell = (mac: string, other: string) => (isMac ? mac : other);
+    try {
+      select([layerItem("badge")]);
+      await nextFrame();
+      native.contextMenu.show.mockResolvedValueOnce(null);
+      const box = layer("badge")!.getBoundingClientRect();
+      rightClick(root, box.left + 10, box.top + 10);
+      await vi.waitFor(() => expect(native.contextMenu.show).toHaveBeenCalledTimes(1));
+      expect(keys(menuItems())).toMatchObject({
+        rename: spell("⌘R", "Ctrl+R"),
+        copy: spell("⌘C", "Ctrl+C"),
+        "paste/parent": undefined,
+        paste: spell("⌘V", "Ctrl+V"),
+        "paste-on-top": spell("⇧⌘V", "Ctrl+Shift+V"),
+        "paste-replace": spell("⇧⌘R", "Ctrl+Shift+R"),
+        duplicate: spell("⌘D", "Ctrl+D"),
+        "copy-png": spell("⇧⌘C", "Ctrl+Shift+C"),
+        "copy-tailwind": spell("⌥T", "Alt+T"),
+        "copy-styles": spell("⌥⌘C", "Ctrl+Alt+C"),
+        "select-parent": spell("⇧Enter", "Shift+Enter"),
+        "select-children": undefined,
+        front: "]",
+        forward: spell("⌘]", "Ctrl+]"),
+        backward: spell("⌘[", "Ctrl+["),
+        back: "[",
+        wrap: spell("⌥⌘G", "Ctrl+Alt+G"),
+        ungroup: spell("⇧⌘G", "Ctrl+Shift+G"),
+        hide: spell("⇧⌘H", "Ctrl+Shift+H"),
+        lock: spell("⇧⌘L", "Ctrl+Shift+L"),
+        export: spell("⇧⌘E", "Ctrl+Shift+E"),
+        deselect: spell("⇧Esc", "Shift+Esc"),
+        delete: "Backspace",
+      });
+
+      // Empty canvas: paste, the frame steps and Hide UI name their keys too.
+      native.contextMenu.show.mockResolvedValueOnce(null);
+      const empty = viewportPoint(root, 500, 300);
+      rightClick(root, empty.x, empty.y);
+      await vi.waitFor(() => expect(native.contextMenu.show).toHaveBeenCalledTimes(2));
+      expect(keys(menuItems())).toEqual({
+        paste: spell("⌘V", "Ctrl+V"),
+        "next-frame/parent": undefined,
+        "next-frame": "N",
+        "previous-frame": spell("⇧N", "Shift+N"),
+        "toggle-ui": ".",
+      });
     } finally {
       await screen.unmount();
     }

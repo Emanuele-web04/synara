@@ -261,6 +261,8 @@ export function useCanvasGestures(input: {
   text: CanvasTextEditing;
   /** A comment pin placed with the Comment tool; null when a press only closed an open thread. */
   onComment: (pending: CanvasPendingComment) => void;
+  /** A Comment tool click outside every frame, where a comment cannot attach. */
+  onCommentMissed: () => void;
   onRenameFrame: (frameId: string) => void;
   /**
    * A resize handle was double-clicked: its axes fit the content (fill the parent with Alt).
@@ -809,7 +811,7 @@ export function useCanvasGestures(input: {
       if (readOnly) return;
       const world = worldAt(point);
       const located = frameAtPoint(frames, world);
-      if (!located) return;
+      if (!located) return input.onCommentMissed();
       // Locked layers are comment targets too while the tool is active.
       const layerId = stackAt(located.frame.id, event.clientX, event.clientY)?.target ?? null;
       const layerElement = layerId

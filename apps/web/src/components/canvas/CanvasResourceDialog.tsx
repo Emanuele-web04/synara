@@ -1,6 +1,7 @@
 import type { CanvasFolder, ProjectId } from "@synara/contracts";
 import { useState } from "react";
 import { useTranslation } from "~/i18n";
+import { CanvasIcon, FolderIcon } from "~/lib/icons";
 import { useStore } from "~/store";
 import { Button } from "../ui/button";
 import {
@@ -13,7 +14,15 @@ import {
   dialogFieldLabelClassName,
 } from "../ui/dialog";
 import { Input } from "../ui/input";
-import { Select, SelectTrigger, SelectValue, SelectPopup, SelectItem } from "../ui/select";
+import {
+  Select,
+  SelectTrigger,
+  SelectValue,
+  SelectPopup,
+  SelectItem,
+  SelectSeparator,
+} from "../ui/select";
+import { canvasFolderRowIndent, canvasFolderTree } from "./canvasFolderTree";
 
 export type CanvasResourceFields = {
   title: string;
@@ -42,6 +51,7 @@ export function CanvasResourceDialog({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const projects = useStore((state) => state.projects);
+  const tree = canvasFolderTree(folders);
   return (
     <Dialog
       open
@@ -93,11 +103,27 @@ export function CanvasResourceDialog({
                 <SelectTrigger aria-label={t("workspace:canvasFolder")}>
                   <SelectValue />
                 </SelectTrigger>
+                {/* Folders as their tree, as the library's Move to menu lists them. */}
                 <SelectPopup surface="composer">
-                  <SelectItem value="">{t("workspace:canvasFiles")}</SelectItem>
-                  {folders.map((folder) => (
-                    <SelectItem key={folder.id} value={folder.id}>
-                      {folder.title}
+                  <SelectItem value="">
+                    <span className="flex items-center gap-2">
+                      <CanvasIcon className="size-3.5 shrink-0 opacity-70" />
+                      {t("workspace:canvasFiles")}
+                    </span>
+                  </SelectItem>
+                  {tree.length > 0 && <SelectSeparator />}
+                  {tree.map(({ folder, depth }) => (
+                    <SelectItem
+                      key={folder.id}
+                      value={folder.id}
+                      data-folder-depth={depth}
+                      // A select row's own start padding is `px-2.5`.
+                      style={canvasFolderRowIndent(depth, "calc(var(--spacing) * 2.5)")}
+                    >
+                      <span className="flex min-w-0 items-center gap-2">
+                        <FolderIcon className="size-3.5 shrink-0 opacity-70" />
+                        <span className="truncate">{folder.title}</span>
+                      </span>
                     </SelectItem>
                   ))}
                 </SelectPopup>

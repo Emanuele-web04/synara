@@ -5,7 +5,11 @@ import { ensureNativeApi } from "~/nativeApi";
 import type { CanvasSelectionItem } from "../canvasStores";
 import type { CanvasPasteMode } from "./canvasClipboard";
 import type { CanvasCommands } from "./canvasCommands";
-import type { CanvasTextAlign, CanvasTextFormat } from "./canvasShortcuts";
+import {
+  canvasMenuShortcut as keyOf,
+  type CanvasTextAlign,
+  type CanvasTextFormat,
+} from "./canvasShortcuts";
 import { showCanvasToast } from "./canvasToasts";
 import { makeCanvasExportActions } from "./canvasSelectionExport";
 import {
@@ -56,19 +60,31 @@ type Action =
   | "text-right"
   | "text-justify";
 
-/** The "Adjust text" rows and what each runs. */
+/** ⌘V: the browser's paste, which the canvas's paste handler takes (not a guide entry). */
+const PASTE_PRESS = { key: "v", mod: true };
+
+/** The "Adjust text" rows and what each runs: the shortcut of the same key. */
 const TEXT_ACTIONS = {
-  "text-bold": ["workspace:canvasShortcutBold", { format: "bold" }],
-  "text-italic": ["workspace:canvasShortcutItalic", { format: "italic" }],
-  "text-underline": ["workspace:canvasShortcutUnderline", { format: "underline" }],
-  "text-strikethrough": ["workspace:canvasShortcutStrikethrough", { format: "strikethrough" }],
-  "text-left": ["workspace:canvasShortcutTextLeft", { align: "left" }],
-  "text-center": ["workspace:canvasShortcutTextCenter", { align: "center" }],
-  "text-right": ["workspace:canvasShortcutTextRight", { align: "right" }],
-  "text-justify": ["workspace:canvasShortcutTextJustify", { align: "justify" }],
+  "text-bold": ["workspace:canvasShortcutBold", { id: "text-format", format: "bold" }],
+  "text-italic": ["workspace:canvasShortcutItalic", { id: "text-format", format: "italic" }],
+  "text-underline": [
+    "workspace:canvasShortcutUnderline",
+    { id: "text-format", format: "underline" },
+  ],
+  "text-strikethrough": [
+    "workspace:canvasShortcutStrikethrough",
+    { id: "text-format", format: "strikethrough" },
+  ],
+  "text-left": ["workspace:canvasShortcutTextLeft", { id: "text-align", align: "left" }],
+  "text-center": ["workspace:canvasShortcutTextCenter", { id: "text-align", align: "center" }],
+  "text-right": ["workspace:canvasShortcutTextRight", { id: "text-align", align: "right" }],
+  "text-justify": ["workspace:canvasShortcutTextJustify", { id: "text-align", align: "justify" }],
 } as const satisfies Record<
   string,
-  readonly [string, { format: CanvasTextFormat } | { align: CanvasTextAlign }]
+  readonly [
+    string,
+    { id: "text-format"; format: CanvasTextFormat } | { id: "text-align"; align: CanvasTextAlign },
+  ]
 >;
 type TextAction = keyof typeof TEXT_ACTIONS;
 const isTextAction = (action: string | null): action is TextAction =>
@@ -88,13 +104,23 @@ export async function showCanvasEmptyMenu(input: {
   const { t } = input;
   type EmptyAction = "paste" | "next-frame" | "previous-frame" | "toggle-ui";
   const items: ContextMenuItem<EmptyAction>[] = [
-    ...(input.readOnly ? [] : [{ id: "paste" as const, label: t("workspace:canvasMenuPaste") }]),
+    ...(input.readOnly
+      ? []
+      : [{ id: "paste" as const, label: t("workspace:canvasMenuPaste"), ...keyOf(PASTE_PRESS) }]),
     ...(input.hasFrames
       ? contextMenuGroup<EmptyAction>(
           { id: "next-frame", label: t("workspace:canvasMenuGoToFrame") },
           [
-            { id: "next-frame", label: t("workspace:canvasShortcutNextFrame") },
-            { id: "previous-frame", label: t("workspace:canvasShortcutPreviousFrame") },
+            {
+              id: "next-frame",
+              label: t("workspace:canvasShortcutNextFrame"),
+              ...keyOf({ id: "frame-step", step: 1 }),
+            },
+            {
+              id: "previous-frame",
+              label: t("workspace:canvasShortcutPreviousFrame"),
+              ...keyOf({ id: "frame-step", step: -1 }),
+            },
           ],
         )
       : []),
@@ -102,6 +128,7 @@ export async function showCanvasEmptyMenu(input: {
       id: "toggle-ui",
       label: input.uiHidden ? t("workspace:canvasMenuShowUi") : t("workspace:canvasMenuHideUi"),
       separatorBefore: !input.readOnly || input.hasFrames,
+      ...keyOf({ id: "toggle-ui" }),
     },
   ];
   const clicked = await ensureNativeApi().contextMenu.show(items, input.position);
@@ -115,6 +142,7 @@ export async function showCanvasEmptyMenu(input: {
  * The layer menu, shared by the canvas and the layers panel. Variants of one action share a
  * parent row (copy as, styles, select, arrange), as the repository's menu rule requires. It
  * reads the editor when it opens, so a right-click that just changed the selection acts on it.
+ * A row whose action has a canvas key shows it (display only).
  */
 export async function showCanvasContextMenu(input: {
   commands: CanvasCommands;
@@ -158,42 +186,102 @@ export async function showCanvasContextMenu(input: {
         ]
       : []),
     ...(writable && selection.length === 1 && input.onRename
-      ? [{ id: "rename" as const, label: t("workspace:canvasMenuRename") }]
+      ? [
+          {
+            id: "rename" as const,
+            label: t("workspace:canvasMenuRename"),
+            ...keyOf({ id: "rename" }),
+          },
+        ]
       : []),
-    { id: "copy", label: t("workspace:canvasMenuCopy"), separatorBefore: pickable.length > 1 },
+    {
+      id: "copy",
+      label: t("workspace:canvasMenuCopy"),
+      separatorBefore: pickable.length > 1,
+      ...keyOf({ id: "copy" }),
+    },
     // Paste, Paste on top and Paste to replace share one row.
     ...(writable && input.onPaste
       ? contextMenuGroup<Action>({ id: "paste", label: t("workspace:canvasMenuPaste") }, [
-          { id: "paste", label: t("workspace:canvasMenuPaste") },
-          { id: "paste-on-top", label: t("workspace:canvasMenuPasteOnTop") },
-          { id: "paste-replace", label: t("workspace:canvasMenuPasteReplace") },
+          { id: "paste", label: t("workspace:canvasMenuPaste"), ...keyOf(PASTE_PRESS) },
+          {
+            id: "paste-on-top",
+            label: t("workspace:canvasMenuPasteOnTop"),
+            ...keyOf({ id: "paste-special", mode: "on-top" }),
+          },
+          {
+            id: "paste-replace",
+            label: t("workspace:canvasMenuPasteReplace"),
+            ...keyOf({ id: "paste-special", mode: "replace" }),
+          },
         ])
       : []),
-    ...(writable ? [{ id: "duplicate" as const, label: t("workspace:canvasMenuDuplicate") }] : []),
+    ...(writable
+      ? [
+          {
+            id: "duplicate" as const,
+            label: t("workspace:canvasMenuDuplicate"),
+            ...keyOf({ id: "duplicate" }),
+          },
+        ]
+      : []),
     // One node gets a "Copy as" submenu; several only copy as PNG.
     ...(selection.length === 1
       ? contextMenuGroup<Action>(
           { id: "copy-png", label: t("workspace:canvasMenuCopyAs"), separatorBefore: true },
           [
-            { id: "copy-png", label: t("workspace:canvasMenuCopyPng") },
+            {
+              id: "copy-png",
+              label: t("workspace:canvasMenuCopyPng"),
+              ...keyOf({ id: "copy-png" }),
+            },
             {
               id: "copy-tailwind",
               label: t("workspace:canvasMenuCopyTailwind"),
               separatorBefore: true,
+              ...keyOf({ id: "copy-code", format: "tailwind" }),
             },
-            { id: "copy-react", label: t("workspace:canvasMenuCopyReact") },
+            {
+              id: "copy-react",
+              label: t("workspace:canvasMenuCopyReact"),
+              ...keyOf({ id: "copy-code", format: "css" }),
+            },
           ],
         )
-      : [{ id: "copy-png" as const, label: t("workspace:canvasCopyPng"), separatorBefore: true }]),
+      : [
+          {
+            id: "copy-png" as const,
+            label: t("workspace:canvasCopyPng"),
+            separatorBefore: true,
+            ...keyOf({ id: "copy-png" }),
+          },
+        ]),
     ...contextMenuGroup<Action>({ id: "copy-styles", label: t("workspace:canvasMenuStyles") }, [
-      { id: "copy-styles", label: t("workspace:canvasMenuCopyStyles") },
+      {
+        id: "copy-styles",
+        label: t("workspace:canvasMenuCopyStyles"),
+        ...keyOf({ id: "copy-styles" }),
+      },
       ...(writable && commands.canPasteStyles()
-        ? [{ id: "paste-styles" as const, label: t("workspace:canvasMenuPasteStyles") }]
+        ? [
+            {
+              id: "paste-styles" as const,
+              label: t("workspace:canvasMenuPasteStyles"),
+              ...keyOf({ id: "paste-styles" }),
+            },
+          ]
         : []),
     ]),
+    // Select children has no key of its own: Enter also edits a text layer.
     ...contextMenuGroup<Action>({ id: "select-parent", label: t("workspace:canvasMenuSelect") }, [
       ...(layers.length
-        ? [{ id: "select-parent" as const, label: t("workspace:canvasMenuSelectParent") }]
+        ? [
+            {
+              id: "select-parent" as const,
+              label: t("workspace:canvasMenuSelectParent"),
+              ...keyOf({ id: "select-parent" }),
+            },
+          ]
         : []),
       { id: "select-children", label: t("workspace:canvasMenuSelectChildren") },
     ]),
@@ -201,10 +289,26 @@ export async function showCanvasContextMenu(input: {
       ? contextMenuGroup<Action>(
           { id: "front", label: t("workspace:canvasMenuArrange"), separatorBefore: true },
           [
-            { id: "front", label: t("workspace:canvasMenuBringToFront") },
-            { id: "forward", label: t("workspace:canvasMenuBringForward") },
-            { id: "backward", label: t("workspace:canvasMenuSendBackward") },
-            { id: "back", label: t("workspace:canvasMenuSendToBack") },
+            {
+              id: "front",
+              label: t("workspace:canvasMenuBringToFront"),
+              ...keyOf({ id: "arrange", mode: "front" }),
+            },
+            {
+              id: "forward",
+              label: t("workspace:canvasMenuBringForward"),
+              ...keyOf({ id: "arrange", mode: "forward" }),
+            },
+            {
+              id: "backward",
+              label: t("workspace:canvasMenuSendBackward"),
+              ...keyOf({ id: "arrange", mode: "backward" }),
+            },
+            {
+              id: "back",
+              label: t("workspace:canvasMenuSendToBack"),
+              ...keyOf({ id: "arrange", mode: "back" }),
+            },
           ],
         )
       : []),
@@ -215,37 +319,57 @@ export async function showCanvasContextMenu(input: {
             id: "text-bold" as const,
             label: t("workspace:canvasMenuAdjustText"),
             separatorBefore: true,
-            children: (Object.keys(TEXT_ACTIONS) as TextAction[]).map((id) => ({
-              id,
-              label: t(TEXT_ACTIONS[id][0]),
-              separatorBefore: id === "text-left",
-            })),
+            children: (Object.keys(TEXT_ACTIONS) as TextAction[]).map((id) =>
+              Object.assign(
+                { id, label: t(TEXT_ACTIONS[id][0]), separatorBefore: id === "text-left" },
+                keyOf(TEXT_ACTIONS[id][1]),
+              ),
+            ),
           },
         ]
       : []),
     ...(writable && layers.length
       ? [
-          { id: "wrap" as const, label: t("workspace:canvasMenuWrap") },
-          { id: "ungroup" as const, label: t("workspace:canvasMenuUngroup") },
+          { id: "wrap" as const, label: t("workspace:canvasMenuWrap"), ...keyOf({ id: "wrap" }) },
+          {
+            id: "ungroup" as const,
+            label: t("workspace:canvasMenuUngroup"),
+            ...keyOf({ id: "ungroup" }),
+          },
           flexed
-            ? { id: "remove-flex" as const, label: t("workspace:canvasMenuRemoveFlex") }
-            : { id: "flex" as const, label: t("workspace:canvasMenuAddFlex") },
+            ? {
+                id: "remove-flex" as const,
+                label: t("workspace:canvasMenuRemoveFlex"),
+                ...keyOf({ id: "remove-flex" }),
+              }
+            : {
+                id: "flex" as const,
+                label: t("workspace:canvasMenuAddFlex"),
+                ...keyOf({ id: "add-flex" }),
+              },
           {
             id: "hide" as const,
             label: flagged(LAYER_HIDDEN_ATTRIBUTE)
               ? t("workspace:canvasMenuShow")
               : t("workspace:canvasMenuHide"),
             separatorBefore: true,
+            ...keyOf({ id: "toggle-hidden" }),
           },
           {
             id: "lock" as const,
             label: flagged(LAYER_LOCKED_ATTRIBUTE)
               ? t("workspace:canvasMenuUnlock")
               : t("workspace:canvasMenuLock"),
+            ...keyOf({ id: "toggle-locked" }),
           },
         ]
       : []),
-    { id: "export", label: t("workspace:canvasMenuExport"), separatorBefore: true },
+    {
+      id: "export",
+      label: t("workspace:canvasMenuExport"),
+      separatorBefore: true,
+      ...keyOf({ id: "export-files" }),
+    },
     // The work's cover: one frame can be the work's library thumbnail.
     ...(writable && selection.length === 1 && selection[0]!.kind === "frame"
       ? [
@@ -257,7 +381,12 @@ export async function showCanvasContextMenu(input: {
           },
         ]
       : []),
-    { id: "deselect", label: t("workspace:canvasMenuDeselect"), separatorBefore: true },
+    {
+      id: "deselect",
+      label: t("workspace:canvasMenuDeselect"),
+      separatorBefore: true,
+      ...keyOf({ id: "escape", deselect: true }),
+    },
     ...(writable
       ? [
           {
@@ -265,6 +394,7 @@ export async function showCanvasContextMenu(input: {
             label: t("workspace:canvasMenuDelete"),
             destructive: true,
             separatorBefore: true,
+            ...keyOf({ id: "delete" }),
           },
         ]
       : []),

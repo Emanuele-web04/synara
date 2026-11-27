@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { canvasFolderTree } from "./canvasFolderTree";
+import { canvasFolderRowIndent, canvasFolderTree } from "./canvasFolderTree";
 
 const folder = (id: string, title: string, folderId: string | null = null) => ({
   id,
@@ -36,5 +36,16 @@ describe("canvasFolderTree", () => {
       "0:a",
       "1:b",
     ]);
+  });
+});
+
+describe("canvasFolderRowIndent", () => {
+  it("indents a row 16 px a level past its own padding", () => {
+    expect(canvasFolderRowIndent(0)).toEqual({
+      paddingInlineStart: "calc(var(--picker-option-px, 8px) + 0px)",
+    });
+    expect(canvasFolderRowIndent(2, "calc(var(--spacing) * 2.5)")).toEqual({
+      paddingInlineStart: "calc(calc(var(--spacing) * 2.5) + 32px)",
+    });
   });
 });

@@ -2,14 +2,28 @@ import { describe, expect, it, vi } from "vitest";
 
 import { buildContextMenuTemplate, CONTEXT_MENU_MAX_DEPTH } from "./contextMenuTemplate";
 
-function build(items: unknown) {
+function build(items: unknown, platform: NodeJS.Platform = "darwin") {
   const onSelect = vi.fn();
   const template = buildContextMenuTemplate(items, {
+    platform,
     decorateLabel: (label) => label,
     resolveIcon: () => undefined,
     onSelect,
   });
   return { template, onSelect };
+}
+
+/** A keybinding shortcut: `key` with only the named modifiers held. */
+function shortcut(key: string, modifiers: Record<string, boolean> = {}) {
+  return {
+    key,
+    metaKey: false,
+    ctrlKey: false,
+    shiftKey: false,
+    altKey: false,
+    modKey: false,
+    ...modifiers,
+  };
 }
 
 describe("buildContextMenuTemplate", () => {
@@ -65,5 +79,50 @@ describe("buildContextMenuTemplate", () => {
     }
 
     expect(build([nested]).template).toEqual([]);
+  });
+
+  it("shows a row's shortcut as an accelerator it never registers", () => {
+    const items = [
+      { id: "duplicate", label: "Duplicate", shortcut: shortcut("d", { modKey: true }) },
+      { id: "delete", label: "Delete", shortcut: shortcut("backspace") },
+      {
+        id: "paste",
+        label: "Paste",
+        // A parent row only opens its submenu: no accelerator of its own.
+        shortcut: shortcut("v", { modKey: true }),
+        children: [
+          {
+            id: "paste-on-top",
+            label: "Paste on top",
+            shortcut: shortcut("v", { modKey: true, shiftKey: true }),
+          },
+        ],
+      },
+      // Untrusted input: a malformed shortcut is left out, the row kept.
+      { id: "rename", label: "Rename", shortcut: { key: 7 } },
+      { id: "plain", label: "Plain" },
+    ];
+
+    for (const platform of ["darwin", "win32", "linux"] as const) {
+      const { template } = build(items, platform);
+      const row = (label: string) => template.find((entry) => entry.label === label)!;
+      expect(row("Duplicate")).toMatchObject({
+        accelerator: "CmdOrCtrl+D",
+        registerAccelerator: false,
+      });
+      expect(row("Delete")).toMatchObject({
+        accelerator: "Backspace",
+        registerAccelerator: false,
+      });
+      expect(row("Paste").accelerator).toBeUndefined();
+      expect((row("Paste").submenu as Electron.MenuItemConstructorOptions[])[0]).toMatchObject({
+        accelerator: "CmdOrCtrl+Shift+V",
+        registerAccelerator: false,
+      });
+      expect(row("Rename").accelerator).toBeUndefined();
+      expect(row("Rename").click).toBeTypeOf("function");
+      expect(row("Plain")).not.toHaveProperty("accelerator");
+      expect(row("Plain")).not.toHaveProperty("registerAccelerator");
+    }
   });
 });

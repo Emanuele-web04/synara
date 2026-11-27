@@ -205,7 +205,14 @@ The library (`CanvasLibraryView.tsx`, `/canvas`):
   "(copy)" suffix, the copy stays in the library), Move to (Files or a folder; a folder never
   into itself or its subfolders), Associated project (works), Archive or Restore.
   Archiving (here or from the work's menu in the full layout) shows the app's compact Undo
-  toast, as archiving a chat does; Undo restores. There is no permanent delete.
+  toast, as archiving a chat does; Undo restores. There is no permanent delete. A failed action
+  (rename, duplicate, move, associated project, archive, restore) shows the app's error toast
+  naming it and the work or folder ("Could not move …"), as the editor's failures do; a failed
+  rename keeps its dialog open. The line under the header is only for a list that did not load
+  (its Retry reloads the list) or a lost connection.
+- **Folder field:** the New canvas, New folder and Rename and organize dialogs list folders as
+  their tree, as Move to does (`canvasFolderTree`, `canvasFolderRowIndent`): Files first, then
+  each folder before its subfolders, a level in.
 - **Empty states:** no works yet, an empty folder, an empty archive, no search matches.
 - Pages, dividers, icons and the cover frame: see Model and the editor's Pages list below.
 - The library has no sharing, links or teams: works live in this app data home.
@@ -262,7 +269,7 @@ reads as the rest of Synara.
 | Pages, layers | `ui/TreeRow.tsx` rows like the main sidebar's (`sidebarRowStyles.ts`): inset 8 px from the panel edges, rounded, the sidebar's hover, selected and focus-ring treatment; 28 px, the chevron in the indent, a 16 px icon lane and a 48 px actions lane at the row's end at every depth, long names truncated (the label runs under the actions lane until a row is hovered or a flag is on). The open page is the selected row; selected layers use the same selected fill as the open page and the rows inside them the hover tone, and a run of filled rows reads as one block. The row of the layer the canvas pointer is over takes the row hover (`TreeRow`'s `hovered`). "Pages" (it collapses the list) and "Layers" are the sidebar's muted section labels. A splitter under the pages list sets its height (drag or arrow keys; double-click fits the pages), kept per viewer. |
 | Toolbar       | `CanvasFloatingToolbar` (`editor/CanvasToolbar.tsx`): one horizontal bar bottom-centre over the canvas, on the opaque popover surface of the app's menus (popover fill, border, menu radius and shadow): the app's `sm` toggles and ghost `icon-sm` buttons for V/H, F/R/T and image insert, C, undo and redo (and the zoom menu where no header shows it), tooltips above with the shortcut in the app's key cap. Only the bar takes pointer events; a narrow pane scrolls it sideways. It fades out (the app's disclosure fade, none with reduced motion) and takes no pointer events while a gesture drags (`data-canvas-dragging` on the viewport, `canvasGestureHidesChrome`), and Hide UI removes it.                                                                                                                                                                            |
 | Inspector     | 280 px (232 px slim in the side pane). It starts with its sections; the side pane adds a row naming what is selected, and a read-only work a Read only row. Sections have 32 px headers in the sidebar's muted label style over 24 px rows: the app's `xs` inputs and selects borderless on the soft secondary fill (`inputControlClassName(size, { filled: true })`, `SelectTrigger variant="filled"`), `icon-xs` buttons, the `sm` `SegmentedPicker` squared off to the fields' radius (`shape="field"`), `subtle` action buttons, the app checkbox. Colour swatches keep a hairline over the colour.                                                                                                                                                                                                                                                                                |
-| Popups        | The app's menus (`ComposerPickerMenuPopup`), selects, combobox (font picker), popovers (colour picker, formatting, export settings) and the default tooltip. The comment card uses the app's popover surface, placed with the camera's CSS variables so it follows a pan without a render.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| Popups        | The app's menus (`ComposerPickerMenuPopup`), selects, combobox (font picker), popovers (colour picker, formatting, export settings) and the default tooltip. The comment card uses the app's popover surface, placed with the camera's CSS variables so it follows a pan without a render, and opens with the popover's fade and 98% scale from the pin's side (`POPOVER_ENTER_MOTION_CLASS` in `lib/disclosureMotion.ts`, none with reduced motion); like a popover it closes at once.                                                                                                                                                                                                                                                                                                                                                                                                |
 | Library       | Cards and rows on the app's card surface and border (`bg-card`, `border-border`), 256 px cards 24 px apart, thumbnails in a muted well (the canvas backdrop), the section tabs as a `SegmentedPicker`, grid or list as the neutral icon `SegmentedPicker`; the Move to menu lists folders as their tree.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | Comment pins  | Keep their 26 px screen size down to 50% zoom, then shrink with the canvas to half size at 25% (`--canvas-pin-scale`), from their anchor corner. A pin that would cover the selection's size badge steps aside, the shortest way left, right or down (`editor/canvasPinPlacement.ts`); the badge keeps its place.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 
@@ -288,7 +295,11 @@ canvas alone and reuses the sidebar's row tokens (a `hovered` row holds the side
 while the canvas points at its layer); its rename field takes an `onDone` for where the
 keyboard goes after Enter or Escape (the canvas). The chat's file-drop tint is shared as
 `FILE_DROP_HIGHLIGHT_CLASS_NAME` (`chat/composerPickerStyles.ts`), which the canvas's image drop
-uses too.
+uses too. `ContextMenuItem` (contracts) gained an optional `shortcut`, display only: the
+browser's context menu draws it with `createShortcutKbdElement` (`ui/kbd.tsx`, `ShortcutKbd`'s
+DOM twin), the desktop menu as an Electron accelerator with `registerAccelerator: false`
+(`contextMenuTemplate.ts`; `keybindingShortcutToAccelerator` spells plain keys there with
+`displayOnly`). Menus that send none render as before.
 
 **Shortcuts against the app's:** the app's global shortcuts listen on the window, before any
 surface. While the canvas has focus it claims the keys it handles (`claimShortcuts` in
@@ -356,7 +367,11 @@ selection actions (align, distribute, resize to fit or fill, resize by a step) l
   square, Alt draws from the centre (both combine) and holding Space moves the box's origin
   with the pointer; a plain click makes a 100 × 100 box centred on the click. The tools sit in
   the floating toolbar bottom-centre over the canvas, with undo and redo at its end, each
-  enabled only while there is something to undo or redo (`CanvasHistory.subscribe`).
+  enabled only while there is something to undo or redo (`CanvasHistory.subscribe`). An
+  editable page with no frames shows a quiet hint in the middle of the canvas ("Press F to draw
+  a frame, or ask the agent in the chat", the app's empty state in muted small text); it takes
+  no pointer, so drawing works through it, and goes with the first frame. A read-only work and
+  Hide UI show none.
 - **Hit test and click:** every layer within 4 screen pixels of the pointer is hit, ancestors
   first and the deepest last; the tolerance reaches only inside the topmost layer under the
   pointer, so a 1 px line is easy to hit but a neighbouring button never wins over the one
@@ -473,7 +488,8 @@ pre-wrap` when the layer would collapse them. An IME composing text keeps every 
 - **Toasts:** actions with no visible result on the canvas confirm with the app's toast:
   styles copied and pasted, opacity set by a digit, every layer unlocked, comments hidden or
   shown (also when the Comment tool or a thread opened from the Comments panel brings hidden
-  comments back), and Hide UI (with the key that shows it again). A new one replaces the last.
+  comments back), and Hide UI (with the key that shows it again); an info toast says where a
+  comment goes after a Comment tool click beside every frame. A new one replaces the last.
   Long jobs (page PNG and work PDF export, ⌘⇧E and every Export button or menu, placing an
   image by insert, drop or paste) run under the app's loading toast once they have taken 300 ms,
   which turns into their success or error toast (`runCanvasJob`; a placed image has no success
@@ -516,7 +532,12 @@ pre-wrap` when the layer would collapse them. An IME composing text keeps every 
   and the four alignments, through the same commands as their keys), wrap, ungroup, Add flex or
   Remove flex, hide, lock, export, Use as cover, Deselect, delete. A right-click on empty canvas
   offers Paste, Go to frame (Next and Previous frame) and Show or Hide UI. Variants of one
-  action share a submenu row. Several layers sent to the front or back keep their order. Every
+  action share a submenu row. A row whose action has a key names it at the row's end, spelled
+  for the platform (⌘ on macOS, Ctrl elsewhere) from the shortcut guide (`canvasMenuShortcut`;
+  Paste is ⌘V, Select children has none since Enter also edits text): the browser's menu draws
+  it in the app's key cap, the desktop menu as an accelerator it never registers
+  (`ContextMenuItem.shortcut`). The page menu's Rename names F2 and the layers panel's Collapse
+  all ⌥L. Several layers sent to the front or back keep their order. Every
   gesture or command is one undo step, and undo restores only the style properties the user
   changed.
 - **Layers panel:** paint order (front first), 28 px rows indented 16 px a level. Click
@@ -644,10 +665,14 @@ pre-wrap` when the layer would collapse them. An IME composing text keeps every 
   open, the first click only closes it; the composer opens on pointer up. Unsent text asks
   "Discard changes?" before Escape or closing drops it. Each of the user's messages has Edit
   and Delete (the first message's Delete removes the thread). A thread with an agent reply
-  newer than `readAt` is unread (a dot on the pin and its row); opening it marks it read.
+  newer than `readAt` is unread (a dot on the pin and its row, and "unread" in the pin's
+  accessible name); opening it marks it read.
   Reply, resolve (with an 8 s Undo), reopen, delete. On a read-only (archived) work a thread
   can be read but not changed: the card has no Resolve or Reopen, menu, message actions, Ask
-  agent or reply field, the panel no Reopen, and the Comment tool places nothing. Closing a card
+  agent or reply field, the panel no Reopen, and the Comment tool places nothing. A Comment
+  tool click beside every frame places nothing either and says "Comments attach to a frame.
+  Click inside one." in the canvas's info toast (not when the click only dismissed an empty
+  comment being written). Closing a card
   that held the focus (Escape, Close, Resolve, a sent comment) gives the keyboard back to the
   canvas. The Comments panel lists every page's
   threads with Search, a Sort and filter menu (Newest first, Oldest first, By page; author
@@ -905,7 +930,8 @@ agent indicator on a work's card and row; the whole card opening its work; place
 first load and the works kept while a search loads; archive with the Undo toast restoring; the
 same menu from a right-click on a card, a folder card and a list row, and the "…" tooltip;
 relative time with the full date in a tooltip; the folder card's hover tint matching a work
-card's), `canvasWorkCache.test.ts` (deltas, including the `duplicate` and `replace_html`
+card's; the dialog's folder field as a tree; failed actions in the error toast naming them, a
+failed rename keeping its dialog, and the list's failure line with its Retry), `canvasWorkCache.test.ts` (deltas, including the `duplicate` and `replace_html`
 shapes, refetch of one work on a gap, own-write echo, newest-wins), `canvasStores.test.ts`
 (activity kinds, per-layer entries, reads leaving the outline alone, `ended`; the side pane
 asked for once per work and turn, never for a read), `CanvasPaneAutoOpen.browser.tsx` (agent
@@ -971,7 +997,9 @@ a Cmd-click or the layers panel; ⌘B on selected blocks, clearing their ranges,
 in-memory stand-in for the store in `editor/canvasEditorTestHarness.tsx`, which can also switch
 pages: B24 hidden and locked frames out of ⌘A, ⌘⇧A, N, fit all and ⌫; B25 an undo on another
 page showing it and the change; B26 image-only drops with the tint and no fall-through; B27 the
-Comment tool showing hidden comments and placing none on a read-only work; B28 and B29 the
+Comment tool showing hidden comments and placing none on a read-only work, B27b its info toast
+beside every frame, B27c the blank page's hint (drawn through, gone with a frame, none on a
+read-only work or with Hide UI); B28 and B29 the
 keyboard back on the canvas after a rename or a closed comment card),
 `editor/CanvasEditorInteractions.browser.tsx` (real pointer and key events: frame
 body and label clicks, the 4 px tolerance, siblings at the selection's depth, locked layers
@@ -989,7 +1017,8 @@ reorder, inherited lock dot, dimmed children, a read-only work's lock and hidden
 first click and pointer-up composer; agent outline radius, rain, fades, edit and delete
 flashes, the indicator on the frame's layers row; animated zoom with zero commits, pinch versus Ctrl, pan
 end on blur; live inspector X during a frame drag with zero commits),
-`editor/CanvasEditorCommands.browser.tsx` (the empty-canvas menu; click, Shift, Alt and Space
+`editor/CanvasEditorCommands.browser.tsx` (the empty-canvas menu; each menu row's key, none on
+parent rows; click, Shift, Alt and Space
 drawing; ⌘ arrow resizes and fit or fill from the keys and handle double-clicks; ⌥ align and
 ⌃⌥ distribute; ⇧Esc and the Deselect row; ⌘⇧X and the Adjust text submenu; toasts, Hide UI's
 included; the
@@ -1000,7 +1029,8 @@ Collapse all in the layers panel) and
 `editor/CanvasComments.browser.tsx` (also discard confirmation, read on open, message edit
 and delete, panel search, filters and the stored toggle, pin clamping, the pin shrinking below
 50% zoom, ⇧C and a panel row showing hidden comments, a read-only work's card and panel without
-their mutating actions, the open-thread count of every page), `editor/CanvasAgentReveal.browser.tsx` (an off-screen frame an agent writes
+their mutating actions, the open-thread count of every page, an unread pin's name, the card's
+popover entrance), `editor/CanvasAgentReveal.browser.tsx` (an off-screen frame an agent writes
 comes into view with the frames in view, a few commits rather than one per animation step, once
 per turn; a sliver at the edge is revealed, a half-visible frame is not; never during a text edit
 or a drag), `CanvasFrameStrip.browser.tsx` (turn-card
@@ -1020,7 +1050,11 @@ Shift toggle), `canvasLayerDrop` (zones, depth steps, slow inside, frames), `can
 (arrange order, frames within reach), `canvasClipboard` (embedding, untrusted trees, paste order, offsets),
 `canvasHistory` (groups, replay, lifetime, several inserts in one edit, the targets an undo
 brings into view), `canvasToasts` (the progress toast turning into the outcome, quick jobs, hidden
-comments shown),
+comments shown), `canvasShortcuts` also a menu row's key (`canvasMenuShortcut`). Outside the
+canvas: `lib/contextMenuFallback.browser.ts` (a row's key cap, none on a parent row) and, in
+`apps/desktop`, `contextMenuTemplate.test.ts` (display-only accelerators, none on parent rows or
+for a malformed shortcut) and `menuShortcuts.test.ts` (plain keys spelled only with
+`displayOnly`),
 `useCanvasTextEditing` (text edits, empty deletes, line breaks, Tab order). Server:
 `canvasLibraryStore.test.ts` also covers frame flags and order, message edit and delete
 permissions and `mark_read`.

@@ -4,6 +4,8 @@ import { page, userEvent } from "vitest/browser";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { showContextMenuFallback } from "../contextMenuFallback";
+import { formatShortcutLabel } from "../keybindings";
+import { isMacPlatform } from "./utils";
 
 const ITEMS = [
   { id: "rename", label: "Rename thread" },
@@ -118,5 +120,47 @@ describe("showContextMenuFallback submenus", () => {
     await userEvent.keyboard("{ArrowDown}{Enter}");
 
     await expect(result).resolves.toBe("archive");
+  });
+
+  it("shows a row's shortcut at its end in the app's key cap, display only", async () => {
+    const shortcut = { key: "d", metaKey: false, ctrlKey: false, altKey: false };
+    const result = showContextMenuFallback(
+      [
+        {
+          id: "duplicate",
+          label: "Duplicate",
+          shortcut: { ...shortcut, shiftKey: false, modKey: true },
+        },
+        {
+          id: "paste",
+          label: "Paste",
+          // A parent row shows its chevron, never a key.
+          shortcut: { ...shortcut, key: "v", shiftKey: false, modKey: true },
+          children: [{ id: "paste-on-top", label: "Paste on top" }],
+        },
+        { id: "archive", label: "Archive" },
+      ],
+      { x: 24, y: 24 },
+    );
+
+    const label = formatShortcutLabel({ ...shortcut, shiftKey: false, modKey: true });
+    expect(label).toBe(isMacPlatform(navigator.platform) ? "⌘D" : "Ctrl+D");
+    const row = page.getByRole("button", { name: "Duplicate" }).element();
+    const kbd = row.querySelector<HTMLElement>('[data-slot="kbd"]')!;
+    expect(kbd.getAttribute("aria-label")).toBe(label);
+    // Right-aligned after the label, as a React menu's shortcut is.
+    expect(kbd.getBoundingClientRect().right).toBeGreaterThan(
+      row.querySelector("span")!.getBoundingClientRect().right + 8,
+    );
+    expect(page.getByRole("button", { name: "Paste" }).element().querySelector("kbd")).toBeNull();
+    expect(page.getByRole("button", { name: "Archive" }).element().querySelector("kbd")).toBeNull();
+
+    // Pressing it does nothing in the menu; only a row picks.
+    document.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "d", metaKey: true, ctrlKey: true }),
+    );
+    expect(document.querySelector('[data-slot^="context-menu"]')).not.toBeNull();
+    await page.getByRole("button", { name: "Duplicate" }).click();
+    await expect(result).resolves.toBe("duplicate");
   });
 });

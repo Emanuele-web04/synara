@@ -40,7 +40,7 @@ import {
 import { CanvasAgentIconSlot } from "./CanvasAgentActivity";
 import { pasteIntoCanvas, readClipboard } from "./canvasClipboard";
 import { showCanvasContextMenu } from "./canvasContextMenu";
-import { canvasShortcutLabelFor } from "./canvasShortcuts";
+import { canvasMenuShortcut, canvasShortcutLabelFor } from "./canvasShortcuts";
 import { ShortcutTooltip } from "./ShortcutTooltip";
 import { useCanvasEditor } from "./CanvasEditorContext";
 import {
@@ -506,7 +506,13 @@ export function CanvasLayersPanel({ className }: { className?: string }) {
           event.preventDefault();
           void ensureNativeApi()
             .contextMenu.show(
-              [{ id: "collapse-all", label: t("workspace:canvasLayersCollapseAll") }],
+              [
+                {
+                  id: "collapse-all",
+                  label: t("workspace:canvasLayersCollapseAll"),
+                  ...canvasMenuShortcut({ id: "collapse-layers" }),
+                },
+              ],
               {
                 x: event.clientX,
                 y: event.clientY,

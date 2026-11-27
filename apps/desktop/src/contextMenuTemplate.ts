@@ -1,19 +1,26 @@
 // FILE: contextMenuTemplate.ts
-// Purpose: Turns renderer context menu rows into an Electron menu template, including submenus.
+// Purpose: Turns renderer context menu rows into an Electron menu template, including submenus
+//          and the display-only accelerator of a row that names its key.
 // Layer: desktop main utility
 // Exports: buildContextMenuTemplate, CONTEXT_MENU_MAX_DEPTH
 
-import type { DesktopContextMenuItem } from "@synara/contracts";
+import { type DesktopContextMenuItem, KeybindingShortcut } from "@synara/contracts";
+import { Schema } from "effect";
 import type { MenuItemConstructorOptions, NativeImage } from "electron";
+import { keybindingShortcutToAccelerator } from "./menuShortcuts";
 
 /** Renderer input is untrusted; deeper nesting than this is dropped rather than built. */
 export const CONTEXT_MENU_MAX_DEPTH = 3;
 
 export interface ContextMenuTemplateOptions {
+  /** Spells a row's shortcut the way this platform's menus show keys. */
+  readonly platform: NodeJS.Platform;
   readonly decorateLabel: (label: string) => string;
   readonly resolveIcon: (item: DesktopContextMenuItem) => NativeImage | undefined;
   readonly onSelect: (id: string) => void;
 }
+
+const isKeybindingShortcut = Schema.is(KeybindingShortcut);
 
 function isContextMenuItem(item: unknown): item is DesktopContextMenuItem {
   if (typeof item !== "object" || item === null) return false;
@@ -58,6 +65,14 @@ export function buildContextMenuTemplate(
     } else {
       const { id } = item;
       itemOption.click = () => options.onSelect(id);
+      // The row names the key that does the same where the menu opened; the menu only shows it.
+      const accelerator = isKeybindingShortcut(item.shortcut)
+        ? keybindingShortcutToAccelerator(item.shortcut, options.platform, { displayOnly: true })
+        : null;
+      if (accelerator) {
+        itemOption.accelerator = accelerator;
+        itemOption.registerAccelerator = false;
+      }
     }
     const icon = options.resolveIcon(item);
     if (icon) {

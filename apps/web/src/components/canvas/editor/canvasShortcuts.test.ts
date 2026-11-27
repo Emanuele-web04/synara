@@ -3,6 +3,7 @@ import {
   CANVAS_SHORTCUT_GUIDE,
   canvasKeyOf,
   canvasKeyOfPress,
+  canvasMenuShortcut,
   canvasShortcutLabelFor,
   matchCanvasShortcut,
   type CanvasShortcut,
@@ -413,5 +414,26 @@ describe("CANVAS_SHORTCUT_GUIDE", () => {
     expect(canvasShortcutLabelFor({ id: "show-layers" }, "Win32")).toBe("Alt+1");
     expect(canvasShortcutLabelFor({ id: "distribute", axis: "y" }, "Win32")).toBeNull();
     expect(canvasShortcutLabelFor({ id: "rename" }, "MacIntel")).toBe("⌘R");
+  });
+
+  it("gives a context menu row the documented press, or a press of its own", () => {
+    const plain = { metaKey: false, ctrlKey: false, shiftKey: false, altKey: false };
+    expect(canvasMenuShortcut({ id: "duplicate" }, "Win32")).toEqual({
+      shortcut: { key: "d", ...plain, modKey: true },
+    });
+    expect(canvasMenuShortcut({ id: "toggle-hidden" }, "MacIntel")).toEqual({
+      shortcut: { key: "h", ...plain, shiftKey: true, modKey: true },
+    });
+    expect(canvasMenuShortcut({ id: "delete" }, "MacIntel")).toEqual({
+      shortcut: { key: "backspace", ...plain, modKey: false },
+    });
+    // ⌘V is the browser's paste, not a guide entry; the row names it all the same.
+    expect(canvasMenuShortcut({ key: "v", mod: true }, "MacIntel")).toEqual({
+      shortcut: { key: "v", ...plain, modKey: true },
+    });
+    // No row key where the platform has no such press, or the shortcut has none.
+    expect(canvasMenuShortcut({ id: "distribute", axis: "x" }, "Win32")).toEqual({});
+    expect(canvasMenuShortcut({ id: "page", step: 1 }, "MacIntel")).toHaveProperty("shortcut");
+    expect(canvasMenuShortcut({ id: "zoom", factor: 2 }, "MacIntel")).toEqual({});
   });
 });

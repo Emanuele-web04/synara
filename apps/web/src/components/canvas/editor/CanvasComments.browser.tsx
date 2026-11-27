@@ -274,6 +274,30 @@ describe("canvas comments", () => {
     expect(pendingDone).toHaveBeenCalledTimes(1);
   });
 
+  it("opens a card with the popover's fade and scale, from its pin's side", async () => {
+    await mount();
+    const started: string[] = [];
+    const record = (event: TransitionEvent) => {
+      if ((event.target as Element).getAttribute("role") === "dialog")
+        started.push(event.propertyName);
+    };
+    document.addEventListener("transitionrun", record, true);
+    try {
+      await pin("Headline feels too heavy").click();
+      const card = page.getByRole("dialog", { name: "Headline" });
+      await expect.element(card).toBeVisible();
+      await vi.waitFor(() => expect(started).toEqual(expect.arrayContaining(["scale", "opacity"])));
+      expect(getComputedStyle(card.element()).transformOrigin).toBe("0px 0px");
+      // It settles fully shown, and keeps its place beside the pin.
+      await vi.waitFor(() => {
+        const style = getComputedStyle(card.element());
+        expect([style.opacity, style.scale]).toEqual(["1", "none"]);
+      });
+    } finally {
+      document.removeEventListener("transitionrun", record, true);
+    }
+  });
+
   it("resolves a thread with an 8 second Undo", async () => {
     const add = vi.spyOn(toastManager, "add");
     await mount();
@@ -301,7 +325,7 @@ describe("canvas comments", () => {
 
   it("replies, and closes the thread on Escape or a click on the canvas", async () => {
     await mount();
-    await pin("Full-width, #1F6F4A fill").click();
+    await pin("Full-width, #1F6F4A fill, unread").click();
     const card = page.getByRole("dialog", { name: "Sign in" });
     await expect.element(card.getByText("Updated fill and label color.")).toBeVisible();
     // Opening a thread with an unread agent reply reads it.
@@ -316,7 +340,7 @@ describe("canvas comments", () => {
     await userEvent.keyboard("{Escape}");
     await expect.element(card).not.toBeInTheDocument();
 
-    await pin("Full-width, #1F6F4A fill").click();
+    await pin("Full-width, #1F6F4A fill, unread").click();
     await expect.element(card).toBeVisible();
     await page.getByTestId("canvas").click({ position: { x: 700, y: 400 } });
     await expect.element(card).not.toBeInTheDocument();
@@ -399,6 +423,16 @@ describe("canvas comments", () => {
     const list = page.getByRole("region", { name: "Comments" });
     // The agent's reply on "button" has not been read.
     await expect.element(list.getByRole("img", { name: "Unread" })).toBeVisible();
+    // Its pin says so in its name, as its dot shows; a read pin's name is its comment alone.
+    await expect.element(pin("Full-width, #1F6F4A fill, unread")).toBeVisible();
+    await expect
+      .element(
+        pin("Full-width, #1F6F4A fill, unread")
+          .element()
+          .querySelector<HTMLElement>("[data-comment-unread]"),
+      )
+      .toBeVisible();
+    await expect.element(pin("Headline feels too heavy")).toBeVisible();
     await list.getByRole("textbox", { name: "Search comments" }).fill("logo");
     await expect.element(list.getByText("Add the logo")).toBeVisible();
     await expect.element(list.getByText("Headline feels too heavy")).not.toBeInTheDocument();
@@ -452,7 +486,7 @@ describe("canvas comments", () => {
   it("keeps an archived work's threads readable without the actions the server refuses", async () => {
     localStorage.removeItem("synara:canvas-comments-show-resolved");
     await mount({ readOnly: true });
-    await pin("Full-width, #1F6F4A fill").click();
+    await pin("Full-width, #1F6F4A fill, unread").click();
     const card = page.getByRole("dialog", { name: "Sign in" });
     await expect.element(card.getByText("Updated fill and label color.")).toBeVisible();
     await expect.element(card.getByRole("button", { name: "Close" })).toBeVisible();

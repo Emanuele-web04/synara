@@ -11,6 +11,7 @@ import type { t as translate } from "~/i18n";
 import { contextMenuGroup } from "~/lib/contextMenuGroup";
 import { ensureNativeApi } from "~/nativeApi";
 import { CANVAS_PAGE_ICON_OPTIONS } from "./canvasPageIcons";
+import { canvasMenuShortcut } from "./editor/canvasShortcuts";
 import type { CanvasPageActions } from "./useCanvasPageActions";
 
 type IconAction = `icon:${CanvasPageIcon}` | "icon:none";
@@ -45,7 +46,12 @@ export async function showCanvasPageMenu(input: {
           },
         ]
       : [
-          { id: "rename", label: t("workspace:canvasRenamePage") },
+          // F2 renames the focused page row (the Pages list and the page switcher).
+          {
+            id: "rename",
+            label: t("workspace:canvasRenamePage"),
+            ...canvasMenuShortcut({ key: "f2" }),
+          },
           ...(pages.canAddDivider
             ? [{ id: "add-divider" as const, label: t("workspace:canvasAddDivider") }]
             : []),

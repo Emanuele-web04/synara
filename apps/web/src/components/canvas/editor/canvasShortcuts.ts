@@ -5,8 +5,8 @@
 //          tooltips and the app's shortcuts sheet read.
 // Layer: Canvas editor input
 // Exports: matchCanvasShortcut, canvasKeyOf, isCanvasKeyTarget, canvasShortcutLabel,
-//          canvasShortcutLabelFor, canvasShortcutSheetRows, canvasKeyOfPress,
-//          CANVAS_SHORTCUT_GUIDE, types
+//          canvasShortcutLabelFor, canvasMenuShortcut, canvasShortcutSheetRows,
+//          canvasKeyOfPress, CANVAS_SHORTCUT_GUIDE, types
 
 import type { KeybindingShortcut } from "@synara/contracts";
 import { formatShortcutLabel } from "~/keybindings";
@@ -777,22 +777,25 @@ const sameShortcut = (a: CanvasShortcut, b: CanvasShortcut) =>
   JSON.stringify(a) === JSON.stringify(b);
 
 /**
- * A guide press spelled for `platform`, or null when the platform has no such press: the
+ * A guide press as the app's keybinding shape, or null when `platform` has no such press: the
  * physical Ctrl key is a separate modifier only where ⌘ is the command key (macOS).
  */
-function pressLabel(pressed: CanvasShortcutPress, platform: string): string | null {
+function pressShortcut(pressed: CanvasShortcutPress, platform: string): KeybindingShortcut | null {
   if (pressed.ctrl && !isMacPlatform(platform)) return null;
-  return formatShortcutLabel(
-    {
-      key: pressed.key,
-      metaKey: false,
-      ctrlKey: pressed.ctrl ?? false,
-      shiftKey: pressed.shift ?? false,
-      altKey: pressed.alt ?? false,
-      modKey: pressed.mod ?? false,
-    },
-    platform,
-  );
+  return {
+    key: pressed.key,
+    metaKey: false,
+    ctrlKey: pressed.ctrl ?? false,
+    shiftKey: pressed.shift ?? false,
+    altKey: pressed.alt ?? false,
+    modKey: pressed.mod ?? false,
+  };
+}
+
+/** A guide press spelled for `platform`, or null when the platform has no such press. */
+function pressLabel(pressed: CanvasShortcutPress, platform: string): string | null {
+  const shortcut = pressShortcut(pressed, platform);
+  return shortcut ? formatShortcutLabel(shortcut, platform) : null;
 }
 
 /** The documented press of `shortcut`, spelled for this platform; null when it has none. */
@@ -802,6 +805,23 @@ export function canvasShortcutLabelFor(
 ): string | null {
   const found = CANVAS_SHORTCUT_GUIDE.find((item) => sameShortcut(item.shortcut, shortcut));
   return found ? pressLabel(found.press, platform) : null;
+}
+
+/**
+ * The key a context menu row shows (`ContextMenuItem.shortcut`): the documented press of a
+ * canvas shortcut, or a press the guide does not list (⌘V, which the browser's paste runs);
+ * an empty object when the platform has none, so it spreads into a row.
+ */
+export function canvasMenuShortcut(
+  shortcut: CanvasShortcut | CanvasShortcutPress,
+  platform: string = navigator.platform,
+): { shortcut?: KeybindingShortcut } {
+  const pressed =
+    "key" in shortcut
+      ? shortcut
+      : CANVAS_SHORTCUT_GUIDE.find((item) => sameShortcut(item.shortcut, shortcut))?.press;
+  const found = pressed ? pressShortcut(pressed, platform) : null;
+  return found ? { shortcut: found } : {};
 }
 
 /**

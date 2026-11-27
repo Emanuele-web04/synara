@@ -145,17 +145,20 @@ function acceleratorKey(key: string): string | null {
 /**
  * The Electron accelerator for a keybinding shortcut, or null when Electron cannot
  * express its key. Chords without Cmd/Ctrl/Alt (other than F-keys) also map to null:
- * as a menu accelerator they would swallow plain typing in the in-app browser.
+ * as a menu accelerator they would swallow plain typing in the in-app browser. A
+ * `displayOnly` accelerator (a context menu row naming its key, never registered) may
+ * be a plain key such as Backspace or `]`.
  */
 export function keybindingShortcutToAccelerator(
   shortcut: KeybindingShortcut,
   platform: NodeJS.Platform,
+  { displayOnly = false }: { displayOnly?: boolean } = {},
 ): string | null {
   const key = acceleratorKey(shortcut.key);
   if (!key) return null;
   const hasCommandModifier =
     shortcut.modKey || shortcut.metaKey || shortcut.ctrlKey || shortcut.altKey;
-  if (!hasCommandModifier && !FUNCTION_KEY_PATTERN.test(shortcut.key)) return null;
+  if (!displayOnly && !hasCommandModifier && !FUNCTION_KEY_PATTERN.test(shortcut.key)) return null;
 
   const isMac = platform === "darwin";
   const parts: string[] = [];

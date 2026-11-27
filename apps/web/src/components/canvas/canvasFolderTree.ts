@@ -1,10 +1,23 @@
 // FILE: canvasFolderTree.ts
 // Purpose: The library's folders as a tree in reading order (each folder followed by its
-//          subfolders, by title) with each one's depth, for the Move to menu's indented rows.
+//          subfolders, by title) with each one's depth, and the indent of a folder's row, for
+//          the folder pickers (the library's Move to menu, the folder field of the canvas dialog).
 // Layer: Canvas UI logic
-// Exports: canvasFolderTree
+// Exports: canvasFolderTree, canvasFolderRowIndent
 
 import type { CanvasFolder } from "@synara/contracts";
+import type { CSSProperties } from "react";
+
+/**
+ * A folder row's start padding: `base`, the row's own (a menu row's picker padding by default),
+ * plus 16 px a level.
+ */
+export const canvasFolderRowIndent = (
+  depth: number,
+  base = "var(--picker-option-px, 8px)",
+): CSSProperties => ({
+  paddingInlineStart: `calc(${base} + ${depth * 16}px)`,
+});
 
 /**
  * `folders` depth first: roots (and folders whose parent is not listed) at depth 0, each
