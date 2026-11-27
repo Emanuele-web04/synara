@@ -494,6 +494,12 @@ Antigravity shows native questions in the composer, including in Full Access. Fo
 sessions that identify Antigravity 1.5.0 or newer, steering sends the message to the active
 session and lets its child work continue. Older or unidentified runtimes use interrupt and queue.
 
+If a prompt fails with `ACP connection closed`, check the Antigravity CLI log for the same time.
+For a transport failure during a prompt, the local Synara server log records
+`antigravity.acp.prompt_transport_failed` with the available bytes on the Antigravity profile volume,
+when that measurement is available. If the CLI reports that the disk is full, free space on
+that volume before sending a follow-up in the same conversation.
+
 ### Provider-native subagents
 
 Antigravity shows native launch roles and prompts in the transcript. Child details appear when
