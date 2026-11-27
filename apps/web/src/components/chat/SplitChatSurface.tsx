@@ -16,7 +16,10 @@ import { Schema } from "effect";
 
 import { SplitPaneLayout } from "./SplitPaneLayout";
 import { ProviderIcon } from "../ProviderIcon";
+import { EnvironmentRow } from "./environment/EnvironmentRow";
 import { PanelStateMessage } from "./PanelStateMessage";
+import { SearchInput } from "../ui/search-input";
+import { MUTED_LABEL_TEXT_CLASS_NAME } from "~/surfaceStyles";
 import {
   ChatMountLoader,
   DeferredChatView,
@@ -288,6 +291,8 @@ function SplitPaneEmbeddedPanel(props: {
   );
 }
 
+// The empty pane's chat chooser: a filter field over plain rows, the same row the Environment
+// panel uses, so picking a chat reads like every other list in the app.
 function SplitPaneEmptyState(props: {
   onFocus: () => void;
   threads: readonly {
@@ -301,6 +306,22 @@ function SplitPaneEmptyState(props: {
   onSelectThread: (threadId: ThreadId) => void;
 }) {
   const { t } = useTranslation();
+  const [query, setQuery] = useState("");
+
+  const projectNameById = new Map(props.projects.map((project) => [project.id, project.name]));
+  const normalizedQuery = query.trim().toLowerCase();
+  const rows = props.threads
+    .map((thread) => ({
+      thread,
+      title: resolveThreadPickerTitle(thread.title),
+      projectName: projectNameById.get(thread.projectId) ?? "Project",
+    }))
+    .filter(
+      (row) =>
+        normalizedQuery.length === 0 ||
+        row.title.toLowerCase().includes(normalizedQuery) ||
+        row.projectName.toLowerCase().includes(normalizedQuery),
+    );
 
   return (
     <div
@@ -310,45 +331,33 @@ function SplitPaneEmptyState(props: {
       )}
       onMouseDown={props.onFocus}
     >
-      <div className="w-full max-w-sm space-y-4">
-        <p className="text-center text-ui-lg font-medium text-foreground/70">
-          {t("chat:selectAChat")}
-        </p>
-        <div className="max-h-[60vh] space-y-1 overflow-y-auto">
-          {props.threads.map((thread) => {
-            const isUsed = props.excludedThreadIds.has(thread.id);
-            const projectName =
-              props.projects.find((p) => p.id === thread.projectId)?.name ?? "Project";
-            return (
-              <button
-                key={thread.id}
-                type="button"
-                disabled={isUsed}
-                className={cn(
-                  "flex w-full items-center gap-3 rounded-lg border px-3 py-2 text-left transition-colors",
-                  isUsed
-                    ? "cursor-default border-border/30 opacity-35"
-                    : "border-[color:var(--color-border-light)] hover:bg-[var(--sidebar-accent)]",
-                )}
-                onClick={() => {
-                  if (!isUsed) props.onSelectThread(thread.id);
-                }}
-              >
-                <ProviderIcon
-                  provider={thread.modelSelection.provider}
-                  className="size-4 shrink-0"
-                />
-                <div className="min-w-0 flex-1">
-                  <div className="truncate text-ui-lg leading-snug font-medium text-foreground">
-                    {resolveThreadPickerTitle(thread.title)}
-                  </div>
-                  <div className="truncate text-ui leading-snug text-muted-foreground">
-                    {projectName}
-                  </div>
-                </div>
-              </button>
-            );
-          })}
+      <div className="flex min-h-0 w-full max-w-sm flex-col gap-2 pb-6">
+        <SearchInput
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder={t("chat:selectAChat")}
+          aria-label={t("chat:selectAChat")}
+        />
+        <div className="flex min-h-0 flex-col gap-0.5 overflow-y-auto">
+          {rows.map(({ thread, title, projectName }) => (
+            <EnvironmentRow
+              key={thread.id}
+              icon={<ProviderIcon provider={thread.modelSelection.provider} className="size-4" />}
+              label={title}
+              trailing={
+                <span className={cn("max-w-32 truncate", MUTED_LABEL_TEXT_CLASS_NAME)}>
+                  {projectName}
+                </span>
+              }
+              disabled={props.excludedThreadIds.has(thread.id)}
+              onClick={() => props.onSelectThread(thread.id)}
+            />
+          ))}
+          {rows.length === 0 ? (
+            <PanelStateMessage density="compact" fill="flex" className="py-6">
+              {t("common:noResults")}
+            </PanelStateMessage>
+          ) : null}
         </div>
       </div>
     </div>
