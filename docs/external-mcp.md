@@ -145,6 +145,28 @@ Creation requires an explicit `projectId`, `provider`, `model`, `prompt`, and st
 The default environment is a managed worktree and the default runtime is approval-required. Local
 checkout execution and full-access execution are independent, explicit scopes.
 
+## Terminal CLI
+
+Scripts and agents that can run a binary but not an MCP client can call the same paired integration
+with `synara task`. Each command is one `tools/call` to `/mcp/external` through the same discovery,
+runtime proof, and stored credential as the stdio bridge, so it gets exactly the integration's
+scopes, limits, and audit trail. Output is JSON on stdout; a tool error goes to stderr with exit
+code 1.
+
+```sh
+synara mcp pair --code <pairing-code>          # once, after creating the integration in Settings
+synara task overview
+synara task projects
+synara task capabilities --project <projectId>
+synara task create --project <projectId> --provider claudeAgent --model <slug> -m "Fix the flaky test"
+synara task wait --thread <threadId> --timeout-ms 600000
+synara task read --thread <threadId>
+```
+
+`task create` generates a `--request-id` when omitted; pass your own to retry safely without
+creating a second task. Use `--integration <id>` before the subcommand when more than one
+integration is paired, and `--home-dir` on the root command for a non-default data directory.
+
 ## Security and lifecycle
 
 - `/mcp/external` is available only while Synara itself is loopback-only. Configuring remote or
