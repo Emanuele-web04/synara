@@ -4487,38 +4487,38 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
       }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
     );
 
-    // Registering the child session opens a second (child) turn that carries the
-    // provider refs ingestion turns into a child thread, and seeds its brief.
+    // Ingestion sees the launch turn before the child starts its own turn.
     expect(result.map((event) => event.type)).toEqual([
       "session.started",
       "thread.started",
       "turn.started",
+      "item.updated",
       "turn.started",
       "item.completed",
-      "item.updated",
       "item.completed",
     ]);
     expect(result[3]).toMatchObject({
+      type: "item.updated",
+      turnId: result[2]?.turnId,
+      payload: {
+        itemType: "collab_agent_tool_call",
+        status: "inProgress",
+        title: "Find changelog implementation",
+      },
+    });
+    expect(result[4]).toMatchObject({
       type: "turn.started",
       providerRefs: {
         providerThreadId: "child-session-1",
         providerParentThreadId: "thread-child-session-tools",
       },
     });
-    expect(result[4]).toMatchObject({
+    expect(result[5]).toMatchObject({
       type: "item.completed",
       payload: {
         itemType: "user_message",
         status: "completed",
         detail: "Explore changelog files.",
-      },
-    });
-    expect(result[5]).toMatchObject({
-      type: "item.updated",
-      payload: {
-        itemType: "collab_agent_tool_call",
-        status: "inProgress",
-        title: "Find changelog implementation",
       },
     });
     expect(result[6]).toMatchObject({
@@ -5666,8 +5666,60 @@ describe("OpenCode background subagent tasks", () => {
     expect(events[0]).toMatchObject({
       payload: { taskId: "child-session-1", status: "completed" },
     });
+    expect(events[0]?.providerRefs).toBeUndefined();
     expect(events[1]).toMatchObject({ payload: { state: "completed" } });
   });
+
+  it.each([
+    ["succeeded", "completed", "completed"],
+    ["failed", "failed", "failed"],
+    ["interrupted", "stopped", "interrupted"],
+  ] as const)(
+    "settles the launcher task and child turn after a V2 execution %s",
+    async (outcome, taskStatus, turnState) => {
+      const eventQueue = createSubscribedEventQueue();
+      const runtime = createMockOpenCodeRuntime();
+      const childSessionId = "child-session-1";
+      const events = await runWithAdapter(runtime, eventQueue, (adapter, threadId) =>
+        Effect.gen(function* () {
+          const collected = yield* adapter.streamEvents.pipe(
+            Stream.takeUntil((event) => event.type === "thread.state.changed"),
+            Stream.runCollect,
+            Effect.forkChild,
+          );
+          yield* startFullAccess(adapter, threadId);
+          yield* sendTestTurn(adapter, threadId, "delegate this");
+          pushOpenCodePart(eventQueue, backgroundTaskToolPart(childSessionId));
+          eventQueue.push({
+            type: "synara.opencode.execution",
+            properties: { sessionID: childSessionId, outcome },
+          });
+          eventQueue.push({
+            type: "session.compacted",
+            properties: { sessionID: "opencode-session-1" },
+          });
+
+          const result = Array.from(yield* Fiber.join(collected));
+          eventQueue.close();
+          return result;
+        }),
+      );
+
+      expect(events.filter((event) => event.type === "turn.completed")).toEqual([
+        expect.objectContaining({
+          providerRefs: expect.objectContaining({ providerThreadId: childSessionId }),
+          payload: expect.objectContaining({ state: turnState }),
+        }),
+      ]);
+      const taskStarted = events.find((event) => event.type === "task.started");
+      const taskCompleted = events.find((event) => event.type === "task.completed");
+      expect(taskCompleted).toMatchObject({
+        turnId: taskStarted?.turnId,
+        payload: { taskId: childSessionId, status: taskStatus },
+      });
+      expect(taskCompleted?.providerRefs).toBeUndefined();
+    },
+  );
 
   it("tracks a resumed background child after its previous task settled", async () => {
     const eventQueue = createSubscribedEventQueue();
@@ -6193,5 +6245,47 @@ describe("OpenCode background subagent tasks", () => {
         event.providerRefs?.providerThreadId === "child-session-1",
     );
     expect(childStoppedTurn?.payload).toMatchObject({ state: "interrupted" });
+  });
+
+  it("releases the root session when a background child abort is interrupted", async () => {
+    const eventQueue = createSubscribedEventQueue();
+    const abortStarted = Deferred.makeUnsafe<void>();
+    const finishAbort = Deferred.makeUnsafe<void>();
+    const closeScope = vi.fn();
+    const runtime = createMockOpenCodeRuntime({
+      onScopeClose: closeScope,
+      abortBarrier: async () => {
+        Deferred.doneUnsafe(abortStarted, Effect.void);
+        await Effect.runPromise(Deferred.await(finishAbort));
+      },
+    });
+
+    await runWithAdapter(runtime, eventQueue, (adapter, threadId) =>
+      Effect.gen(function* () {
+        const childStarted = yield* Stream.runHead(
+          Stream.filter(
+            adapter.streamEvents,
+            (event) => event.type === "turn.started" && event.providerRefs !== undefined,
+          ),
+        ).pipe(Effect.forkChild);
+        yield* startFullAccess(adapter, threadId);
+        yield* sendTestTurn(adapter, threadId, "delegate this");
+        pushOpenCodePart(eventQueue, backgroundTaskToolPart("child-session-1"));
+        yield* Fiber.join(childStarted);
+
+        const stop = yield* adapter.stopSession(threadId).pipe(Effect.forkChild);
+        yield* Deferred.await(abortStarted);
+        yield* Fiber.interrupt(stop);
+        expect(runtime.abortCalls).toEqual([{ sessionID: "child-session-1" }]);
+        expect(closeScope).toHaveBeenCalledTimes(1);
+      }).pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            eventQueue.close();
+            Deferred.doneUnsafe(finishAbort, Effect.void);
+          }),
+        ),
+      ),
+    );
   });
 });

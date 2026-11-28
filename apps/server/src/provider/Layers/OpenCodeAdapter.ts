@@ -245,6 +245,8 @@ interface OpenCodeSessionContext extends OpenCodeMessageState<Part> {
     {
       readonly childSessionId: string | null;
       readonly toolUseId: string;
+      readonly launchContext: OpenCodeSessionContext;
+      readonly launchTurnId: TurnId | undefined;
       settled: boolean;
       settlementStatus?: "completed" | "failed" | "stopped";
     }
@@ -1461,26 +1463,30 @@ const stopOpenCodeContext = Effect.fn("stopOpenCodeContext")(function* (
   context: OpenCodeSessionContext,
   beforeRelease?: Effect.Effect<void>,
 ) {
-  if (yield* Ref.getAndSet(context.stopped, true)) {
-    return;
-  }
-  // Child sessions belong to this runtime; their provider work must stop too.
-  yield* Effect.forEach(
-    [...context.subagentSessions.values()],
-    (child) =>
-      runOpenCodeSdk("session.abort", () =>
-        child.client.session.abort({ sessionID: child.openCodeSessionId }),
-      ).pipe(Effect.ignore({ log: true })),
-    { concurrency: "unbounded", discard: true },
-  );
-
-  yield* runOpenCodeSdk("session.abort", () =>
-    context.client.session.abort({ sessionID: context.openCodeSessionId }),
-  ).pipe(
-    Effect.ignore({ log: true }),
-    // A cancelled abort still retires the stopped context before recovery can
-    // replace it. Otherwise its managed server and gateway lease are abandoned.
-    Effect.ensuring(releaseOpenCodeSessionResources(context, beforeRelease)),
+  yield* Effect.uninterruptibleMask((restore) =>
+    Effect.gen(function* () {
+      if (yield* Ref.getAndSet(context.stopped, true)) {
+        return;
+      }
+      yield* Effect.gen(function* () {
+        yield* Effect.forEach(
+          [...context.subagentSessions.values()],
+          (child) =>
+            runOpenCodeSdk("session.abort", (signal) =>
+              child.client.session.abort({ sessionID: child.openCodeSessionId }, { signal }),
+            ).pipe(Effect.ignore({ log: true })),
+          { concurrency: "unbounded", discard: true },
+        );
+        yield* runOpenCodeSdk("session.abort", (signal) =>
+          context.client.session.abort({ sessionID: context.openCodeSessionId }, { signal }),
+        ).pipe(Effect.ignore({ log: true }));
+      }).pipe(
+        restore,
+        // Once marked stopped, cancellation of any provider abort must still
+        // release the managed server, event reader, and gateway lease.
+        Effect.ensuring(releaseOpenCodeSessionResources(context, beforeRelease)),
+      );
+    }),
   );
 });
 
@@ -1635,10 +1641,10 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         // a later authoritative failure visible instead of freezing success.
         task.settled = true;
         task.settlementStatus = input.status;
-        yield* emit(context, {
+        yield* emit(task.launchContext, {
           ...buildEventBase({
-            threadId: context.session.threadId,
-            turnId: context.activeTurnId,
+            threadId: task.launchContext.session.threadId,
+            turnId: task.launchTurnId,
             raw: input.raw,
           }),
           type: "task.completed",
@@ -2588,7 +2594,8 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                 ...(event.properties.message ? { summary: event.properties.message } : {}),
                 raw: event,
               });
-            } else if (turnId) {
+            }
+            if (turnId && (backgroundTaskId === undefined || context.subagentRefs !== undefined)) {
               if (context.nativeTranscriptNeedsReconciliation) {
                 const snapshotsExit = yield* Effect.exit(loadCurrentMessageSnapshots(context));
                 if (Exit.isFailure(snapshotsExit)) {
@@ -2806,36 +2813,6 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
               const isSubagentChild =
                 subagentSpawn !== null &&
                 subagentSpawn.childSessionId !== context.openCodeSessionId;
-              if (isSubagentChild && subagentSpawn) {
-                // A task tool created an OpenCode child session: route it as a
-                // Synara child thread instead of only a background task. Register
-                // the child context, open its turn, and seed its brief on first
-                // sight; the background-task bookkeeping below still runs so the
-                // subagent keeps its own task lifecycle and status.
-                const alreadyRegistered = context.subagentSessions.has(
-                  subagentSpawn.childSessionId,
-                );
-                const childContext = ensureSubagentSession(context, subagentSpawn.childSessionId);
-                if (!alreadyRegistered) {
-                  yield* ensureSubagentTurn(childContext);
-                  if (subagentSpawn.prompt !== undefined) {
-                    yield* emit(childContext, {
-                      ...buildEventBase({
-                        threadId: childContext.session.threadId,
-                        itemId: `subagent-brief:${subagentSpawn.childSessionId}`,
-                        raw: event,
-                      }),
-                      type: "item.completed",
-                      payload: {
-                        itemType: "user_message",
-                        status: "completed" as const,
-                        title: "Subagent brief",
-                        detail: subagentSpawn.prompt,
-                      },
-                    });
-                  }
-                }
-              }
               {
                 const backgroundTaskStart = detectOpenCodeBackgroundTaskStart(part);
                 const previousBackgroundTask =
@@ -2851,6 +2828,8 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                   context.backgroundTasks.set(backgroundTaskStart.taskId, {
                     childSessionId: backgroundTaskStart.childSessionId,
                     toolUseId: part.callID,
+                    launchContext: context,
+                    launchTurnId: turnId,
                     settled: false,
                   });
                   if (backgroundTaskStart.childSessionId !== null) {
@@ -2956,6 +2935,28 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                 payload,
               };
               yield* emit(context, runtimeEvent);
+              if (isSubagentChild && !context.subagentSessions.has(subagentSpawn.childSessionId)) {
+                // Ingestion needs the launch item before the first child event
+                // to record the launching thread and turn.
+                const childContext = ensureSubagentSession(context, subagentSpawn.childSessionId);
+                yield* ensureSubagentTurn(childContext);
+                if (subagentSpawn.prompt !== undefined) {
+                  yield* emit(childContext, {
+                    ...buildEventBase({
+                      threadId: childContext.session.threadId,
+                      itemId: `subagent-brief:${subagentSpawn.childSessionId}`,
+                      raw: event,
+                    }),
+                    type: "item.completed",
+                    payload: {
+                      itemType: "user_message",
+                      status: "completed",
+                      title: "Subagent brief",
+                      detail: subagentSpawn.prompt,
+                    },
+                  });
+                }
+              }
             }
 
             if (part.type === "compaction") {
