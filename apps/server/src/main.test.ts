@@ -935,4 +935,117 @@ it.layer(testLayer)("server CLI command", (it) => {
       assert.equal(start.mock.calls.length, 0);
     }),
   );
+
+  it.effect("starts in web mode and prints a secret-free summary for `synara serve`", () =>
+    Effect.gen(function* () {
+      const flagHome = makeTempHome("synara-main-serve-");
+      const output: string[] = [];
+      const stdout = vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
+        output.push(String(chunk));
+        return true;
+      });
+      try {
+        yield* runCli(
+          [
+            "serve",
+            "--port",
+            "4123",
+            "--host",
+            "127.0.0.1",
+            "--home-dir",
+            flagHome,
+            "--auth-token",
+            "serve-secret",
+            "--no-browser",
+          ],
+          {
+            SYNARA_MODE: "desktop",
+          },
+        );
+      } finally {
+        stdout.mockRestore();
+      }
+
+      assert.equal(start.mock.calls.length, 1);
+      assert.equal(resolvedConfig?.mode, "web");
+      assert.equal(resolvedConfig?.port, 4123);
+      assert.equal(resolvedConfig?.host, "127.0.0.1");
+      assert.equal(resolvedConfig?.baseDir, flagHome);
+      assert.equal(resolvedConfig?.noBrowser, true);
+      assert.equal(resolvedConfig?.authToken, "serve-secret");
+      const rendered = output.join("");
+      assert.include(rendered, "Synara web server listening");
+      assert.include(rendered, "URL: http://127.0.0.1:4123");
+      assert.include(rendered, `Data: ${flagHome}`);
+      assert.notInclude(rendered, "serve-secret");
+    }),
+  );
+
+  it.effect("accepts root flags placed before `synara serve`", () =>
+    Effect.gen(function* () {
+      const flagHome = makeTempHome("synara-main-serve-prefix-");
+      const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+      try {
+        yield* runCli(["--home-dir", flagHome, "--port", "4124", "serve", "--no-browser"]);
+      } finally {
+        stdout.mockRestore();
+      }
+
+      assert.equal(start.mock.calls.length, 1);
+      assert.equal(resolvedConfig?.mode, "web");
+      assert.equal(resolvedConfig?.port, 4124);
+      assert.equal(resolvedConfig?.baseDir, flagHome);
+    }),
+  );
+
+  it.effect("rejects explicit `--mode desktop` on `synara serve`", () =>
+    Effect.gen(function* () {
+      const error = yield* Effect.flip(runCli(["serve", "--mode", "desktop"]));
+
+      assert.equal(start.mock.calls.length, 0);
+      assert.match(String(error), /always runs in web mode/);
+    }),
+  );
+
+  it.effect("prints the startup pairing URL for `synara serve` remote access", () =>
+    Effect.gen(function* () {
+      const output: string[] = [];
+      const stdout = vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
+        output.push(String(chunk));
+        return true;
+      });
+      try {
+        yield* runCli([
+          "serve",
+          "--host",
+          "0.0.0.0",
+          "--port",
+          "4125",
+          "--auth-token",
+          "remote-secret",
+          "--public-url",
+          "https://synara.example.test",
+          "--no-browser",
+        ]);
+      } finally {
+        stdout.mockRestore();
+      }
+
+      assert.equal(start.mock.calls.length, 1);
+      const rendered = output.join("");
+      assert.include(rendered, "Listen: http://0.0.0.0:4125");
+      assert.include(rendered, "Public URL: https://synara.example.test");
+      assert.match(rendered, /Pairing URL: https:\/\/synara\.example\.test\/pair#token=/);
+      assert.notInclude(rendered, "remote-secret");
+    }),
+  );
+
+  it.effect("enforces remote access policy for `synara serve`", () =>
+    Effect.gen(function* () {
+      const error = yield* Effect.flip(runCli(["serve", "--host", "0.0.0.0", "--no-browser"]));
+
+      assert.equal(start.mock.calls.length, 0);
+      assert.match(String(error), /Refusing to bind Synara to non-loopback host 0\.0\.0\.0/);
+    }),
+  );
 });

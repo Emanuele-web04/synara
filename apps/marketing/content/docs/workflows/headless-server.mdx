@@ -55,10 +55,10 @@ Keep the generated dependency directory beside the extracted `package.json` and 
 ### Start loopback-only first
 
 ```bash
-node dist/index.mjs --no-browser --home-dir /absolute/path/to/synara-data
+node dist/index.mjs serve --no-browser --home-dir /absolute/path/to/synara-data
 ```
 
-Synara binds to `127.0.0.1` unless you explicitly choose a different host. The data directory stores server state separately from the extracted application, which makes replacing the release files safer.
+Synara binds to `127.0.0.1` unless you explicitly choose a different host, prints the listening URL and active data directory, and serves the built web client. The data directory stores server state separately from the extracted application, which makes replacing the release files safer.
 
 </Step>
 </Steps>
