@@ -97,10 +97,10 @@ export const SIDEBAR_THREAD_ROW_FIRST_LINE_CENTER_CLASS_NAME =
 export const SIDEBAR_CHILD_STEM_CLASS_NAME =
   "pointer-events-none absolute z-10 border-foreground/14";
 
-/** Width of the child-count chip (`SidebarChildThreadsChip`) at one digit. */
+/** Width of the fold toggle (`SidebarChildThreadsToggle`). */
 export const SIDEBAR_CHILD_CHIP_WIDTH_PX = 18;
 
-/** Gap between the child-count chip and the provider glyph it precedes. */
+/** Gap between the fold toggle and the provider glyph it precedes. */
 export const SIDEBAR_CHILD_CHIP_GAP_PX = 4;
 
 /** Indent per level for agent-created child threads, under the parent's title. */

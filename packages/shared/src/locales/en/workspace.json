@@ -1048,6 +1048,8 @@
   "childThreadsUnread_other": "{{count}} new",
   "childThreadsWorking_one": "{{count}} running",
   "childThreadsWorking_other": "{{count}} running",
+  "childThreadsIdle_one": "{{count}} idle",
+  "childThreadsIdle_other": "{{count}} idle",
   "childThreadsDoneCount_one": "+{{count}} done",
   "childThreadsDoneCount_other": "+{{count}} done",
   "introducingSynaraForIphone": "Introducing Synara for iPhone",
