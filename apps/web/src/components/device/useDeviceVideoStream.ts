@@ -4,9 +4,9 @@
 // Exports: useDeviceVideoStream
 // Depends on: DevicePanel.logic frame gate, deviceFrameSource transport
 
-import type { DeviceUdid } from "@synara/contracts";
+import type { DeviceGeometry, DeviceUdid } from "@synara/contracts";
 import type { DeviceFrame, DeviceFrameTouchPhase } from "@synara/shared/deviceFrame";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useEffectEvent, useRef, useState } from "react";
 
 import {
   createDeviceFrameGateState,
@@ -90,15 +90,21 @@ export function useDeviceVideoStream(input: {
   /** Null unsubscribes and tears the decoder down. */
   readonly udid: DeviceUdid | null;
   readonly enabled: boolean;
+  readonly onTouchError: () => void;
 }): {
   readonly status: DeviceVideoStatus;
   readonly dimensions: DeviceVideoDimensions | null;
+  readonly geometry: DeviceGeometry | null;
   /** Send a live touch event over the open frame socket; returns false if unavailable. */
   readonly sendTouch: (phase: DeviceFrameTouchPhase, x: number, y: number) => boolean;
 } {
   const { canvasRef, udid, enabled } = input;
   const [status, setStatus] = useState<DeviceVideoStatus>({ kind: "idle" });
   const [dimensions, setDimensions] = useState<DeviceVideoDimensions | null>(null);
+  const [geometry, setGeometry] = useState<{ udid: DeviceUdid; value: DeviceGeometry } | null>(
+    null,
+  );
+  const reportTouchError = useEffectEvent(input.onTouchError);
 
   // Generation guards every async callback: a decoder output or socket message
   // from a torn-down stream must not paint over the current one.
@@ -140,7 +146,18 @@ export function useDeviceVideoStream(input: {
     const openFrameSource = () => {
       const next = createDeviceFrameSource({
         udid,
-        handlers: { onFrame: handleFrame, onReset: handleReset },
+        handlers: {
+          onFrame: handleFrame,
+          onReset: handleReset,
+          onControl: (message) => {
+            if (!isCurrent() || disposed || paused) return;
+            if (message.type === "device.frame.geometry") {
+              setGeometry({ udid, value: message.geometry });
+            } else {
+              reportTouchError();
+            }
+          },
+        },
       });
       sourceRef.current = next;
       return next;
@@ -399,5 +416,10 @@ export function useDeviceVideoStream(input: {
     };
   }, [canvasRef, udid, enabled]);
 
-  return { status, dimensions, sendTouch };
+  return {
+    status,
+    dimensions,
+    geometry: geometry?.udid === udid ? geometry.value : null,
+    sendTouch,
+  };
 }

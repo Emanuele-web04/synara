@@ -204,11 +204,19 @@ export default function DevicePanel(props: {
   const {
     status: videoStatus,
     dimensions,
+    geometry: streamedGeometry,
     sendTouch,
   } = useDeviceVideoStream({
     canvasRef,
     udid: streamEnabled && attachedDevice ? attachedDevice.udid : null,
     enabled: streamEnabled,
+    onTouchError: () => {
+      toastManager.add({
+        type: "error",
+        title: t("computer:theSimulatorDidNotAcceptThatInput"),
+        description: "The input could not be delivered.",
+      });
+    },
   });
 
   const pickerEntries = useMemo(
@@ -437,15 +445,15 @@ export default function DevicePanel(props: {
     moveRaf: number | null;
   } | null>(null);
 
+  const attachedUdid = attachedDevice?.udid ?? null;
   useEffect(() => {
     return () => {
       const active = activeTouchRef.current;
       activeTouchRef.current = null;
       if (!active) return;
       if (active.moveRaf !== null) cancelAnimationFrame(active.moveRaf);
-      if (active.live) sendTouch("up", active.lastPoint.x, active.lastPoint.y);
     };
-  }, [sendTouch]);
+  }, [attachedUdid, streamEnabled]);
 
   // The accessibility tree's root frame is the device's screen in points, which
   // is the unit the backend injects input in. Frames arrive in pixels (3x on a
@@ -455,7 +463,7 @@ export default function DevicePanel(props: {
     readonly width: number;
     readonly height: number;
   } | null>(null);
-  const attachedUdid = attachedDevice?.udid ?? null;
+  const geometry = streamedGeometry ?? attachedDevice?.geometry;
 
   // Only a fallback: when the descriptor carries geometry, resolveDevicePointSize
   // prefers it and this round trip would be spent on a value we discard.
@@ -484,7 +492,7 @@ export default function DevicePanel(props: {
   const devicePointSize = resolveDevicePointSize({
     framePixelWidth: dimensions?.width ?? 0,
     framePixelHeight: dimensions?.height ?? 0,
-    geometry: attachedDevice?.geometry,
+    geometry,
     measured: measuredPointSize,
   });
 
@@ -492,7 +500,7 @@ export default function DevicePanel(props: {
   // than the stream's frame dimensions so the chassis keeps its shape before
   // the first frame arrives and across stream restarts.
   const deviceKind = attachedDevice ? deviceKindFor(attachedDevice) : "iPhone";
-  const deviceScale = attachedDevice?.geometry?.scale ?? RESOLUTION_SCALE[deviceKind];
+  const deviceScale = geometry?.scale ?? RESOLUTION_SCALE[deviceKind];
   const devicePixelSize = devicePointSize
     ? {
         width: Math.round(devicePointSize.width * deviceScale),
@@ -507,7 +515,7 @@ export default function DevicePanel(props: {
       const pointSize = resolveDevicePointSize({
         framePixelWidth: dimensions.width,
         framePixelHeight: dimensions.height,
-        geometry: attachedDevice?.geometry,
+        geometry,
         measured: measuredPointSize,
       });
       // offsetX/offsetY rather than clientX minus the bounding rect: the canvas
@@ -528,7 +536,7 @@ export default function DevicePanel(props: {
         event.offsetY,
       );
     },
-    [dimensions, measuredPointSize, attachedDevice?.geometry],
+    [dimensions, measuredPointSize, geometry],
   );
 
   const handlePointerDown = useCallback(

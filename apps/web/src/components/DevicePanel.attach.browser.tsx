@@ -24,7 +24,14 @@ const transport = vi.hoisted(() => ({
 }));
 
 vi.mock("~/nativeApi", () => ({
-  ensureNativeApi: () => ({ device: { getThreadState: transport.getThreadState } }),
+  ensureNativeApi: () => ({
+    device: {
+      getThreadState: transport.getThreadState,
+      describeUi: async () => {
+        throw new Error("Accessibility unavailable");
+      },
+    },
+  }),
 }));
 vi.mock("~/lib/deviceFrameSource", () => ({
   createDeviceFrameSource: (options: DeviceFrameSourceOptions) => {
@@ -225,9 +232,16 @@ describe("simulator attach first frame", () => {
       .toBeVisible();
   });
 
-  it("streams live touch down, move, and up directly on the frame socket", async () => {
-    await mount(state(SLIM_2, 1, null));
+  it("streams touch in native points even without descriptor or accessibility geometry", async () => {
+    await mount({
+      ...state(SLIM_2, 1, null),
+      devices: devices.map(({ geometry: _geometry, ...device }) => device),
+    });
     const source = transport.sources[0]!;
+    source.handlers.onControl?.({
+      type: "device.frame.geometry",
+      geometry: { pointWidth: 402, pointHeight: 874, scale: 3 },
+    });
     prime(source);
     await expect.poll(() => document.querySelector("canvas")?.width).toBe(40);
     const canvas = document.querySelector("canvas")!;
@@ -243,7 +257,10 @@ describe("simulator attach first frame", () => {
       }),
     );
     expect(source.sendTouch).toHaveBeenCalledTimes(1);
-    expect(source.sendTouch.mock.calls[0]?.[0]).toBe("down");
+    const [phase, x, y] = source.sendTouch.mock.calls[0]!;
+    expect(phase).toBe("down");
+    expect(x).toBeCloseTo(201, -1);
+    expect(y).toBeCloseTo(437, -1);
 
     canvas.dispatchEvent(
       new PointerEvent("pointermove", {

@@ -17,6 +17,7 @@
  *
  * @module device/deviceFrameRoute
  */
+import type { DeviceFrameServerMessage, DeviceGeometry } from "@synara/contracts";
 import {
   DEVICE_FRAME_RESYNC_MESSAGE,
   DEVICE_FRAME_TOUCH_MESSAGE,
@@ -119,6 +120,94 @@ export function makeDeviceFrameSink(options: {
   return makeFrameSink(options);
 }
 
+type LiveTouch = Omit<Extract<DeviceFrameClientMessage, { kind: "touch" }>, "kind">;
+type TouchPoint = Pick<LiveTouch, "x" | "y">;
+
+/** Order contact boundaries across panes and keep at most one queued move per contact. */
+class DeviceFrameTouches {
+  connections = 0;
+  private tail = Promise.resolve();
+  private contact: { owner: symbol; point: TouchPoint; holding: boolean } | null = null;
+  private requestedOwner: symbol | null = null;
+  private pendingMove: { owner: symbol; point: TouchPoint } | null = null;
+
+  constructor(private readonly deliver: (input: LiveTouch) => Promise<void>) {}
+
+  private enqueue(deliver: () => Promise<void>, onError: () => void): Promise<void> {
+    const next = this.tail.then(deliver).catch(onError);
+    this.tail = next;
+    return next;
+  }
+
+  private async release(point?: TouchPoint): Promise<void> {
+    if (!this.contact) return;
+    // Retain an uncertain contact so close or the next down can retry its release.
+    this.contact.holding = false;
+    await this.deliver({ phase: "up", ...(point ?? this.contact.point) });
+    this.contact = null;
+  }
+
+  touch(
+    owner: symbol,
+    { phase, x, y }: LiveTouch,
+    isOpen: () => boolean,
+    onError: () => void,
+  ): void {
+    const point = { x, y };
+    if (phase === "move") {
+      if (this.requestedOwner !== owner) return;
+      if (this.pendingMove?.owner === owner) {
+        this.pendingMove.point = point;
+        return;
+      }
+      const move = { owner, point };
+      this.pendingMove = move;
+      void this.enqueue(async () => {
+        if (this.pendingMove === move) this.pendingMove = null;
+        if (!isOpen() || this.contact?.owner !== owner || !this.contact.holding) return;
+        try {
+          await this.deliver({ phase, ...move.point });
+          this.contact.point = move.point;
+        } catch (error) {
+          await this.release().catch(() => undefined);
+          throw error;
+        }
+      }, onError);
+      return;
+    }
+
+    if (phase === "down") this.requestedOwner = owner;
+    else if (this.requestedOwner === owner) this.requestedOwner = null;
+    this.pendingMove = null;
+    void this.enqueue(async () => {
+      if (!isOpen()) return;
+      if (phase === "up") {
+        if (this.contact?.owner === owner) await this.release(point);
+        return;
+      }
+      await this.release();
+      if (!isOpen()) return;
+      const contact = { owner, point, holding: false };
+      this.contact = contact;
+      try {
+        await this.deliver({ phase, ...point });
+        contact.holding = true;
+      } catch (error) {
+        await this.release().catch(() => undefined);
+        throw error;
+      }
+    }, onError);
+  }
+
+  disconnect(owner: symbol, onError: () => void): Promise<void> {
+    if (this.requestedOwner === owner) this.requestedOwner = null;
+    if (this.pendingMove?.owner === owner) this.pendingMove = null;
+    return this.enqueue(async () => {
+      if (this.contact?.owner === owner) await this.release();
+    }, onError);
+  }
+}
+
 /**
  * Mount `GET /ws/device-frames?udid=...`. Requests without a device, or on a
  * host with no device engine, are refused before the upgrade.
@@ -141,6 +230,7 @@ export function makeDeviceFrameRouteLayer<R = never, E = never>(options: {
   return Layer.effectDiscard(
     Effect.gen(function* () {
       const router = yield* HttpRouter.HttpRouter;
+      const touchesByDevice = new Map<string, DeviceFrameTouches>();
       yield* router.add(
         "GET",
         DEVICE_FRAME_WS_PATH,
@@ -164,17 +254,47 @@ export function makeDeviceFrameRouteLayer<R = never, E = never>(options: {
             const byteStream = frameSocketByteStream(request);
             const socket = yield* request.upgrade;
             const writer = yield* socket.writer;
+            const { manager } = deviceService.value;
+            const deviceKey = udid.toLowerCase();
+            let touches = touchesByDevice.get(deviceKey);
+            if (!touches) {
+              touches = new DeviceFrameTouches((input) => manager.touch(udid, input));
+              touchesByDevice.set(deviceKey, touches);
+            }
+            const contactOwner = Symbol();
+            touches.connections += 1;
             let open = true;
+            let lastGeometry: DeviceGeometry | null = null;
+            const sendControl = (message: DeviceFrameServerMessage) =>
+              Effect.runPromise(writer(JSON.stringify(message))).catch(() => undefined);
+            const sendTouchError = () => {
+              if (open) void sendControl({ type: "device.frame.touch-error" });
+            };
             const sink = makeDeviceFrameSink({
-              send: (bytes) => Effect.runPromise(writer(bytes)).catch(() => undefined),
+              send: (bytes) => {
+                const geometry = manager.frameGeometry(udid);
+                // Announce the helper's point bounds independently of the encoded scale.
+                if (geometry && geometry !== lastGeometry) {
+                  lastGeometry = geometry;
+                  void sendControl({ type: "device.frame.geometry", geometry });
+                }
+                return Effect.runPromise(writer(bytes)).catch(() => undefined);
+              },
               isOpen: () => open,
               byteStream,
             });
-            const unsubscribe = deviceService.value.manager.subscribeFrames(udid, sink);
+            const unsubscribe = manager.subscribeFrames(udid, sink);
             yield* Effect.addFinalizer(() =>
-              Effect.sync(() => {
+              Effect.promise(async () => {
                 open = false;
+                await touches.disconnect(contactOwner, () => {
+                  Effect.runFork(
+                    Effect.logDebug("Could not release simulator touch on disconnect"),
+                  );
+                });
                 unsubscribe();
+                touches.connections -= 1;
+                if (touches.connections === 0) touchesByDevice.delete(deviceKey);
               }),
             );
             // Client messages on the uncompressed frame socket carry keyframe
@@ -186,15 +306,11 @@ export function makeDeviceFrameRouteLayer<R = never, E = never>(options: {
               if (decoded === null) return;
               if (decoded.kind === "resync") {
                 Effect.runFork(
-                  Effect.promise(() =>
-                    deviceService.value.manager.requestKeyframe(udid).catch(() => undefined),
-                  ),
+                  Effect.promise(() => manager.requestKeyframe(udid).catch(() => undefined)),
                 );
                 return;
               }
-              void deviceService.value.manager
-                .touch(udid, { phase: decoded.phase, x: decoded.x, y: decoded.y })
-                .catch(() => undefined);
+              touches.touch(contactOwner, decoded, sink.isOpen, sendTouchError);
             });
             return HttpServerResponse.empty();
           });

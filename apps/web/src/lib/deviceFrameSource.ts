@@ -14,7 +14,8 @@ import {
   type DeviceFrame,
   type DeviceFrameTouchPhase,
 } from "@synara/shared/deviceFrame";
-import type { DeviceUdid } from "@synara/contracts";
+import { DeviceFrameServerMessage, type DeviceUdid } from "@synara/contracts";
+import { Schema } from "effect";
 
 import {
   binaryFrameSocketUrl,
@@ -26,6 +27,7 @@ import {
 export interface DeviceFrameSourceHandlers {
   readonly onFrame: (frame: DeviceFrame) => void;
   readonly onReset: (reason: DeviceFrameSourceResetReason) => void;
+  readonly onControl?: (message: DeviceFrameServerMessage) => void;
 }
 
 export type DeviceFrameSourceResetReason = FrameSourceResetReason;
@@ -67,22 +69,46 @@ export function deviceFrameSocketUrl(input: {
   });
 }
 
+const decodeControl = Schema.decodeUnknownOption(Schema.fromJsonString(DeviceFrameServerMessage));
+
 export function createDeviceFrameSource(options: DeviceFrameSourceOptions): DeviceFrameSource {
+  let active: { readonly x: number; readonly y: number } | null = null;
   const base = createBinaryFrameSource({
     streamId: options.udid,
     streamIdParam: DEVICE_FRAME_WS_UDID_PARAM,
     wsPath: DEVICE_FRAME_WS_PATH,
     resyncMessage: DEVICE_FRAME_RESYNC_MESSAGE,
-    handlers: options.handlers,
+    handlers: {
+      onFrame: options.handlers.onFrame,
+      onReset: (reason) => {
+        if (reason === "closed") active = null;
+        options.handlers.onReset(reason);
+      },
+      onText: (text) => {
+        const decoded = decodeControl(text);
+        if (decoded._tag === "Some") options.handlers.onControl?.(decoded.value);
+      },
+    },
     decode: decodeDeviceFrame,
     ...(options.createSocket !== undefined ? { createSocket: options.createSocket } : {}),
     ...(options.explicitUrl !== undefined ? { explicitUrl: options.explicitUrl } : {}),
     ...(options.now !== undefined ? { now: options.now } : {}),
     resyncCooldownMs: options.resyncCooldownMs ?? DEVICE_FRAME_RESYNC_COOLDOWN_MS,
   });
+  const sendTouch: DeviceFrameSource["sendTouch"] = (phase, x, y) => {
+    // A pointer held across reconnect belongs to the old socket.
+    if (phase !== "down" && active === null) return false;
+    if (!base.sendJson({ type: DEVICE_FRAME_TOUCH_MESSAGE, phase, x, y })) return false;
+    active = phase === "up" ? null : { x, y };
+    return true;
+  };
   return {
     requestResync: base.requestResync,
-    sendTouch: (phase, x, y) => base.sendJson({ type: DEVICE_FRAME_TOUCH_MESSAGE, phase, x, y }),
-    close: base.close,
+    sendTouch,
+    close: () => {
+      // Effect cleanup closes the source before the pane can handle pointer-up.
+      if (active !== null) sendTouch("up", active.x, active.y);
+      base.close();
+    },
   };
 }

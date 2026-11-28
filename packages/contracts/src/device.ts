@@ -79,6 +79,13 @@ export type DeviceBootSource = typeof DeviceBootSource.Type;
 export const DeviceFamily = Schema.Literals(["phone", "tablet"]);
 export type DeviceFamily = typeof DeviceFamily.Type;
 
+export const DeviceGeometry = Schema.Struct({
+  pointWidth: Schema.Finite.check(Schema.isGreaterThan(0)),
+  pointHeight: Schema.Finite.check(Schema.isGreaterThan(0)),
+  scale: Schema.Finite.check(Schema.isGreaterThan(0)),
+});
+export type DeviceGeometry = typeof DeviceGeometry.Type;
+
 export const DeviceDescriptor = Schema.Struct({
   platform: DevicePlatform,
   udid: DeviceUdid,
@@ -105,17 +112,9 @@ export const DeviceDescriptor = Schema.Struct({
    * Optional because a backend that cannot read the profile (or a fake one)
    * still lists devices, and requiring it would break those listings.
    */
-  geometry: Schema.optional(
-    Schema.Struct({
-      pointWidth: Schema.Finite.check(Schema.isGreaterThan(0)),
-      pointHeight: Schema.Finite.check(Schema.isGreaterThan(0)),
-      scale: Schema.Finite.check(Schema.isGreaterThan(0)),
-    }),
-  ),
+  geometry: Schema.optional(DeviceGeometry),
 });
 export type DeviceDescriptor = typeof DeviceDescriptor.Type;
-
-export type DeviceGeometry = NonNullable<DeviceDescriptor["geometry"]>;
 
 /** Alias kept because the pane talks about "device state" while the manager stores descriptors. */
 export const DeviceState = DeviceDescriptor;
@@ -691,6 +690,13 @@ export const DEVICE_FRAME_FLAG_CODEC_CONFIG = 0b0000_0010;
 /** Bytes before the variable-length device id. */
 export const DEVICE_FRAME_HEADER_FIXED_BYTES = 17;
 export const DEVICE_FRAME_MAX_DEVICE_ID_BYTES = 255;
+
+/** Sparse text control messages carried alongside the H.264 envelopes. */
+export const DeviceFrameServerMessage = Schema.Union([
+  Schema.Struct({ type: Schema.Literal("device.frame.geometry"), geometry: DeviceGeometry }),
+  Schema.Struct({ type: Schema.Literal("device.frame.touch-error") }),
+]);
+export type DeviceFrameServerMessage = typeof DeviceFrameServerMessage.Type;
 
 export const DeviceFrameHeader = Schema.Struct({
   deviceId: DeviceUdid,

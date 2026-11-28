@@ -52,6 +52,7 @@ interface BinaryFrameSourceOptions<Frame> {
   readonly resyncMessage: string;
   readonly handlers: {
     readonly onFrame: (frame: Frame) => void;
+    readonly onText?: (text: string) => void;
     /**
      * The socket dropped. The pane resets its decoder because the next
      * connection starts a new stream generation with its own parameter sets.
@@ -163,9 +164,11 @@ export function createBinaryFrameSource<Frame>(
 
   socket.addEventListener("message", ((event: { data: unknown }) => {
     if (closed) return;
+    if (typeof event.data === "string") {
+      options.handlers.onText?.(event.data);
+      return;
+    }
     const bytes = frameBytes(event.data);
-    // Text on this socket is a protocol violation, not a frame; ignoring it
-    // keeps a stray server log line from tearing down a healthy stream.
     if (!bytes) return;
 
     const result = options.decode(bytes);

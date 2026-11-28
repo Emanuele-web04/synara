@@ -33,6 +33,7 @@ import {
   type DeviceAttachPhase,
   type DeviceAvailability,
   type DeviceBootResult,
+  type DeviceGeometry,
   type DeviceDescribeUiResult,
   type DeviceDescriptor,
   type DeviceEvent,
@@ -771,7 +772,7 @@ export class DeviceManager {
     input: { readonly phase: DeviceTouchPhase; readonly x: number; readonly y: number },
     options?: DeviceInputOptions,
   ): Promise<void> {
-    if (!this.backend.touch) return;
+    if (!this.backend.touch) throw new DeviceBackendError("Live simulator input is unavailable.");
     await this.withDeviceAction(udid, () =>
       this.backend.touch!(udid, input.phase, input.x, input.y, options),
     );
@@ -1318,6 +1319,11 @@ export class DeviceManager {
 
   async describeUi(udid: string): Promise<DeviceDescribeUiResult> {
     return await this.withDeviceAction(udid, () => this.backend.describeUi(udid));
+  }
+
+  /** Native screen size and scale for clients receiving resized video. */
+  frameGeometry(udid: string): DeviceGeometry | null {
+    return this.backend.geometry(udid);
   }
 
   /** The screen in points: helper geometry when attached, else the tree's root. */
