@@ -5361,9 +5361,11 @@ const make = Effect.gen(function* () {
       ...textGenerationLogContext,
       hasProviderOptions: Boolean(textGenerationInput.providerOptions),
     });
+    const { threadTitleMaxWords } = yield* serverSettings.getSettings;
     const titleGenerationInput: ThreadTitleGenerationInput = {
       cwd: cwd ?? process.cwd(),
       message: input.messageText,
+      maxWords: threadTitleMaxWords,
       ...(input.attachments?.length ? { attachments: input.attachments } : {}),
       modelSelection: textGenerationInput.modelSelection,
       ...(textGenerationInput.providerOptions
@@ -11640,6 +11642,7 @@ const make = Effect.gen(function* () {
         cwd: cwd ?? process.cwd(),
         message: context,
         context: "conversation",
+        maxWords: settings.threadTitleMaxWords,
         modelSelection: textGenerationInput.modelSelection,
         ...(textGenerationInput.providerOptions
           ? { providerOptions: textGenerationInput.providerOptions }

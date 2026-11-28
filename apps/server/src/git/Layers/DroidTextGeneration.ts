@@ -244,8 +244,9 @@ const makeDroidTextGeneration = Effect.gen(function* () {
             message: input.message,
             ...(input.context ? { context: input.context } : {}),
             ...(input.attachments ? { attachments: input.attachments } : {}),
+            ...(input.maxWords !== undefined ? { maxWords: input.maxWords } : {}),
           }),
-        (generated) => ({ title: sanitizeGeneratedThreadTitle(generated.title) }),
+        (generated) => ({ title: sanitizeGeneratedThreadTitle(generated.title, input.maxWords) }),
       );
     }),
     generateThreadRecap: Effect.fn("DroidTextGeneration.generateThreadRecap")(function* (

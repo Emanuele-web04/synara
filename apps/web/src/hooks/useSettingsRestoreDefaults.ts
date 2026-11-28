@@ -158,6 +158,9 @@ export function useSettingsRestoreDefaults({
       ? ["settings:followUpBehavior"]
       : []),
     ...(settings.sidechatExpiry !== defaults.sidechatExpiry ? ["settings:sideChatExpiry"] : []),
+    ...(settings.threadTitleMaxWords !== defaults.threadTitleMaxWords
+      ? ["settings:maxTitleWords"]
+      : []),
     ...(settings.voiceEnterBehavior !== defaults.voiceEnterBehavior
       ? ["settings:enterWhileDictating"]
       : []),

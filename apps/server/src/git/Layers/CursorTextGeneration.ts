@@ -277,6 +277,7 @@ const makeCursorTextGeneration = Effect.gen(function* () {
       message: input.message,
       ...(input.context ? { context: input.context } : {}),
       ...(input.attachments ? { attachments: input.attachments } : {}),
+      ...(input.maxWords !== undefined ? { maxWords: input.maxWords } : {}),
     });
     const generated = yield* runAcpTextGeneration(cursorAcpConfig, {
       childProcessSpawner,
@@ -290,7 +291,7 @@ const makeCursorTextGeneration = Effect.gen(function* () {
     });
 
     return {
-      title: sanitizeGeneratedThreadTitle(generated.title),
+      title: sanitizeGeneratedThreadTitle(generated.title, input.maxWords),
     };
   });
 

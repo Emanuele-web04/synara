@@ -6,17 +6,52 @@
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 
-import { COMPOSER_PREDICTION_MAX_CHARS } from "@synara/contracts";
+import {
+  COMPOSER_PREDICTION_MAX_CHARS,
+  DEFAULT_SERVER_SETTINGS,
+  DEFAULT_THREAD_TITLE_MAX_WORDS,
+} from "@synara/contracts";
+import { MAX_CHAT_THREAD_TITLE_WORDS } from "@synara/shared/chatThreads";
 
 import {
   buildAutomationCompletionEvaluationPrompt,
   buildCommitMessagePrompt,
   buildComposerPredictionPrompt,
   buildPrContentPrompt,
+  buildThreadTitlePrompt,
   COMPOSER_PREDICTION_CONTEXT_BUDGET,
   decodeStructuredTextGenerationOutput,
   sanitizeComposerPrediction,
 } from "./textGenerationShared.ts";
+
+describe("buildThreadTitlePrompt", () => {
+  it("keeps the default cap when no word limit is given", () => {
+    const { prompt, rawTextFallback } = buildThreadTitlePrompt({ message: "Fix login" });
+    expect(prompt).toContain(`in 3-${MAX_CHAT_THREAD_TITLE_WORDS} words.`);
+    expect(prompt).toContain(`Never exceed ${MAX_CHAT_THREAD_TITLE_WORDS} words.`);
+    expect(rawTextFallback.maxWords).toBe(MAX_CHAT_THREAD_TITLE_WORDS + 4);
+  });
+
+  it("asks for the chosen word limit in both prompt variants", () => {
+    const first = buildThreadTitlePrompt({ message: "Fix login", maxWords: 8 });
+    expect(first.prompt).toContain("Summarize the user's request in 3-8 words.");
+    expect(first.prompt).toContain("Never exceed 8 words.");
+    expect(first.rawTextFallback.maxWords).toBe(12);
+
+    const short = buildThreadTitlePrompt({
+      message: "Fix login",
+      context: "conversation",
+      maxWords: 3,
+    });
+    expect(short.prompt).toContain("Summarize the conversation's current objective in 3 words.");
+    expect(short.prompt).toContain("Never exceed 3 words.");
+  });
+
+  it("defaults the setting to the shared word cap", () => {
+    expect(DEFAULT_THREAD_TITLE_MAX_WORDS).toBe(MAX_CHAT_THREAD_TITLE_WORDS);
+    expect(DEFAULT_SERVER_SETTINGS.threadTitleMaxWords).toBe(MAX_CHAT_THREAD_TITLE_WORDS);
+  });
+});
 
 describe("textGenerationShared", () => {
   const commitInput = {

@@ -65,6 +65,7 @@ function serverSettings(overrides: Partial<ServerSettings["providers"]> = {}): S
     addProjectBaseDirectory: "",
     githubInboxIncludeUpstreams: false,
     sidechatExpiry: "1h",
+    threadTitleMaxWords: 6,
     sourceControlWritingStyle: "repository",
     sourceControlCustomInstructions: "",
     gitAttributionEnabled: true,

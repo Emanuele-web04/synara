@@ -431,6 +431,7 @@ const makeClaudeTextGeneration = Effect.gen(function* () {
     const { prompt, outputSchemaJson } = buildThreadTitlePrompt({
       message: input.message,
       ...(input.attachments ? { attachments: input.attachments } : {}),
+      ...(input.maxWords !== undefined ? { maxWords: input.maxWords } : {}),
     });
     const generated = yield* runClaudeJson({
       operation: "generateThreadTitle",
@@ -440,7 +441,7 @@ const makeClaudeTextGeneration = Effect.gen(function* () {
       modelSelection,
       ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
     });
-    return { title: sanitizeGeneratedThreadTitle(generated.title) };
+    return { title: sanitizeGeneratedThreadTitle(generated.title, input.maxWords) };
   });
 
   const generateThreadRecap: TextGenerationShape["generateThreadRecap"] = Effect.fn(
