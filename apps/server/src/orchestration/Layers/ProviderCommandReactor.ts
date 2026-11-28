@@ -2659,6 +2659,8 @@ const make = Effect.gen(function* () {
       readonly modelSelection?: ModelSelection;
       readonly providerOptions?: ProviderStartOptions;
       readonly enableComputerControl?: boolean;
+      /** The ordinary chat can proceed with the existing tools while Claude is busy. */
+      readonly deferChatComputerEnable?: boolean;
       readonly runtimeMode?: RuntimeMode;
       readonly registerPriorTranscriptBootstrapOnFreshStart?: boolean;
       /** The user explicitly requested a same-thread handoff. */
@@ -3130,6 +3132,7 @@ const make = Effect.gen(function* () {
         !providerChanged &&
         !workspaceChanged &&
         !additionalDirectoriesChanged &&
+        !providerInstanceChanged &&
         !providerOptionsChanged &&
         !shouldRestartForModelChange &&
         !shouldRestartForModelSelectionChange &&
@@ -3208,13 +3211,13 @@ const make = Effect.gen(function* () {
       ).pipe(
         // The live-turn check above sees only turns. The adapter also refuses
         // while background tasks, approvals or questions are open, before it
-        // touches the runtime. Switching Computer off can wait for that work
-        // like it waits for a turn; switching it on cannot, because the turn
-        // would run without the tools it asked for.
+        // touches the runtime. A normal chat turn may keep its existing
+        // catalog until the adapter is idle. An explicit /computer-use turn
+        // must wait for the requested tools to be available.
         Effect.catchIf(
           (error): error is ProviderAdapterValidationError =>
             computerControlOnlyChange &&
-            requestedComputerControl === false &&
+            (requestedComputerControl === false || options?.deferChatComputerEnable === true) &&
             error instanceof ProviderAdapterValidationError &&
             error.operation === "session/reconfigure",
           (error) =>
@@ -3997,7 +4000,15 @@ const make = Effect.gen(function* () {
             ...(input.providerOptions !== undefined
               ? { providerOptions: input.providerOptions }
               : {}),
-            ...(input.dispatchMode === "steer" ? {} : { enableComputerControl }),
+            ...(input.dispatchMode === "steer"
+              ? {}
+              : {
+                  enableComputerControl,
+                  deferChatComputerEnable:
+                    input.dispatchOrigin === "user" &&
+                    requestedMode === "chat" &&
+                    computerInvocation === null,
+                }),
             ...(input.runtimeMode !== undefined ? { runtimeMode: input.runtimeMode } : {}),
             ...(registerPriorTranscriptBootstrapOnFreshStart
               ? { registerPriorTranscriptBootstrapOnFreshStart: true }
