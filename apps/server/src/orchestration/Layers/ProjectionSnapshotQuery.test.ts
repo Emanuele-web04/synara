@@ -25,6 +25,7 @@ import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProjectionPendingInteractionRepository } from "../../persistence/Services/ProjectionPendingInteractions.ts";
 import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
 import { captureCrashResumeRecord } from "../quitResume.ts";
+import { findRestartOrphanedTasks } from "../startupTurnReconciliation.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 
 const asProjectId = (value: string): ProjectId => ProjectId.makeUnsafe(value);
@@ -361,6 +362,25 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           { nativeEventType: "background_tasks_changed", data: { tasks: [] } },
         ],
       );
+
+      // A repeat ID can reopen after completion. Storage order and the event
+      // timestamps may disagree with the provider's causal sequence.
+      yield* sql`INSERT INTO projection_thread_activities
+        (activity_id, thread_id, tone, kind, summary, payload_json, sequence, created_at)
+        VALUES
+          ('task-reopened', ${threadId}, 'info', 'task.updated', 'Reopened', '{"taskId":"task-1","isBackgrounded":true,"status":"running"}', 12, '2026-10-11T10:00:30.000Z'),
+          ('late-pause', ${threadId}, 'info', 'task.updated', 'Paused', ${JSON.stringify({ taskId: "sequence-task", status: "\tpaused " })}, 14, '2026-10-11T10:02:00.000Z'),
+          ('late-start', ${threadId}, 'info', 'task.started', 'Started', '{"taskId":"sequence-task"}', 13, '2026-10-11T10:03:00.000Z')`;
+      const lifecycle = yield* query.listTaskLifecycleActivitiesByThreads([threadId]);
+      const discovery = yield* query.listTaskLifecycleActivitiesByThreads([threadId], "discovery");
+      assert.deepEqual(
+        lifecycle.filter((row) => !discovery.some(({ id }) => id === row.id)).map(({ id }) => id),
+        ["task-patch", "workflow-launch"],
+      );
+      const startedBefore = "2026-10-11T12:00:00.000Z";
+      const orphaned = [{ taskId: "task-1", turnId: null }];
+      assert.deepEqual(findRestartOrphanedTasks(lifecycle, startedBefore), orphaned);
+      assert.deepEqual(findRestartOrphanedTasks(discovery, startedBefore), orphaned);
     }),
   );
 

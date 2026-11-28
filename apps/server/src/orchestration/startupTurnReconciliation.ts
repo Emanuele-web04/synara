@@ -71,6 +71,8 @@ import { ProjectionSnapshotQuery } from "./Services/ProjectionSnapshotQuery.ts";
 import { ProviderCommandReactor } from "./Services/ProviderCommandReactor.ts";
 import { reportReliabilityIssue } from "../reliability";
 
+const TASK_DISCOVERY_THREAD_BATCH_SIZE = 100;
+
 /** The `thread.session.set` variant of the internal orchestration command union. */
 type ThreadSessionSetCommand = Extract<
   OrchestrationCommand,
@@ -653,8 +655,8 @@ export const reconcileRestartStuckTurns: Effect.Effect<
   // `engine.getReadModel()` only carries checkpoint-revert activities, so
   // scan task-lifecycle rows across live threads via the indexed query to find
   // background or agent tasks left open by a prior process or clean stop.
-  const readTaskLifecycleActivities = (threadIds: ReadonlyArray<ThreadId>) =>
-    snapshotQuery.listTaskLifecycleActivitiesByThreads(threadIds).pipe(
+  const readTaskLifecycleActivities = (threadIds: ReadonlyArray<ThreadId>, mode?: "discovery") =>
+    snapshotQuery.listTaskLifecycleActivitiesByThreads(threadIds, mode).pipe(
       Effect.catchCause((cause) =>
         Effect.logWarning("failed to read restart-orphaned task activities", { cause }).pipe(
           Effect.tap(() => noteFailure),
@@ -662,30 +664,41 @@ export const reconcileRestartStuckTurns: Effect.Effect<
         ),
       ),
     );
-  const taskActivitiesByThread = new Map(
-    Object.entries(
-      Arr.groupBy(
-        yield* readTaskLifecycleActivities(readModel.threads.map((thread) => thread.id)),
-        (row) => row.threadId,
+  const threadsNeedingRestartCleanup: Array<(typeof readModel.threads)[number]> = [];
+  // Limit the startup scan to one batch of thread histories in memory. The
+  // later read under the lease still includes progress rows for sequence allocation.
+  for (const threads of Arr.chunksOf(readModel.threads, TASK_DISCOVERY_THREAD_BATCH_SIZE)) {
+    const taskActivitiesByThread = new Map(
+      Object.entries(
+        Arr.groupBy(
+          yield* readTaskLifecycleActivities(
+            threads.map((thread) => thread.id),
+            "discovery",
+          ),
+          (row) => row.threadId,
+        ),
       ),
-    ),
-  );
-  const threadsNeedingRestartCleanup = readModel.threads.filter(
-    (thread) =>
-      needsRestartReconciliation(thread) ||
-      threadHasCheckpointRevertInProgress(thread) ||
-      thread.hasPendingApprovals ||
-      thread.hasPendingUserInput ||
-      unsettledByThread.has(thread.id) ||
-      deadRuntimeThreadIds.has(thread.id) ||
-      // Native children share their root runtime and have no runtime row of
-      // their own. Hydrate their pinned task state before trusting the capped tail.
-      (thread.parentThreadId != null && deadRuntimeThreadIds.has(thread.parentThreadId)) ||
-      findRestartOrphanedTasks(
-        taskActivitiesByThread.get(thread.id) ?? thread.activities ?? [],
-        processStartedAt,
-      ).length > 0,
-  );
+    );
+    for (const thread of threads) {
+      if (
+        needsRestartReconciliation(thread) ||
+        threadHasCheckpointRevertInProgress(thread) ||
+        thread.hasPendingApprovals ||
+        thread.hasPendingUserInput ||
+        unsettledByThread.has(thread.id) ||
+        deadRuntimeThreadIds.has(thread.id) ||
+        // Native children share their root runtime and have no runtime row of
+        // their own. Hydrate their pinned task state before trusting the capped tail.
+        (thread.parentThreadId != null && deadRuntimeThreadIds.has(thread.parentThreadId)) ||
+        findRestartOrphanedTasks(
+          taskActivitiesByThread.get(thread.id) ?? thread.activities ?? [],
+          processStartedAt,
+        ).length > 0
+      ) {
+        threadsNeedingRestartCleanup.push(thread);
+      }
+    }
+  }
   if (threadsNeedingRestartCleanup.length === 0) {
     return;
   }

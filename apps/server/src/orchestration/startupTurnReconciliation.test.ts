@@ -969,7 +969,28 @@ describe("reconcileRestartStuckTurns selection", () => {
         }),
       ),
     );
-    const listTaskLifecycleActivitiesByThreads = vi.fn(() => Effect.succeed([oldNotice]));
+    const idleThreads = Array.from({ length: 100 }, (_, index) =>
+      makeThread(`idle-${index}`, { activities: [] }),
+    );
+    const listTaskLifecycleActivitiesByThreads = vi.fn(
+      (threadIds: ReadonlyArray<ThreadId>, mode?: "discovery") =>
+        Effect.succeed(
+          !threadIds.includes(thread.id)
+            ? []
+            : mode === "discovery"
+              ? [oldNotice]
+              : [
+                  oldNotice,
+                  {
+                    ...oldNotice,
+                    id: EventId.makeUnsafe("late-progress"),
+                    kind: "task.updated",
+                    payload: { taskId: "orphan-bg-1", status: "running" },
+                    sequence: 600,
+                  },
+                ],
+        ),
+    );
     await Effect.runPromise(
       reconcileRestartStuckTurns.pipe(
         Effect.provideService(ProviderCommandReactor, {
@@ -979,7 +1000,7 @@ describe("reconcileRestartStuckTurns selection", () => {
           "withRestartOrphanedThread"
         > as never),
         Effect.provideService(OrchestrationEngineService, {
-          getReadModel: () => Effect.succeed({ threads: [thread] }),
+          getReadModel: () => Effect.succeed({ threads: [...idleThreads, thread] }),
           dispatch,
         } as never),
         Effect.provideService(ProjectionSnapshotQuery, {
@@ -995,6 +1016,11 @@ describe("reconcileRestartStuckTurns selection", () => {
         } as never),
       ),
     );
+    expect(listTaskLifecycleActivitiesByThreads.mock.calls).toEqual([
+      [idleThreads.map(({ id }) => id), "discovery"],
+      [[thread.id], "discovery"],
+      [[thread.id], undefined],
+    ]);
     expect(getThreadDetailById).toHaveBeenCalledExactlyOnceWith(thread.id);
     expect(dispatch).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
@@ -1004,7 +1030,7 @@ describe("reconcileRestartStuckTurns selection", () => {
           kind: "task.completed",
           summary: "Task stopped",
           payload: { taskId: "orphan-bg-1", status: "stopped" },
-          sequence: 501,
+          sequence: 601,
         }),
       }),
     );

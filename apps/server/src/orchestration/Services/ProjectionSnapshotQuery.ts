@@ -310,9 +310,11 @@ export interface ProjectionSnapshotQueryShape {
    * Read task-lifecycle activities (`task.started`, `task.updated`,
    * `task.completed`, and `background_tasks_changed` notices) for the given
    * threads across their full history, ordered causally per thread.
+   * Discovery can omit progress patches that cannot open or close a task.
    */
   readonly listTaskLifecycleActivitiesByThreads: (
     threadIds: ReadonlyArray<ThreadId>,
+    mode?: "discovery",
   ) => Effect.Effect<ReadonlyArray<ProjectionTaskLifecycleActivity>, ProjectionRepositoryError>;
 
   /**

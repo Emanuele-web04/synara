@@ -2649,10 +2649,12 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
   // history. Rows are ordered in memory (compareBackgroundTaskActivityRows):
   // with an ORDER BY here SQLite prefers the (thread_id, sequence) indexes and
   // walks every activity of the thread (3 ms vs 0.1 ms on a 4.4k-activity one).
+  // Discovery skips plain progress patches. Keep unfamiliar statuses for the
+  // restart fold and malformed rows for the existing decode error path.
   const listTaskLifecycleActivityRowsByThreads = SqlSchema.findAll({
-    Request: ThreadIdsLookupInput,
+    Request: Schema.Struct({ threadIds: Schema.Array(ThreadId), discovery: Schema.Boolean }),
     Result: TaskLifecycleActivityDbRowSchema,
-    execute: ({ threadIds }) =>
+    execute: ({ threadIds, discovery }) =>
       sql`
         SELECT
           activity_id AS "activityId",
@@ -2669,15 +2671,28 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             kind <> 'runtime.warning'
             OR json_extract(payload_json, '$.nativeEventType') = ${BACKGROUND_TASKS_CHANGED_NATIVE_EVENT_TYPE}
           )
+          ${
+            discovery
+              ? sql`AND CASE
+                WHEN kind = 'task.updated' AND json_valid(payload_json) THEN
+                  json_type(payload_json, '$.isBackgrounded') IS 'true'
+                  OR COALESCE(json_extract(payload_json, '$.status'), 'running') IS NOT 'running'
+                ELSE 1
+              END`
+              : sql``
+          }
       `,
   });
 
   const listTaskLifecycleActivitiesByThreads: ProjectionSnapshotQueryShape["listTaskLifecycleActivitiesByThreads"] =
-    (threadIds) => {
+    (threadIds, mode) => {
       if (threadIds.length === 0) {
         return Effect.succeed([]);
       }
-      return listTaskLifecycleActivityRowsByThreads({ threadIds }).pipe(
+      return listTaskLifecycleActivityRowsByThreads({
+        threadIds,
+        discovery: mode === "discovery",
+      }).pipe(
         Effect.mapError(
           toPersistenceSqlOrDecodeError(
             "ProjectionSnapshotQuery.listTaskLifecycleActivitiesByThreads:query",
