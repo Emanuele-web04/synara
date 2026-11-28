@@ -77,6 +77,9 @@ const make = Effect.gen(function* () {
         yield* projectAgent.recordWorkerTurnRequest({
           threadId: payload.threadId as ThreadId,
           commandId: event.commandId,
+          ...("messageId" in payload && typeof payload.messageId === "string"
+            ? { messageId: payload.messageId }
+            : {}),
           dispatchOrigin:
             "dispatchOrigin" in payload && typeof payload.dispatchOrigin === "string"
               ? payload.dispatchOrigin
@@ -116,6 +119,7 @@ const make = Effect.gen(function* () {
       }
       const payload = event.payload;
       if (!("threadId" in payload)) return;
+      if (event.type === "thread.turn-diff-completed" && event.payload.preserveLatestTurn) return;
       yield* projectAgent.ingestSettledThreadEvent({
         threadId: payload.threadId as ThreadId,
         sourceEventId: `${event.sequence}:${event.type}`,
@@ -129,9 +133,8 @@ const make = Effect.gen(function* () {
               },
             }
           : {}),
-        // Only a ready diff can serve as a checkpoint completion signal.
-        ...("status" in payload && typeof payload.status === "string"
-          ? { checkpointStatus: payload.status }
+        ...(event.type === "thread.turn-diff-completed"
+          ? { checkpointStatus: event.payload.status, checkpointRef: event.payload.checkpointRef }
           : {}),
         ...("turnId" in payload && typeof payload.turnId === "string"
           ? { turnId: payload.turnId }

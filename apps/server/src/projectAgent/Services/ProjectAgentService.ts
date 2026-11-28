@@ -249,8 +249,9 @@ export interface ProjectAgentServiceShape {
     readonly threadId: ThreadId;
     readonly sourceEventId: string;
     readonly eventType: string;
-    /** Only a ready checkpoint is a settlement signal for a Git worker. */
+    /** A final Git checkpoint can have no usable baseline. */
     readonly checkpointStatus?: string;
+    readonly checkpointRef?: string;
     /** Confirmed status from the event, even if the projection has already advanced. */
     readonly confirmedInterruption?: {
       readonly sequence: number;
@@ -269,11 +270,12 @@ export interface ProjectAgentServiceShape {
    * Turn-ownership signal from the reactor: classifies the originating
    * command (coordinator / ladder / user), clears a latched needs-you on any
    * new turn, and re-arms monitoring on a terminally settled worker when the
-   * new turn is coordinator- or ladder-originated.
+   * new turn is coordinator- or ladder-originated or an explicit Retry.
    */
   readonly recordWorkerTurnRequest: (input: {
     readonly threadId: ThreadId;
     readonly commandId: string | null;
+    readonly messageId?: string;
     readonly dispatchOrigin: string | null;
     readonly turnId: string | null;
     /** Orchestration event type that carried the request
