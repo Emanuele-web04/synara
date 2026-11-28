@@ -156,7 +156,9 @@ and wake their coordinator without creating Git checkpoints; the health scan als
 completed workers after a missed live event. Workspace checks use the provider session’s current
 folder, or its saved folder after a restart. Interrupted delivery resumes the same report, evidence,
 and monitoring rows before the coordinator wakes, without duplicating them or replacing a newer
-attempt’s report. Repository workers still wait for their checkpoint outcome. Repeating the same delegation after a coordinator wake reuses its saved task cards. An interrupted creation is reconciled conservatively;
+attempt’s report. A repository worker can publish provisional diffs while editing. The Hub waits
+for a ready checkpoint to report completion and uses the provider session’s confirmed interruption
+to report an interrupted worker. Repeating the same delegation after a coordinator wake reuses its saved task cards. An interrupted creation is reconciled conservatively;
 a failed creation remains visible instead of silently spawning a replacement. If cleanup cannot
 finish, the task retains its reserved slot until startup recovery confirms cleanup.
 

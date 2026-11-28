@@ -13,7 +13,6 @@ import { ProjectAgentService } from "../Services/ProjectAgentService.ts";
 
 const SETTLE_EVENT_TYPES: ReadonlySet<OrchestrationEvent["type"]> = new Set([
   "thread.turn-diff-completed",
-  "thread.turn-interrupt-requested",
   "thread.session-set",
   "thread.session-stop-requested",
 ]);
@@ -121,8 +120,7 @@ const make = Effect.gen(function* () {
         threadId: payload.threadId as ThreadId,
         sourceEventId: `${event.sequence}:${event.type}`,
         eventType: event.type,
-        // A turn-diff that closed missing/error (e.g. a turn the ladder
-        // interrupted) is reclassified inside ingest as an interruption.
+        // Only a ready diff can serve as a checkpoint completion signal.
         ...("status" in payload && typeof payload.status === "string"
           ? { checkpointStatus: payload.status }
           : {}),

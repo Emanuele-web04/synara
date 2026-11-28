@@ -5280,11 +5280,7 @@ it.effect("logs coordinator check-ins to the activity log without waking it", ()
   }).pipe(Effect.provide(harness.layer));
 });
 
-// A turn-diff that closed missing/error belongs to a turn the ladder
-// interrupted — it settles `interrupted`, never `completed`: the recovery
-// count survives and no false "finished" row posts. A `ready` diff still
-// settles completed and refunds the count (a genuine success).
-it.effect("settles a missing diff as interrupted without resetting the recovery count", () => {
+it.effect("ignores provisional diffs and reports the confirmed interruption once", () => {
   const harness = makeTestLayer();
   return Effect.gen(function* () {
     const service = yield* ProjectAgentService;
@@ -5312,15 +5308,39 @@ it.effect("settles a missing diff as interrupted without resetting the recovery 
     const mid = yield* repository.findManagedWorkerByThread(workerThreadId);
     assert.equal(Option.isSome(mid) ? mid.value.recoveriesUsed : null, 2);
 
-    // The ladder's own interrupt closes the checkpoint `missing`: the
-    // diff-completed event must not read as a clean finish.
+    const wakesBeforeDiffs = harness.runNowCalls.length;
+    for (const [i, status] of ["missing", "error", "missing"].entries()) {
+      yield* service.ingestSettledThreadEvent({
+        threadId: workerThreadId,
+        sourceEventId: `diff-${i}`,
+        eventType: "thread.turn-diff-completed",
+        checkpointStatus: status,
+        createdAt: "1970-01-01T00:18:00.000Z",
+      });
+    }
+    const running = yield* repository.findManagedWorkerByThread(workerThreadId);
+    assert.equal(Option.getOrThrow(running).settleOutcome, null);
+    assert.equal(activityRows(harness, "synara.worker.settled").length, 0);
+    assert.equal(harness.runNowCalls.length, wakesBeforeDiffs);
+
+    const stoppedAt = "1970-01-01T00:18:01.000Z";
+    harness.threadShells[workerThreadId] = {
+      ...quietRunningShell(stoppedAt),
+      session: { status: "interrupted", updatedAt: stoppedAt, lastError: null, activeTurnId: null },
+    };
     yield* service.ingestSettledThreadEvent({
       threadId: workerThreadId,
-      sourceEventId: "diff-missing-1",
-      eventType: "thread.turn-diff-completed",
-      checkpointStatus: "missing",
-      createdAt: "1970-01-01T00:18:00.000Z",
+      sourceEventId: "session-interrupted-1",
+      eventType: "thread.session-set",
+      createdAt: stoppedAt,
     });
+    yield* service.ingestSettledThreadEvent({
+      threadId: workerThreadId,
+      sourceEventId: "session-interrupted-replayed",
+      eventType: "thread.session-set",
+      createdAt: stoppedAt,
+    });
+    yield* service.inspectWorkerHealth();
     const worker = yield* repository.findManagedWorkerByThread(workerThreadId);
     assert.equal(Option.isSome(worker) ? worker.value.settleOutcome : null, "interrupted");
     // The ladder's own interrupt never refunds the attempts it spent.
@@ -5337,6 +5357,11 @@ it.effect("settles a missing diff as interrupted without resetting the recovery 
       eventType: "thread.turn-start-requested",
       createdAt: "1970-01-01T00:19:00.000Z",
     });
+    harness.threadShells[workerThreadId] = {
+      projectId: groupId,
+      title: "Stalled worker",
+      session: { status: "ready", updatedAt: "1970-01-01T00:25:00.000Z", lastError: null },
+    };
     yield* service.ingestSettledThreadEvent({
       threadId: workerThreadId,
       sourceEventId: "diff-ready-1",

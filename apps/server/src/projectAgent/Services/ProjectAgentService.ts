@@ -249,9 +249,7 @@ export interface ProjectAgentServiceShape {
     readonly threadId: ThreadId;
     readonly sourceEventId: string;
     readonly eventType: string;
-    /** Checkpoint status carried by `thread.turn-diff-completed` — a diff that
-     * ended `missing`/`error` describes an interrupted turn, never a clean
-     * finish, and must not settle the worker as `completed`. */
+    /** Only a ready checkpoint is a settlement signal for a Git worker. */
     readonly checkpointStatus?: string;
     /** Turn the event belongs to — used to classify coordinator check-in
      * turns for the group activity log. */

@@ -5757,6 +5757,14 @@ export const makeProjectAgentService = Effect.gen(function* () {
 
     ingestSettledThreadEvent: (input) =>
       Effect.gen(function* () {
+        // A provider can publish several provisional file diffs during the same
+        // running turn. Missing/failed checkpoints carry no worker outcome.
+        if (
+          input.eventType === "thread.turn-diff-completed" &&
+          input.checkpointStatus !== undefined &&
+          input.checkpointStatus !== "ready"
+        )
+          return;
         const task = yield* repository
           .findTaskByAssignedThread(input.threadId)
           .pipe(Effect.mapError(toServiceError("Failed to resolve task for event.")));
@@ -5783,12 +5791,6 @@ export const makeProjectAgentService = Effect.gen(function* () {
           .getConfig(projectId)
           .pipe(Effect.mapError(toServiceError("Failed to load coordinator for event.")));
         if (Option.isNone(config) || !config.value.enabled) return;
-        // A diff-completed event whose checkpoint closed missing/error belongs
-        // to a turn that did not finish cleanly — e.g. a turn the recovery
-        // ladder itself interrupted. Reclassify it so everything downstream
-        // treats it as an interruption (never `completed`): no false
-        // "finished" row, and the recovery counter is not reset by the
-        // ladder's own interrupt.
         const nonGitTurn =
           (input.eventType === "thread.session-set" || input.eventType === "worker.completed") &&
           (Option.isSome(worker) || Option.isSome(task)) &&
@@ -5800,16 +5802,21 @@ export const makeProjectAgentService = Effect.gen(function* () {
           (!nonGitTurn || nonGitTurn.turnId !== input.turnId)
         )
           return;
-        const sourceEventId = nonGitTurn
-          ? `worker-non-git-completed:${input.threadId}:${nonGitTurn.turnId}`
-          : input.sourceEventId;
-        const eventType = nonGitTurn
-          ? "worker.completed"
-          : input.eventType === "thread.turn-diff-completed" &&
-              input.checkpointStatus !== undefined &&
-              input.checkpointStatus !== "ready"
-            ? "worker.interrupted"
-            : input.eventType;
+        let sourceEventId = input.sourceEventId;
+        let eventType = input.eventType;
+        if (nonGitTurn) {
+          sourceEventId = `worker-non-git-completed:${input.threadId}:${nonGitTurn.turnId}`;
+          eventType = "worker.completed";
+        } else if (
+          input.eventType === "thread.session-set" &&
+          (Option.isSome(worker) || Option.isSome(task)) &&
+          Option.isSome(shell) &&
+          shell.value.session?.status === "interrupted"
+        ) {
+          // Use the health poller's identity so both observations deliver one wake.
+          sourceEventId = `worker-health:${input.threadId}:interrupted:${shell.value.session.updatedAt}`;
+          eventType = "worker.interrupted";
+        }
         if (Option.isSome(configByCoordinator)) {
           // Coordinator self-events never wake coordination. Automation
           // "check-in" turns additionally stay out of the coordinator
