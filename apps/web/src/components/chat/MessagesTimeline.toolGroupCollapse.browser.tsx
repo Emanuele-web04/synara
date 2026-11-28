@@ -448,6 +448,64 @@ describe("MessagesTimeline tool group collapse", () => {
     expect(isVisibleOutsideClosedDisclosure("Amber")).toBe(true);
   });
 
+  it("shows an answered Antigravity choice with the question only once", async () => {
+    const turnId = TurnId.makeUnsafe("antigravity-choice");
+    const question = "Which fruit should I use?";
+    const activities: OrchestrationThreadActivity[] = [
+      {
+        id: EventId.makeUnsafe("fruit-question"),
+        turnId,
+        createdAt: "2026-03-17T19:12:21.000Z",
+        sequence: 1,
+        kind: "user-input.requested",
+        tone: "info",
+        summary: "User input requested",
+        payload: {
+          requestId: "fruit",
+          questions: [
+            {
+              id: "q1",
+              customAnswerId: "q1_other",
+              header: question,
+              question,
+              options: [
+                { value: "1", label: "Apple", description: "Apple" },
+                { value: "2", label: "Pear", description: "Pear" },
+              ],
+            },
+          ],
+        },
+      },
+      {
+        id: EventId.makeUnsafe("fruit-answer"),
+        turnId,
+        createdAt: "2026-03-17T19:12:22.000Z",
+        sequence: 2,
+        kind: "user-input.resolved",
+        tone: "info",
+        summary: "User input submitted",
+        payload: { requestId: "fruit", answers: { q1: "2" } },
+      },
+    ];
+    const host = createTimelineHost();
+    const screen = await render(
+      <ToolGroupCollapseTimeline
+        timelineEntries={deriveTimelineEntries([], [], deriveWorkLogEntries(activities, turnId))}
+        settled
+      />,
+      { container: host },
+    );
+    try {
+      await expect.element(screen.getByText("Pear", { exact: true })).toBeVisible();
+      expect(screen.getByText(question, { exact: true }).elements()).toHaveLength(1);
+      expect(screen.getByText("Apple · Pear", { exact: true }).elements()).toHaveLength(0);
+      expect(screen.getByText("Answer", { exact: true }).elements()).toHaveLength(0);
+    } finally {
+      await screen.unmount();
+      host.remove();
+    }
+  });
+
   it("keeps the original updates reachable from a compacted legacy reasoning row", async () => {
     const state = deriveAgentActivityTimelineState([
       {
