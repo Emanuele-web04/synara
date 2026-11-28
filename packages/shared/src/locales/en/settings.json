@@ -1143,6 +1143,8 @@
   "emptyChatBackground_gradientDescription": "Soft dithered accent waves that drift and fade into the background.",
   "emptyChatBackground_off": "Off",
   "emptyChatBackground_offDescription": "No backdrop.",
+  "emptyChatBackdropIntensity": "Backdrop intensity",
+  "emptyChatBackdropIntensityDescription": "Dim the Temple or Gradient backdrop to make the heading and composer easier to read.",
   "usageDurationDaysHours": "{{days}}d {{hours}}h",
   "usageDurationHoursMinutes": "{{hours}}h {{minutes}}m",
   "usageDurationMinutes": "{{minutes}}m",

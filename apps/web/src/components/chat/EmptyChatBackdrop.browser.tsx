@@ -8,7 +8,7 @@ import { render } from "vitest-browser-react";
 import { EmptyChatBackdrop } from "./EmptyChatBackdrop";
 
 it("restores the still Temple image after hiding the pane during a ripple", async () => {
-  const backdropProps = { style: "temple" } as const;
+  const backdropProps = { style: "temple", intensity: 100 } as const;
   const screen = await render(
     <div data-testid="pane" style={{ position: "relative", width: 480, height: 320 }}>
       <EmptyChatBackdrop {...backdropProps} />

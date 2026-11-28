@@ -7161,7 +7161,10 @@ export default function ChatView({
                 )}
               >
                 {settings.showAsciiBackground && !terminalWorkspaceTerminalTabActive ? (
-                  <EmptyChatBackdrop style={settings.emptyChatBackdropStyle} />
+                  <EmptyChatBackdrop
+                    style={settings.emptyChatBackdropStyle}
+                    intensity={settings.emptyChatBackdropIntensity}
+                  />
                 ) : null}
                 {/* The heading floats centered in the space above the composer, which is
                     anchored to the bottom of the pane (with its workspace-tools rail

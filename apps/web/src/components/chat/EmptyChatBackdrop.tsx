@@ -7,7 +7,7 @@
 // Depends on: the active theme's accent color and variant; landing elements marked
 //             `data-empty-chat-backdrop-quiet` get a clear zone behind them.
 
-import { useEffect, useRef } from "react";
+import { type CSSProperties, useEffect, useRef } from "react";
 
 import { useMediaQuery } from "~/hooks/useMediaQuery";
 import { useTheme } from "~/hooks/useTheme";
@@ -519,7 +519,7 @@ function ditherDots(density: Uint8Array, cols: number, rows: number): Uint8Array
 
 export type EmptyChatBackdropStyle = "temple" | "gradient";
 
-export function EmptyChatBackdrop(props: { style: EmptyChatBackdropStyle }) {
+export function EmptyChatBackdrop(props: { style: EmptyChatBackdropStyle; intensity: number }) {
   const { style } = props;
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -835,7 +835,8 @@ export function EmptyChatBackdrop(props: { style: EmptyChatBackdropStyle }) {
       ref={containerRef}
       aria-hidden
       data-empty-chat-backdrop={style}
-      className="pointer-events-none absolute inset-0 overflow-hidden opacity-0 transition-opacity duration-700 ease-out select-none contrast-more:hidden data-[ready=true]:opacity-100 motion-reduce:transition-none forced-colors:hidden"
+      style={{ "--empty-chat-backdrop-opacity": props.intensity / 100 } as CSSProperties}
+      className="pointer-events-none absolute inset-0 overflow-hidden opacity-0 transition-opacity duration-700 ease-out select-none contrast-more:hidden data-[ready=true]:opacity-(--empty-chat-backdrop-opacity) motion-reduce:transition-none forced-colors:hidden"
     >
       {skyMask ? (
         <div

@@ -13,6 +13,7 @@ import {
   MAX_TERMINAL_FONT_SIZE_PX,
   type MessageTrailAudioSource,
   MIN_CHAT_FONT_SIZE_PX,
+  MIN_EMPTY_CHAT_BACKDROP_INTENSITY,
   MIN_TERMINAL_FONT_SIZE_PX,
   normalizeChatFontSizePx,
   normalizeTerminalFontFamily,
@@ -46,6 +47,7 @@ import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
 import { SelectItem } from "~/components/ui/select";
 import { Switch } from "~/components/ui/switch";
+import { Slider } from "~/components/ui/slider";
 import { isElectron } from "~/env";
 import { useCustomTitleBarPreference } from "~/hooks/useCustomTitleBarPreference";
 import { useDefaultDesktopAppIcon } from "~/hooks/useDefaultDesktopAppIcon";
@@ -221,7 +223,9 @@ function MessageTrailMicrophoneRow({
 
 export function AppearanceSettingsView(binding: AppSettingsBinding) {
   const { settings, defaults, updateSettings } = binding;
-  const { t } = useTranslation();
+  const { t, formatLocale } = useTranslation();
+  const formatIntensity = (value: number) =>
+    new Intl.NumberFormat(formatLocale, { style: "percent" }).format(value / 100);
   const { resolvedTheme, theme, setTheme, systemUiFont, setSystemUiFont } = useTheme();
   const platform = getNavigatorPlatform();
   const shouldShowFontSmoothing = isMacPlatform(platform);
@@ -378,6 +382,44 @@ export function AppearanceSettingsView(binding: AppSettingsBinding) {
               ariaLabel={t("settings:asciiBackground")}
               options={EMPTY_CHAT_BACKGROUND_OPTIONS}
             />
+          }
+        />
+
+        <SettingsRow
+          id="setting-empty-chat-backdrop-intensity"
+          title="settings:emptyChatBackdropIntensity"
+          description="settings:emptyChatBackdropIntensityDescription"
+          resetAction={
+            settings.emptyChatBackdropIntensity !== defaults.emptyChatBackdropIntensity ? (
+              <SettingResetButton
+                label={t("settings:emptyChatBackdropIntensity")}
+                onClick={() =>
+                  updateSettings({
+                    emptyChatBackdropIntensity: defaults.emptyChatBackdropIntensity,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <div className="flex w-40 items-center gap-2">
+              <Slider
+                className="min-w-0 flex-1"
+                value={settings.emptyChatBackdropIntensity}
+                min={MIN_EMPTY_CHAT_BACKDROP_INTENSITY}
+                max={100}
+                step={5}
+                disabled={!settings.showAsciiBackground}
+                aria-label={t("settings:emptyChatBackdropIntensity")}
+                getAriaValueText={formatIntensity}
+                onValueChange={(emptyChatBackdropIntensity) =>
+                  updateSettings({ emptyChatBackdropIntensity })
+                }
+              />
+              <span aria-hidden className="min-w-[4ch] text-end text-ui-xs tabular-nums">
+                {formatIntensity(settings.emptyChatBackdropIntensity)}
+              </span>
+            </div>
           }
         />
 
