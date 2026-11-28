@@ -22,6 +22,16 @@ import { ComposerPickerMenuSubPopup } from "./ComposerPickerMenuPopup";
 import { ComposerUltrafastMenu } from "./ComposerUltrafastMenu";
 import { COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME } from "./composerPickerStyles";
 import {
+  buildDevinPairingPatch,
+  currentDevinPairing,
+  type DevinPairingParts,
+  type DevinPairingSpeed,
+  devinPairingLeadEfforts,
+  devinPairingLeadSpeeds,
+  devinPairingSidekicksForLead,
+  resolveDevinPairingUid,
+} from "./devinFusionPairing";
+import {
   getComposerTraitSelection,
   planComposerEffortChange,
   resolveComposerTraitStatusLabel,
@@ -115,12 +125,85 @@ export function ComposerModelPickerTraitRows(props: {
   const contextWindowTraitId = selection.contextWindowDescriptor?.id ?? "contextWindow";
   const contextWindowValue = selection.contextWindow ?? selection.defaultContextWindow ?? "";
 
-  const usesEffortSlider = props.effortControl === "slider" && selection.effortLevels.length > 0;
+  const pairing = selection.pairing;
+  const pairingParts = pairing ? currentDevinPairing(pairing, modelOptions).parts : null;
+  const commitPairing = (part: Partial<DevinPairingParts>) => {
+    if (!pairing || !pairingParts) return;
+    const uid = resolveDevinPairingUid(pairing, { ...pairingParts, ...part });
+    if (uid) commitTrait(buildDevinPairingPatch(uid));
+  };
+
+  const usesEffortSlider =
+    props.effortControl === "slider" && !pairing && selection.effortLevels.length > 0;
   // Only a requested fast mode can be refused; otherwise there is nothing to explain.
   const fastModeNotice = showsComposerFastModeBadge(selection) ? props.fastModeNotice : null;
 
   const rows: ReactNode[] = [];
-  if (selection.thinkingEnabled !== null) {
+  if (pairing && pairingParts) {
+    const leadEfforts = devinPairingLeadEfforts(pairing, pairingParts.lead);
+    const leadSpeeds = devinPairingLeadSpeeds(pairing, pairingParts.lead);
+    const sidekickOptions = devinPairingSidekicksForLead(pairing, pairingParts.lead);
+    const speedLabel = (speed: DevinPairingSpeed) =>
+      speed === "ultrafast"
+        ? t("chat:traitsPicker_ultrafast")
+        : speed === "fast"
+          ? t("chat:traitsPicker_fast")
+          : t("chat:standard");
+    rows.push(
+      <TraitRow
+        key="lead"
+        label={t("chat:traitsPicker_lead")}
+        value={pairingParts.lead}
+        valueLabel={
+          pairing.leads.find((option) => option.value === pairingParts.lead)?.label ??
+          pairingParts.lead
+        }
+        options={pairing.leads.map((option) => ({ ...option }))}
+        onValueChange={(value) => commitPairing({ lead: value })}
+      />,
+    );
+    if (leadEfforts.length > 0) {
+      rows.push(
+        <TraitRow
+          key="lead-effort"
+          label={t("chat:traitsPicker_effort")}
+          value={pairingParts.effort}
+          valueLabel={
+            leadEfforts.find((option) => option.value === pairingParts.effort)?.label ??
+            pairingParts.effort
+          }
+          options={leadEfforts.map((option) => ({ ...option }))}
+          onValueChange={(value) => commitPairing({ effort: value })}
+        />,
+      );
+    }
+    if (leadSpeeds.length > 1) {
+      rows.push(
+        <TraitRow
+          key="speed"
+          label={t("chat:traitsPicker_speed")}
+          value={pairingParts.speed}
+          valueLabel={speedLabel(pairingParts.speed)}
+          options={leadSpeeds.map((speed) => ({ value: speed, label: speedLabel(speed) }))}
+          onValueChange={(value) => commitPairing({ speed: value as DevinPairingSpeed })}
+        />,
+      );
+    }
+    rows.push(
+      <TraitRow
+        key="sidekick"
+        label={t("chat:traitsPicker_sidekick")}
+        value={pairingParts.sidekick}
+        valueLabel={
+          sidekickOptions.find((option) => option.value === pairingParts.sidekick)?.label ??
+          pairingParts.sidekick
+        }
+        options={sidekickOptions.map((option) => ({ ...option }))}
+        onValueChange={(value) => commitPairing({ sidekick: value })}
+      />,
+    );
+  }
+  if (!pairing && selection.thinkingEnabled !== null) {
     rows.push(
       <TraitRow
         key="thinking"
@@ -139,7 +222,7 @@ export function ComposerModelPickerTraitRows(props: {
       />,
     );
   }
-  if (selection.contextWindowOptions.length > 1) {
+  if (!pairing && selection.contextWindowOptions.length > 1) {
     rows.push(
       <TraitRow
         key="context"
@@ -158,7 +241,7 @@ export function ComposerModelPickerTraitRows(props: {
       />,
     );
   }
-  if (selection.effortLevels.length > 0 && !usesEffortSlider) {
+  if (!pairing && selection.effortLevels.length > 0 && !usesEffortSlider) {
     rows.push(
       <TraitRow
         key="effort"
@@ -186,7 +269,7 @@ export function ComposerModelPickerTraitRows(props: {
       />,
     );
   }
-  if (selection.supportsUltrafastMode && !usesEffortSlider) {
+  if (!pairing && selection.supportsUltrafastMode && !usesEffortSlider) {
     rows.push(
       <ComposerUltrafastMenu
         key="speed"
@@ -195,7 +278,7 @@ export function ComposerModelPickerTraitRows(props: {
         onChange={commitTrait}
       />,
     );
-  } else if (supportsComposerFastModeControl(selection) && !usesEffortSlider) {
+  } else if (!pairing && supportsComposerFastModeControl(selection) && !usesEffortSlider) {
     rows.push(
       <TraitRow
         key="speed"
