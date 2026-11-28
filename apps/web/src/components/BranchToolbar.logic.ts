@@ -1,13 +1,28 @@
-import type { GitBranch } from "@synara/contracts";
+import type { GitBranch, ModelSelection } from "@synara/contracts";
+import { defaultInstanceIdForProvider } from "@synara/shared/providerInstances";
 import {
   deriveAssociatedWorktreeMetadata,
   type AssociatedWorktreeMetadata,
 } from "@synara/shared/threadWorkspace";
 import { Schema } from "effect";
-import type { ThreadWorkspacePatch } from "../types";
+import type { ThreadSession, ThreadWorkspacePatch } from "../types";
 
 export const EnvMode = Schema.Literals(["local", "worktree"]);
 export type EnvMode = typeof EnvMode.Type;
+
+export function resolveBranchToolbarUsageAccount(
+  session: Pick<ThreadSession, "provider" | "providerInstanceId"> | null,
+  selection: Pick<ModelSelection, "provider" | "instanceId"> | undefined,
+) {
+  const provider = session?.provider ?? selection?.provider ?? null;
+  return {
+    provider,
+    instanceId:
+      session?.providerInstanceId ??
+      (selection?.provider === provider ? selection.instanceId : undefined) ??
+      (provider === null ? undefined : defaultInstanceIdForProvider(provider)),
+  };
+}
 
 export function resolveEffectiveEnvMode(input: {
   activeWorktreePath: string | null;

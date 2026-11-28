@@ -12,7 +12,6 @@ import { ChevronDownIcon, WorktreeIcon } from "~/lib/icons";
 import { HiOutlineHandRaised } from "react-icons/hi2";
 import { CentralIcon } from "~/lib/central-icons";
 import { useCallback, useMemo, useState, type ReactNode } from "react";
-import { useAppSettings } from "~/appSettings";
 
 import { newCommandId, cn } from "../lib/utils";
 import { readNativeApi } from "../nativeApi";
@@ -21,17 +20,14 @@ import { useProviderUsageSummary } from "../hooks/useProviderUsageSummary";
 import { resolveThreadEnvironmentPresentation } from "../lib/threadEnvironment";
 import { runtimeModePresentation, providerModelSupportsAutoRuntimeMode } from "../lib/runtimeMode";
 import { useStore } from "../store";
-import {
-  createAccountRateLimitThreadsSelector,
-  createProjectSelector,
-  createThreadShellSettingsSelector,
-} from "../storeSelectors";
+import { createProjectSelector, createThreadShellSettingsSelector } from "../storeSelectors";
 import {
   EnvMode,
   resolveAssociatedWorktreeMetadataAfterWorkspacePatch,
   resolveDraftEnvModeAfterBranchChange,
   resolveEffectiveEnvMode,
   resolveFixedLocalWorkspacePatch,
+  resolveBranchToolbarUsageAccount,
 } from "./BranchToolbar.logic";
 import {
   BranchToolbarBranchSelector,
@@ -297,9 +293,6 @@ export default function BranchToolbar({
   const setThreadWorkspaceAction = useStore((store) => store.setThreadWorkspace);
   const draftThread = useComposerDraftStore((store) => store.getDraftThread(threadId));
   const setDraftThreadContext = useComposerDraftStore((store) => store.setDraftThreadContext);
-  const [rateLimitThreadsSelector] = useState(() => createAccountRateLimitThreadsSelector());
-  const threads = useStore(rateLimitThreadsSelector);
-  const { settings } = useAppSettings();
 
   // Settings and session only, never the transcript: subscribing to the whole thread
   // re-rendered the toolbar for every streamed token.
@@ -322,8 +315,10 @@ export default function BranchToolbar({
   const activeWorkingDirectory = hasServerThread
     ? (serverThread.workingDirectory ?? null)
     : (draftThread?.workingDirectory ?? null);
-  const activeProvider =
-    serverThreadSession?.provider ?? serverThread?.modelSelection.provider ?? null;
+  const usageAccount = resolveBranchToolbarUsageAccount(
+    serverThreadSession,
+    serverThread?.modelSelection,
+  );
   const usesFixedLocalWorkspace = fixedLocalWorkspaceCwd !== undefined;
   const branchCwd = usesFixedLocalWorkspace
     ? fixedLocalWorkspaceCwd
@@ -484,9 +479,7 @@ export default function BranchToolbar({
   const showEnvPicker = effectiveEnvMode === "local" || canSwitchToLocal;
 
   const usageSummary = useProviderUsageSummary({
-    provider: activeProvider,
-    threads,
-    codexHomePath: settings.codexHomePath || null,
+    ...usageAccount,
     fetchOpenUsageData: false,
   });
   const [rateLimitsOpen, setRateLimitsOpen] = useState(true);
@@ -533,7 +526,7 @@ export default function BranchToolbar({
                   </MenuItem>
                   <CollapsiblePanel>
                     <ProviderUsagePanelContent
-                      provider={activeProvider}
+                      provider={usageAccount.provider}
                       rateLimits={usageSummary.rateLimits}
                       usageLines={usageSummary.usageLines}
                       notice={usageSummary.usageNotice}

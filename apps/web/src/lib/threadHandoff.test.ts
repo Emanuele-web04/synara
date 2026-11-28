@@ -326,6 +326,29 @@ describe("threadHandoff", () => {
     ]);
   });
 
+  it("does not offer a signed-out account of the same provider as a handoff target", () => {
+    const providerInstances = getProviderInstanceOptions(
+      AppSettingsSchema.makeUnsafe({
+        providerInstances: { agy_work: { driver: "antigravity", displayName: "Work" } },
+      }),
+    );
+    expect(
+      resolveAvailableHandoffTargets({
+        sourceProvider: "antigravity",
+        sourceProviderInstanceId: "antigravity",
+        providerInstances,
+        providerStatuses: [
+          readyStatus("antigravity"),
+          readyStatus("antigravity", {
+            instanceId: "agy_work",
+            status: "error",
+            authStatus: "unauthenticated",
+          }),
+        ],
+      }),
+    ).toEqual([]);
+  });
+
   it("does not expose targets before provider health is available", () => {
     expect(
       resolveAvailableHandoffTargets({
