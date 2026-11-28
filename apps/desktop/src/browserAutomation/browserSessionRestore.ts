@@ -11,7 +11,7 @@ import {
 } from "node:fs";
 import { open, rename, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { Schema } from "effect";
+import { Option, Schema } from "effect";
 import { VaultKeyProtection, type VaultKeyStore } from "./vaultKeyProtection";
 
 const Text = Schema.String.check(Schema.isMaxLength(16_384));
@@ -32,6 +32,7 @@ const Cookie = Schema.Struct({
   partitionKeyOpaque: Schema.optional(Schema.Boolean),
 });
 type Cookie = typeof Cookie.Type;
+const decodeCookie = Schema.decodeUnknownOption(Cookie);
 const Snapshot = Schema.Struct({
   version: Schema.Literal(1),
   domains: Schema.Array(Text).check(Schema.isMaxLength(20_000)),
@@ -54,13 +55,14 @@ function domainName(domain: string): string {
 export function sessionCookieParameters(cookie: Cookie): Record<string, unknown> | null {
   if (!cookie.session || cookie.partitionKeyOpaque || !cookie.path.startsWith("/")) return null;
   const host = domainName(cookie.domain);
-  const url = new URL(
+  const url = URL.parse(
     `${cookie.secure || cookie.sourceScheme === "Secure" ? "https" : "http"}://${host}/`,
   );
-  if (url.hostname !== host || url.username || url.password || url.port) return null;
+  if (!url || url.hostname !== host || url.username || url.password || url.port) return null;
   if (cookie.partitionKey) {
-    const top = new URL(cookie.partitionKey.topLevelSite);
+    const top = URL.parse(cookie.partitionKey.topLevelSite);
     if (
+      !top ||
       !["http:", "https:"].includes(top.protocol) ||
       top.origin !== cookie.partitionKey.topLevelSite
     )
@@ -89,7 +91,6 @@ export class BrowserSessionRestore {
   private disposed = false;
   private readonly dirtyPath: string;
   private readonly snapshotPath: string;
-  private domains = new Set<string>();
   private revision = 0;
   private clean = false;
   private available = false;
@@ -142,13 +143,14 @@ export class BrowserSessionRestore {
       this.revision++;
       if (this.clean) this.invalidate();
     });
-    // Fresh installs have no sessions to decrypt. Defer OS key creation until an import.
+    // Defer OS key creation until there are session cookies to protect.
     if (!existsSync(this.snapshotPath)) {
       this.available = true;
       return;
     }
     const key = await this.keys.provide();
     key.fill(0);
+    if (this.disposed) return;
     this.available = true;
     if (interrupted) {
       await unlink(this.snapshotPath).catch(() => {});
@@ -177,17 +179,15 @@ export class BrowserSessionRestore {
         decipher.setAuthTag(encrypted.subarray(12, 28));
         plaintext = Buffer.concat([decipher.update(encrypted.subarray(28)), decipher.final()]);
         const snapshot = Schema.decodeUnknownSync(Snapshot)(JSON.parse(plaintext.toString("utf8")));
-        this.domains = new Set(snapshot.domains);
         const cookies = snapshot.cookies.map(sessionCookieParameters);
         if (cookies.some((cookie) => cookie === null))
           throw new Error("Unsupported session snapshot.");
-        await this.backend.restore(cookies as Record<string, unknown>[]);
+        if (!this.disposed) await this.backend.restore(cookies as Record<string, unknown>[]);
       } finally {
         dataKey.fill(0);
         plaintext?.fill(0);
       }
     } catch {
-      this.domains.clear();
       await unlink(this.snapshotPath).catch(() => {});
       throw new Error("Browser session restoration is unavailable.");
     } finally {
@@ -204,35 +204,34 @@ export class BrowserSessionRestore {
       this.available = false;
       throw new Error("Secure browser session storage is unavailable.");
     }
-    let raw: unknown[];
-    try {
-      raw = await this.backend.read();
-    } catch {
-      throw new Error("Browser session metadata could not be read.");
-    }
-    let cookies: readonly Cookie[];
-    try {
-      cookies = Schema.decodeUnknownSync(Schema.Array(Cookie))(raw);
-    } catch {
-      throw new Error("Browser session metadata is unsupported.");
-    }
-    const imported = new Set(domains.map(domainName));
-    for (const cookie of cookies)
-      if (imported.has(domainName(cookie.domain))) this.domains.add(cookie.domain);
-    await this.save();
+    if (!this.available) throw new Error("Secure browser session storage is unavailable.");
+    await this.save(new Set(domains.map(domainName)));
   }
 
-  private save(): Promise<void> {
+  private save(importedDomains?: ReadonlySet<string>): Promise<void> {
     const operation = this.writing.then(async () => {
-      const cookies = Schema.decodeUnknownSync(Schema.Array(Cookie))(
-        await this.backend.read(),
-      ).filter((cookie) => cookie.session && this.domains.has(cookie.domain));
-      // Refuse to claim continuity if isolation metadata cannot be replayed.
-      if (cookies.some((cookie) => sessionCookieParameters(cookie) === null))
-        throw new Error("Unsupported session cookie metadata.");
-      const plaintext = Buffer.from(
-        JSON.stringify({ version: 1, domains: [...this.domains], cookies }),
-      );
+      const cookies: Cookie[] = [];
+      for (const raw of await this.backend.read()) {
+        const decoded = decodeCookie(raw);
+        if (Option.isNone(decoded)) {
+          if (importedDomains) throw new Error("Unsupported imported cookie metadata.");
+          continue;
+        }
+        const cookie = decoded.value;
+        if (!cookie.session || (importedDomains && !importedDomains.has(domainName(cookie.domain))))
+          continue;
+        // Opaque partition keys cannot be reconstructed. Never broaden a cookie's scope.
+        if (!sessionCookieParameters(cookie)) {
+          if (importedDomains) throw new Error("Unsupported imported cookie metadata.");
+          continue;
+        }
+        cookies.push(cookie);
+      }
+      if (!cookies.length && !this.keyProtection) return;
+      const domains = [...new Set(cookies.map((cookie) => cookie.domain))];
+      const snapshot = { version: 1 as const, domains, cookies };
+      if (!Schema.is(Snapshot)(snapshot)) throw new Error("Session snapshot is too large.");
+      const plaintext = Buffer.from(JSON.stringify(snapshot));
       if (plaintext.length > MAX_BYTES - 28) throw new Error("Session snapshot is too large.");
       const key = await this.keys.provide();
       const temporary = join(this.directory, `sessions-${randomBytes(16).toString("hex")}.tmp`);
@@ -262,8 +261,14 @@ export class BrowserSessionRestore {
   }
 
   async shutdown(): Promise<void> {
+    if (this.clean || this.disposed) return;
     try {
-      if (!this.available || !this.keyProtection) return;
+      if (!this.available) return;
+      this.available = false;
+      if (!this.keyProtection && this.revision === 0) return;
+      // Direct sign-ins can be the first use of secure storage. A desktop without an
+      // OS key store still has Chromium's normal cookie lifetime.
+      if (!this.keyProtection && !(await this.store.available())) return;
       const revision = this.revision;
       await this.save();
       if (this.revision !== revision) throw new Error("Browser cookies changed during shutdown.");
@@ -271,9 +276,18 @@ export class BrowserSessionRestore {
       unlinkSync(this.dirtyPath);
       this.syncDirectory();
     } finally {
-      this.disposed = true;
-      this.keyProtection?.dispose();
-      this.backend.dispose();
+      // A service worker can still sign out between the checkpoint and Electron quit.
+      // Keep the change listener alive until will-quit to invalidate that checkpoint.
+      if (this.clean) this.keyProtection?.dispose();
+      else this.dispose();
     }
+  }
+
+  dispose(): void {
+    if (this.disposed) return;
+    this.available = false;
+    this.disposed = true;
+    this.keyProtection?.dispose();
+    this.backend.dispose();
   }
 }

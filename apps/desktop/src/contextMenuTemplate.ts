@@ -21,6 +21,11 @@ function isContextMenuItem(item: unknown): item is DesktopContextMenuItem {
   return typeof candidate.id === "string" && typeof candidate.label === "string";
 }
 
+/** Native menus on Windows and Linux interpret a single ampersand as a mnemonic. */
+export function literalMenuLabel(value: string): string {
+  return process.platform === "darwin" ? value : value.replaceAll("&", "&&");
+}
+
 /**
  * Builds one menu level. A row with usable `children` becomes a native submenu and never
  * resolves itself; a parent whose children are all invalid is dropped so it cannot read as

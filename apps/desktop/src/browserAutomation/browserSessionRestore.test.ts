@@ -38,7 +38,9 @@ function backend(initial: unknown[] = [cookie]) {
     onChange: (listener: () => void) => {
       change = listener;
     },
-    dispose: vi.fn(),
+    dispose: vi.fn(() => {
+      change = () => {};
+    }),
     change(next: unknown[]) {
       cookies = next;
       change();
@@ -56,7 +58,7 @@ afterEach(async () => {
   await Promise.all(homes.splice(0).map((path) => rm(path, { recursive: true, force: true })));
 });
 
-describe("imported browser session restoration", () => {
+describe("browser profile session restoration", () => {
   it("does not access OS keys on an empty startup or unused shutdown", async () => {
     const directory = await home();
     const osStore = { ...store, available: vi.fn(store.available), encrypt: vi.fn(store.encrypt) };
@@ -162,21 +164,24 @@ describe("imported browser session restoration", () => {
     await second.shutdown();
   });
 
-  it("stores only imported domains and leaves persistent-cookie expiry to Chromium", async () => {
+  it("restores direct sign-ins without an import and leaves persistent and opaque cookies to Chromium", async () => {
     const directory = await home();
-    const source = backend([
-      cookie,
-      { ...cookie, name: "persistent", session: false },
-      { ...cookie, domain: "unrelated.test" },
-    ]);
+    const source = backend([]);
     const first = new BrowserSessionRestore(directory, source, store);
     await first.initialize();
-    await first.rememberImport(["example.test"]);
+    source.change([
+      cookie,
+      { ...cookie, name: "persistent", session: false },
+      { ...cookie, name: "opaque", partitionKeyOpaque: true },
+      { ...cookie, name: "unknown", sourceScheme: "Unsupported" },
+    ]);
     await first.shutdown();
     const next = backend([]);
     const second = new BrowserSessionRestore(directory, next, store);
     await second.initialize();
-    expect(next.restore.mock.calls[0]![0]).toHaveLength(1);
+    expect(next.restore.mock.calls[0]![0]).toEqual([
+      expect.objectContaining({ name: cookie.name, value: cookie.value }),
+    ]);
     await second.shutdown();
   });
 
@@ -225,6 +230,34 @@ describe("imported browser session restoration", () => {
     await first.rememberImport(["example.test"]);
     await first.shutdown();
     source.change([]);
+    expect(existsSync(join(directory, "active-run"))).toBe(true);
+    first.dispose();
+  });
+
+  it("does not replay an old login after startup abandoned a delayed key-store read", async () => {
+    const directory = await home();
+    const source = backend([]);
+    const first = new BrowserSessionRestore(directory, source, store);
+    await first.initialize();
+    source.change([cookie]);
+    await first.shutdown();
+
+    let release!: (value: boolean) => void;
+    const available = vi.fn(
+      () =>
+        new Promise<boolean>((resolve) => {
+          release = resolve;
+        }),
+    );
+    const next = backend([]);
+    const second = new BrowserSessionRestore(directory, next, { ...store, available });
+    const started = second.initialize();
+    await vi.waitFor(() => expect(available).toHaveBeenCalledOnce());
+    second.dispose();
+    release(true);
+    await started.catch(() => {});
+    await second.shutdown();
+    expect(next.restore).not.toHaveBeenCalled();
     expect(existsSync(join(directory, "active-run"))).toBe(true);
   });
 

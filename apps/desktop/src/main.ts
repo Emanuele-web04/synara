@@ -303,8 +303,12 @@ import { MacUpdateInstallHandoff } from "./macUpdateInstallHandoff";
 import { BROWSER_SESSION_PARTITION, DesktopBrowserManager } from "./browserManager";
 import { BrowserSessionRestore } from "./browserAutomation/browserSessionRestore";
 import { createCookieSessionBackend } from "./browserAutomation/electronCookieSession";
+import { registerBrowserHybridPasskeys } from "./browserHybridPasskeys";
+import { configureBrowserTouchId, registerBrowserPasskeyAccounts } from "./browserPasskeys";
 import { BrowserVault } from "./browserAutomation/browserVault";
 import { BrowserVaultCapture } from "./browserAutomation/browserVaultCapture";
+import { BrowserEmailHistory } from "./browserAutomation/browserEmailHistory";
+import { registerLoginEmailMenu } from "./browserAutomation/loginEmailMenu";
 import { registerBrowserVaultIpc } from "./browserVaultIpc";
 import { registerSafariAccessIpc } from "./safariAccessIpc";
 import { showInFileManager } from "./showInFileManager";
@@ -405,13 +409,13 @@ const shellEnvironmentSync = syncShellEnvironment();
 
 const IPC = DESKTOP_IPC_CHANNELS;
 const MAX_CLIPBOARD_IMAGE_DATA_URL_LENGTH = 16 * 1024 * 1024;
-const packagedDesktopFlavor = app.isPackaged
-  ? (
-      JSON.parse(FS.readFileSync(Path.join(app.getAppPath(), "package.json"), "utf8")) as {
-        synaraDesktopFlavor?: unknown;
-      }
-    ).synaraDesktopFlavor
+const packagedMetadata = app.isPackaged
+  ? (JSON.parse(FS.readFileSync(Path.join(app.getAppPath(), "package.json"), "utf8")) as {
+      synaraDesktopFlavor?: unknown;
+      synaraWebAuthnAccessGroup?: unknown;
+    })
   : undefined;
+const packagedDesktopFlavor = packagedMetadata?.synaraDesktopFlavor;
 const isSourceDesktopBuild =
   requestedSourceBuildMarker === SYNARA_SOURCE_DESKTOP_BUILD_MARKER &&
   packagedDesktopFlavor === undefined;
@@ -660,8 +664,28 @@ const browserOsKeyStore = {
 const browserVault = new BrowserVault(Path.join(BASE_DIR, "browser-vault"), browserOsKeyStore);
 let browserSessionRestore: BrowserSessionRestore | undefined;
 const browserVaultCapture = new BrowserVaultCapture(browserVault);
-const browserManager = new DesktopBrowserManager({
-  onRuntimeReady: (runtime) => browserVaultCapture.register(runtime),
+const browserEmailHistory = new BrowserEmailHistory(
+  Path.join(userDataPath, "browser-emails.enc"),
+  browserOsKeyStore,
+);
+const browserManager: DesktopBrowserManager = new DesktopBrowserManager({
+  onRuntimeReady: (runtime) => {
+    const unregisterCapture = browserVaultCapture.register(runtime);
+    const unregisterEmails = registerLoginEmailMenu(
+      runtime.webContents,
+      browserEmailHistory,
+      browserVault,
+      () => isHumanBrowserPage(runtime.webContents),
+      () => ({
+        release: browserManager.beginHumanBrowserOperation(runtime.threadId),
+        ready: browserHostPipeServer?.waitForIdle(runtime.threadId) ?? Promise.resolve(),
+      }),
+    );
+    return () => {
+      unregisterEmails();
+      unregisterCapture();
+    };
+  },
   onHumanControl: (threadId) => browserVaultCapture.noteHumanActivity(threadId),
   annotationPreloadPath: annotationGuestPreload,
   beforeInputEvent: (event, input) => {
@@ -696,6 +720,13 @@ const browserManager = new DesktopBrowserManager({
     );
   },
 });
+function isHumanBrowserPage(contents: Electron.WebContents): boolean {
+  return (
+    browserManager.isVisibleBrowserContents(contents) &&
+    browserVaultCapture.isHumanControlled(contents)
+  );
+}
+
 let browserHostPipeServer: BrowserHostPipeServer | null = null;
 let appSnapManager: DesktopAppSnapManager | null = null;
 let configuredUpdaterCacheDirName: string | null = null;
@@ -5218,7 +5249,13 @@ async function shutdownDesktopRuntime(reason: string): Promise<void> {
         await shutdownBrowserServices({
           revokeHost: () => disposeBrowserHostPipeServerForShutdown(reason),
           closePages: () => browserManager.dispose(),
-          stopCapture: () => browserVaultCapture.dispose(),
+          stopCapture: async () => {
+            try {
+              await browserVaultCapture.dispose();
+            } finally {
+              await browserEmailHistory.flush();
+            }
+          },
           clearKeys: () => browserVault.dispose(),
         });
       } finally {
@@ -5226,7 +5263,12 @@ async function shutdownDesktopRuntime(reason: string): Promise<void> {
           session.fromPartition(BROWSER_SESSION_PARTITION),
         ).dispose();
       }
-      await browserSessionRestore?.shutdown();
+      try {
+        await browserSessionRestore?.shutdown();
+      } catch {
+        // The dirty marker keeps a failed checkpoint out of the next launch.
+        console.warn("[Synara browser] Could not save session cookies for the next launch.");
+      }
       restoreStdIoCapture?.();
       if (betaDiagnostics) {
         trackBetaDiagnostics("app.exit", { kind: "lifecycle" });
@@ -5967,8 +6009,6 @@ function registerIpcHandlers(): void {
         } catch (error) {
           const allowed = [
             "Secure browser session storage is unavailable.",
-            "Browser session metadata could not be read.",
-            "Browser session metadata is unsupported.",
             "Secure browser session persistence failed.",
           ];
           console.warn(
@@ -6520,8 +6560,7 @@ if (!hasSingleInstanceLock) {
   });
 }
 
-// Restores the imported browser session's cookies. Never rejects: a failure or timeout
-// leaves the browser without saved cookies, as before.
+// A failed or timed-out profile restore must still let the first window open.
 async function restoreBrowserSession(restore: BrowserSessionRestore): Promise<void> {
   try {
     let restoreTimer: NodeJS.Timeout | undefined;
@@ -6529,19 +6568,19 @@ async function restoreBrowserSession(restore: BrowserSessionRestore): Promise<vo
       await Promise.race([
         restore.initialize().finally(() => clearTimeout(restoreTimer)),
         new Promise<never>((_, reject) => {
-          restoreTimer = setTimeout(
-            () => reject(new Error("Browser session restoration timed out.")),
-            BROWSER_SESSION_RESTORE_TIMEOUT_MS,
-          );
+          restoreTimer = setTimeout(() => {
+            // The first page can navigate after the deadline. Retire the cookie
+            // backend before releasing it so a late restore cannot replay a login.
+            restore.dispose();
+            reject(new Error("Browser session restoration timed out."));
+          }, BROWSER_SESSION_RESTORE_TIMEOUT_MS);
         }),
       ]);
     } finally {
       clearTimeout(restoreTimer);
     }
   } catch {
-    console.warn(
-      "[Synara browser] Secure session restoration is unavailable; no saved session cookies were restored.",
-    );
+    console.warn("[Synara browser] Secure session restoration did not complete.");
   }
 }
 
@@ -6570,6 +6609,7 @@ async function bootstrap(browserNetworkGuardReady: Promise<void>): Promise<void>
     createCookieSessionBackend(BROWSER_SESSION_PARTITION),
     browserOsKeyStore,
   );
+  app.once("will-quit", () => browserSessionRestore?.dispose());
   // Saved cookies feed neither the backend nor the window, so they are restored while the
   // backend starts. Browser tools and the first window wait for them below, so no page in
   // the browser partition loads before they are back.
@@ -6716,9 +6756,24 @@ if (hasSingleInstanceLock) {
       // Install the session-owned proxy before anything can create or navigate browser
       // pages. It does not feed the backend, so bootstrap starts the backend meanwhile
       // and holds the first window until the guard is up; a failure is awaited below.
-      const browserNetworkGuardReady = getBetterwrightNetworkGuard(
-        session.fromPartition(BROWSER_SESSION_PARTITION),
-      ).initialize();
+      configureBrowserTouchId(
+        desktopIdentity.bundleId,
+        packagedMetadata?.synaraWebAuthnAccessGroup,
+      );
+      const browserSession = session.fromPartition(BROWSER_SESSION_PARTITION);
+      const disposePasskeyAccounts = registerBrowserPasskeyAccounts(
+        browserSession,
+        isHumanBrowserPage,
+      );
+      const disposeHybridPasskeys = registerBrowserHybridPasskeys(
+        browserSession,
+        isHumanBrowserPage,
+      );
+      app.once("will-quit", () => {
+        disposeHybridPasskeys();
+        disposePasskeyAccounts();
+      });
+      const browserNetworkGuardReady = getBetterwrightNetworkGuard(browserSession).initialize();
       // Observed below and in bootstrap; this keeps an early return from leaving it unobserved.
       browserNetworkGuardReady.catch(() => undefined);
       productAnalytics.start();

@@ -281,6 +281,41 @@ export class BrowserVault {
     this.vault.trackRedactionSecret(secret);
   }
 
+  async savedLoginsForOrigin(origin: string) {
+    await this.ready;
+    if (!this.keyProtection || (await this.keyProtection.status()).locked) return [];
+    const { credentials } = await this.vault.ownerList({ category: "login" });
+    if ((await this.keyProtection.status()).locked || this.disposed) return [];
+    return credentials
+      .filter((entry) => entry.origin === origin && entry.matchMode !== "never")
+      .map(({ id, username }) => ({ id, username }));
+  }
+
+  /** Called only after the owner selects this account in the native browser menu. */
+  async fillSelectedLogin(origin: string, id: string, username: string) {
+    await this.ready;
+    if (!this.keyProtection || (await this.keyProtection.status()).locked) return null;
+    const entry = await this.vault.handleRequest(
+      "fill",
+      { id, username, matchMode: "exact-origin" },
+      origin,
+    );
+    if (
+      !entry ||
+      typeof entry !== "object" ||
+      !("origin" in entry) ||
+      entry.origin !== origin ||
+      !("username" in entry) ||
+      entry.username !== username ||
+      !("secret" in entry) ||
+      typeof entry.secret !== "string" ||
+      (await this.keyProtection.status()).locked ||
+      this.disposed
+    )
+      return null;
+    return { username, password: entry.secret };
+  }
+
   async shouldOfferSave(input: {
     origin: string;
     username: string;

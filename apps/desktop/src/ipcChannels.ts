@@ -108,6 +108,10 @@ export const DESKTOP_IPC_CHANNELS = {
     state: "desktop:appsnap-state",
   },
   browser: {
+    email: {
+      remember: "desktop:browser-email-remember",
+      choose: "desktop:browser-email-choose",
+    },
     vault: {
       snapshot: "desktop:browser-vault-snapshot",
       configure: "desktop:browser-vault-configure",

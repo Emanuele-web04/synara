@@ -42,6 +42,7 @@ describe("browser vault", { timeout: VAULT_TEST_TIMEOUT_MS }, () => {
         protection: { configured: false, locked: true, osProtected: false },
         logins: [],
       });
+      expect(await vault.savedLoginsForOrigin(origin)).toEqual([]);
       expect(store.available).not.toHaveBeenCalled();
       await expect(readFile(join(home, "vault", "key-protection.json"))).rejects.toThrow();
       expect(
@@ -52,7 +53,20 @@ describe("browser vault", { timeout: VAULT_TEST_TIMEOUT_MS }, () => {
       expect((await vault.snapshot()).logins).toMatchObject([{ username: "human" }]);
       const restored = new BrowserVault(home, store);
       try {
-        expect((await restored.snapshot()).logins).toMatchObject([{ username: "human" }]);
+        const [account] = await restored.savedLoginsForOrigin(origin);
+        expect(account).toEqual({ id: expect.any(String), username: "human" });
+        expect(await restored.fillSelectedLogin(origin, account!.id, "human")).toEqual({
+          username: "human",
+          password: "saved-synthetic",
+        });
+        const other = "https://sub.login.example.test";
+        expect(await restored.savedLoginsForOrigin(other)).toEqual([]);
+        await expect(restored.fillSelectedLogin(other, account!.id, "human")).rejects.toThrow();
+        await expect(
+          restored.fillSelectedLogin(origin, account!.id, "different"),
+        ).rejects.toThrow();
+        await restored.remove(account!.id);
+        await expect(restored.fillSelectedLogin(origin, account!.id, "human")).rejects.toThrow();
       } finally {
         restored.dispose();
       }
@@ -191,6 +205,9 @@ describe("browser vault", { timeout: VAULT_TEST_TIMEOUT_MS }, () => {
     const adapter = vault.agentAdapter(page(), new AbortController().signal);
     const snapshot = await vault.snapshot();
     expect(snapshot.logins).toHaveLength(3);
+    expect(
+      (await vault.savedLoginsForOrigin(origin)).map(({ username }) => username).sort(),
+    ).toEqual(["agent", "human"]);
     expect(snapshot.logins.find((login) => login.username === "signup")).toMatchObject({
       status: "pending",
       source: "unknown",
@@ -212,6 +229,8 @@ describe("browser vault", { timeout: VAULT_TEST_TIMEOUT_MS }, () => {
       master,
     );
     await vault.lock();
+    expect(await vault.savedLoginsForOrigin(origin)).toEqual([]);
+    expect(await vault.fillSelectedLogin(origin, snapshot.logins[0]!.id, "human")).toBeNull();
     await expect(adapter.handleRequest("list", {}, origin)).rejects.toThrow();
     expect((await vault.snapshot()).logins).toEqual([]);
     vault.dispose();

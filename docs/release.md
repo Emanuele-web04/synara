@@ -426,6 +426,36 @@ Required secrets used by the workflow:
 - `APPLE_API_ISSUER`
 - `APPLE_TEAM_ID`
 
+#### Phone passkeys in the macOS browser
+
+The app uses Chromium’s native hybrid WebAuthn transport when its Electron distribution provides it. The release input is a Synara build of the Electron commit and patch recorded in [upstream.json](../apps/desktop/patches/electron-hybrid/upstream.json). Bluetooth permission is attributed to the signed app via `NSBluetoothAlwaysUsageDescription`. Phone passkeys use a different mechanism from the Touch ID provisioning profile below.
+
+On a macOS build host, use a dedicated Electron checkout synced to the release tag in the manifest, including Chromium’s dependencies and the release PGO profiles. Provide the matching Xcode and `depot_tools` on PATH. The build command checks the upstream revisions, applies Synara’s patch, compiles the distribution and restores the clean Electron source. Each invocation produces one architecture. [Electron build instructions](https://github.com/electron/electron/blob/v43.8.12/docs/development/build-instructions-gn.md)
+
+```sh
+node scripts/build-mac-hybrid-electron.ts --source-reference
+node scripts/build-mac-hybrid-electron.ts --source "$ELECTRON_SRC" --arch arm64 --output /path/to/hybrid-arm64
+node scripts/build-mac-hybrid-electron.ts --verify /path/to/hybrid-arm64 --arch arm64
+```
+
+For local packaging, set `SYNARA_MAC_HYBRID_RUNTIME` to the output directory. Packaging checks the manifest, ZIP digest, Electron version, Mach-O architecture and native API markers, then signs the resulting app through the existing macOS release process. For desktop development, extract the verified ZIP into its own directory and set Electron’s `ELECTRON_OVERRIDE_DIST_PATH` to that directory before starting Synara.
+
+The **Build macOS Electron with phone passkeys** workflow builds arm64 and x64 on a dedicated Mac runner labeled `synara-electron-builder`, with `ELECTRON_SRC` pointing to its synced checkout. It exercises the generated code in a managed browser tab and uploads an artifact for each architecture. Dispatch it on the default branch. After qualifying the builds, set the repository variable `SYNARA_MAC_HYBRID_RUN_ID` to that successful run. Release packaging loads the matching architecture from that producer. A missing or expired selected artifact fails packaging. An empty variable uses standard Electron, which offers no phone QR on macOS. Rebuild and qualify the runtime when the Electron pin or native patch changes and before the selected artifacts expire.
+
+To qualify a physical phone, run the following on an interactive Mac with the verified distribution extracted. Select **Register test passkey** and scan the QR. Then use the same tab to sign in with the saved passkey and scan again. The fixture uses a disposable local site and a temporary browser profile. The test credential can be removed from the phone afterward.
+
+```sh
+SYNARA_HYBRID_ELECTRON_DIST=/path/to/extracted-runtime bun run --cwd apps/desktop smoke:browser-hybrid-passkey --phone
+```
+
+The automated variant uses `--simulate-focus` on unattended hosts. It decodes the rendered QR and checks that it matches Chromium’s request, along with cancellation, tab changes and concurrent requests. Physical qualification also exercises Bluetooth proximity and the phone’s signature.
+
+#### Local Touch ID passkeys
+
+To enable device-bound Touch ID passkeys in the desktop browser, create a Developer ID provisioning profile with Keychain Sharing for each channel's explicit App ID. The profile must authorize `<AppIDPrefix>.<bundle ID>.webauthn` and the Developer ID Application certificate used for that release. Store the base64-encoded profiles in separate optional Actions secrets named `MAC_WEBAUTHN_PROFILE_STABLE` and `MAC_WEBAUTHN_PROFILE_BETA`. For a local signed build, set `SYNARA_MAC_WEBAUTHN_PROFILE` to the matching profile's path. Packaging checks the team, bundle, expiry, and keychain grant before applying the entitlement to the main app. Builds without the profile use the standard signature and leave local Touch ID passkeys unavailable.
+
+For a provisioned build, inspect `Contents/embedded.provisionprofile` with `security cms -D -i` and compare its authorization to the app's signed `keychain-access-groups` using `codesign --display --entitlements - "/path/to/Synara.app"`. On a compatible Mac, register a test account's passkey in the browser, restart, sign in with that passkey, and confirm the other channel cannot select it. [Apple's provisioning profile guide](https://developer.apple.com/documentation/technotes/tn3125-inside-code-signing-provisioning-profiles) · [Electron 43 WebAuthn](https://github.com/electron/electron/blob/v43.8.12/docs/api/app.md#appconfigurewebauthnoptions-macos)
+
 Checklist:
 
 1. Apple Developer account access:

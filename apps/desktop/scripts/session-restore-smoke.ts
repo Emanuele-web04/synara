@@ -88,6 +88,7 @@ void (async () => {
     await restore.rememberImport(["example.test"]);
     stage = "shutdown";
     await restore.shutdown();
+    restore.dispose(); // Simulate will-quit before resetting the cookie jar in this process.
     stage = "replay";
     await session
       .fromPartition("persist:session-smoke")
@@ -102,6 +103,7 @@ void (async () => {
       cookies.map(cookieIdentity).toSorted(),
     );
     await restarted.shutdown();
+    restarted.dispose();
     console.log(
       "Session restoration native smoke passed: encrypted checkpoint and replay, including partitioned cookies",
     );

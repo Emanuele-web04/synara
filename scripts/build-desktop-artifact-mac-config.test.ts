@@ -205,6 +205,7 @@ describe("createDesktopPlatformBuildConfig", () => {
     // macOS 26 reads the layered icon out of Assets.car; without this key the
     // bundle falls back to the flat ICNS and never gets the glass material.
     assert.equal(extendInfo.CFBundleIconName, MAC_ICON_ASSET_NAME);
+    assert.match(String(extendInfo.NSBluetoothAlwaysUsageDescription), /passkey QR code/);
     assert.equal(extendInfo.NSMicrophoneUsageDescription, MICROPHONE_USAGE_DESCRIPTION);
     assert.equal(extendInfo.NSAudioCaptureUsageDescription, AUDIO_CAPTURE_USAGE_DESCRIPTION);
     assert.equal(

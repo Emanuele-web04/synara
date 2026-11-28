@@ -37,6 +37,8 @@ import {
   validateDesktopNativeBuildHost,
 } from "./lib/desktop-platform-build-config.ts";
 import { stageCloudflared } from "./lib/cloudflared.ts";
+import { stageMacWebAuthnProfile } from "./lib/mac-webauthn-profile.ts";
+import { hybridArchiveMetadata, verifyMacHybridElectron } from "./lib/mac-hybrid-electron.ts";
 import { stageDesktopRuntimeResources } from "./lib/desktop-runtime-resources.ts";
 import {
   SYNARA_PACKAGED_DESKTOP_FLAVORS,
@@ -248,6 +250,7 @@ interface StagePackageJson {
   readonly synaraLockfileSha256: string;
   readonly synaraSourceTag: string | null;
   readonly synaraWindowsPublisherSubject: string | null;
+  readonly synaraWebAuthnAccessGroup?: string;
   readonly private: true;
   readonly description: string;
   readonly author: string;
@@ -916,6 +919,7 @@ const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   mockUpdates: boolean,
   mockUpdateServerPort: string | undefined,
   flavor: SynaraPackagedDesktopFlavor,
+  macProvisioningProfile?: string,
 ) {
   const buildConfig: Record<string, unknown> = {
     ...artifactIdentity.buildConfig,
@@ -959,6 +963,7 @@ const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     target,
     signed,
     adHocSign: artifactIdentity.identity.usesScriptedUpdates && !signed,
+    ...(macProvisioningProfile ? { macProvisioningProfile } : {}),
     flavor,
     ...(windowsAzureSignOptions ? { windowsAzureSignOptions } : {}),
   } as const;
@@ -1210,6 +1215,27 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
 
   yield* Effect.log(`[desktop-artifact] Packaging stage: ${stageRoot}`);
   const stageAppDir = path.join(stageRoot, "app");
+  // Freeze the selected runtime before verification so a concurrent rebuild cannot
+  // replace a verified archive while the rest of the desktop payload is being staged.
+  const hybridRuntimeInput =
+    options.platform === "mac" ? process.env.SYNARA_MAC_HYBRID_RUNTIME : undefined;
+  let hybridArchive: string | undefined;
+  if (hybridRuntimeInput) {
+    const stagedRuntime = path.join(stageRoot, "hybrid-runtime");
+    const archive = yield* Effect.try({
+      try: () => hybridArchiveMetadata(options.arch).archive,
+      catch: (cause) => new BuildScriptError({ message: "Invalid hybrid runtime target.", cause }),
+    });
+    yield* fs.makeDirectory(stagedRuntime);
+    for (const name of [archive, "manifest.json", "LICENSE-Nightly-Labs"]) {
+      yield* fs.copyFile(path.join(hybridRuntimeInput, name), path.join(stagedRuntime, name));
+    }
+    hybridArchive = yield* Effect.tryPromise({
+      try: () => verifyMacHybridElectron(stagedRuntime, options.arch, electronVersion),
+      catch: (cause) =>
+        new BuildScriptError({ message: "Invalid macOS hybrid Electron runtime.", cause }),
+    });
+  }
   const stageResourcesDir = path.join(stageAppDir, "apps/desktop/resources");
   const distDirs = {
     desktopDist: path.join(repoRoot, "apps/desktop/dist-electron"),
@@ -1343,6 +1369,25 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     { flavor: options.flavor, repositoryRoot: repoRoot },
   );
 
+  const macProfile =
+    options.platform === "mac" &&
+    options.signed &&
+    (options.flavor === "production" || options.flavor === "beta")
+      ? process.env.SYNARA_MAC_WEBAUTHN_PROFILE
+      : undefined;
+  const webAuthnAccessGroup = macProfile
+    ? yield* Effect.try({
+        try: () =>
+          stageMacWebAuthnProfile({
+            profile: macProfile,
+            entitlements: path.join(stageResourcesDir, "entitlements.mac.plist"),
+            team: process.env.APPLE_TEAM_ID,
+            bundleId: artifactIdentity.identity.bundleId,
+          }),
+        catch: (cause) =>
+          new BuildScriptError({ message: "Invalid macOS passkey signing configuration.", cause }),
+      })
+    : undefined;
   const resolvedBuildConfig = yield* createBuildConfig(
     options.platform,
     options.target,
@@ -1351,7 +1396,19 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     options.mockUpdates,
     options.mockUpdateServerPort,
     options.flavor,
+    macProfile ? path.resolve(macProfile) : undefined,
   );
+  if (hybridArchive) {
+    resolvedBuildConfig.buildConfig.electronDist = hybridArchive;
+    const extraResources = resolvedBuildConfig.buildConfig.extraResources as Record<
+      string,
+      string
+    >[];
+    extraResources.push({
+      from: path.join(path.dirname(hybridArchive), "LICENSE-Nightly-Labs"),
+      to: "licenses/electron-hybrid-LICENSE.txt",
+    });
+  }
 
   const stagePackageJson: StagePackageJson = {
     ...artifactIdentity.packageMetadata,
@@ -1361,6 +1418,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     synaraLockfileSha256: resolvedLockfileSha256,
     synaraSourceTag: options.sourceTag ?? null,
     synaraWindowsPublisherSubject: resolvedBuildConfig.windowsPublisherSubject,
+    ...(webAuthnAccessGroup ? { synaraWebAuthnAccessGroup: webAuthnAccessGroup } : {}),
     private: true,
     description: "Synara desktop build",
     author: "Emanuele Di Pietro",

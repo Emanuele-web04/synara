@@ -76,7 +76,7 @@ jobs:
         if: github.run_attempt > 1
         uses: actions/github-script@v8
         env:
-          CHECKPOINT_NAME: candidate-desktop-${{ inputs.platform }}-${{ inputs.arch }}
+          CHECKPOINT_NAME: candidate-desktop-${{ inputs.platform }}-${{ inputs.arch }}${{ inputs.platform == 'mac' && vars.SYNARA_MAC_HYBRID_RUN_ID != '' && format('-hybrid-{0}', vars.SYNARA_MAC_HYBRID_RUN_ID) || '' }}
         with:
           script: |
             const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
@@ -175,6 +175,33 @@ jobs:
         with:
           arch: ${{ inputs.arch }}
 
+      - name: Validate selected Electron build
+        if: inputs.platform == 'mac' && steps.restore_checkpoint.outcome != 'success' && vars.SYNARA_MAC_HYBRID_RUN_ID != ''
+        uses: actions/github-script@v8
+        env:
+          HYBRID_RUN: ${{ vars.SYNARA_MAC_HYBRID_RUN_ID }}
+        with:
+          script: |
+            const id = process.env.HYBRID_RUN;
+            if (!/^[1-9][0-9]*$/.test(id)) throw new Error("Invalid macOS Electron producer run ID.");
+            const {data: run} = await github.rest.actions.getWorkflowRun({...context.repo, run_id: Number(id)});
+            const repo = context.payload.repository;
+            if (run.repository?.id !== repo.id || run.head_repository?.id !== repo.id ||
+                run.path !== ".github/workflows/mac-hybrid-electron.yml" || run.head_branch !== repo.default_branch ||
+                run.event !== "workflow_dispatch" || run.status !== "completed" || run.conclusion !== "success") {
+              throw new Error("Only a successful default-branch macOS Electron build can supply this release.");
+            }
+
+      - name: Download qualified macOS Electron
+        id: hybrid_electron
+        if: inputs.platform == 'mac' && steps.restore_checkpoint.outcome != 'success' && vars.SYNARA_MAC_HYBRID_RUN_ID != ''
+        uses: actions/download-artifact@v8
+        with:
+          name: mac-hybrid-electron-${{ inputs.arch }}
+          path: ${{ runner.temp }}/hybrid-runtime
+          run-id: ${{ vars.SYNARA_MAC_HYBRID_RUN_ID }}
+          github-token: ${{ github.token }}
+
       - name: Restore portable outputs
         if: steps.restore_checkpoint.outcome != 'success'
         uses: ./.github/actions/restore-portable-build
@@ -193,6 +220,8 @@ jobs:
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          SYNARA_MAC_HYBRID_RUNTIME: ${{ steps.hybrid_electron.outputs.download-path }}
+          SYNARA_MAC_WEBAUTHN_PROFILE_BASE64: ${{ inputs.platform == 'mac' && ((inputs.desktop_flavor == 'production' && secrets.MAC_WEBAUTHN_PROFILE_STABLE) || (inputs.desktop_flavor == 'beta' && secrets.MAC_WEBAUTHN_PROFILE_BETA)) || '' }}
           AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
           AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
@@ -247,6 +276,11 @@ jobs:
               key_path="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY_ID}.p8"
               (umask 077; printf '%s' "$APPLE_API_KEY" > "$key_path")
               export APPLE_API_KEY="$key_path"
+              if [[ -n "$SYNARA_MAC_WEBAUTHN_PROFILE_BASE64" ]]; then
+                export SYNARA_MAC_WEBAUTHN_PROFILE="$RUNNER_TEMP/synara-webauthn.provisionprofile"
+                (umask 077; printf '%s' "$SYNARA_MAC_WEBAUTHN_PROFILE_BASE64" | /usr/bin/base64 -D > "$SYNARA_MAC_WEBAUTHN_PROFILE")
+              fi
+              unset SYNARA_MAC_WEBAUTHN_PROFILE_BASE64
               echo "macOS signing enabled."
               signed=true
               args+=(--signed)
@@ -420,7 +454,7 @@ jobs:
         if: ${{ failure() && !cancelled() && steps.checkpoint_backup_verify.outcome == 'success' }}
         uses: actions/upload-artifact@v7
         with:
-          name: candidate-desktop-${{ inputs.platform }}-${{ inputs.arch }}
+          name: candidate-desktop-${{ inputs.platform }}-${{ inputs.arch }}${{ inputs.platform == 'mac' && vars.SYNARA_MAC_HYBRID_RUN_ID != '' && format('-hybrid-{0}', vars.SYNARA_MAC_HYBRID_RUN_ID) || '' }}
           path: release-publish/*
           compression-level: 0
           retention-days: 30

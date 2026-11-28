@@ -3,11 +3,19 @@ title: Browser logins & sessions
 description: Manage saved accounts, import browser cookies deliberately, and understand shared sessions and optional Safari setup.
 ---
 
-Tabs and browser tool access belong to a task, but cookies and signed-in sessions are shared across Synara browser tabs and agent workflows. Moving a tab between the floating browser and right dock does not create a separate session.
+The desktop browser uses one local Chromium profile for all chats in the same Synara app. Sign in to a site in one chat and you can open the same site, already signed in, in another. Each chat owns its tabs and tool access. Stable and Beta have separate profiles.
+
+Chromium stores site data and honors the expiry dates on persistent cookies. During a clean app shutdown, Synara also saves compatible session cookies from direct sign-ins and imports when secure OS storage is available. Signing out on the site takes effect in the other chats and carries over to the next launch. After an interrupted run, Synara discards the previous session-cookie snapshot. A site can still expire or revoke a login.
+
+## Email suggestions
+
+On supported sign-in pages, Synara remembers an email you type and submit, including email-first flows where **Continue** opens a separate password step. On your next visit, click the login field, Tab or Shift+Tab into it, or press the down arrow to open the account menu. Use the arrow keys and Enter to choose an address, or Escape to dismiss. Suggestions are limited to the same origin and are available across chats. Synara respects forms that turn autocomplete off. It encrypts the address history locally when secure OS storage is available. Otherwise, suggestions last until you quit the app.
 
 ## Saved logins
 
 In the desktop app, open the browser toolbar’s **Saved logins** key button to manage locally saved accounts. The list shows each site, username and whether the login was saved by you or an agent. An unfinished signup can appear separately from a saved account.
+
+On a sign-in page, choose an account under **Saved logins** in the field menu to fill the username and current password. In a two-step flow, choose the username first, then choose the saved account in the password field. Synara offers accounts from the unlocked vault for that exact origin. Agents cannot select from the native menu. After you fill a password, browser tools for that chat pause until the page navigates to a new document or the tab closes. Other chats can continue working.
 
 Under **Saving & access**:
 
@@ -21,6 +29,14 @@ After setup, **Lock saved logins** locks vault access; use **Unlock** with the m
 
 Saved login deletion and vault locking affect the saved-password vault. They do not sign you out of websites or remove imported browser cookies. Use the website’s sign-out controls to end a signed-in session.
 
+## Passkeys
+
+Use the site's **Sign in with a passkey** action. The available choices depend on the operating system, the authenticator and the site.
+
+- On compatible Windows 11 systems, Windows offers Windows Hello, a security key, or a nearby phone. Choose the phone option and scan the system QR code. Both devices need Bluetooth and an internet connection. [Microsoft passkey support](https://learn.microsoft.com/en-us/windows/security/identity-protection/passkeys/)
+- **Phone on macOS.** In builds with the phone-passkey runtime, Synara opens a QR dialog when a site requests a passkey and accepts a nearby phone. Check the site name in the dialog, scan with the phone’s camera, and confirm on the phone. Keep Bluetooth and internet access enabled on both devices. Allow Synara to use Bluetooth if macOS asks. The website completes the login in the original tab. **Cancel** or Escape closes the request.
+- **Touch ID on macOS.** Builds signed with the channel’s passkey provisioning profile can create and use a passkey locally on that Mac. When Chromium offers several accounts, choose one in the native account menu.
+
 ## Import an existing browser session
 
 Cookie import is available through the desktop browser’s **Saved logins** dialog when a destination tab is selected. It copies compatible cookies from an available Chrome, Safari or Edge profile; available browsers and profiles depend on the platform and installed native reader. This imports signed-in browser sessions, not passwords into the Saved logins list.
@@ -33,8 +49,6 @@ Cookie import is available through the desktop browser’s **Saved logins** dial
 6. Check the imported and skipped counts. Confirm the page’s signed-in state afterward; some cookies cannot transfer and the site may still require a fresh sign-in.
 
 Imported sessions are shared across Synara browser tabs and agent workflows. Choosing **This site** narrows the copied domains; it does not create a private session for that task.
-
-Compatible imported session cookies can be restored after a clean app shutdown using secure local storage. An interrupted run’s session-cookie snapshot is discarded, and unavailable secure storage can prevent restoration. Import does not guarantee that every website remains signed in after a restart.
 
 ## Optional Safari setup on macOS
 

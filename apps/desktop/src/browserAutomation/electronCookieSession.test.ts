@@ -56,7 +56,8 @@ describe("createCookieSessionBackend", () => {
     const listener = vi.fn();
 
     backend.onChange(listener);
-    cookieEvents.emit("changed");
+    cookieEvents.emit("changed", {}, { session: false });
+    cookieEvents.emit("changed", {}, { session: true });
 
     expect(listener).toHaveBeenCalledTimes(1);
     expect(surface.createView).not.toHaveBeenCalled();

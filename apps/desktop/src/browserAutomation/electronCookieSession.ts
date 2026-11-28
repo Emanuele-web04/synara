@@ -2,10 +2,9 @@ import { session as electronSession, WebContentsView, type WebContents } from "e
 import type { CookieSessionBackend } from "./browserSessionRestore";
 
 /**
- * Close the hidden view this long after its last cookie read/restore. The
- * restore path runs once at startup and a session import reads twice back to
- * back, so a short grace coalesces those without keeping a renderer process
- * alive for the app's lifetime.
+ * Close the hidden view this long after its last cookie read/restore.
+ * A short grace coalesces nearby imports without keeping a renderer process
+ * alive between profile checkpoints.
  */
 export const COOKIE_SESSION_VIEW_IDLE_CLOSE_MS = 5_000;
 
@@ -13,7 +12,7 @@ type CookieViewContents = Pick<WebContents, "loadURL" | "isDestroyed" | "close">
   readonly debugger: Pick<WebContents["debugger"], "attach" | "sendCommand">;
 };
 
-type CookieChangeListener = () => void;
+type CookieChangeListener = (event: Electron.Event, cookie: Electron.Cookie) => void;
 
 /** The Electron surface this backend needs; injectable so tests can fake it. */
 export interface CookieSessionElectronSurface {
@@ -116,8 +115,11 @@ export function createCookieSessionBackend(
     },
     onChange(listener) {
       // The partition's cookie store reports changes without any view alive.
-      surface.cookies(partition).on("changed", listener);
-      changedListeners.add(listener);
+      const onChange: CookieChangeListener = (_event, cookie) => {
+        if (cookie.session) listener();
+      };
+      surface.cookies(partition).on("changed", onChange);
+      changedListeners.add(onChange);
     },
     dispose() {
       if (disposed) return;
