@@ -1243,16 +1243,17 @@ function isOpenCodeBackgroundSessionLifecycleEvent(event: OpenCodeSubscribedEven
   );
 }
 
-// A child session reaching idle ends its synthetic turn; every other event keeps
-// (or starts) it. Errors still flow through the normal turn-completion path.
-function isSubagentIdleEvent(event: OpenCodeSubscribedEvent): boolean {
-  if (event.type === "session.idle") {
-    return true;
-  }
+// A settled child can still receive transcript and permission updates. Wait
+// for a new execution signal before assigning another turn to the child.
+function startsSubagentTurn(event: OpenCodeSubscribedEvent): boolean {
   if (event.type === "session.status") {
-    return event.properties.status.type === "idle";
+    return event.properties.status.type === "busy" || event.properties.status.type === "retry";
   }
-  return false;
+  return (
+    event.type === "synara.opencode.execution.started" ||
+    event.type === "session.next.prompted" ||
+    event.type === "session.next.step.started"
+  );
 }
 
 function shouldHandleSubscribedEvent(
@@ -2511,7 +2512,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           eventSessionId !== undefined
             ? (rootContext.subagentSessions.get(eventSessionId) ?? rootContext)
             : rootContext;
-        if (context.subagentRefs !== undefined && !isSubagentIdleEvent(event)) {
+        if (context.subagentRefs !== undefined && startsSubagentTurn(event)) {
           yield* ensureSubagentTurn(context);
         }
 
@@ -4768,7 +4769,8 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
       )(function* (threadId, requestId, decision) {
         const context = ensureAdapterSessionContext(threadId);
         const reply = toOpenCodePermissionReply(decision);
-        if (!context.pendingPermissions.has(requestId)) {
+        const request = context.pendingPermissions.get(requestId);
+        if (request === undefined) {
           return yield* new ProviderAdapterRequestError({
             provider,
             method: "permission.reply",
@@ -4784,6 +4786,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           });
         }
         context.replyingPermissions.set(requestId, reply);
+        const ownerContext = context.subagentSessions.get(request.sessionID) ?? context;
 
         yield* Effect.gen(function* () {
           yield* runOpenCodeSdk("permission.reply", () =>
@@ -4792,7 +4795,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
               reply,
             }),
           ).pipe(Effect.mapError(toAdapterRequestError));
-          yield* acknowledgeHumanPermissionReply(context, { requestId, reply });
+          yield* acknowledgeHumanPermissionReply(ownerContext, { requestId, reply });
         }).pipe(
           Effect.ensuring(
             Effect.sync(() => {

@@ -5982,6 +5982,115 @@ describe("OpenCode background subagent tasks", () => {
     expect(parentTurnCompleted).toBeUndefined();
   });
 
+  it("keeps a child settled through late compaction and opens a turn when work resumes", async () => {
+    const eventQueue = createSubscribedEventQueue();
+    const runtime = createMockOpenCodeRuntime();
+    const childSessionId = "child-session-1";
+
+    const events = await runWithAdapter(runtime, eventQueue, (adapter, threadId) =>
+      Effect.gen(function* () {
+        const eventsFiber = yield* adapter.streamEvents.pipe(
+          Stream.filter((event) => event.providerRefs?.providerThreadId === childSessionId),
+          Stream.takeUntil((event) => event.type === "content.delta"),
+          Stream.runCollect,
+          Effect.forkChild,
+        );
+
+        yield* startFullAccess(adapter, threadId);
+        yield* sendTestTurn(adapter, threadId, "delegate this");
+        pushOpenCodePart(eventQueue, backgroundTaskToolPart(childSessionId));
+        eventQueue.push({ type: "session.idle", properties: { sessionID: childSessionId } });
+        eventQueue.push({ type: "session.compacted", properties: { sessionID: childSessionId } });
+        eventQueue.push({
+          type: "session.status",
+          properties: { sessionID: childSessionId, status: { type: "busy" } },
+        });
+        eventQueue.push({
+          type: "session.next.text.delta",
+          properties: { timestamp: 1, sessionID: childSessionId, delta: "Resuming work" },
+        });
+
+        const collected = Array.from(yield* Fiber.join(eventsFiber));
+        eventQueue.close();
+        return collected;
+      }),
+    );
+
+    const started = events.filter((event) => event.type === "turn.started");
+    expect(started).toHaveLength(2);
+    expect(events.find((event) => event.type === "turn.completed")?.turnId).toBe(
+      started[0]?.turnId,
+    );
+    const compacted = events.find((event) => event.type === "thread.state.changed");
+    expect(compacted?.payload).toMatchObject({ state: "compacted" });
+    expect(compacted?.turnId).toBeUndefined();
+    expect(events.at(-1)).toMatchObject({
+      turnId: started[1]?.turnId,
+      payload: { delta: "Resuming work" },
+    });
+  });
+
+  it("confirms a child permission on its own turn when permission.list acknowledges the reply", async () => {
+    const eventQueue = createSubscribedEventQueue();
+    const runtime = createMockOpenCodeRuntime({ permissionList: async () => ({ data: [] }) });
+    const childSessionId = "child-session-1";
+    const requestId = ApprovalRequestId.makeUnsafe("child-permission-1");
+
+    const events = await runWithAdapter(runtime, eventQueue, (adapter, threadId) =>
+      Effect.gen(function* () {
+        const opened = yield* Deferred.make<void>();
+        const eventsFiber = yield* adapter.streamEvents.pipe(
+          Stream.filter(
+            (event) => event.type === "request.opened" || event.type === "request.resolved",
+          ),
+          Stream.tap((event) =>
+            event.type === "request.opened" ? Deferred.succeed(opened, undefined) : Effect.void,
+          ),
+          Stream.takeUntil((event) => event.type === "request.resolved"),
+          Stream.runCollect,
+          Effect.forkChild,
+        );
+
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId,
+          runtimeMode: "approval-required",
+        });
+        yield* sendTestTurn(adapter, threadId, "delegate this");
+        pushOpenCodePart(eventQueue, backgroundTaskToolPart(childSessionId));
+        eventQueue.push({
+          type: "permission.asked",
+          properties: {
+            id: requestId,
+            sessionID: childSessionId,
+            permission: "bash",
+            patterns: ["git status"],
+            metadata: {},
+            always: [],
+          },
+        });
+        yield* Deferred.await(opened);
+        yield* adapter.respondToRequest(threadId, requestId, "accept");
+
+        const collected = Array.from(yield* Fiber.join(eventsFiber));
+        eventQueue.close();
+        return collected;
+      }),
+    );
+
+    expect(events[0]).toMatchObject({
+      type: "request.opened",
+      providerRefs: { providerThreadId: childSessionId },
+      requestId,
+    });
+    expect(events[1]).toMatchObject({
+      type: "request.resolved",
+      providerRefs: { providerThreadId: childSessionId },
+      turnId: events[0]?.turnId,
+      requestId,
+    });
+  });
+
   it("fails the child thread's turn when its session errors", async () => {
     const eventQueue = createSubscribedEventQueue();
     const runtime = createMockOpenCodeRuntime();
