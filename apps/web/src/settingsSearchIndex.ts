@@ -335,10 +335,10 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     target: null,
   },
   {
-    id: "usage:sidebar-rings",
+    id: "usage:sidebar-accounts",
     section: "usage",
-    title: "settings:sidebarUsageRings",
-    keywords: ["settings:chooseUpToTwoProviderAccountsForUsageRings"],
+    title: "settings:sidebarUsageAccounts",
+    keywords: ["settings:chooseSidebarUsageAccounts"],
     target: null,
   },
   {

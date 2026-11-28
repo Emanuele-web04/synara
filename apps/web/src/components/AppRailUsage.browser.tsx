@@ -16,16 +16,71 @@ const settings = vi.hoisted(() => ({
   disabledProviders: [] as string[],
   railUsageProviders: ["codex"],
   railUsageInstanceIds: null as string[] | null,
-  railUsageWindow: "both",
 }));
 const updateSettings = vi.hoisted(() => vi.fn());
 
 vi.mock("~/appSettings", () => ({ useAppSettings: () => ({ settings, updateSettings }) }));
 
 import { serverQueryKeys, setProviderUsageQueryData } from "~/lib/serverReactQuery";
+import {
+  DEFAULT_THEME_STATE,
+  buildThemeCssVariables,
+  getAvailableCodeThemes,
+  resolveThemePack,
+  setThemeCodeThemeId,
+  type ThemeVariant,
+} from "~/theme/theme.logic";
 
 import { AppRailUsage } from "./AppRailUsage";
 import { ProviderUsageSettingsPanel } from "./settings/ProviderUsageSettingsPanel";
+
+/** The app projects its theme pack into root variables on mount; the tile's tones need them. */
+function applyTheme(variant: ThemeVariant, themeId?: string) {
+  const root = document.documentElement;
+  root.classList.toggle("dark", variant === "dark");
+  const state = themeId
+    ? setThemeCodeThemeId(DEFAULT_THEME_STATE, variant, themeId)
+    : DEFAULT_THEME_STATE;
+  const build = buildThemeCssVariables(resolveThemePack(state, variant), variant);
+  for (const [name, value] of Object.entries(build.variables)) {
+    root.style.setProperty(name, value);
+  }
+}
+
+function channels(value: string): readonly [number, number, number] {
+  const srgb = /^color\(srgb\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)/.exec(value);
+  if (srgb) return [Number(srgb[1]) * 255, Number(srgb[2]) * 255, Number(srgb[3]) * 255] as const;
+  const rgb = /^rgba?\(([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)/.exec(value);
+  if (!rgb) throw new Error(`unreadable colour: ${value}`);
+  return [Number(rgb[1]), Number(rgb[2]), Number(rgb[3])] as const;
+}
+
+function luminance(color: string): number {
+  const [red, green, blue] = channels(color).map((channel) => {
+    const scaled = channel / 255;
+    return scaled <= 0.03928 ? scaled / 12.92 : ((scaled + 0.055) / 1.055) ** 2.4;
+  }) as [number, number, number];
+  return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+}
+
+/** WCAG contrast ratio, so a state's mark is measured rather than asserted. */
+function contrast(left: string, right: string): number {
+  const [light, dark] = [luminance(left), luminance(right)].toSorted((a, b) => b - a) as [
+    number,
+    number,
+  ];
+  return (light + 0.05) / (dark + 0.05);
+}
+
+/** A rail token's colour, resolved in the tile's own context. */
+function tileToken(tile: Element, name: string): string {
+  const probe = document.createElement("span");
+  probe.style.background = getComputedStyle(tile).getPropertyValue(name);
+  document.body.append(probe);
+  const resolved = getComputedStyle(probe).backgroundColor;
+  probe.remove();
+  return resolved;
+}
 
 async function renderAccounts(
   snapshots: readonly ServerProviderUsageSnapshot[] | undefined,
@@ -39,23 +94,25 @@ async function renderAccounts(
   client.setQueryData(serverQueryKeys.settings(), serverSettings);
   const onOpenUsageSettings = vi.fn();
   const content = () => (
-    <QueryClientProvider client={client}>
-      {showSettings ? (
-        <div className="flex items-start gap-6 p-6">
-          <div
-            data-testid="usage-rail"
-            className="flex w-12 shrink-0 flex-col items-center gap-1 rounded-lg bg-sidebar py-2"
-          >
-            <AppRailUsage onOpenUsageSettings={onOpenUsageSettings} />
+    <div data-sidebar-layout="rail">
+      <QueryClientProvider client={client}>
+        {showSettings ? (
+          <div className="flex items-start gap-6 p-6">
+            <div
+              data-testid="usage-rail"
+              className="flex w-12 shrink-0 flex-col items-center gap-1 rounded-lg bg-sidebar py-2"
+            >
+              <AppRailUsage onOpenUsageSettings={onOpenUsageSettings} />
+            </div>
+            <div className="w-[520px] space-y-6">
+              <ProviderUsageSettingsPanel />
+            </div>
           </div>
-          <div className="w-[520px] space-y-6">
-            <ProviderUsageSettingsPanel />
-          </div>
-        </div>
-      ) : (
-        <AppRailUsage onOpenUsageSettings={onOpenUsageSettings} />
-      )}
-    </QueryClientProvider>
+        ) : (
+          <AppRailUsage onOpenUsageSettings={onOpenUsageSettings} />
+        )}
+      </QueryClientProvider>
+    </div>
   );
   const view = await render(content());
   return { client, onOpenUsageSettings, rerender: () => view.rerender(content()) };
@@ -107,7 +164,7 @@ const claudeSnapshots: readonly ServerProviderUsageSnapshot[] = [
 
 describe("AppRailUsage", () => {
   beforeEach(() => {
-    settings.railUsageWindow = "both";
+    applyTheme("light");
     settings.disabledProviders = [];
     settings.railUsageProviders = ["codex"];
     settings.railUsageInstanceIds = null;
@@ -158,7 +215,7 @@ describe("AppRailUsage", () => {
     expect(settings.railUsageProviders).toEqual(["codex"]);
   });
 
-  it("selects two Claude accounts in Settings and shows each account's ring and hover card", async () => {
+  it("selects two Claude accounts in Settings and shows each account's tile and hover card", async () => {
     settings.railUsageInstanceIds = [];
     const { rerender } = await renderAccounts(claudeSnapshots, claudeSettings, true);
     const personalSwitch = page.getByRole("switch", {
@@ -176,27 +233,17 @@ describe("AppRailUsage", () => {
     });
     await expect.element(personalSwitch).toBeChecked();
     await expect.element(workSwitch).toBeChecked();
-    await expect
-      .element(
-        page.getByRole("switch", {
-          name: "Show Codex usage at the bottom of the sidebar",
-        }),
-      )
-      .toBeDisabled();
 
     const personal = page.getByRole("button", { name: /^Claude · Default account usage:/ });
     const work = page.getByRole("button", { name: /^Claude · Work usage:/ });
     await expect.element(personal).toBeVisible();
     await expect.element(work).toBeVisible();
     expect(
-      personal
-        .element()
-        .querySelector("circle[stroke-dasharray]")
-        ?.getAttribute("stroke-dasharray"),
-    ).toBe("75 100");
-    expect(
-      work.element().querySelector("circle[stroke-dasharray]")?.getAttribute("stroke-dasharray"),
-    ).toBe("20 100");
+      personal.element().querySelector<HTMLElement>(".app-rail-usage-fill")?.style.height,
+    ).toBe("75%");
+    expect(work.element().querySelector<HTMLElement>(".app-rail-usage-fill")?.style.height).toBe(
+      "20%",
+    );
     expect(work.element().querySelector('[data-accent="#2563eb"]')).not.toBeNull();
     await userEvent.hover(work);
     await expect.element(page.getByText("Claude · Work", { exact: true }).last()).toBeVisible();
@@ -233,11 +280,11 @@ describe("AppRailUsage", () => {
     });
     const personal = page.getByRole("button", { name: /^Claude · Default account usage:/ });
     const work = page.getByRole("button", { name: /^Claude · Work usage:/ });
-    expect(personal.element().querySelector('span[aria-hidden="true"]')).toBeNull();
-    expect(work.element().querySelector('span[aria-hidden="true"]')).not.toBeNull();
+    expect(personal.element().querySelector('span.rounded-full[aria-hidden="true"]')).toBeNull();
+    expect(work.element().querySelector('span.rounded-full[aria-hidden="true"]')).not.toBeNull();
   });
 
-  it("preserves a disabled account selection when another ring is changed", async () => {
+  it("preserves a disabled account selection when another tile is changed", async () => {
     settings.railUsageInstanceIds = ["claude_work", "codex"];
     const { client, rerender } = await renderAccounts(
       claudeSnapshots,
@@ -273,7 +320,7 @@ describe("AppRailUsage", () => {
     await expect.element(page.getByRole("button", { name: /^Claude · Work usage:/ })).toBeVisible();
     await expect
       .element(page.getByRole("switch", { name: "Show Codex usage at the bottom of the sidebar" }))
-      .not.toBeChecked();
+      .toBeChecked();
     expect(settings.railUsageInstanceIds).toEqual(["claude_work", "claudeAgent", "codex"]);
   });
 
@@ -291,63 +338,147 @@ describe("AppRailUsage", () => {
       .not.toBeInTheDocument();
   });
 
-  it("shows independent weekly and five-hour rings even when a model sublimit is tighter", async () => {
-    const onOpenUsageSettings = await renderUsage([
-      { window: "seven_day", usedPercent: 57, windowDurationMins: 10_080 },
-      { window: "five_hour", usedPercent: 22, windowDurationMins: 300 },
-      { window: "seven_day_sonnet", usedPercent: 96, windowDurationMins: 10_080 },
+  it("fills one cell to the lowest quota and shows all three windows with resets on hover", async () => {
+    settings.railUsageProviders = ["opencode"];
+    const now = Date.now();
+    const resetsAt = (hours: number) => new Date(now + hours * 3_600_000).toISOString();
+    const { onOpenUsageSettings } = await renderAccounts([
+      {
+        provider: "opencode",
+        updatedAt: new Date(now).toISOString(),
+        status: "ok",
+        source: "test",
+        limits: [
+          { window: "5h", usedPercent: 22, resetsAt: resetsAt(1) },
+          { window: "Weekly", usedPercent: 57, resetsAt: resetsAt(72) },
+          { window: "Monthly", usedPercent: 88, resetsAt: resetsAt(288) },
+        ],
+        usageLines: [],
+      },
     ]);
 
-    const button = page.getByRole("button", { name: /^Codex usage:/ });
+    const button = page.getByRole("button", { name: /^OpenCode usage:/ });
     await expect.element(button).toBeVisible();
-    const fills = button.element().querySelectorAll("circle[stroke-dasharray]");
-    expect(Array.from(fills, (circle) => circle.getAttribute("stroke-dasharray"))).toEqual([
-      "43 100",
-      "78 100",
-    ]);
-    expect(Number(fills[0]?.getAttribute("r"))).toBeGreaterThan(
-      Number(fills[1]?.getAttribute("r")),
+    expect(button.element().querySelectorAll(".app-rail-usage-fill")).toHaveLength(1);
+    expect(button.element().querySelector<HTMLElement>(".app-rail-usage-fill")?.style.height).toBe(
+      "12%",
     );
-    // Both rings colour by the same remaining-quota scale: 43% is fair, 78% is healthy.
-    expect(fills[0]?.getAttribute("class")).toContain("stroke-yellow-500");
-    expect(fills[1]?.getAttribute("class")).toContain("stroke-emerald-500");
+    expect(button.element().querySelector(".app-rail-usage-tile")).toHaveAttribute(
+      "data-usage-state",
+      "low",
+    );
 
     await userEvent.hover(button);
-    await expect.element(page.getByText("Weekly · outer")).toBeVisible();
-    await expect.element(page.getByText("5h · inner")).toBeVisible();
-    await expect.element(page.getByText("43% left", { exact: true })).toBeVisible();
     await expect.element(page.getByText("78% left", { exact: true })).toBeVisible();
+    await expect.element(page.getByText("43% left", { exact: true })).toBeVisible();
+    await expect.element(page.getByText("12% left", { exact: true })).toBeVisible();
+    expect(page.getByText(/^Resets in /).elements()).toHaveLength(3);
     await button.click();
     expect(onOpenUsageSettings).toHaveBeenCalledOnce();
   });
 
-  it.each([
-    ["fiveHour", "85 100", "stroke-emerald-500"],
-    ["weekly", "8 100", "stroke-red-500"],
-  ])("draws a single ring for the %s setting", async (window, dasharray, strokeClassName) => {
-    settings.railUsageWindow = window;
+  it("uses the tighter named model limit when present", async () => {
     await renderUsage([
-      { window: "Weekly", usedPercent: 92 },
-      { window: "5h", usedPercent: 15 },
+      { window: "seven_day", usedPercent: 57, windowDurationMins: 10_080 },
+      { window: "five_hour", usedPercent: 22, windowDurationMins: 300 },
+      { window: "seven_day_sonnet", usedPercent: 96, windowDurationMins: 10_080 },
     ]);
     const button = page.getByRole("button", { name: /^Codex usage:/ });
     await expect.element(button).toBeVisible();
-    const fills = button.element().querySelectorAll("circle[stroke-dasharray]");
-    expect(fills).toHaveLength(1);
-    expect(fills[0]?.getAttribute("stroke-dasharray")).toBe(dasharray);
-    expect(fills[0]?.getAttribute("class")).toContain(strokeClassName);
+    expect(button.element().querySelector<HTMLElement>(".app-rail-usage-fill")?.style.height).toBe(
+      "4%",
+    );
   });
 
-  it.each(["Weekly", "5h"])("shows only the reported %s ring", async (window) => {
-    await renderUsage([{ window, usedPercent: 35 }]);
-    const button = page.getByRole("button", { name: /^Codex usage:/ });
-    await expect.element(button).toBeVisible();
-    const fills = button.element().querySelectorAll("circle[stroke-dasharray]");
-    expect(fills).toHaveLength(1);
-    expect(fills[0]?.getAttribute("stroke-dasharray")).toBe("65 100");
+  it("draws every state by shape, with each mark measured against the track", async () => {
+    const cases = [
+      { remaining: 43, state: "normal" },
+      { remaining: 18, state: "low" },
+      { remaining: 0, state: "exhausted" },
+    ] as const;
+    const clientFor = (remaining: number) => {
+      const client = new QueryClient({
+        defaultOptions: { queries: { retry: false, enabled: false } },
+      });
+      setProviderUsageQueryData(client, [
+        {
+          provider: "codex",
+          updatedAt: "2026-10-02T12:00:00.000Z",
+          status: "ok",
+          source: "test",
+          limits: [{ window: "Weekly", usedPercent: 100 - remaining }],
+          usageLines: [],
+        } satisfies ServerProviderUsageSnapshot,
+      ]);
+      client.setQueryData(serverQueryKeys.settings(), DEFAULT_SERVER_SETTINGS_VIEW);
+      return client;
+    };
+    await render(
+      <div data-sidebar-layout="rail" className="flex items-start gap-4">
+        {cases.map(({ remaining, state }) => (
+          <div
+            key={state}
+            data-state={state}
+            className="flex w-12 flex-col items-center gap-1 py-2"
+          >
+            <QueryClientProvider client={clientFor(remaining)}>
+              <AppRailUsage onOpenUsageSettings={() => {}} />
+            </QueryClientProvider>
+          </div>
+        ))}
+      </div>,
+    );
+    const tileFor = (state: string) => {
+      const tile = document.querySelector<HTMLElement>(
+        `[data-state="${state}"] .app-rail-usage-tile`,
+      );
+      expect(tile).not.toBeNull();
+      return tile!;
+    };
+    for (const theme of ["light", "dark"] as const) {
+      applyTheme(theme);
+      for (const { id } of getAvailableCodeThemes(theme)) {
+        applyTheme(theme, id);
+        const tile = tileFor("low");
+        const track = tileToken(tile, "--rail-usage-well");
+        const plate = tileToken(tile, "--rail-usage-plate");
+        const ink = tileToken(tile, "--rail-usage-ink");
+        const boundary = theme === "light" ? track : tileToken(tile, "--rail-usage-well-edge");
+        const palette = `${id} ${theme}`;
+        expect(contrast(boundary, plate), `${palette}: track boundary`).toBeGreaterThanOrEqual(3);
+        expect(contrast(ink, track), `${palette}: quota ink`).toBeGreaterThanOrEqual(3);
+        expect(
+          contrast(tileToken(tile, "--rail-usage-edge"), plate),
+          `${palette}: warning edge`,
+        ).toBeGreaterThanOrEqual(3);
+      }
+      applyTheme(theme);
+      for (const { state } of cases) {
+        const tile = tileFor(state);
+        expect(tile).toHaveAttribute("data-usage-state", state);
+        const ink = tileToken(tile, "--rail-usage-ink");
+        const fill = tile.querySelector<HTMLElement>(".app-rail-usage-fill");
+        if (state === "exhausted") {
+          expect(fill).toBeNull();
+        }
+        if (state === "normal") {
+          expect(fill?.style.height).toBe("43%");
+          expect(getComputedStyle(fill!).backgroundImage).toContain("linear-gradient");
+        }
+        if (state === "low") {
+          // The bar keeps its extent but loses its body to an outline, so it is not a hue shift.
+          expect(fill?.style.height).toBe("18%");
+          expect(getComputedStyle(fill!).backgroundImage).toBe("none");
+          expect(getComputedStyle(fill!).boxShadow).toContain(ink);
+        }
+      }
+      expect(document.querySelector('[data-state="exhausted"] button svg')).toHaveClass(
+        "opacity-35",
+      );
+    }
   });
 
-  it("keeps an empty track for an exhausted window without drawing a remaining arc", async () => {
+  it("lists every window, including an exhausted one, on the hover card", async () => {
     await renderUsage([
       { window: "Weekly", usedPercent: 0 },
       { window: "5h", usedPercent: 100 },
@@ -356,28 +487,30 @@ describe("AppRailUsage", () => {
       name: "Codex usage: 5h 0% remaining, Weekly 100% remaining. Open usage settings",
     });
     await expect.element(button).toBeVisible();
-    expect(button.element().querySelectorAll("circle")).toHaveLength(3);
-    const fills = button.element().querySelectorAll("circle[stroke-dasharray]");
-    expect(fills).toHaveLength(1);
-    expect(fills[0]?.getAttribute("stroke-dasharray")).toBe("100 100");
+    const tile = button.element().querySelector(".app-rail-usage-tile")!;
+    const frame = getComputedStyle(tile).boxShadow;
+    expect(frame).toContain(tileToken(tile, "--rail-usage-alert"));
+    expect(frame).toContain("0px 0px 0px 1px inset");
+    await userEvent.hover(button);
+    expect(getComputedStyle(tile).boxShadow).toBe(frame);
+    await expect.element(page.getByText("0% left", { exact: true }).last()).toBeVisible();
+    await expect.element(page.getByText("100% left", { exact: true }).last()).toBeVisible();
   });
 
-  it("preserves the single-ring fallback for providers with other limit windows", async () => {
-    await renderUsage([{ window: "Monthly", usedPercent: 60 }]);
-    const button = page.getByRole("button", { name: /^Codex usage:/ });
-    await expect.element(button).toBeVisible();
-    const fills = button.element().querySelectorAll("circle[stroke-dasharray]");
-    expect(fills).toHaveLength(1);
-    expect(fills[0]?.getAttribute("stroke-dasharray")).toBe("40 100");
-  });
-
-  it("keeps the unavailable provider visible without a quota arc", async () => {
+  it("keeps an unavailable provider visible as an unfilled well, not an exhausted tile", async () => {
     await renderUsage([], "error");
     const button = page.getByRole("button", {
       name: "Codex usage: Unavailable. Open usage settings",
     });
     await expect.element(button).toBeVisible();
-    expect(button.element().querySelectorAll("circle")).toHaveLength(1);
-    expect(button.element().querySelectorAll("circle[stroke-dasharray]")).toHaveLength(0);
+    const tile = button.element().querySelector<HTMLElement>(".app-rail-usage-tile")!;
+    expect(tile).toHaveAttribute("data-usage-state", "empty");
+    expect(button.element().querySelector(".app-rail-usage-fill")).toBeNull();
+    // No destructive frame: the empty well reads as "no reading", apart from a 0% tile.
+    expect(getComputedStyle(tile).boxShadow).not.toContain(tileToken(tile, "--rail-usage-alert"));
+    expect(getComputedStyle(tile).boxShadow).toContain("0px 0px 0px 0.5px inset");
+    expect(
+      contrast(tileToken(tile, "--rail-usage-well"), tileToken(tile, "--rail-usage-plate")),
+    ).toBeGreaterThanOrEqual(3);
   });
 });

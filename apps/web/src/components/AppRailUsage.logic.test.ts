@@ -1,15 +1,11 @@
 import { DEFAULT_SERVER_SETTINGS_VIEW } from "@synara/contracts";
 import { deriveProviderInstances } from "@synara/shared/providerInstances";
 import { describe, expect, it } from "vitest";
-import { resolveEnvironmentProviderUsageSummary } from "./chat/environment/EnvironmentUsageSection.logic";
-
-import { deriveProviderUsageDisplayRows } from "~/lib/providerUsageDisplay";
-
 import {
   MAX_RAIL_USAGE_ACCOUNTS,
+  RAIL_USAGE_LOW_THRESHOLD,
   getRailUsageAccounts,
-  railUsageRingTone,
-  selectRailUsageRows,
+  railUsageState,
   resolveRailUsageAccounts,
   toggleRailUsageAccount,
 } from "./AppRailUsage.logic";
@@ -43,7 +39,7 @@ describe("rail usage accounts", () => {
     expect(toggleRailUsageAccount(added, "opencode", false, visible)).toEqual(saved);
     expect(
       resolveRailUsageAccounts(added, accounts).map((account) => account.instance.instanceId),
-    ).toEqual(saved);
+    ).toEqual(added);
   });
 
   it("allows two accounts of the same provider and distinguishes their names", () => {
@@ -61,10 +57,14 @@ describe("rail usage accounts", () => {
   it("drops duplicate, removed, and disabled accounts before applying the cap", () => {
     expect(
       selectedIds(["removed", "claude_disabled", "codex", "codex", "claude_work", "cursor"]),
-    ).toEqual(["codex", "claude_work"]);
-    expect(selectedIds(["codex", "claudeAgent", "claude_work"]).length).toBe(
-      MAX_RAIL_USAGE_ACCOUNTS,
-    );
+    ).toEqual(["codex", "claude_work", "cursor"]);
+    expect(selectedIds(["codex", "claudeAgent", "cursor", "antigravity", "grok"])).toEqual([
+      "codex",
+      "claudeAgent",
+      "cursor",
+      "antigravity",
+    ]);
+    expect(MAX_RAIL_USAGE_ACCOUNTS).toBe(4);
     expect(selectedIds([])).toEqual([]);
   });
 
@@ -92,64 +92,29 @@ describe("toggleRailUsageAccount", () => {
   });
 
   it("ignores another account past the cap", () => {
-    expect(
-      toggleRailUsageAccount(["claudeAgent", "claude_work"], "codex", true, available),
-    ).toEqual(["claudeAgent", "claude_work"]);
-  });
-});
-
-describe("selectRailUsageRows", () => {
-  const rowsFor = (...windows: ReadonlyArray<string>) =>
-    deriveProviderUsageDisplayRows([
-      {
-        provider: "codex",
-        updatedAt: "2026-10-02T12:00:00.000Z",
-        limits: windows.map((window) => ({ window, usedPercent: 60 })),
-      },
+    const full = ["codex", "claudeAgent", "cursor", "claude_work"];
+    expect(toggleRailUsageAccount(full, "grok", true, available)).toEqual(full);
+    expect(toggleRailUsageAccount(full.slice(0, 3), "grok", true, available)).toEqual([
+      ...full.slice(0, 3),
+      "grok",
     ]);
-  const rows = rowsFor("5h", "Weekly");
-  const labels = (...args: Parameters<typeof selectRailUsageRows>) =>
-    selectRailUsageRows(...args).map((row) => row.label);
-
-  it("draws weekly outside five-hour, or only the chosen window", () => {
-    expect(labels(rows, null, "both")).toEqual(["Weekly", "5h"]);
-    expect(labels(rows, null, "fiveHour")).toEqual(["5h"]);
-    expect(labels(rows, null, "weekly")).toEqual(["Weekly"]);
-  });
-
-  it("describes quota rows while preserving canonical window selection", () => {
-    const selected = selectRailUsageRows(rows, null, "both");
-    expect(selected.map((row) => row.label)).toEqual(["Weekly", "5h"]);
-    const summary = resolveEnvironmentProviderUsageSummary({
-      providerName: "Codex",
-      rows: selected,
-      snapshot: undefined,
-      hasUsageLines: true,
-    });
-    expect(summary.rows).toBe(selected);
-    expect(rows.map((row) => row.label)).toEqual(["5h", "Weekly"]);
-  });
-
-  it("falls back to the other account window, then to the primary row", () => {
-    const weeklyOnly = rows.filter((row) => row.label === "Weekly");
-    expect(labels(weeklyOnly, null, "fiveHour")).toEqual(["Weekly"]);
-    const monthly = rowsFor("Monthly");
-    expect(labels(monthly, monthly[0] ?? null, "weekly")).toEqual(["Monthly"]);
-    expect(labels([], null, "both")).toEqual([]);
   });
 });
 
-describe("railUsageRingTone", () => {
+describe("railUsageState", () => {
   it.each([
-    [100, "healthy"],
-    [51, "healthy"],
-    [50, "fair"],
-    [26, "fair"],
-    [25, "low"],
-    [11, "low"],
-    [10, "critical"],
-    [0, "critical"],
-  ] as const)("%i%% left is %s", (remaining, tone) => {
-    expect(railUsageRingTone(remaining)).toBe(tone);
+    ["no reading", undefined, "empty"],
+    ["0%", 0, "exhausted"],
+    ["1%", 1, "low"],
+    [`${RAIL_USAGE_LOW_THRESHOLD}%`, RAIL_USAGE_LOW_THRESHOLD, "low"],
+    [`${RAIL_USAGE_LOW_THRESHOLD + 1}%`, RAIL_USAGE_LOW_THRESHOLD + 1, "normal"],
+    ["100%", 100, "normal"],
+  ] as const)("%s remaining reads as %s", (_label, remaining, state) => {
+    expect(railUsageState(remaining)).toBe(state);
+  });
+
+  it("treats a missing reading as empty rather than nothing left", () => {
+    expect(railUsageState(undefined)).toBe("empty");
+    expect(railUsageState(0)).toBe("exhausted");
   });
 });

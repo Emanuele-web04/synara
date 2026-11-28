@@ -16,7 +16,6 @@ vi.mock("~/appSettings", () => ({
       disabledProviders: ["codex", "claudeAgent"],
       railUsageProviders: ["codex", "claudeAgent"],
       railUsageInstanceIds: null,
-      railUsageWindow: "both",
     },
     updateSettings,
   }),
