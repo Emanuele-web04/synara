@@ -5528,12 +5528,21 @@ it.effect("replays a confirmed interruption after monitor row delivery fails", (
     const repository = yield* ProjectAgentRepository;
     const overview = yield* configureTestGroup(service, "interruption-replay-setup");
     const threadId = ThreadId.makeUnsafe("thread-interruption-replay");
+    const peerThreadId = ThreadId.makeUnsafe("thread-interruption-replay-peer");
     yield* service.recordManagedWorkerThreads({
       requestId: "register-interruption-replay",
       callerThreadId: overview.config!.coordinatorThreadId,
-      threadIds: [threadId],
-      titles: ["Interrupted worker"],
+      threadIds: [threadId, peerThreadId],
+      titles: ["Interrupted worker", "Completed peer"],
     });
+    yield* service.ingestSettledThreadEvent({
+      threadId: peerThreadId,
+      sourceEventId: "peer-settled-while-stop-confirmation-lagged",
+      eventType: "thread.turn-diff-completed",
+      createdAt: "2026-09-20T00:00:02.000Z",
+    });
+    const initialWakeCount = harness.runNowCalls.length;
+    const before = yield* repository.getCursor(groupId);
     failing.push("thread.activity.append");
     yield* service.ingestSettledThreadEvent({
       threadId,
@@ -5544,8 +5553,11 @@ it.effect("replays a confirmed interruption after monitor row delivery fails", (
     });
     const worker = Option.getOrThrow(yield* repository.findManagedWorkerByThread(threadId));
     assert.equal(worker.settleOutcome, "interrupted");
-    assert.equal(harness.runNowCalls.length, 0);
-    assert.equal((yield* repository.getCursor(groupId)).processedThroughInboxId, null);
+    assert.equal(harness.runNowCalls.length, initialWakeCount);
+    assert.equal(
+      (yield* repository.getCursor(groupId)).processedThroughInboxId,
+      before.processedThroughInboxId,
+    );
     failing.length = 0;
     harness.dispatched.length = 0;
     yield* service.reconcilePendingWakes();
@@ -5562,8 +5574,11 @@ it.effect("replays a confirmed interruption after monitor row delivery fails", (
       createdAt: "2026-09-20T00:00:01.000Z",
     });
     assert.equal(activityRows(harness, "synara.worker.settled").length, 1);
-    assert.equal(harness.runNowCalls.length, 1);
-    assert.isNotNull((yield* repository.getCursor(groupId)).processedThroughInboxId);
+    assert.equal(activityRows(harness, "synara.workers.settled").length, 1);
+    const inbox = yield* repository.listInboxAfter({ projectId: groupId, limit: 20 });
+    const rollup = inbox.find((row) => row.eventType === "workers.settled");
+    assert.isDefined(rollup);
+    assert.equal((yield* repository.getCursor(groupId)).processedThroughInboxId, rollup?.id);
   }).pipe(Effect.provide(harness.layer));
 });
 

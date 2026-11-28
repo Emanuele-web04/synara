@@ -144,6 +144,7 @@ import { LibraryError, ProjectAgentServiceError } from "../Errors.ts";
 import { isAllowedGroupCoordinatorCreateTarget } from "../groupCreateAllowlist.ts";
 import { gateProjectAgentServiceForStable, isServerGroupsEnabled } from "../groupsBetaGate.ts";
 import { cleanupGroupWorkspaceRoot } from "../../groupWorkspaceScaffold.ts";
+import { isManagedCheckpointRefForThread } from "../../checkpointing/Utils.ts";
 import {
   hashDocumentContent,
   materializeDocumentPath,
@@ -668,6 +669,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
     readonly eventType: string;
     readonly sourceEventId: string;
     readonly createdAt: string;
+    readonly rollupCreatedAt?: string;
     readonly coordinatorThreadId: ThreadId;
     readonly taskId: ProjectTaskId | null;
     /** Paused/archived groups keep recording worker state but post no rows. */
@@ -781,7 +783,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
       yield* postWorkerBatchRollup({
         worker: persistedWorker,
         coordinatorThreadId: input.coordinatorThreadId,
-        createdAt: input.createdAt,
+        createdAt: input.rollupCreatedAt ?? input.createdAt,
         suppressRows: input.suppressRows,
         taskId: input.taskId,
         prUrl,
@@ -2027,6 +2029,8 @@ export const makeProjectAgentService = Effect.gen(function* () {
         eventType: event.eventType,
         sourceEventId: event.sourceEventId,
         createdAt: delivery.completedAt,
+        // The new batch wake must sort after the already-admitted settlement.
+        rollupCreatedAt: new Date(Date.parse(event.createdAt) + 1).toISOString(),
         coordinatorThreadId: config.coordinatorThreadId,
         taskId: delivery.worker.taskId,
         lastKnownPr: delivery.prUrl ? { url: delivery.prUrl } : null,
@@ -5778,14 +5782,19 @@ export const makeProjectAgentService = Effect.gen(function* () {
           if (
             !missingFinalCheckpoint ||
             !input.checkpointRef ||
-            input.checkpointRef.startsWith("provider-diff:") ||
+            !isManagedCheckpointRefForThread(input.checkpointRef, input.threadId) ||
             input.turnId === undefined
           )
             return;
           const turn = yield* projectionTurns
             .getByTurnId({ threadId: input.threadId, turnId: TurnId.makeUnsafe(input.turnId) })
             .pipe(Effect.mapError(toServiceError("Failed to verify final worker checkpoint.")));
-          if (Option.isNone(turn) || turn.value.state !== "completed") return;
+          if (
+            Option.isNone(turn) ||
+            turn.value.state !== "completed" ||
+            turn.value.checkpointRef !== input.checkpointRef
+          )
+            return;
         }
         const task = yield* repository
           .findTaskByAssignedThread(input.threadId)
