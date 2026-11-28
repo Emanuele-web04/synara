@@ -1,4 +1,4 @@
-import { Cause, Duration, Effect, Layer, Option, Schedule } from "effect";
+import { Cause, Clock, Config, Duration, Effect, Layer, Option, Schedule, Schema } from "effect";
 
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery";
 import { ProviderSessionDirectory } from "../Services/ProviderSessionDirectory";
@@ -10,6 +10,10 @@ import { ProviderService } from "../Services/ProviderService";
 
 const DEFAULT_INACTIVITY_THRESHOLD_MS = 30 * 60 * 1000;
 const DEFAULT_SWEEP_INTERVAL_MS = 5 * 60 * 1000;
+const reaperInactivityThreshold = Config.schema(
+  Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  "SYNARA_PROVIDER_SESSION_REAPER_MS",
+).pipe(Config.orElse(() => Config.succeed(DEFAULT_INACTIVITY_THRESHOLD_MS)));
 
 export interface ProviderSessionReaperLiveOptions {
   readonly inactivityThresholdMs?: number;
@@ -23,8 +27,8 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
     const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
 
     const inactivityThresholdMs = Math.max(
-      1,
-      options?.inactivityThresholdMs ?? DEFAULT_INACTIVITY_THRESHOLD_MS,
+      0,
+      options?.inactivityThresholdMs ?? (yield* reaperInactivityThreshold),
     );
     const sweepIntervalMs = Math.max(1, options?.sweepIntervalMs ?? DEFAULT_SWEEP_INTERVAL_MS);
 
@@ -37,7 +41,7 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
       }
       const stopRuntimeSession = providerService.stopRuntimeSession;
       const bindings = yield* directory.listBindings();
-      const now = Date.now();
+      const now = yield* Clock.currentTimeMillis;
 
       for (const binding of bindings) {
         if (binding.status === "stopped") continue;
@@ -86,10 +90,13 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
       ),
     );
 
-    const start: ProviderSessionReaperShape["start"] = () =>
-      Effect.forkScoped(
+    const start: ProviderSessionReaperShape["start"] = () => {
+      // With cleanup disabled, skip both the startup sweep and the repeating fiber.
+      if (inactivityThresholdMs === 0) return Effect.void;
+      return Effect.forkScoped(
         runSweepSafely.pipe(Effect.repeat(Schedule.spaced(Duration.millis(sweepIntervalMs)))),
       ).pipe(Effect.asVoid);
+    };
 
     return { start } satisfies ProviderSessionReaperShape;
   });
