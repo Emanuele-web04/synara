@@ -3209,17 +3209,15 @@ const make = Effect.gen(function* () {
           shouldRestartForModelChange) &&
           shouldRegisterContextBootstrap,
       ).pipe(
-        // The live-turn check above sees only turns. The adapter also refuses
-        // while background tasks, approvals or questions are open, before it
-        // touches the runtime. A normal chat turn may keep its existing
-        // catalog until the adapter is idle. An explicit /computer-use turn
-        // must wait for the requested tools to be available.
+        // Busy adapters preserve the live runtime and its catalog for ordinary chat.
+        // Surface other preparation failures and explicit requests for new tools.
         Effect.catchIf(
           (error): error is ProviderAdapterValidationError =>
             computerControlOnlyChange &&
             (requestedComputerControl === false || options?.deferChatComputerEnable === true) &&
             error instanceof ProviderAdapterValidationError &&
-            error.operation === "session/reconfigure",
+            error.operation === "session/reconfigure" &&
+            error.reason === "session-busy",
           (error) =>
             Effect.logInfo("provider command reactor deferred computer-control restart", {
               threadId,

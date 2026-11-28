@@ -7147,6 +7147,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             new ProviderAdapterValidationError({
               provider: PROVIDER,
               operation: "session/reconfigure",
+              reason: "session-busy",
               issue:
                 "Wait for Claude's active turn, shared tasks, approvals and questions to finish before changing session settings.",
             }),

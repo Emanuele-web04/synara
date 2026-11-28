@@ -2540,56 +2540,89 @@ describe("ProviderCommandReactor", () => {
     });
   }
 
-  it.each([false, true])(
-    "delivers plain chat during busy Claude Computer toggles (on=%s)",
-    async (enable) => {
-      const registry = makeAgentGatewaySessionRegistry();
-      const harness = await createHarness({
-        threadModelSelection: { provider: "claudeAgent", model: "claude-fable-5-1" },
-        gatewaySessions: registry,
-      });
-      const threadId = ThreadId.makeUnsafe("thread-1");
-      const createdAt = new Date().toISOString();
-      const send = (id: string, computer: boolean) =>
-        harness.engine.dispatch({
-          type: "thread.turn.start",
-          commandId: CommandId.makeUnsafe(id),
-          threadId,
-          message: { messageId: asMessageId(id), role: "user", text: "continue", attachments: [] },
-          enableComputerControl: computer,
-          computerControlMode: computer ? "chat" : "off",
-          dispatchOrigin: "user",
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-          runtimeMode: "approval-required",
-          createdAt,
-        });
-      await Effect.runPromise(send("bootstrap-computer", false));
-      await waitFor(() => harness.sendTurn.mock.calls.length === 1);
-      await harness.drain();
-      // The current session has the opposite provisioning from the next turn.
-      registry.issue(threadId, "claudeAgent", {
-        additionalCapabilities: enable ? [] : ["computer:control"],
-      });
-      harness.startSession.mockClear();
-      harness.startSession.mockImplementationOnce(() =>
-        Effect.fail(
-          new ProviderAdapterValidationError({
-            provider: "claudeAgent",
-            operation: "session/reconfigure",
-            issue: "Background work is active",
-          }),
-        ),
-      );
-      await Effect.runPromise(send("computer-toggle-busy", enable));
-      await waitFor(() => harness.sendTurn.mock.calls.length === 2);
-      await harness.drain();
-      expect(harness.startSession).toHaveBeenCalledTimes(1);
-      expect(harness.stopSession).not.toHaveBeenCalled();
-      expect(registry.computerControlProvisioned?.(threadId, "claudeAgent")).toBe(!enable);
-      const session = (await Effect.runPromise(harness.engine.getReadModel())).threads[0]!.session!;
-      expect(session.lastError).toBeNull();
+  it.each([
+    {
+      name: "delivers plain chat when turning Computer off with background work",
+      enable: false,
+      busy: true,
+      explicit: false,
+      delivered: true,
     },
-  );
+    {
+      name: "delivers plain chat when turning Computer on with background work",
+      enable: true,
+      busy: true,
+      explicit: false,
+      delivered: true,
+    },
+    {
+      name: "reports Claude preflight failures when turning Computer on",
+      enable: true,
+      busy: false,
+      explicit: false,
+      delivered: false,
+    },
+    {
+      name: "refuses explicit Computer use with background work",
+      enable: true,
+      busy: true,
+      explicit: true,
+      delivered: false,
+    },
+  ])("$name", async ({ enable, busy, explicit, delivered }) => {
+    const registry = makeAgentGatewaySessionRegistry();
+    const harness = await createHarness({
+      threadModelSelection: { provider: "claudeAgent", model: "claude-fable-5-1" },
+      gatewaySessions: registry,
+    });
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const createdAt = new Date().toISOString();
+    const issue = busy ? "Background work is active" : "Claude session preparation timed out";
+    const send = (id: string, computer: boolean, explicitInvocation = false) =>
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe(id),
+        threadId,
+        message: {
+          messageId: asMessageId(id),
+          role: "user",
+          text: explicitInvocation ? "/computer-use inspect the page" : "continue",
+          attachments: [],
+        },
+        enableComputerControl: computer,
+        computerControlMode: explicitInvocation ? "request" : computer ? "chat" : "off",
+        dispatchOrigin: "user",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt,
+      });
+    await Effect.runPromise(send("bootstrap-computer", false));
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    await harness.drain();
+    // The current session has the opposite provisioning from the next turn.
+    registry.issue(threadId, "claudeAgent", {
+      additionalCapabilities: enable ? [] : ["computer:control"],
+    });
+    harness.startSession.mockClear();
+    harness.startSession.mockImplementationOnce(() =>
+      Effect.fail(
+        new ProviderAdapterValidationError({
+          provider: "claudeAgent",
+          operation: "session/reconfigure",
+          ...(busy ? { reason: "session-busy" } : {}),
+          issue,
+        }),
+      ),
+    );
+    await Effect.runPromise(send("computer-toggle", enable, explicit));
+    await harness.drain();
+    expect(harness.sendTurn).toHaveBeenCalledTimes(delivered ? 2 : 1);
+    expect(harness.startSession).toHaveBeenCalledTimes(1);
+    expect(harness.stopSession).not.toHaveBeenCalled();
+    expect(registry.computerControlProvisioned?.(threadId, "claudeAgent")).toBe(!enable);
+    const session = (await Effect.runPromise(harness.engine.getReadModel())).threads[0]!.session!;
+    expect(session.lastError).toBe(delivered ? null : `Your message was not sent. ${issue}`);
+  });
 
   it("seeds imported Droid selection and applies a stored effort at the next turn", async () => {
     const harness = await createHarness({
