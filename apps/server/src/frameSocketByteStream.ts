@@ -31,6 +31,11 @@ export function frameSocketByteStream(
   if (!socket || typeof socket.writableLength !== "number" || typeof socket.on !== "function") {
     return undefined;
   }
+  // Disable Nagle's algorithm so small H.264 delta frames and live touch
+  // events flush immediately instead of waiting on delayed-ACK coalescing.
+  if (typeof socket.setNoDelay === "function") {
+    socket.setNoDelay(true);
+  }
   const stream = socket;
   return {
     pendingBytes: () => stream.writableLength,

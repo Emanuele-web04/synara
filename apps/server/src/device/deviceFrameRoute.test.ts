@@ -6,7 +6,11 @@ import { HttpRouter, HttpServerResponse } from "effect/unstable/http";
 import { describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
 
-import { DEVICE_FRAME_RESYNC_MESSAGE, DEVICE_FRAME_WS_PATH } from "@synara/shared/deviceFrame";
+import {
+  DEVICE_FRAME_RESYNC_MESSAGE,
+  DEVICE_FRAME_TOUCH_MESSAGE,
+  DEVICE_FRAME_WS_PATH,
+} from "@synara/shared/deviceFrame";
 import type { FrameSink } from "@synara/shared/frameTransport";
 
 import { makeBoundedNodeHttpServer } from "../nodeHttpServer";
@@ -26,6 +30,7 @@ import { runWithRemoteAdmission } from "../auth/remoteAccess";
 import { RemoteSessionRegistry } from "../remoteSessions/sessionRegistry";
 import { DeviceService, type DeviceServiceShape } from "./Services/DeviceService";
 import {
+  decodeDeviceFrameClientMessage,
   decodeResyncRequest,
   makeDeviceFrameSink,
   makeDeviceFrameRouteLayer,
@@ -55,6 +60,42 @@ describe("frame socket client messages", () => {
     });
 
     expect(decodeResyncRequest(oversized)).toBeNull();
+  });
+
+  it("decodes valid live touch events and ignores out-of-bounds or malformed ones", () => {
+    expect(
+      decodeDeviceFrameClientMessage(
+        JSON.stringify({ type: DEVICE_FRAME_TOUCH_MESSAGE, phase: "down", x: 120, y: 340 }),
+      ),
+    ).toEqual({ kind: "touch", phase: "down", x: 120, y: 340 });
+    expect(
+      decodeDeviceFrameClientMessage(
+        new TextEncoder().encode(
+          JSON.stringify({ type: DEVICE_FRAME_TOUCH_MESSAGE, phase: "move", x: 125.5, y: 310 }),
+        ),
+      ),
+    ).toEqual({ kind: "touch", phase: "move", x: 125.5, y: 310 });
+    expect(
+      decodeDeviceFrameClientMessage(
+        JSON.stringify({ type: DEVICE_FRAME_TOUCH_MESSAGE, phase: "up", x: 125.5, y: 310 }),
+      ),
+    ).toEqual({ kind: "touch", phase: "up", x: 125.5, y: 310 });
+
+    expect(
+      decodeDeviceFrameClientMessage(
+        JSON.stringify({ type: DEVICE_FRAME_TOUCH_MESSAGE, phase: "hover", x: 10, y: 10 }),
+      ),
+    ).toBeNull();
+    expect(
+      decodeDeviceFrameClientMessage(
+        JSON.stringify({ type: DEVICE_FRAME_TOUCH_MESSAGE, phase: "down", x: -1, y: 10 }),
+      ),
+    ).toBeNull();
+    expect(
+      decodeDeviceFrameClientMessage(
+        JSON.stringify({ type: DEVICE_FRAME_TOUCH_MESSAGE, phase: "down", x: 25_000, y: 10 }),
+      ),
+    ).toBeNull();
   });
 });
 
@@ -130,6 +171,9 @@ describe("device frame connection lifetime", () => {
       const unsubscribe = vi.fn();
       let sink: FrameSink | undefined;
       let subscriptions = 0;
+      const touched: Array<{ readonly phase: string; readonly x: number; readonly y: number }> = [];
+      const downDelivered = Promise.withResolvers<void>();
+      const geometry = { pointWidth: 402, pointHeight: 874, scale: 3 };
       const manager = {
         subscribeFrames: (udid: string, subscriber: FrameSink) => {
           expect(udid).toBe("test-device");
@@ -137,7 +181,17 @@ describe("device frame connection lifetime", () => {
           sink = subscriber;
           return unsubscribe;
         },
+        frameGeometry: () => geometry,
         requestKeyframe: async () => {},
+        touch: async (
+          udid: string,
+          input: { readonly phase: string; readonly x: number; readonly y: number },
+        ) => {
+          expect(udid).toBe("test-device");
+          touched.push(input);
+          if (input.phase === "down") await downDelivered.promise;
+          if (input.phase === "move") throw new Error("native HID message contains private data");
+        },
       } as unknown as DeviceServiceShape["manager"];
       const runAuthorizedConnection: NonNullable<
         Parameters<typeof makeDeviceFrameRouteLayer>[0]["runAuthorizedConnection"]
@@ -213,16 +267,31 @@ describe("device frame connection lifetime", () => {
         await once(client, "open", { signal: AbortSignal.timeout(2_000) });
         await vi.waitFor(() => expect(sink).toBeDefined());
         const activeSink = sink!;
-        const frame = once(client, "message", { signal: AbortSignal.timeout(2_000) });
+        const messages: Array<[data: Buffer, binary: boolean]> = [];
+        client.on("message", (data, binary) => messages.push([data as Buffer, binary]));
         activeSink.send(Uint8Array.of(1, 2, 3));
-        expect((await frame)[0]).toEqual(Buffer.from([1, 2, 3]));
+        await vi.waitFor(() => expect(messages).toHaveLength(2));
+        expect(messages[0]).toEqual([
+          Buffer.from(JSON.stringify({ type: "device.frame.geometry", geometry })),
+          false,
+        ]);
+        expect(messages[1]).toEqual([Buffer.from([1, 2, 3]), true]);
+        client.send(
+          JSON.stringify({ type: DEVICE_FRAME_TOUCH_MESSAGE, phase: "down", x: 50, y: 90 }),
+        );
+        await vi.waitFor(() => expect(touched).toContainEqual({ phase: "down", x: 50, y: 90 }));
 
         if (mode === "revoke") {
           const sessionClosed = once(client, "close", { signal: AbortSignal.timeout(6_000) });
           expect(await Effect.runPromise(sessions!.revoke(issued!.sessionId))).toBe(true);
           await sessionClosed;
+          downDelivered.resolve();
           await vi.waitFor(() => expect(unsubscribe).toHaveBeenCalledOnce());
           expect(activeSink.isOpen()).toBe(false);
+          expect(touched).toEqual([
+            { phase: "down", x: 50, y: 90 },
+            { phase: "up", x: 50, y: 90 },
+          ]);
           expect(registry.canAdmitRemoteSession()).toBe(true);
           expect(subscriptions).toBe(1);
           return;
@@ -231,6 +300,22 @@ describe("device frame connection lifetime", () => {
         const closed = wrapped
           ? once(client, "close", { signal: AbortSignal.timeout(2_000) })
           : undefined;
+        downDelivered.resolve();
+        if (mode === "default") {
+          const failedInput = once(client, "message", { signal: AbortSignal.timeout(2_000) });
+          client.send(
+            JSON.stringify({ type: DEVICE_FRAME_TOUCH_MESSAGE, phase: "move", x: 52, y: 92 }),
+          );
+          expect(await failedInput).toEqual([
+            Buffer.from(JSON.stringify({ type: "device.frame.touch-error" })),
+            false,
+          ]);
+          expect(touched).toEqual([
+            { phase: "down", x: 50, y: 90 },
+            { phase: "move", x: 52, y: 92 },
+            { phase: "up", x: 50, y: 90 },
+          ]);
+        }
         available = false;
         registry.closeAll("Remote authorization unavailable");
         if (closed) {
@@ -256,9 +341,10 @@ describe("device frame connection lifetime", () => {
           client = new WebSocket(streamUrl, socketOptions);
           await once(client, "open", { signal: AbortSignal.timeout(2_000) });
           await vi.waitFor(() => expect(subscriptions).toBe(2));
-          const recoveredFrame = once(client, "message", { signal: AbortSignal.timeout(2_000) });
+          const recoveredMessages: Buffer[] = [];
+          client.on("message", (data) => recoveredMessages.push(data as Buffer));
           sink!.send(Uint8Array.of(6, 7));
-          expect((await recoveredFrame)[0]).toEqual(Buffer.from([6, 7]));
+          await vi.waitFor(() => expect(recoveredMessages[1]).toEqual(Buffer.from([6, 7])));
           const recoveredClosed = once(client, "close", { signal: AbortSignal.timeout(2_000) });
           client.close();
           await recoveredClosed;
@@ -274,6 +360,7 @@ describe("device frame connection lifetime", () => {
         expect(activeSink.isOpen()).toBe(false);
         expect(sink!.isOpen()).toBe(false);
       } finally {
+        downDelivered.resolve();
         releaseGuard();
         refused?.terminate();
         client?.terminate();

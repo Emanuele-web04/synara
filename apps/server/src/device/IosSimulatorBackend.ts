@@ -63,6 +63,7 @@ import {
   type DeviceScreenshotCapture,
   type DeviceSwipeGesture,
   type DeviceTapOptions,
+  type DeviceTouchPhase,
   type DeviceTypeTextOutcome,
 } from "./DeviceBackend.ts";
 import { readCrashReports, unifiedLogArguments, tailLines } from "./deviceLogs.ts";
@@ -295,6 +296,8 @@ interface SimulatorHelperSession {
   shutdown: Promise<void> | null;
   streamingUdid: string | null;
   idleTimer: ReturnType<typeof setTimeout> | null;
+  pendingTouchMove: { readonly x: number; readonly y: number } | null;
+  touchMoveInFlight: boolean;
 }
 
 export class IosSimulatorBackend implements DeviceBackend {
@@ -504,7 +507,9 @@ export class IosSimulatorBackend implements DeviceBackend {
    * one missing symbol cannot take the rest of the pane down.
    */
   async assertCapability(capability: DeviceCapabilityId): Promise<void> {
-    const probe = await this.probeHelperCapabilities();
+    // Reuse the cached capability probe result on the hot input/stream path so
+    // taps and drags never stall every 15s waiting on xcode-select/xcodebuild.
+    const probe = this.helperProbe?.result ?? (await this.probeHelperCapabilities());
     if (probe === null) return;
     const status = probe.capabilities.find((entry) => entry.id === capability);
     if (!status || status.ok) return;
@@ -872,6 +877,51 @@ export class IosSimulatorBackend implements DeviceBackend {
     );
   }
 
+  async touch(
+    udid: string,
+    phase: DeviceTouchPhase,
+    x: number,
+    y: number,
+    options?: DeviceInputOptions,
+  ): Promise<void> {
+    const session = this.helperSession(udid);
+    if (phase !== "move") {
+      // Clear any coalesced move before down/up so a release is never followed
+      // by a stale intermediate position.
+      session.pendingTouchMove = null;
+      await this.injectInput(
+        udid,
+        HELPER_METHODS.touch,
+        (helper) => ({ phase, ...helper.normalize(x, y) }),
+        options?.signal,
+      );
+      return;
+    }
+
+    if (session.touchMoveInFlight) {
+      session.pendingTouchMove = { x, y };
+      return;
+    }
+
+    session.touchMoveInFlight = true;
+    try {
+      let next: { readonly x: number; readonly y: number } | null = { x, y };
+      while (next !== null) {
+        const current = next;
+        session.pendingTouchMove = null;
+        await this.injectInput(
+          udid,
+          HELPER_METHODS.touch,
+          (helper) => ({ phase: "move", ...helper.normalize(current.x, current.y) }),
+          options?.signal,
+        );
+        next = session.pendingTouchMove;
+      }
+    } finally {
+      session.touchMoveInFlight = false;
+    }
+  }
+
   async swipe(
     udid: string,
     gesture: DeviceSwipeGesture,
@@ -1142,6 +1192,14 @@ export class IosSimulatorBackend implements DeviceBackend {
       session.streamingUdid = null;
       await session.client?.stopStream().catch(() => undefined);
     });
+  }
+
+  async requestKeyframe(udid: string): Promise<void> {
+    const session = this.helperSessions.get(udid.toLowerCase());
+    if (!session?.client?.running || session.streamingUdid !== udid) {
+      throw new DeviceBackendError(`No active simulator stream for ${udid}`);
+    }
+    await this.helperRequest(session.client, HELPER_METHODS.streamKeyframe, {});
   }
 
   onStreamInterrupted(listener: (udid: string, reason: string) => void): () => void {
@@ -1628,6 +1686,8 @@ export class IosSimulatorBackend implements DeviceBackend {
         shutdown: null,
         streamingUdid: null,
         idleTimer: null,
+        pendingTouchMove: null,
+        touchMoveInFlight: false,
       };
       this.helperSessions.set(key, session);
     }
@@ -1702,6 +1762,7 @@ export class IosSimulatorBackend implements DeviceBackend {
       session.idleTimer = null;
     }
     session.streamingUdid = null;
+    session.pendingTouchMove = null;
     session.interruptCompile?.(
       new DeviceBackendError(
         this.disposed
@@ -1819,6 +1880,7 @@ export class IosSimulatorBackend implements DeviceBackend {
       throw this.recordHelperFailure("Device helper build produced no binary");
     }
     this.helperBuildFailure = null;
+    this.helperProbe = null;
     return binaryPath;
   }
 

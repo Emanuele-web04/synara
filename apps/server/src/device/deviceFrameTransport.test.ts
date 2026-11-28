@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { decodeDeviceFrame } from "@synara/shared/deviceFrame";
+import { decodeDeviceFrame, encodeDeviceFrame } from "@synara/shared/deviceFrame";
 
 import type { DeviceStreamFrame } from "./DeviceBackend.ts";
 import { DeviceFrameTransport, type DeviceFrameSink } from "./deviceFrameTransport.ts";
@@ -56,6 +56,34 @@ describe("device frame transport framing", () => {
 
     expect(sinkA.received).toHaveLength(1);
     expect(sinkB.received).toHaveLength(0);
+  });
+
+  it("forwards a pre-encoded helper envelope without re-allocating it", () => {
+    const transport = new DeviceFrameTransport();
+    const sink = new RecordingSink();
+    transport.subscribe(DEVICE, sink);
+    const encodedEnvelope = encodeDeviceFrame({
+      header: {
+        deviceId: DEVICE,
+        sequence: 9,
+        timestampMs: 42,
+        keyframe: true,
+        codecConfig: false,
+      },
+      payload: new Uint8Array([0x00, 0x00, 0x00, 0x01, 0x65]),
+    });
+
+    transport.publish(DEVICE, {
+      sequence: 9,
+      timestampMs: 42,
+      keyframe: true,
+      codecConfig: false,
+      data: new Uint8Array([0x00, 0x00, 0x00, 0x01, 0x65]),
+      encodedEnvelope,
+    });
+
+    expect(sink.received).toHaveLength(1);
+    expect(sink.received[0]).toBe(encodedEnvelope);
   });
 });
 

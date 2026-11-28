@@ -201,10 +201,22 @@ export default function DevicePanel(props: {
   // Resync is owned by the frame socket, not this component: `device.attach` on
   // an already-attached device early-returns server-side, so it could never
   // have recovered a frozen canvas.
-  const { status: videoStatus, dimensions } = useDeviceVideoStream({
+  const {
+    status: videoStatus,
+    dimensions,
+    geometry: streamedGeometry,
+    sendTouch,
+  } = useDeviceVideoStream({
     canvasRef,
     udid: streamEnabled && attachedDevice ? attachedDevice.udid : null,
     enabled: streamEnabled,
+    onTouchError: () => {
+      toastManager.add({
+        type: "error",
+        title: t("computer:theSimulatorDidNotAcceptThatInput"),
+        description: "The input could not be delivered.",
+      });
+    },
   });
 
   const pickerEntries = useMemo(
@@ -419,7 +431,29 @@ export default function DevicePanel(props: {
 
   // ── Pointer input ──────────────────────────────────────────────────
 
-  const pressRef = useRef<{ point: DevicePoint | null; startedAt: number } | null>(null);
+  // Active pointer contact. When the uncompressed frame socket is open, touches
+  // stream live (`down` / rAF-coalesced `move` / `up`) so dragging and scrolling
+  // track 1:1 without waiting for mouse release. If the frame socket is not open
+  // yet, release falls back to a synthesized `tap`/`swipe` RPC.
+  const activeTouchRef = useRef<{
+    readonly pointerId: number;
+    readonly live: boolean;
+    readonly startPoint: DevicePoint;
+    lastPoint: DevicePoint;
+    readonly startedAt: number;
+    pendingMove: DevicePoint | null;
+    moveRaf: number | null;
+  } | null>(null);
+
+  const attachedUdid = attachedDevice?.udid ?? null;
+  useEffect(() => {
+    return () => {
+      const active = activeTouchRef.current;
+      activeTouchRef.current = null;
+      if (!active) return;
+      if (active.moveRaf !== null) cancelAnimationFrame(active.moveRaf);
+    };
+  }, [attachedUdid, streamEnabled]);
 
   // The accessibility tree's root frame is the device's screen in points, which
   // is the unit the backend injects input in. Frames arrive in pixels (3x on a
@@ -429,7 +463,7 @@ export default function DevicePanel(props: {
     readonly width: number;
     readonly height: number;
   } | null>(null);
-  const attachedUdid = attachedDevice?.udid ?? null;
+  const geometry = streamedGeometry ?? attachedDevice?.geometry;
 
   // Only a fallback: when the descriptor carries geometry, resolveDevicePointSize
   // prefers it and this round trip would be spent on a value we discard.
@@ -458,7 +492,7 @@ export default function DevicePanel(props: {
   const devicePointSize = resolveDevicePointSize({
     framePixelWidth: dimensions?.width ?? 0,
     framePixelHeight: dimensions?.height ?? 0,
-    geometry: attachedDevice?.geometry,
+    geometry,
     measured: measuredPointSize,
   });
 
@@ -466,7 +500,7 @@ export default function DevicePanel(props: {
   // than the stream's frame dimensions so the chassis keeps its shape before
   // the first frame arrives and across stream restarts.
   const deviceKind = attachedDevice ? deviceKindFor(attachedDevice) : "iPhone";
-  const deviceScale = attachedDevice?.geometry?.scale ?? RESOLUTION_SCALE[deviceKind];
+  const deviceScale = geometry?.scale ?? RESOLUTION_SCALE[deviceKind];
   const devicePixelSize = devicePointSize
     ? {
         width: Math.round(devicePointSize.width * deviceScale),
@@ -481,7 +515,7 @@ export default function DevicePanel(props: {
       const pointSize = resolveDevicePointSize({
         framePixelWidth: dimensions.width,
         framePixelHeight: dimensions.height,
-        geometry: attachedDevice?.geometry,
+        geometry,
         measured: measuredPointSize,
       });
       // offsetX/offsetY rather than clientX minus the bounding rect: the canvas
@@ -502,32 +536,91 @@ export default function DevicePanel(props: {
         event.offsetY,
       );
     },
-    [dimensions, measuredPointSize, attachedDevice?.geometry],
+    [dimensions, measuredPointSize, geometry],
   );
 
   const handlePointerDown = useCallback(
     (event: React.PointerEvent<HTMLCanvasElement>) => {
-      if (!attachedDevice) return;
+      if (!attachedDevice || event.button !== 0) return;
+      const point = pointFromEvent(event.nativeEvent);
+      if (!point) return;
       event.currentTarget.setPointerCapture(event.pointerId);
       // Focus on press so keyboard passthrough follows the click without a
       // separate tab stop.
       event.currentTarget.focus();
-      pressRef.current = { point: pointFromEvent(event.nativeEvent), startedAt: performance.now() };
+
+      const previous = activeTouchRef.current;
+      if (previous) {
+        if (previous.moveRaf !== null) cancelAnimationFrame(previous.moveRaf);
+        if (previous.live) sendTouch("up", previous.lastPoint.x, previous.lastPoint.y);
+      }
+
+      const live = sendTouch("down", point.x, point.y);
+      activeTouchRef.current = {
+        pointerId: event.pointerId,
+        live,
+        startPoint: point,
+        lastPoint: point,
+        startedAt: performance.now(),
+        pendingMove: null,
+        moveRaf: null,
+      };
     },
-    [attachedDevice, pointFromEvent],
+    [attachedDevice, pointFromEvent, sendTouch],
   );
 
-  const handlePointerUp = useCallback(
+  const handlePointerMove = useCallback(
     (event: React.PointerEvent<HTMLCanvasElement>) => {
-      const press = pressRef.current;
-      pressRef.current = null;
-      if (!press || !attachedDevice) return;
-      event.currentTarget.releasePointerCapture(event.pointerId);
+      const active = activeTouchRef.current;
+      if (!active || !active.live || active.pointerId !== event.pointerId) return;
+      const point = pointFromEvent(event.nativeEvent);
+      if (!point) return;
+      if (point.x === active.lastPoint.x && point.y === active.lastPoint.y) return;
+      active.pendingMove = point;
+      if (active.moveRaf !== null) return;
+      active.moveRaf = requestAnimationFrame(() => {
+        active.moveRaf = null;
+        const move = active.pendingMove;
+        active.pendingMove = null;
+        if (!move || activeTouchRef.current !== active) return;
+        active.lastPoint = move;
+        sendTouch("move", move.x, move.y);
+      });
+    },
+    [pointFromEvent, sendTouch],
+  );
 
+  const finishPointer = useCallback(
+    (event: React.PointerEvent<HTMLCanvasElement>, cancelled: boolean) => {
+      const active = activeTouchRef.current;
+      if (!active || active.pointerId !== event.pointerId) return;
+      activeTouchRef.current = null;
+      if (active.moveRaf !== null) {
+        cancelAnimationFrame(active.moveRaf);
+        active.moveRaf = null;
+      }
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      }
+      if (!attachedDevice) return;
+
+      const endPoint = pointFromEvent(event.nativeEvent) ?? active.pendingMove ?? active.lastPoint;
+      if (active.live) {
+        if (
+          !cancelled &&
+          (endPoint.x !== active.lastPoint.x || endPoint.y !== active.lastPoint.y)
+        ) {
+          sendTouch("move", endPoint.x, endPoint.y);
+        }
+        sendTouch("up", endPoint.x, endPoint.y);
+        return;
+      }
+
+      if (cancelled) return;
       const gesture = resolveDevicePointerGesture({
-        from: press.point,
-        to: pointFromEvent(event.nativeEvent),
-        durationMs: performance.now() - press.startedAt,
+        from: active.startPoint,
+        to: endPoint,
+        durationMs: performance.now() - active.startedAt,
       });
       if (!gesture) return;
 
@@ -552,7 +645,17 @@ export default function DevicePanel(props: {
         });
       });
     },
-    [attachedDevice, pointFromEvent, t],
+    [attachedDevice, pointFromEvent, sendTouch, t],
+  );
+
+  const handlePointerUp = useCallback(
+    (event: React.PointerEvent<HTMLCanvasElement>) => finishPointer(event, false),
+    [finishPointer],
+  );
+
+  const handlePointerCancel = useCallback(
+    (event: React.PointerEvent<HTMLCanvasElement>) => finishPointer(event, true),
+    [finishPointer],
   );
 
   // ── Keyboard passthrough ───────────────────────────────────────────
@@ -728,14 +831,13 @@ export default function DevicePanel(props: {
           // object-cover so the frame is filled edge to edge: the canvas already
           // carries the device's own aspect ratio, so nothing is actually cropped.
           className={cn(
-            "h-full w-full object-cover outline-none ring-inset focus-visible:ring-2 focus-visible:ring-ring/70",
+            "h-full w-full object-cover outline-none ring-inset will-change-transform focus-visible:ring-2 focus-visible:ring-ring/70",
             videoStatus.kind !== "streaming" && "invisible",
           )}
           onPointerDown={handlePointerDown}
+          onPointerMove={handlePointerMove}
           onPointerUp={handlePointerUp}
-          onPointerCancel={() => {
-            pressRef.current = null;
-          }}
+          onPointerCancel={handlePointerCancel}
           onKeyDown={(event) => handleKey(event, "down")}
           onKeyUp={(event) => handleKey(event, "up")}
         />

@@ -35,6 +35,7 @@ import {
   type DeviceLogResult,
   type DeviceStreamFrame,
   type DeviceSwipeGesture,
+  type DeviceTouchPhase,
   type DeviceTypeTextOutcome,
 } from "./DeviceBackend.ts";
 
@@ -62,6 +63,13 @@ export type FakeDeviceCall =
       readonly x: number;
       readonly y: number;
       readonly holdMs?: number;
+    }
+  | {
+      readonly kind: "touch";
+      readonly udid: string;
+      readonly phase: DeviceTouchPhase;
+      readonly x: number;
+      readonly y: number;
     }
   | { readonly kind: "swipe"; readonly udid: string; readonly gesture: DeviceSwipeGesture }
   | { readonly kind: "typeText"; readonly udid: string; readonly text: string }
@@ -294,6 +302,11 @@ export class FakeDeviceBackend implements DeviceBackend {
       y,
       ...(options.holdMs === undefined ? {} : { holdMs: options.holdMs }),
     });
+    this.requireBooted(udid);
+  }
+
+  async touch(udid: string, phase: DeviceTouchPhase, x: number, y: number): Promise<void> {
+    this.record({ kind: "touch", udid, phase, x, y });
     this.requireBooted(udid);
   }
 
@@ -570,6 +583,9 @@ export class FakeDeviceBackend implements DeviceBackend {
     this.record({ kind: "detachStream", udid });
     this.listeners.delete(udid);
   }
+
+  /** Optional test hook for backends that support in-place keyframe requests. */
+  requestKeyframe?: (udid: string) => Promise<void>;
 
   async dispose(): Promise<void> {
     for (const udid of Array.from(this.recordings.keys())) {

@@ -33,6 +33,7 @@ import {
   type DeviceAttachPhase,
   type DeviceAvailability,
   type DeviceBootResult,
+  type DeviceGeometry,
   type DeviceDescribeUiResult,
   type DeviceDescriptor,
   type DeviceEvent,
@@ -60,6 +61,7 @@ import {
   type DeviceScreenshotCapture,
   type DeviceSwipeGesture,
   type DeviceTapOptions,
+  type DeviceTouchPhase,
   type DeviceTypeTextOutcome,
 } from "./DeviceBackend.ts";
 import {
@@ -764,6 +766,17 @@ export class DeviceManager {
     await this.withDeviceAction(udid, () => this.backend.tap(udid, x, y, options));
   }
 
+  async touch(
+    udid: string,
+    input: { readonly phase: DeviceTouchPhase; readonly x: number; readonly y: number },
+    options?: DeviceInputOptions,
+  ): Promise<void> {
+    if (!this.backend.touch) throw new DeviceBackendError("Live simulator input is unavailable.");
+    await this.withDeviceAction(udid, () =>
+      this.backend.touch!(udid, input.phase, input.x, input.y, options),
+    );
+  }
+
   /**
    * Tap the element a label names, scrolling it into view first if needed.
    *
@@ -1307,6 +1320,11 @@ export class DeviceManager {
     return await this.withDeviceAction(udid, () => this.backend.describeUi(udid));
   }
 
+  /** Native screen size and scale for clients receiving resized video. */
+  frameGeometry(udid: string): DeviceGeometry | null {
+    return this.backend.geometry(udid);
+  }
+
   /** The screen in points: helper geometry when attached, else the tree's root. */
   async pointSize(
     udid: string,
@@ -1611,16 +1629,26 @@ export class DeviceManager {
   /**
    * Force a fresh codec-config frame followed by a keyframe.
    *
-   * There is no "emit an IDR now" call in the helper, and the encoder's natural
-   * keyframe interval is seconds away, so a decoder that has lost sync would
-   * otherwise sit frozen. Restarting the stream builds a new compression
-   * session, which always emits parameter sets and an IDR as its first frames.
+   * When the backend supports in-place keyframe requests (`stream.keyframe`),
+   * ask the live encoder for an immediate IDR without tearing down the socket
+   * or VideoToolbox session. Fall back to a stream restart when the backend
+   * lacks in-place keyframe support or the live request fails.
    *
    * Cached frames are dropped first so a late subscriber cannot be primed with
-   * a keyframe from the previous generation.
+   * a keyframe from before the resync.
    */
   async requestKeyframe(udid: string): Promise<void> {
     if (this.activeStreamUdid !== udid || this.disposed) return;
+    if (this.backend.requestKeyframe) {
+      this.transport.resetDevice(udid);
+      try {
+        await this.backend.requestKeyframe(udid);
+        return;
+      } catch {
+        // Fall through to a full stream rebuild when the helper cannot emit
+        // an in-place keyframe (e.g. stream died concurrently).
+      }
+    }
     this.desiredStreamUdid = null;
     await this.queueStreamReconciliation();
     if (

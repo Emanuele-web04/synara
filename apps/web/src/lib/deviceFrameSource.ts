@@ -7,12 +7,15 @@
 
 import {
   DEVICE_FRAME_RESYNC_MESSAGE,
+  DEVICE_FRAME_TOUCH_MESSAGE,
   DEVICE_FRAME_WS_PATH,
   DEVICE_FRAME_WS_UDID_PARAM,
   decodeDeviceFrame,
   type DeviceFrame,
+  type DeviceFrameTouchPhase,
 } from "@synara/shared/deviceFrame";
-import type { DeviceUdid } from "@synara/contracts";
+import { DeviceFrameServerMessage, type DeviceUdid } from "@synara/contracts";
+import { Schema } from "effect";
 
 import {
   binaryFrameSocketUrl,
@@ -24,19 +27,22 @@ import {
 export interface DeviceFrameSourceHandlers {
   readonly onFrame: (frame: DeviceFrame) => void;
   readonly onReset: (reason: DeviceFrameSourceResetReason) => void;
+  readonly onControl?: (message: DeviceFrameServerMessage) => void;
 }
 
 export type DeviceFrameSourceResetReason = FrameSourceResetReason;
 
 /**
- * Rebuilding the capture session is expensive (it tears down and recreates the
- * VideoToolbox encoder), so resync requests are debounced to this window; see
- * `resyncCooldownMs` in binaryFrameSource for the mechanism.
+ * Debounce window for keyframe resync requests. With in-place `stream.keyframe`
+ * IDR generation on the helper, recovery takes milliseconds, while a short
+ * cooldown still prevents bursts of dropped frames from flooding the server.
  */
-export const DEVICE_FRAME_RESYNC_COOLDOWN_MS = 1_000;
+export const DEVICE_FRAME_RESYNC_COOLDOWN_MS = 300;
 
 export interface DeviceFrameSource {
   readonly requestResync: () => boolean;
+  /** Send a live touch event over the uncompressed frame socket when open. */
+  readonly sendTouch: (phase: DeviceFrameTouchPhase, x: number, y: number) => boolean;
   readonly close: () => void;
 }
 
@@ -63,17 +69,46 @@ export function deviceFrameSocketUrl(input: {
   });
 }
 
+const decodeControl = Schema.decodeUnknownOption(Schema.fromJsonString(DeviceFrameServerMessage));
+
 export function createDeviceFrameSource(options: DeviceFrameSourceOptions): DeviceFrameSource {
-  return createBinaryFrameSource({
+  let active: { readonly x: number; readonly y: number } | null = null;
+  const base = createBinaryFrameSource({
     streamId: options.udid,
     streamIdParam: DEVICE_FRAME_WS_UDID_PARAM,
     wsPath: DEVICE_FRAME_WS_PATH,
     resyncMessage: DEVICE_FRAME_RESYNC_MESSAGE,
-    handlers: options.handlers,
+    handlers: {
+      onFrame: options.handlers.onFrame,
+      onReset: (reason) => {
+        if (reason === "closed") active = null;
+        options.handlers.onReset(reason);
+      },
+      onText: (text) => {
+        const decoded = decodeControl(text);
+        if (decoded._tag === "Some") options.handlers.onControl?.(decoded.value);
+      },
+    },
     decode: decodeDeviceFrame,
     ...(options.createSocket !== undefined ? { createSocket: options.createSocket } : {}),
     ...(options.explicitUrl !== undefined ? { explicitUrl: options.explicitUrl } : {}),
     ...(options.now !== undefined ? { now: options.now } : {}),
     resyncCooldownMs: options.resyncCooldownMs ?? DEVICE_FRAME_RESYNC_COOLDOWN_MS,
   });
+  const sendTouch: DeviceFrameSource["sendTouch"] = (phase, x, y) => {
+    // A pointer held across reconnect belongs to the old socket.
+    if (phase !== "down" && active === null) return false;
+    if (!base.sendJson({ type: DEVICE_FRAME_TOUCH_MESSAGE, phase, x, y })) return false;
+    active = phase === "up" ? null : { x, y };
+    return true;
+  };
+  return {
+    requestResync: base.requestResync,
+    sendTouch,
+    close: () => {
+      // Effect cleanup closes the source before the pane can handle pointer-up.
+      if (active !== null) sendTouch("up", active.x, active.y);
+      base.close();
+    },
+  };
 }

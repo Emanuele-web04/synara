@@ -249,6 +249,33 @@ describe("text input", () => {
   });
 });
 
+describe("live touch coalescing", () => {
+  it("coalesces queued drag moves to the latest coordinate while preserving down and up", async () => {
+    const { backend } = await makeBackend(ALL_OK);
+    StubHelper.requests = [];
+
+    await backend.touch(DEVICE, "down", 10, 20);
+    // Fire several moves concurrently; only the in-flight move and the latest
+    // coalesced position should reach the helper.
+    await Promise.all([
+      backend.touch(DEVICE, "move", 20, 30),
+      backend.touch(DEVICE, "move", 30, 40),
+      backend.touch(DEVICE, "move", 40, 50),
+      backend.touch(DEVICE, "move", 50, 60),
+    ]);
+    await backend.touch(DEVICE, "up", 50, 60);
+
+    const touches = StubHelper.requests
+      .filter((request) => request.method === "touch")
+      .map((request) => request.params);
+    expect(touches[0]).toEqual({ phase: "down", x: 10, y: 20 });
+    expect(touches.at(-1)).toEqual({ phase: "up", x: 50, y: 60 });
+    const moves = touches.filter((entry) => entry.phase === "move");
+    expect(moves.length).toBeLessThanOrEqual(2);
+    expect(moves.at(-1)).toEqual({ phase: "move", x: 50, y: 60 });
+  });
+});
+
 describe("operations backed by a broken capability", () => {
   let backend: IosSimulatorBackend;
 

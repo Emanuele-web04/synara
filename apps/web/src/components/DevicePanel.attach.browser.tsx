@@ -14,18 +14,31 @@ import { render } from "vitest-browser-react";
 import type { DeviceFrameSourceOptions } from "~/lib/deviceFrameSource";
 
 const transport = vi.hoisted(() => ({
-  sources: [] as Array<DeviceFrameSourceOptions & { close: ReturnType<typeof vi.fn> }>,
+  sources: [] as Array<
+    DeviceFrameSourceOptions & {
+      close: ReturnType<typeof vi.fn>;
+      sendTouch: ReturnType<typeof vi.fn>;
+    }
+  >,
   getThreadState: vi.fn(),
 }));
 
 vi.mock("~/nativeApi", () => ({
-  ensureNativeApi: () => ({ device: { getThreadState: transport.getThreadState } }),
+  ensureNativeApi: () => ({
+    device: {
+      getThreadState: transport.getThreadState,
+      describeUi: async () => {
+        throw new Error("Accessibility unavailable");
+      },
+    },
+  }),
 }));
 vi.mock("~/lib/deviceFrameSource", () => ({
   createDeviceFrameSource: (options: DeviceFrameSourceOptions) => {
     const close = vi.fn();
-    transport.sources.push({ ...options, close });
-    return { close, requestResync: vi.fn() };
+    const sendTouch = vi.fn(() => true);
+    transport.sources.push({ ...options, close, sendTouch });
+    return { close, requestResync: vi.fn(), sendTouch };
   },
 }));
 
@@ -217,5 +230,59 @@ describe("simulator attach first frame", () => {
     await expect
       .element(mounted.getByText("Simulator decoder failed", { exact: true }))
       .toBeVisible();
+  });
+
+  it("streams touch in native points even without descriptor or accessibility geometry", async () => {
+    await mount({
+      ...state(SLIM_2, 1, null),
+      devices: devices.map(({ geometry: _geometry, ...device }) => device),
+    });
+    const source = transport.sources[0]!;
+    source.handlers.onControl?.({
+      type: "device.frame.geometry",
+      geometry: { pointWidth: 402, pointHeight: 874, scale: 3 },
+    });
+    prime(source);
+    await expect.poll(() => document.querySelector("canvas")?.width).toBe(40);
+    const canvas = document.querySelector("canvas")!;
+    const rect = canvas.getBoundingClientRect();
+
+    canvas.dispatchEvent(
+      new PointerEvent("pointerdown", {
+        bubbles: true,
+        pointerId: 1,
+        button: 0,
+        clientX: rect.left + rect.width * 0.5,
+        clientY: rect.top + rect.height * 0.5,
+      }),
+    );
+    expect(source.sendTouch).toHaveBeenCalledTimes(1);
+    const [phase, x, y] = source.sendTouch.mock.calls[0]!;
+    expect(phase).toBe("down");
+    expect(x).toBeCloseTo(201, -1);
+    expect(y).toBeCloseTo(437, -1);
+
+    canvas.dispatchEvent(
+      new PointerEvent("pointermove", {
+        bubbles: true,
+        pointerId: 1,
+        button: 0,
+        clientX: rect.left + rect.width * 0.5,
+        clientY: rect.top + rect.height * 0.25,
+      }),
+    );
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    expect(source.sendTouch.mock.calls.some(([phase]) => phase === "move")).toBe(true);
+
+    canvas.dispatchEvent(
+      new PointerEvent("pointerup", {
+        bubbles: true,
+        pointerId: 1,
+        button: 0,
+        clientX: rect.left + rect.width * 0.5,
+        clientY: rect.top + rect.height * 0.2,
+      }),
+    );
+    expect(source.sendTouch.mock.calls.at(-1)?.[0]).toBe("up");
   });
 });

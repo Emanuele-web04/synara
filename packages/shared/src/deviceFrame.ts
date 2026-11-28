@@ -11,6 +11,16 @@ import {
 export const DEVICE_FRAME_WS_PATH = "/ws/device-frames";
 export const DEVICE_FRAME_WS_UDID_PARAM = "udid";
 export const DEVICE_FRAME_RESYNC_MESSAGE = "device.frame.resync";
+export const DEVICE_FRAME_TOUCH_MESSAGE = "device.frame.touch";
+
+export type DeviceFrameTouchPhase = "down" | "move" | "up";
+
+export interface DeviceFrameTouchMessage {
+  readonly type: typeof DEVICE_FRAME_TOUCH_MESSAGE;
+  readonly phase: DeviceFrameTouchPhase;
+  readonly x: number;
+  readonly y: number;
+}
 
 export interface DeviceFrame {
   readonly header: DeviceFrameHeader;

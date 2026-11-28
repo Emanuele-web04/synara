@@ -284,6 +284,44 @@ describe("DeviceManager keyframe resync", () => {
 
     expect(backend.callsOfKind("attachStream")).toHaveLength(0);
   });
+
+  it("uses in-place backend keyframe requests without restarting the stream", async () => {
+    const { backend, manager } = makeManager();
+    const inPlaceRequests: string[] = [];
+    backend.requestKeyframe = async (udid) => {
+      inPlaceRequests.push(udid);
+    };
+    await backend.boot(DEVICE_A);
+    await manager.attach(THREAD_A, DEVICE_A);
+    manager.subscribeFrames(DEVICE_A, {
+      send: () => undefined,
+      bufferedAmount: () => 0,
+      isOpen: () => true,
+    });
+    await waitForStream(backend, DEVICE_A, true);
+
+    await manager.requestKeyframe(DEVICE_A);
+
+    expect(inPlaceRequests).toEqual([DEVICE_A]);
+    expect(backend.callsOfKind("detachStream")).toHaveLength(0);
+    expect(backend.callsOfKind("attachStream")).toHaveLength(1);
+    expect(backend.hasStream(DEVICE_A)).toBe(true);
+  });
+
+  it("forwards live touch events to the backend", async () => {
+    const { backend, manager } = makeManager();
+    await backend.boot(DEVICE_A);
+
+    await manager.touch(DEVICE_A, { phase: "down", x: 100, y: 200 });
+    await manager.touch(DEVICE_A, { phase: "move", x: 110, y: 180 });
+    await manager.touch(DEVICE_A, { phase: "up", x: 110, y: 180 });
+
+    expect(backend.callsOfKind("touch")).toEqual([
+      { kind: "touch", udid: DEVICE_A, phase: "down", x: 100, y: 200 },
+      { kind: "touch", udid: DEVICE_A, phase: "move", x: 110, y: 180 },
+      { kind: "touch", udid: DEVICE_A, phase: "up", x: 110, y: 180 },
+    ]);
+  });
 });
 
 describe("DeviceManager stream transition ordering", () => {

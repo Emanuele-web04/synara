@@ -17,17 +17,15 @@
  *
  * @module device/deviceFrameRoute
  */
+import type { DeviceFrameServerMessage, DeviceGeometry } from "@synara/contracts";
 import {
   DEVICE_FRAME_RESYNC_MESSAGE,
+  DEVICE_FRAME_TOUCH_MESSAGE,
   DEVICE_FRAME_WS_PATH,
   DEVICE_FRAME_WS_UDID_PARAM,
+  type DeviceFrameTouchPhase,
 } from "@synara/shared/deviceFrame";
-import {
-  decodeFrameResyncRequest,
-  makeFrameSink,
-  type FrameByteStream,
-  type FrameSink,
-} from "@synara/shared/frameTransport";
+import { makeFrameSink, type FrameByteStream, type FrameSink } from "@synara/shared/frameTransport";
 import { Effect, Layer } from "effect";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 
@@ -36,16 +34,72 @@ import { frameSocketByteStream } from "../frameSocketByteStream.ts";
 import { DeviceService } from "./Services/DeviceService.ts";
 import type { DeviceFrameSink } from "./deviceFrameTransport.ts";
 
-/** A resync request is a few dozen bytes; anything larger is not one. */
+/** Client control messages on the frame socket are tiny JSON envelopes. */
 const MAX_CLIENT_MESSAGE_BYTES = 1_024;
+/** Mirrors DeviceCoordinate upper bound in `@synara/contracts`. */
+const MAX_TOUCH_COORDINATE = 20_000;
+
+export type DeviceFrameClientMessage =
+  | { readonly kind: "resync" }
+  | {
+      readonly kind: "touch";
+      readonly phase: DeviceFrameTouchPhase;
+      readonly x: number;
+      readonly y: number;
+    };
+
+function isTouchPhase(value: unknown): value is DeviceFrameTouchPhase {
+  return value === "down" || value === "move" || value === "up";
+}
+
+function isValidCoordinate(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isFinite(value) &&
+    value >= 0 &&
+    value <= MAX_TOUCH_COORDINATE
+  );
+}
 
 /**
- * Parse a client message on the frame socket. Returns the request kind, or
- * null for anything unrecognized, which the caller ignores rather than
- * treating as a protocol error.
+ * Parse a client message on the frame socket (keyframe resync or live touch).
+ * Returns null for anything unrecognized or out of bounds, which the caller
+ * ignores rather than treating as a protocol error.
+ */
+export function decodeDeviceFrameClientMessage(
+  message: string | Uint8Array,
+): DeviceFrameClientMessage | null {
+  const text = typeof message === "string" ? message : Buffer.from(message).toString("utf8");
+  if (text.length > MAX_CLIENT_MESSAGE_BYTES) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== "object" || parsed === null) return null;
+  const record = parsed as Record<string, unknown>;
+  if (record.type === DEVICE_FRAME_RESYNC_MESSAGE) {
+    return { kind: "resync" };
+  }
+  if (
+    record.type === DEVICE_FRAME_TOUCH_MESSAGE &&
+    isTouchPhase(record.phase) &&
+    isValidCoordinate(record.x) &&
+    isValidCoordinate(record.y)
+  ) {
+    return { kind: "touch", phase: record.phase, x: record.x, y: record.y };
+  }
+  return null;
+}
+
+/**
+ * Parse a client resync request on the frame socket. Returns "resync", or
+ * null for anything else.
  */
 export function decodeResyncRequest(message: string | Uint8Array): "resync" | null {
-  return decodeFrameResyncRequest(message, DEVICE_FRAME_RESYNC_MESSAGE, MAX_CLIENT_MESSAGE_BYTES);
+  const decoded = decodeDeviceFrameClientMessage(message);
+  return decoded?.kind === "resync" ? "resync" : null;
 }
 
 export interface DeviceFrameSocketWriter {
@@ -64,6 +118,94 @@ export function makeDeviceFrameSink(options: {
   readonly byteStream?: FrameByteStream | undefined;
 }): DeviceFrameSink {
   return makeFrameSink(options);
+}
+
+type LiveTouch = Omit<Extract<DeviceFrameClientMessage, { kind: "touch" }>, "kind">;
+type TouchPoint = Pick<LiveTouch, "x" | "y">;
+
+/** Order contact boundaries across panes and keep at most one queued move per contact. */
+class DeviceFrameTouches {
+  connections = 0;
+  private tail = Promise.resolve();
+  private contact: { owner: symbol; point: TouchPoint; holding: boolean } | null = null;
+  private requestedOwner: symbol | null = null;
+  private pendingMove: { owner: symbol; point: TouchPoint } | null = null;
+
+  constructor(private readonly deliver: (input: LiveTouch) => Promise<void>) {}
+
+  private enqueue(deliver: () => Promise<void>, onError: () => void): Promise<void> {
+    const next = this.tail.then(deliver).catch(onError);
+    this.tail = next;
+    return next;
+  }
+
+  private async release(point?: TouchPoint): Promise<void> {
+    if (!this.contact) return;
+    // Retain an uncertain contact so close or the next down can retry its release.
+    this.contact.holding = false;
+    await this.deliver({ phase: "up", ...(point ?? this.contact.point) });
+    this.contact = null;
+  }
+
+  touch(
+    owner: symbol,
+    { phase, x, y }: LiveTouch,
+    isOpen: () => boolean,
+    onError: () => void,
+  ): void {
+    const point = { x, y };
+    if (phase === "move") {
+      if (this.requestedOwner !== owner) return;
+      if (this.pendingMove?.owner === owner) {
+        this.pendingMove.point = point;
+        return;
+      }
+      const move = { owner, point };
+      this.pendingMove = move;
+      void this.enqueue(async () => {
+        if (this.pendingMove === move) this.pendingMove = null;
+        if (!isOpen() || this.contact?.owner !== owner || !this.contact.holding) return;
+        try {
+          await this.deliver({ phase, ...move.point });
+          this.contact.point = move.point;
+        } catch (error) {
+          await this.release().catch(() => undefined);
+          throw error;
+        }
+      }, onError);
+      return;
+    }
+
+    if (phase === "down") this.requestedOwner = owner;
+    else if (this.requestedOwner === owner) this.requestedOwner = null;
+    this.pendingMove = null;
+    void this.enqueue(async () => {
+      if (!isOpen()) return;
+      if (phase === "up") {
+        if (this.contact?.owner === owner) await this.release(point);
+        return;
+      }
+      await this.release();
+      if (!isOpen()) return;
+      const contact = { owner, point, holding: false };
+      this.contact = contact;
+      try {
+        await this.deliver({ phase, ...point });
+        contact.holding = true;
+      } catch (error) {
+        await this.release().catch(() => undefined);
+        throw error;
+      }
+    }, onError);
+  }
+
+  disconnect(owner: symbol, onError: () => void): Promise<void> {
+    if (this.requestedOwner === owner) this.requestedOwner = null;
+    if (this.pendingMove?.owner === owner) this.pendingMove = null;
+    return this.enqueue(async () => {
+      if (this.contact?.owner === owner) await this.release();
+    }, onError);
+  }
 }
 
 /**
@@ -88,6 +230,7 @@ export function makeDeviceFrameRouteLayer<R = never, E = never>(options: {
   return Layer.effectDiscard(
     Effect.gen(function* () {
       const router = yield* HttpRouter.HttpRouter;
+      const touchesByDevice = new Map<string, DeviceFrameTouches>();
       yield* router.add(
         "GET",
         DEVICE_FRAME_WS_PATH,
@@ -111,32 +254,63 @@ export function makeDeviceFrameRouteLayer<R = never, E = never>(options: {
             const byteStream = frameSocketByteStream(request);
             const socket = yield* request.upgrade;
             const writer = yield* socket.writer;
+            const { manager } = deviceService.value;
+            const deviceKey = udid.toLowerCase();
+            let touches = touchesByDevice.get(deviceKey);
+            if (!touches) {
+              touches = new DeviceFrameTouches((input) => manager.touch(udid, input));
+              touchesByDevice.set(deviceKey, touches);
+            }
+            const contactOwner = Symbol();
+            touches.connections += 1;
             let open = true;
+            let lastGeometry: DeviceGeometry | null = null;
+            const sendControl = (message: DeviceFrameServerMessage) =>
+              Effect.runPromise(writer(JSON.stringify(message))).catch(() => undefined);
+            const sendTouchError = () => {
+              if (open) void sendControl({ type: "device.frame.touch-error" });
+            };
             const sink = makeDeviceFrameSink({
-              send: (bytes) => Effect.runPromise(writer(bytes)).catch(() => undefined),
+              send: (bytes) => {
+                const geometry = manager.frameGeometry(udid);
+                // Announce the helper's point bounds independently of the encoded scale.
+                if (geometry && geometry !== lastGeometry) {
+                  lastGeometry = geometry;
+                  void sendControl({ type: "device.frame.geometry", geometry });
+                }
+                return Effect.runPromise(writer(bytes)).catch(() => undefined);
+              },
               isOpen: () => open,
               byteStream,
             });
-            const unsubscribe = deviceService.value.manager.subscribeFrames(udid, sink);
+            const unsubscribe = manager.subscribeFrames(udid, sink);
             yield* Effect.addFinalizer(() =>
-              Effect.sync(() => {
+              Effect.promise(async () => {
                 open = false;
+                await touches.disconnect(contactOwner, () => {
+                  Effect.runFork(
+                    Effect.logDebug("Could not release simulator touch on disconnect"),
+                  );
+                });
                 unsubscribe();
+                touches.connections -= 1;
+                if (touches.connections === 0) touchesByDevice.delete(deviceKey);
               }),
             );
-            // The only thing a client may send is a resync request, when its
-            // decoder hits a sequence gap or an error. Handled here rather than
-            // as an RPC because it is a property of this stream, and because a
-            // frozen canvas should not depend on a second socket being healthy.
-            // Anything unrecognized is ignored: a stray message must not kill a
-            // stream.
+            // Client messages on the uncompressed frame socket carry keyframe
+            // resyncs and low-latency live touch events (`down` / `move` / `up`),
+            // keeping both off the compressed JSON-RPC socket. Anything
+            // unrecognized is ignored so a stray message never kills a stream.
             yield* socket.run((message) => {
-              if (decodeResyncRequest(message) === null) return;
-              Effect.runFork(
-                Effect.promise(() =>
-                  deviceService.value.manager.requestKeyframe(udid).catch(() => undefined),
-                ),
-              );
+              const decoded = decodeDeviceFrameClientMessage(message);
+              if (decoded === null) return;
+              if (decoded.kind === "resync") {
+                Effect.runFork(
+                  Effect.promise(() => manager.requestKeyframe(udid).catch(() => undefined)),
+                );
+                return;
+              }
+              touches.touch(contactOwner, decoded, sink.isOpen, sendTouchError);
             });
             return HttpServerResponse.empty();
           });
