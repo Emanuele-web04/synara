@@ -8,6 +8,7 @@ import {
   isRightDockPaneKind,
   movePaneInState,
   openPaneInState,
+  removePaneFromState,
   resolveVisibleDockSidechatThreadIds,
   sanitizeRightDockStateByThreadId,
   sanitizeRightDockThreadState,
@@ -268,17 +269,27 @@ describe("empty launcher state", () => {
     });
   });
 
-  it("returns to the launcher after the final pane closes", () => {
-    const open = openPaneInState(createDefaultRightDockState(), {
+  it("keeps a remaining pane open and collapses the dock after the final close", () => {
+    const browser = openPaneInState(createDefaultRightDockState(), {
       paneId: "browser-1",
       kind: "browser",
     });
+    const both = openPaneInState(browser, { paneId: "device-1", kind: "device" });
+    const remaining = closePaneInState(both, "device-1");
 
-    expect(closePaneInState(open, "browser-1")).toEqual({
-      open: true,
-      panes: [],
-      activePaneId: null,
+    expect(remaining).toEqual(browser);
+    expect(closePaneInState(remaining, "browser-1")).toEqual(createDefaultRightDockState());
+  });
+
+  it("shows the launcher when background cleanup removes the final pane", () => {
+    const open = openPaneInState(createDefaultRightDockState(), {
+      paneId: "terminal-1",
+      kind: "terminal",
     });
+
+    expect(removePaneFromState(open, "terminal-1")).toEqual(
+      setDockOpenInState(createDefaultRightDockState(), true),
+    );
   });
 });
 

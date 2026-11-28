@@ -91,9 +91,9 @@ export function useSidechatDockPanePruning(input: {
   dockState: RightDockThreadState;
   existingThreadIds: ReadonlySet<ThreadId>;
   threadsHydrated: boolean;
-  closePane: (hostId: RightDockHostId, paneId: string) => void;
+  removePane: (hostId: RightDockHostId, paneId: string) => void;
 }) {
-  const { hostId, dockState, existingThreadIds, threadsHydrated, closePane } = input;
+  const { hostId, dockState, existingThreadIds, threadsHydrated, removePane } = input;
   const sidechatPaneRetentionVersion = useSyncExternalStore(
     subscribeSidechatPaneRetention,
     getSidechatPaneRetentionVersion,
@@ -124,7 +124,7 @@ export function useSidechatDockPanePruning(input: {
         if (pane?.threadId) {
           clearSidechatPaneRetention(pane.threadId);
         }
-        closePane(hostId, paneId);
+        removePane(hostId, paneId);
         continue;
       }
       timerIds.push(
@@ -132,7 +132,7 @@ export function useSidechatDockPanePruning(input: {
           if (pane?.threadId) {
             clearSidechatPaneRetention(pane.threadId);
           }
-          closePane(hostId, paneId);
+          removePane(hostId, paneId);
         }, remainingGraceMs),
       );
     }
@@ -142,7 +142,7 @@ export function useSidechatDockPanePruning(input: {
       }
     };
   }, [
-    closePane,
+    removePane,
     dockState,
     existingThreadIds,
     hostId,

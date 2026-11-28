@@ -19,6 +19,7 @@ import {
   createDefaultRightDockState,
   movePaneInState,
   openPaneInState,
+  removePaneFromState,
   sanitizeRightDockStateByThreadId,
   setActivePaneInState,
   setDockOpenInState,
@@ -40,6 +41,8 @@ interface RightDockStore {
     input: Omit<OpenPaneInput, "paneId"> & { paneId?: string },
   ) => void;
   closePane: (threadId: RightDockHostId, paneId: string) => void;
+  /** Remove a pane during background cleanup while preserving dock visibility. */
+  removePane: (threadId: RightDockHostId, paneId: string) => void;
   movePane: (threadId: RightDockHostId, paneId: string, overPaneId: string) => void;
   setActivePane: (threadId: RightDockHostId, paneId: string) => void;
   setDockOpen: (threadId: RightDockHostId, open: boolean) => void;
@@ -104,6 +107,8 @@ export const useRightDockStore = create<RightDockStore>()(
         ),
       closePane: (threadId, paneId) =>
         commit(set, get, threadId, (state) => closePaneInState(state, paneId)),
+      removePane: (threadId, paneId) =>
+        commit(set, get, threadId, (state) => removePaneFromState(state, paneId)),
       movePane: (threadId, paneId, overPaneId) =>
         commit(set, get, threadId, (state) => movePaneInState(state, paneId, overPaneId)),
       setActivePane: (threadId, paneId) =>

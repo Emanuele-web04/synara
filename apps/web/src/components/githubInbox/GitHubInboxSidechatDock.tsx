@@ -45,6 +45,7 @@ export function GitHubInboxSidechatDock({
   const { t } = useTranslation();
 
   const closePane = useRightDockStore((store) => store.closePane);
+  const removePane = useRightDockStore((store) => store.removePane);
   const setDockOpen = useRightDockStore((store) => store.setDockOpen);
   // Tab labels need only titles, so the coarse summary selector keeps streaming tokens in the
   // side chat from re-rendering the whole inbox.
@@ -59,7 +60,7 @@ export function GitHubInboxSidechatDock({
     dockState,
     existingThreadIds,
     threadsHydrated,
-    closePane,
+    removePane,
   });
   const paneLabelOverrides = useMemo(
     () => buildRightDockPaneLabelOverrides(dockState.panes, threadSummaries),
