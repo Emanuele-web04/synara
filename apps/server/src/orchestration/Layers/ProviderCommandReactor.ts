@@ -2660,6 +2660,8 @@ const make = Effect.gen(function* () {
       readonly modelSelection?: ModelSelection;
       readonly providerOptions?: ProviderStartOptions;
       readonly enableComputerControl?: boolean;
+      /** The ordinary chat can proceed with the existing tools while Claude is busy. */
+      readonly deferChatComputerEnable?: boolean;
       readonly runtimeMode?: RuntimeMode;
       readonly registerPriorTranscriptBootstrapOnFreshStart?: boolean;
       /** The user explicitly requested a same-thread handoff. */
@@ -3131,6 +3133,7 @@ const make = Effect.gen(function* () {
         !providerChanged &&
         !workspaceChanged &&
         !additionalDirectoriesChanged &&
+        !providerInstanceChanged &&
         !providerOptionsChanged &&
         !shouldRestartForModelChange &&
         !shouldRestartForModelSelectionChange &&
@@ -3207,17 +3210,15 @@ const make = Effect.gen(function* () {
           shouldRestartForModelChange) &&
           shouldRegisterContextBootstrap,
       ).pipe(
-        // The live-turn check above sees only turns. The adapter also refuses
-        // while background tasks, approvals or questions are open, before it
-        // touches the runtime. Switching Computer off can wait for that work
-        // like it waits for a turn; switching it on cannot, because the turn
-        // would run without the tools it asked for.
+        // Busy adapters preserve the live runtime and its catalog for ordinary chat.
+        // Surface other preparation failures and explicit requests for new tools.
         Effect.catchIf(
           (error): error is ProviderAdapterValidationError =>
             computerControlOnlyChange &&
-            requestedComputerControl === false &&
+            (requestedComputerControl === false || options?.deferChatComputerEnable === true) &&
             error instanceof ProviderAdapterValidationError &&
-            error.operation === "session/reconfigure",
+            error.operation === "session/reconfigure" &&
+            error.reason === "session-busy",
           (error) =>
             Effect.logInfo("provider command reactor deferred computer-control restart", {
               threadId,
@@ -3998,7 +3999,15 @@ const make = Effect.gen(function* () {
             ...(input.providerOptions !== undefined
               ? { providerOptions: input.providerOptions }
               : {}),
-            ...(input.dispatchMode === "steer" ? {} : { enableComputerControl }),
+            ...(input.dispatchMode === "steer"
+              ? {}
+              : {
+                  enableComputerControl,
+                  deferChatComputerEnable:
+                    input.dispatchOrigin === "user" &&
+                    requestedMode === "chat" &&
+                    computerInvocation === null,
+                }),
             ...(input.runtimeMode !== undefined ? { runtimeMode: input.runtimeMode } : {}),
             ...(registerPriorTranscriptBootstrapOnFreshStart
               ? { registerPriorTranscriptBootstrapOnFreshStart: true }

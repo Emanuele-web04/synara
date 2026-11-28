@@ -11,6 +11,7 @@ export class ProviderAdapterValidationError extends Schema.TaggedErrorClass<Prov
     provider: Schema.String,
     operation: Schema.String,
     issue: Schema.String,
+    reason: Schema.optional(Schema.Literal("session-busy")),
     cause: Schema.optional(Schema.Defect),
   },
 ) {
