@@ -176,7 +176,7 @@ export function ThreadFindBar({
       role="search"
       data-testid="thread-find-bar"
       data-thread-find-layout="panel"
-      className="flex w-80 max-w-[calc(100vw-2rem)] flex-col rounded-3xl border border-border/60 bg-[var(--color-background-elevated-primary-opaque)] shadow-lg"
+      className="flex w-80 max-w-[calc(100vw-2rem)] flex-col rounded-3xl border border-[color:var(--color-border)] bg-[var(--color-background-elevated-primary-opaque)] shadow-lg"
     >
       <div className="flex items-center gap-2.5 px-4">
         <SearchIcon className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
@@ -204,7 +204,7 @@ export function ThreadFindBar({
         </IconButton>
       </div>
       <DisclosureRegion open={resultsRowVisible}>
-        <div className="flex items-center justify-between gap-2 border-t border-border/60 px-3 py-2">
+        <div className="flex items-center justify-between gap-2 border-t border-[color:var(--color-border)] px-3 py-2">
           <div className="flex shrink-0 items-center gap-1">
             <IconButton
               onClick={() => handleStep("previous")}

@@ -337,7 +337,7 @@ export function KanbanProjectBoardView({
               <Button
                 size="xs"
                 variant="ghost"
-                className="text-ui-xs text-muted-foreground/80 hover:text-foreground"
+                className="text-ui-xs text-muted-foreground hover:text-foreground"
                 onClick={() => setHasRevealedReviewFold(!hasRevealedReviewFold)}
               >
                 {resolveReviewFoldToggleLabel(hasRevealedReviewFold, board.hiddenCount)}

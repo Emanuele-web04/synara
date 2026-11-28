@@ -15819,6 +15819,61 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
+  it("reopens the terminal with its shortcut after returning to chat", async () => {
+    await using mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: addThreadToSnapshot(
+        createSnapshotForTargetUser({
+          targetMessageId: MessageId.makeUnsafe("terminal-toggle-navigated-chat"),
+          targetText: "Terminal shortcut",
+        }),
+        OTHER_THREAD_ID,
+      ),
+      configureFixture: (nextFixture) => {
+        nextFixture.serverConfig = {
+          ...nextFixture.serverConfig,
+          keybindings: [
+            {
+              command: "terminal.toggle",
+              shortcut: {
+                key: "j",
+                metaKey: false,
+                ctrlKey: false,
+                shiftKey: false,
+                altKey: false,
+                modKey: true,
+              },
+            },
+          ],
+        };
+      },
+    });
+
+    const renderedTerminal = () => document.querySelector('aside[aria-label="Terminal"]');
+    await waitForServerConfigToApply();
+    await dispatchConfiguredShortcutWhenReady(window, { key: "j" });
+    await vi.waitFor(() => expect(renderedTerminal()?.closest("[inert]")).toBeNull());
+
+    await page.getByLabelText("Open New thread", { exact: true }).click();
+    await waitForURL(
+      mounted.router,
+      (path) => path === `/${OTHER_THREAD_ID}`,
+      "Opening the other chat should navigate away from the terminal.",
+    );
+    await page.getByLabelText(`Open ${THREAD_TITLE}`, { exact: true }).click();
+    await waitForURL(
+      mounted.router,
+      (path) => path === `/${THREAD_ID}`,
+      "Opening the original chat should return to its transcript.",
+    );
+    await vi.waitFor(() => expect(renderedTerminal()?.closest("[inert]")).toBeTruthy());
+
+    await dispatchConfiguredShortcutWhenReady(window, { key: "j" });
+    await vi.waitFor(() => expect(renderedTerminal()?.closest("[inert]")).toBeNull());
+    await dispatchConfiguredShortcutWhenReady(window, { key: "j" });
+    await vi.waitFor(() => expect(renderedTerminal()).toBeNull());
+  });
+
   it("promotes terminal-first shortcut threads so they render as terminal rows", async () => {
     const restoreNativeApi = installDeterministicSendNativeApi();
     const mounted = await mountChatView({

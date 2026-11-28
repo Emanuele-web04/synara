@@ -27,7 +27,7 @@ export type PendingDeviceApproval = ReturnType<typeof pendingApprovals>[number];
 /** Requests first (a new code would withdraw them), then a fresh join, then the code. */
 export type DevicePairingView = "approval" | "joined" | "code" | "empty";
 
-export const DEVICE_PAIRING_CARD_CLASS_NAME = "rounded-[20px] border border-border bg-muted/40";
+export const DEVICE_PAIRING_CARD_CLASS_NAME = "rounded-[20px] border border-border bg-foreground/2";
 
 export function useDevicePairing({
   createCode,
@@ -222,9 +222,7 @@ export function PendingDeviceApprovalCard({
 export function PairingCode({ code }: { code: string }) {
   return (
     <div className="flex flex-col items-center gap-2.5">
-      <span className="text-ui-xs font-medium tracking-[0.08em] text-muted-foreground uppercase">
-        Pairing code
-      </span>
+      <span className="text-ui-xs font-medium text-muted-foreground">Pairing code</span>
       <span className="font-mono text-4xl font-medium tracking-[0.12em] text-foreground">
         {code}
       </span>

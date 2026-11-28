@@ -314,7 +314,7 @@ function UsageAnalyticsBody(props: {
       <section className="flex flex-col gap-6">
         <div className="flex flex-col gap-8 @3xl:flex-row @3xl:gap-10">
           <div className="flex flex-col gap-1.5 @3xl:w-60 @3xl:shrink-0">
-            <span className="text-ui-sm tracking-wide text-muted-foreground uppercase">
+            <span className="text-ui-sm text-muted-foreground">
               {metric === "cost" ? "API cost" : "Tokens processed"}
             </span>
             <span className="text-3xl font-semibold tracking-tight text-foreground tabular-nums">
@@ -529,7 +529,7 @@ function UsageAnalyticsBody(props: {
         </div>
         <div className="flex flex-col gap-4">
           <SectionTitle title="About these numbers" />
-          <ul className="flex list-disc flex-col gap-2 pl-4 text-ui text-muted-foreground marker:text-foreground/30">
+          <ul className="flex list-disc flex-col gap-2 pl-4 text-ui text-muted-foreground marker:text-muted-foreground">
             <li>
               Cost is at API rates. A subscription bills its own price, which can be much less.
             </li>

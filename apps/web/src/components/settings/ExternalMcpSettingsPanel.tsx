@@ -291,7 +291,9 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
                       key={project.id}
                       className={cn(
                         "flex cursor-pointer items-center justify-between gap-3 rounded-lg border px-3 py-2 text-ui leading-snug transition-colors",
-                        checked ? "border-foreground/30 bg-muted/70" : "border-border/70",
+                        checked
+                          ? "border-foreground/30 bg-[var(--color-background-button-secondary)]"
+                          : "border-[color:var(--color-border)]",
                       )}
                     >
                       <span className="min-w-0 truncate">{project.title}</span>
@@ -336,7 +338,7 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
           >
             <DisclosureRegion
               open={advancedOpen}
-              contentClassName="mt-3 space-y-4 border-t border-border/70 pt-3"
+              contentClassName="mt-3 space-y-4 border-t border-[color:var(--color-border)] pt-3"
             >
               <div className="flex items-start justify-between gap-4">
                 <div>
@@ -512,7 +514,7 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
               </Button>
             }
           >
-            <pre className="mt-3 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-border/70 bg-muted/30 p-3 text-ui-sm leading-relaxed">
+            <pre className="mt-3 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-[color:var(--color-border)] bg-foreground/2 p-3 text-ui-sm leading-relaxed">
               {setupPrompt}
             </pre>
           </SettingsRow>
@@ -534,7 +536,7 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
           >
             <DisclosureRegion
               open={manualOpen}
-              contentClassName="mt-3 space-y-3 border-t border-border/70 pt-3"
+              contentClassName="mt-3 space-y-3 border-t border-[color:var(--color-border)] pt-3"
             >
               {!paired ? (
                 <div>
@@ -556,7 +558,7 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
                       {t("workspace:share_copy")}
                     </Button>
                   </div>
-                  <pre className="overflow-x-auto rounded-lg border border-border/70 bg-muted/30 p-3 text-ui-sm leading-relaxed">
+                  <pre className="overflow-x-auto rounded-lg border border-[color:var(--color-border)] bg-foreground/2 p-3 text-ui-sm leading-relaxed">
                     {setup.setupCommand}
                   </pre>
                 </div>
@@ -580,7 +582,7 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
                     {t("workspace:share_copy")}
                   </Button>
                 </div>
-                <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-border/70 bg-muted/30 p-3 text-ui-sm leading-relaxed">
+                <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-[color:var(--color-border)] bg-foreground/2 p-3 text-ui-sm leading-relaxed">
                   {manualConfiguration.value}
                 </pre>
               </div>
@@ -609,7 +611,7 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
             }
           >
             {paired ? (
-              <div className="mt-3 rounded-lg border border-border/70 bg-muted/30 p-3 text-ui leading-relaxed text-muted-foreground">
+              <div className="mt-3 rounded-lg border border-[color:var(--color-border)] bg-foreground/2 p-3 text-ui leading-relaxed text-muted-foreground">
                 {examplePrompt}
               </div>
             ) : null}

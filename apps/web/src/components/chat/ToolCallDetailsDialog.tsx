@@ -20,9 +20,10 @@ import { formatTimestamp } from "../../timestampFormat";
 import ChatMarkdown from "../ChatMarkdown";
 import { useTranslation, getFormatLocale } from "~/i18n";
 
-const DETAIL_HEADER_CLASS_NAME = "border-b border-border/45 px-3 py-2 text-ui-xs font-medium";
+const DETAIL_HEADER_CLASS_NAME =
+  "border-b border-[color:var(--color-border)] px-3 py-2 text-ui-xs font-medium";
 const DETAIL_CODE_BLOCK_CLASS_NAME =
-  "max-h-[min(46vh,30rem)] overflow-auto whitespace-pre-wrap break-words font-chat-code text-chat-code leading-relaxed text-foreground/88";
+  "max-h-[min(46vh,30rem)] overflow-auto whitespace-pre-wrap break-words font-chat-code text-chat-code leading-relaxed text-foreground";
 const TOOL_DETAILS_MARKDOWN_CLASS_NAME = "text-ui leading-relaxed";
 
 export function ToolCallDetailsContent({
@@ -38,7 +39,7 @@ export function ToolCallDetailsContent({
 
   if (!details && !activity) {
     return (
-      <div className="rounded-lg border border-border/45 bg-background/60 px-3 py-2 text-ui leading-snug text-muted-foreground">
+      <div className="rounded-lg border border-[color:var(--color-border)] bg-foreground/2 px-3 py-2 text-ui leading-snug text-muted-foreground">
         {t("chat:toolCallDetails_noPayload")}
       </div>
     );
@@ -65,7 +66,7 @@ export function ToolCallDetailsContent({
             {details.files.map((file) => (
               <span
                 key={file}
-                className="max-w-full rounded-md border border-border/45 bg-background/70 px-2 py-1 font-chat-code text-chat-code text-foreground/82"
+                className="max-w-full rounded-md border border-[color:var(--color-border)] bg-foreground/2 px-2 py-1 font-chat-code text-chat-code text-foreground"
                 title={file}
               >
                 {file}
@@ -87,10 +88,10 @@ export function ToolCallDetailsContent({
             {details.edits.map((edit, index) => (
               <div
                 key={`${edit.path ?? "edit"}:${index}`}
-                className="overflow-hidden rounded-lg border border-border/45 bg-background/58"
+                className="overflow-hidden rounded-lg border border-[color:var(--color-border)] bg-foreground/2"
               >
                 {edit.path ? (
-                  <div className="border-b border-border/45 px-3 py-2 font-chat-code text-chat-code text-muted-foreground/72">
+                  <div className="border-b border-[color:var(--color-border)] px-3 py-2 font-chat-code text-chat-code text-muted-foreground">
                     {edit.path}
                   </div>
                 ) : null}
@@ -148,41 +149,41 @@ function LiveActivityMetadata({
 
   return (
     <ToolDetailSection title={t("workspace:profile_activity")}>
-      <dl className="grid grid-cols-[max-content_minmax(0,1fr)] gap-x-3 gap-y-1.5 rounded-lg border border-border/45 bg-background/60 px-3 py-2.5 text-ui-sm">
-        <dt className="text-muted-foreground/56">{t("chat:detail_status")}</dt>
-        <dd className="text-foreground/84">{stateLabel}</dd>
+      <dl className="grid grid-cols-[max-content_minmax(0,1fr)] gap-x-3 gap-y-1.5 rounded-lg border border-[color:var(--color-border)] bg-foreground/2 px-3 py-2.5 text-ui-sm">
+        <dt className="text-muted-foreground">{t("chat:detail_status")}</dt>
+        <dd className="text-foreground">{stateLabel}</dd>
         {activity.startedAt ? (
           <>
-            <dt className="text-muted-foreground/56">{t("chat:started")}</dt>
-            <dd className="text-foreground/84">
+            <dt className="text-muted-foreground">{t("chat:started")}</dt>
+            <dd className="text-foreground">
               <time dateTime={activity.startedAt} title={activity.startedAt}>
                 {formatActivityTimestamp(activity.startedAt, timestampFormat)}
               </time>
             </dd>
           </>
         ) : null}
-        <dt className="text-muted-foreground/56">{t("chat:lastActivity")}</dt>
-        <dd className="text-foreground/84">
+        <dt className="text-muted-foreground">{t("chat:lastActivity")}</dt>
+        <dd className="text-foreground">
           <time dateTime={activity.lastActivityAt} title={activity.lastActivityAt}>
             {formatActivityTimestamp(activity.lastActivityAt, timestampFormat)}
           </time>
         </dd>
         {elapsed ? (
           <>
-            <dt className="text-muted-foreground/56">{t("chat:elapsed")}</dt>
-            <dd className="tabular-nums text-foreground/84">{elapsed}</dd>
+            <dt className="text-muted-foreground">{t("chat:elapsed")}</dt>
+            <dd className="tabular-nums text-foreground">{elapsed}</dd>
           </>
         ) : null}
         {progress ? (
           <>
-            <dt className="text-muted-foreground/56">{t("chat:progress")}</dt>
-            <dd className="tabular-nums text-foreground/84">{progress}</dd>
+            <dt className="text-muted-foreground">{t("chat:progress")}</dt>
+            <dd className="tabular-nums text-foreground">{progress}</dd>
           </>
         ) : null}
         {activity.detail ? (
           <>
-            <dt className="text-muted-foreground/56">{t("chat:detail")}</dt>
-            <dd className="break-words text-foreground/84">{activity.detail}</dd>
+            <dt className="text-muted-foreground">{t("chat:detail")}</dt>
+            <dd className="break-words text-foreground">{activity.detail}</dd>
           </>
         ) : null}
       </dl>
@@ -203,7 +204,7 @@ function MarkdownToolCodeBlock(props: { language: string; children: string }) {
 function ToolDetailSection(props: { title: string; children: ReactNode }) {
   return (
     <section className="space-y-2">
-      <h3 className="text-ui-sm font-medium text-muted-foreground/56">{props.title}</h3>
+      <h3 className="text-ui-sm font-medium text-muted-foreground">{props.title}</h3>
       {props.children}
     </section>
   );
@@ -216,14 +217,14 @@ function ToolOutputMetadata({ output }: { output: WorkLogToolOutputDetails }) {
     return null;
   }
   return (
-    <div className="flex flex-wrap items-center gap-2 text-ui-sm text-muted-foreground/68">
+    <div className="flex flex-wrap items-center gap-2 text-ui-sm text-muted-foreground">
       {output.exitCode !== undefined ? (
-        <span className="rounded-full border border-border/45 px-2 py-0.5">
+        <span className="rounded-full border border-[color:var(--color-border)] px-2 py-0.5">
           {t("chat:exitCode")} {output.exitCode}
         </span>
       ) : null}
       {output.truncated ? (
-        <span className="rounded-full border border-amber-500/30 bg-amber-500/8 px-2 py-0.5 text-amber-200/90">
+        <span className="rounded-full border border-warning/30 bg-warning/8 px-2 py-0.5 text-warning">
           {t("chat:toolCallDetails_truncated")}
         </span>
       ) : null}
@@ -258,11 +259,11 @@ function ToolOutputSection({ output }: { output: WorkLogToolOutputDetails }) {
 
 function LabeledCodeBlock(props: { title: string; tone: "output" | "error"; children: string }) {
   return (
-    <div className="overflow-hidden rounded-lg border border-border/45 bg-background/58">
+    <div className="overflow-hidden rounded-lg border border-[color:var(--color-border)] bg-foreground/2">
       <div
         className={cn(
           DETAIL_HEADER_CLASS_NAME,
-          props.tone === "error" ? "text-rose-200/88" : "text-muted-foreground/60",
+          props.tone === "error" ? "text-destructive" : "text-muted-foreground",
         )}
       >
         {props.title}
@@ -276,14 +277,16 @@ function TextChangeBlock(props: { title: string; tone: "add" | "remove"; childre
   return (
     <div
       className={cn(
-        "min-w-0 border-border/45 md:[&:not(:first-child)]:border-l",
-        props.tone === "add" ? "bg-emerald-500/5" : "bg-rose-500/5",
+        "min-w-0 border-[color:var(--color-border)] md:[&:not(:first-child)]:border-l",
+        props.tone === "add" ? "bg-success/5" : "bg-destructive/5",
       )}
     >
       <div
         className={cn(
           DETAIL_HEADER_CLASS_NAME,
-          props.tone === "add" ? "text-emerald-200/82" : "text-rose-200/82",
+          props.tone === "add"
+            ? "text-[var(--color-decoration-added)]"
+            : "text-[var(--color-decoration-deleted)]",
         )}
       >
         {props.title}
@@ -298,10 +301,10 @@ function ToolCodeBlock(props: { children: string; tone?: "default" | "command"; 
     <pre
       className={cn(
         DETAIL_CODE_BLOCK_CLASS_NAME,
-        props.tone === "command" && "text-sky-100/92",
+        props.tone === "command" && "text-foreground",
         props.bare
           ? "px-3 py-2.5"
-          : "rounded-lg border border-border/45 bg-background/70 px-3 py-2.5",
+          : "rounded-lg border border-[color:var(--color-border)] bg-foreground/2 px-3 py-2.5",
       )}
     >
       {props.children}
@@ -312,20 +315,20 @@ function ToolCodeBlock(props: { children: string; tone?: "default" | "command"; 
 function DiffCodeBlock({ children }: { children: string }) {
   const lines = children.split(/\r?\n/);
   return (
-    <pre className="max-h-[min(52vh,34rem)] overflow-auto rounded-lg border border-border/45 bg-background/70 px-0 py-2 font-chat-code text-chat-code leading-relaxed">
+    <pre className="max-h-[min(52vh,34rem)] overflow-auto rounded-lg border border-[color:var(--color-border)] bg-foreground/2 px-0 py-2 font-chat-code text-chat-code leading-relaxed">
       {lines.map((line, index) => (
         <span
           key={`${index}:${line.slice(0, 24)}`}
           className={cn(
             "block min-w-max whitespace-pre-wrap break-words px-3",
             line.startsWith("+") && !line.startsWith("+++")
-              ? "bg-emerald-500/8 text-emerald-100/92"
+              ? "bg-success/8 text-[var(--color-decoration-added)]"
               : null,
             line.startsWith("-") && !line.startsWith("---")
-              ? "bg-rose-500/8 text-rose-100/92"
+              ? "bg-destructive/8 text-[var(--color-decoration-deleted)]"
               : null,
-            line.startsWith("@@") ? "text-sky-200/90" : null,
-            /^(diff --git|index |--- |\+\+\+ )/.test(line) ? "text-muted-foreground/62" : null,
+            line.startsWith("@@") ? "text-info" : null,
+            /^(diff --git|index |--- |\+\+\+ )/.test(line) ? "text-muted-foreground" : null,
           )}
         >
           {line.length > 0 ? line : " "}

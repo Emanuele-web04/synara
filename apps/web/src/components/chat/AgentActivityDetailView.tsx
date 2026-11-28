@@ -73,7 +73,7 @@ export function AgentActivityDetailView({
         <button
           type="button"
           data-scroll-anchor-ignore
-          className="inline-flex items-center gap-1.5 rounded-md px-1.5 py-1 text-muted-foreground/70 transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-foreground"
+          className="inline-flex items-center gap-1.5 rounded-md px-1.5 py-1 text-muted-foreground transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-foreground"
           style={footerTextStyle}
           onClick={onBack}
         >
@@ -81,17 +81,17 @@ export function AgentActivityDetailView({
           <span>{t("common:app_back")}</span>
         </button>
 
-        <div className="mt-3 border-b border-border/55 pb-4">
+        <div className="mt-3 border-b border-[color:var(--color-border)] pb-4">
           <div className="flex min-w-0 items-start gap-3">
-            <span className="mt-1 flex size-7 shrink-0 items-center justify-center rounded-md border border-border/45 bg-background/65 text-muted-foreground/58">
+            <span className="mt-1 flex size-7 shrink-0 items-center justify-center rounded-md border border-[color:var(--color-border)] bg-foreground/2 text-muted-foreground">
               <BotIcon className="size-3.5" />
             </span>
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                <h2 className="truncate text-ui-lg font-medium leading-6 text-foreground/92">
+                <h2 className="truncate text-ui-lg font-medium leading-6 text-foreground">
                   {detail.title}
                 </h2>
-                <span className="rounded-full border border-border/45 px-2 py-0.5 text-ui-xs font-medium text-muted-foreground/56">
+                <span className="rounded-full border border-[color:var(--color-border)] px-2 py-0.5 text-ui-xs font-medium text-muted-foreground">
                   {t("chat:symbol7", {
                     value0: detail.entries.length,
                     value1: pluralize(detail.entries.length, "update"),
@@ -99,7 +99,7 @@ export function AgentActivityDetailView({
                 </span>
               </div>
               {detail.summary ? (
-                <p className="mt-1 max-w-4xl text-muted-foreground/58" style={chatTypographyStyle}>
+                <p className="mt-1 max-w-4xl text-muted-foreground" style={chatTypographyStyle}>
                   {detail.summary}
                 </p>
               ) : null}
@@ -132,7 +132,7 @@ export function AgentActivityDetailView({
         ) : null}
 
         <AgentActivitySection title={t("workspace:profile_activity")}>
-          <div className="divide-y divide-border/45">
+          <div className="divide-y divide-[color:var(--color-border)]">
             {detail.entries.map((entry) => (
               <AgentActivityEventRow
                 key={entry.id}
@@ -153,8 +153,8 @@ export function AgentActivityDetailView({
 
 function AgentActivitySection(props: { title: string; children: ReactNode }) {
   return (
-    <section className="border-b border-border/45 py-4 last:border-b-0">
-      <h3 className="mb-2 text-ui-sm font-medium text-muted-foreground/48">{props.title}</h3>
+    <section className="border-b border-[color:var(--color-border)] py-4 last:border-b-0">
+      <h3 className="mb-2 text-ui-sm font-medium text-muted-foreground">{props.title}</h3>
       {props.children}
     </section>
   );
@@ -180,15 +180,15 @@ function AgentActivityEventRow(props: {
   return (
     <div className="py-3 first:pt-0 last:pb-0">
       <div className="flex min-w-0 items-baseline justify-between gap-3">
-        <p className="truncate font-medium text-foreground/78" style={props.chatTypographyStyle}>
+        <p className="truncate font-medium text-foreground" style={props.chatTypographyStyle}>
           {title}
         </p>
-        <p className="shrink-0 tabular-nums text-muted-foreground/38" style={props.footerTextStyle}>
+        <p className="shrink-0 tabular-nums text-muted-foreground" style={props.footerTextStyle}>
           {formatShortTimestamp(props.entry.createdAt, props.timestampFormat, formatLocale)}
         </p>
       </div>
       {body ? (
-        <div className="mt-1 text-muted-foreground/70">
+        <div className="mt-1 text-muted-foreground">
           <ChatMarkdown
             text={body}
             cwd={props.markdownCwd}

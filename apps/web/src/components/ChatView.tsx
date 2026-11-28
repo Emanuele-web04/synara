@@ -319,7 +319,6 @@ import { SidebarHeaderNavigationControls } from "./SidebarHeaderNavigationContro
 import { SynaraLogo } from "@synara/profile-ui/logo";
 import { EmptyChatBackdrop } from "./chat/EmptyChatBackdrop";
 import { SponsorLandingBanner } from "./SponsorLandingBanner";
-import TerminalWorkspaceTabs from "./TerminalWorkspaceTabs";
 import { ThreadWorktreeHandoffDialog } from "./ThreadWorktreeHandoffDialog";
 
 import { ChatComposerFooter } from "./chat/ChatComposerFooter";
@@ -7127,16 +7126,6 @@ export default function ChatView({
         status={shouldShowProviderHealthBanner ? visibleActiveProviderStatus : null}
         onDismiss={dismissActiveProviderHealthBanner}
       />
-      {terminalWorkspaceOpen && !isEditorRail ? (
-        <TerminalWorkspaceTabs
-          activeTab={terminalState.workspaceActiveTab}
-          isWorking={isWorking}
-          terminalHasRunningActivity={terminalState.runningTerminalIds.length > 0}
-          workspaceLayout={terminalState.workspaceLayout}
-          onSelectTab={setTerminalWorkspaceTab}
-          onClose={onCloseEditorTerminal}
-        />
-      ) : null}
       {/* Main content area with optional plan sidebar */}
       <div
         ref={setMainContentElement}

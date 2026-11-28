@@ -12,7 +12,6 @@ import { memo, useCallback, useMemo, useState } from "react";
 
 import { SettingsIcon, UserIcon } from "~/lib/icons";
 import { resolveProviderInstanceLabel } from "~/lib/providerInstancePresentation";
-import { cn } from "~/lib/utils";
 import {
   Menu,
   MenuItem,
@@ -103,7 +102,7 @@ export const ProviderInstancePicker = memo(function ProviderInstancePicker(
         <span className="sr-only">{triggerLabel}</span>
       </MenuTrigger>
       <ComposerPickerMenuPopup align="start" fixedWidth>
-        <div className="px-2.5 pb-1 pt-1 text-ui-xs font-medium text-muted-foreground uppercase tracking-[0.08em]">
+        <div className="px-2.5 pb-1 pt-1 text-ui leading-snug text-muted-foreground">
           {pickerSectionLabel(props.provider)}
         </div>
         <MenuRadioGroup
@@ -113,7 +112,7 @@ export const ProviderInstancePicker = memo(function ProviderInstancePicker(
           {!selectedInstance ? (
             <MenuRadioItem value={props.selectedProviderInstanceId} disabled>
               <span className="truncate">{t("settings:missingAccount")}</span>
-              <span className="ms-auto text-ui-xs text-muted-foreground/80 uppercase tracking-[0.08em]">
+              <span className="ms-auto text-ui-xs text-muted-foreground">
                 {t("chat:providerModelPicker_unavailable")}
               </span>
             </MenuRadioItem>
@@ -139,14 +138,7 @@ export const ProviderInstancePicker = memo(function ProviderInstancePicker(
               >
                 <span className="truncate">{instance.label}</span>
                 {statusLabel ? (
-                  <span
-                    className={cn(
-                      "ms-auto text-ui-xs text-muted-foreground/80",
-                      statusLabel !== "Checking" && "uppercase tracking-[0.08em]",
-                    )}
-                  >
-                    {statusLabel}
-                  </span>
+                  <span className="ms-auto text-ui-xs text-muted-foreground">{statusLabel}</span>
                 ) : null}
               </MenuRadioItem>
             );

@@ -655,7 +655,7 @@ function AutomationDetailView() {
                         {t("automation:detail_runsIn")}
                         <CentralIcon
                           name="info-simple"
-                          className="size-3 text-muted-foreground/60"
+                          className="size-3 text-muted-foreground"
                           aria-label={t("automation:detail_runsInTooltip")}
                         />
                       </>
@@ -964,7 +964,7 @@ function AutomationDetailView() {
                           type="button"
                           variant="ghost"
                           size="xs"
-                          className="h-5 shrink-0 px-1.5 text-ui-xs text-muted-foreground/70"
+                          className="h-5 shrink-0 px-1.5 text-ui-xs text-muted-foreground"
                           onClick={() =>
                             void navigate({
                               to: "/$threadId",
@@ -1251,8 +1251,8 @@ function RunRow({
     >
       <RunStatusIndicator status={run.status} />
       <div className="min-w-0 flex-1 truncate">
-        <span className="text-foreground/90">{runStatusLabel(run.status)}</span>
-        {resultTitle ? <span className="text-foreground/90"> · {resultTitle}</span> : null}
+        <span className="text-foreground">{runStatusLabel(run.status)}</span>
+        {resultTitle ? <span className="text-foreground"> · {resultTitle}</span> : null}
         <span className="text-muted-foreground"> · {runResultSummary(run)}</span>
       </div>
       {triageActionable ? (

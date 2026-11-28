@@ -136,7 +136,7 @@ export function TerminalSearch({ searchAddon, isOpen, onClose }: TerminalSearchP
   if (!isOpen) return null;
 
   return (
-    <div className="absolute right-1 top-1 z-10 flex max-w-[calc(100%-0.5rem)] items-center rounded bg-popover/95 pl-2 pr-0.5 shadow-lg ring-1 ring-border/40 backdrop-blur">
+    <div className="absolute right-1 top-1 z-10 flex max-w-[calc(100%-0.5rem)] items-center rounded-lg border border-[color:var(--color-border)] bg-[var(--color-background-elevated-primary-opaque)] pl-2 pr-0.5">
       <input
         ref={inputRef}
         type="text"
@@ -155,34 +155,30 @@ export function TerminalSearch({ searchAddon, isOpen, onClose }: TerminalSearchP
         <IconButton
           onClick={() => setCaseSensitive((v) => !v)}
           label={t("common:terminal_toggleCaseSensitive")}
+          variant="chrome"
+          aria-pressed={caseSensitive}
           className={cn(
-            "size-6 rounded-sm border-transparent bg-transparent shadow-none sm:size-6",
-            caseSensitive
-              ? "bg-primary/20 text-foreground"
-              : "text-muted-foreground hover:bg-muted-foreground/20 hover:text-foreground",
+            caseSensitive &&
+              "bg-[var(--color-background-button-secondary)] text-[var(--color-text-foreground)]",
           )}
         >
           <span className="text-ui-xs font-bold leading-none">{t("workspace:aa")}</span>
         </IconButton>
         <IconButton
           onClick={() => handleSearch("previous")}
-          className="size-6 rounded-sm border-transparent bg-transparent text-muted-foreground shadow-none hover:bg-muted-foreground/20 hover:text-foreground sm:size-6"
+          variant="chrome"
           label={t("common:previousMatchShiftEnter")}
         >
           <ChevronUpIcon className="size-3.5" />
         </IconButton>
         <IconButton
           onClick={() => handleSearch("next")}
-          className="size-6 rounded-sm border-transparent bg-transparent text-muted-foreground shadow-none hover:bg-muted-foreground/20 hover:text-foreground sm:size-6"
+          variant="chrome"
           label={t("common:nextMatchEnter")}
         >
           <ChevronDownIcon className="size-3.5" />
         </IconButton>
-        <IconButton
-          onClick={handleClose}
-          className="size-6 rounded-sm border-transparent bg-transparent text-muted-foreground shadow-none hover:bg-muted-foreground/20 hover:text-foreground sm:size-6"
-          label={t("common:closeSearchEsc")}
-        >
+        <IconButton onClick={handleClose} variant="chrome" label={t("common:closeSearchEsc")}>
           <XIcon className="size-3.5" />
         </IconButton>
       </div>

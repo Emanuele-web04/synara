@@ -398,7 +398,7 @@ function EditProfileDialogContent({
         </div>
 
         {/* Fields */}
-        <div className="divide-y divide-border/60 overflow-hidden rounded-xl border border-border/60">
+        <div className="divide-y divide-[color:var(--color-border)] overflow-hidden rounded-xl border border-[color:var(--color-border)]">
           <Field label={t("common:edit_displayName")}>
             <InputGroup className={fieldControlClassName}>
               <InputGroupInput
@@ -481,11 +481,11 @@ function EditProfileDialogContent({
           <div className="flex flex-col gap-1.5">
             <div className="flex items-baseline justify-between gap-3 px-1">
               <span className="text-ui-sm text-muted-foreground">Links</span>
-              <span className="text-ui-xs text-muted-foreground/80">
+              <span className="text-ui-xs text-muted-foreground">
                 Optional · shown on your public profile
               </span>
             </div>
-            <div className="divide-y divide-border/60 overflow-hidden rounded-xl border border-border/60">
+            <div className="divide-y divide-[color:var(--color-border)] overflow-hidden rounded-xl border border-[color:var(--color-border)]">
               {SOCIAL_LINK_PLATFORMS.map((platform) => (
                 <SocialLinkField
                   key={platform}
@@ -748,7 +748,7 @@ function Field({
         <span className="shrink-0 text-ui-sm text-muted-foreground">{label}</span>
         <div className="w-56 shrink-0">{children}</div>
       </div>
-      {hint && <p className="text-ui-xs leading-snug text-muted-foreground/80">{hint}</p>}
+      {hint && <p className="text-ui-xs leading-snug text-muted-foreground">{hint}</p>}
     </div>
   );
 }

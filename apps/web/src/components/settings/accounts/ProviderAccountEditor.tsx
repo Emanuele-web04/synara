@@ -158,7 +158,7 @@ export function ProviderAccountEditor(props: {
         role="group"
         aria-label={t("settings:account", { value0: account.label })}
       >
-        <div className="flex items-start gap-3 border-b border-border/70 bg-muted/25 px-3 py-3">
+        <div className="flex items-start gap-3 border-b border-[color:var(--color-border)] bg-foreground/2 px-3 py-3">
           <ProviderAccountAvatar provider={provider} accentColor={account.accentColor} size="md" />
           <div className="min-w-0 flex-1">
             <div className="flex min-w-0 items-center gap-2">
@@ -217,7 +217,7 @@ export function ProviderAccountEditor(props: {
         </div>
 
         {status.detail && status.tone !== "ready" && status.tone !== "idle" ? (
-          <div className="border-b border-border/70 px-3 py-2 text-ui-sm text-muted-foreground">
+          <div className="border-b border-[color:var(--color-border)] px-3 py-2 text-ui-sm text-muted-foreground">
             {liveStatus?.authStatus === "unauthenticated"
               ? t("settings:useSignInToAuthenticateThisAccountThenComplete")
               : status.detail}
@@ -330,10 +330,8 @@ export function ProviderAccountEditor(props: {
 // One titled band of the account editor; bands are separated by hairlines.
 function ProviderAccountEditorSection(props: { title: string; children: ReactNode }) {
   return (
-    <section className="space-y-2 border-b border-border/70 px-3 py-3 last:border-b-0">
-      <h4 className="text-ui-xs font-medium tracking-wide text-muted-foreground uppercase">
-        {props.title}
-      </h4>
+    <section className="space-y-2 border-b border-[color:var(--color-border)] px-3 py-3 last:border-b-0">
+      <h4 className="text-ui-xs font-medium text-muted-foreground">{props.title}</h4>
       {props.children}
     </section>
   );

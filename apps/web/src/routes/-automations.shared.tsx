@@ -1,5 +1,4 @@
 import { readExecutionContext } from "~/lib/hosts/executionContext";
-import { FOCUS_RING_CLASS_NAME } from "~/touchTargetStyles";
 import { automationDraftWarningPresentation } from "~/lib/automationDraft";
 import {
   type AutomationCreateInput,
@@ -40,6 +39,7 @@ import {
 import { ProviderModelPicker } from "~/components/chat/ProviderModelPicker";
 import { Alert, AlertDescription, AlertTitle } from "~/components/ui/alert";
 import { Button } from "~/components/ui/button";
+import { Checkbox } from "~/components/ui/checkbox";
 import { Dialog, DialogPopup, DialogTitle } from "~/components/ui/dialog";
 import {
   Menu,
@@ -53,6 +53,8 @@ import {
   MenuSubTrigger,
   MenuTrigger,
 } from "~/components/ui/menu";
+import { Input } from "~/components/ui/input";
+import { StatusDot } from "~/components/ui/status-chip";
 import { TimePicker } from "~/components/ui/time-picker";
 import { toastManager } from "~/components/ui/toast";
 import type { AutomationDraftWarning, AutomationDraftWarningId } from "~/lib/automationDraft";
@@ -247,15 +249,15 @@ export function runStatusVariant(
 export function runStatusDotClassName(status: AutomationRun["status"]): string {
   switch (runStatusVariant(status)) {
     case "success":
-      return "text-emerald-500";
+      return "text-success";
     case "error":
       return "text-destructive";
     case "warning":
-      return "text-amber-500";
+      return "text-warning";
     case "info":
-      return "text-blue-500";
+      return "text-info";
     case "outline":
-      return "text-muted-foreground/50";
+      return "text-muted-foreground";
   }
 }
 
@@ -290,7 +292,7 @@ export function RunStatusIndicator({
     return (
       <CentralIcon
         name="circle-check"
-        className={cn("size-3.5 shrink-0 text-muted-foreground/70", className)}
+        className={cn("size-3.5 shrink-0 text-muted-foreground", className)}
       />
     );
   }
@@ -434,20 +436,20 @@ export function automationListRowIcon(
     // Auto-disabled after consecutive failures is a problem to look at, not a pause the
     // user chose — keep the warning glyph so the row doesn't read as intentionally idle.
     if (definition.disabledReason === "failures") {
-      return { name: "exclamation-circle", className: "size-4 text-amber-500" };
+      return { name: "exclamation-circle", className: "size-4 text-warning" };
     }
-    return { name: "pause", className: "size-4 text-muted-foreground/40" };
+    return { name: "pause", className: "size-4 text-muted-foreground" };
   }
   if (latestRun?.status === "succeeded") {
     return { name: "circle-check", className: "size-4 text-green-500" };
   }
   if (latestRun && automationAttentionLabel(latestRun) !== null) {
-    return { name: "exclamation-circle", className: "size-4 text-amber-500" };
+    return { name: "exclamation-circle", className: "size-4 text-warning" };
   }
   if (definition.nextRunAt) {
-    return { name: "clock", className: "size-4 text-foreground/70" };
+    return { name: "clock", className: "size-4 text-foreground" };
   }
-  return { name: "circle-placeholder-on", className: "size-4 text-foreground/70" };
+  return { name: "circle-placeholder-on", className: "size-4 text-foreground" };
 }
 
 const deletedAutomationIdsInCache = new Set<string>();
@@ -864,7 +866,7 @@ export function AutomationApprovalBanner({
             .map((warning) => automationDraftWarningPresentation(warning, t))
             .map((warning) => (
               <li key={warning.id} className="text-ui leading-snug">
-                <span className="font-medium text-foreground/90">{warning.title}</span>
+                <span className="font-medium text-foreground">{warning.title}</span>
                 <span className="block">{warning.detail}</span>
               </li>
             ))}
@@ -1117,7 +1119,7 @@ export function AutomationDialog({
             placeholder={t("automation:form_titleAriaLabel")}
             aria-label={t("automation:form_titleAriaLabel")}
             autoFocus
-            className="min-w-0 flex-1 bg-transparent py-1 font-system-ui text-lg font-medium text-foreground outline-none placeholder:text-muted-foreground/50"
+            className="min-w-0 flex-1 bg-transparent py-1 font-system-ui text-lg font-medium text-foreground outline-none placeholder:text-muted-foreground"
           />
           <div className="flex shrink-0 items-center gap-1.5">
             <Button
@@ -1166,11 +1168,11 @@ export function AutomationDialog({
             }}
             placeholder={t("automation:form_promptPlaceholder")}
             aria-label={t("automation:form_promptAriaLabel")}
-            className="min-h-[15rem] w-full flex-1 resize-none overflow-y-auto bg-transparent font-system-ui text-ui leading-relaxed text-foreground outline-none placeholder:text-muted-foreground/50"
+            className="min-h-[15rem] w-full flex-1 resize-none overflow-y-auto bg-transparent font-system-ui text-ui leading-relaxed text-foreground outline-none placeholder:text-muted-foreground"
           />
 
           {warnings.length > 0 ? (
-            <div className="mt-2 flex flex-col gap-1.5 border-t border-border/50 pt-3">
+            <div className="mt-2 flex flex-col gap-1.5 border-t border-[color:var(--color-border)] pt-3">
               {warnings
                 .map((warning) => automationDraftWarningPresentation(warning, t))
                 .map((warning) => (
@@ -1179,14 +1181,13 @@ export function AutomationDialog({
                     className="flex items-start gap-2 text-ui leading-snug text-muted-foreground"
                   >
                     {warning.requiresAcknowledgement ? (
-                      <input
-                        type="checkbox"
+                      <Checkbox
                         checked={acknowledgedWarningIds.has(warning.id)}
-                        onChange={(event) => onToggleWarning?.(warning.id, event.target.checked)}
-                        className={cn("mt-0.5 rounded-sm", FOCUS_RING_CLASS_NAME)}
+                        onCheckedChange={(checked) => onToggleWarning?.(warning.id, checked)}
+                        className="mt-0.5"
                       />
                     ) : (
-                      <span className="mt-1 size-1.5 shrink-0 rounded-full bg-amber-500" />
+                      <StatusDot className="mt-1 bg-warning" />
                     )}
                     <span className="min-w-0">
                       <span className="font-medium text-foreground">{warning.title}</span>
@@ -1197,7 +1198,7 @@ export function AutomationDialog({
             </div>
           ) : null}
           {fastIntervalLimitMessage ? (
-            <div className="mt-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-2.5 py-2 text-ui leading-snug text-amber-700 dark:text-amber-300">
+            <div className="mt-2 rounded-lg border border-warning/30 bg-warning/8 px-2.5 py-2 text-ui leading-snug text-warning-foreground dark:text-warning">
               {fastIntervalLimitMessage}
             </div>
           ) : null}
@@ -1329,12 +1330,13 @@ export function AutomationDialog({
                     <MenuGroup>
                       <MenuGroupLabel>{t("automation:schedule_runAt")}</MenuGroupLabel>
                       <div className="px-2 py-1">
-                        <input
+                        <Input
                           type="datetime-local"
                           step={1}
                           value={form.onceRunAt}
                           onChange={(event) => setField("onceRunAt", event.target.value)}
-                          className="w-full rounded-md border border-border bg-transparent px-2 py-1.5 text-ui leading-snug outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                          nativeInput
+                          size="sm"
                         />
                       </div>
                     </MenuGroup>
@@ -1346,11 +1348,12 @@ export function AutomationDialog({
                     <MenuGroup>
                       <MenuGroupLabel>{t("automation:schedule_cron")}</MenuGroupLabel>
                       <div className="px-2 py-1">
-                        <input
+                        <Input
                           value={form.cronExpression}
                           onChange={(event) => setField("cronExpression", event.target.value)}
                           placeholder="0 9 * * *"
-                          className="w-full rounded-md border border-border bg-transparent px-2 py-1.5 text-ui leading-snug outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                          nativeInput
+                          size="sm"
                         />
                       </div>
                     </MenuGroup>
@@ -1407,11 +1410,12 @@ export function AutomationDialog({
                     <MenuGroup>
                       <MenuGroupLabel>{t("automation:schedule_timezone")}</MenuGroupLabel>
                       <div className="px-2 py-1">
-                        <input
+                        <Input
                           value={form.timezone}
                           onChange={(event) => setField("timezone", event.target.value)}
                           placeholder={t("automation:schedule_timezonePlaceholder")}
-                          className="w-full rounded-md border border-border bg-transparent px-2 py-1.5 text-ui leading-snug outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                          nativeInput
+                          size="sm"
                         />
                       </div>
                     </MenuGroup>
@@ -1482,11 +1486,12 @@ export function AutomationDialog({
                 <MenuGroup>
                   <MenuGroupLabel>{t("automation:detail_stopWhen")}</MenuGroupLabel>
                   <div className="px-2 py-1">
-                    <input
+                    <Input
                       value={form.stopWhen}
                       onChange={(event) => setField("stopWhen", event.target.value)}
                       placeholder={t("automation:schedule_stopWhenPlaceholder")}
-                      className="w-full rounded-md border border-border bg-transparent px-2 py-1.5 text-ui leading-snug outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                      nativeInput
+                      size="sm"
                     />
                   </div>
                 </MenuGroup>
