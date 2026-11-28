@@ -1,4 +1,5 @@
 import { AUTH_SIGNED_OUT_PATH } from "./authSignedOut";
+import { clearThreadDetailCache } from "./threadDetailCache";
 
 export type AuthLogoutFlowResult = "cancelled" | "failed" | "redirecting";
 
@@ -11,6 +12,9 @@ export async function logoutCurrentBrowserSession(input: {
   if (!(await input.confirm())) return "cancelled";
   try {
     await input.logout();
+    // Cached thread detail is per-user data; a signed-out browser must not
+    // keep another session's transcripts on this disk.
+    await clearThreadDetailCache();
     input.navigate(AUTH_SIGNED_OUT_PATH);
     return "redirecting";
   } catch (error) {
