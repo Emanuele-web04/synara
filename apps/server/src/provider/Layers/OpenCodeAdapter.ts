@@ -1540,7 +1540,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             contexts,
             (context) =>
               Effect.ignoreCause(
-                stopOpenCodeContext(
+                stopOpenCodeContextTree(
                   context,
                   settleAllOpenCodeBackgroundTasks(context, { status: "stopped" }),
                 ),
@@ -1552,6 +1552,31 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           }
         }),
       );
+
+      // Stops a root context and every child session it owns. Child sessions
+      // have their own turns; aborting the provider work alone would leave each
+      // child thread stuck at "running", so close those turns first.
+      const stopOpenCodeContextTree = (
+        context: OpenCodeSessionContext,
+        beforeRelease?: Effect.Effect<void>,
+      ) =>
+        Effect.gen(function* () {
+          yield* Effect.forEach(
+            [...context.subagentSessions.values()],
+            (child) => {
+              const turnId = child.activeTurnId;
+              return turnId === undefined
+                ? Effect.void
+                : completeOpenCodeTurn(child, {
+                    turnId,
+                    raw: { source: "synara.opencode.stop", reason: "Session stopped." },
+                    interrupted: true,
+                  });
+            },
+            { concurrency: "unbounded", discard: true },
+          );
+          yield* stopOpenCodeContext(context, beforeRelease);
+        });
 
       const emit = (context: OpenCodeSessionContext, event: ProviderRuntimeEvent) =>
         Queue.offer(runtimeEvents, {
@@ -3597,6 +3622,16 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                 summary: sessionErrorMessage(event.properties.error),
                 raw: event,
               });
+              // The same session can be a native subagent thread: its own turn
+              // must fail alongside the background-task bookkeeping, or the
+              // child thread stays "running" forever.
+              if (context.subagentRefs !== undefined && turnId) {
+                yield* completeOpenCodeTurn(context, {
+                  turnId,
+                  raw: event,
+                  errorMessage: sessionErrorMessage(event.properties.error),
+                });
+              }
               break;
             }
             const message = sessionErrorMessage(event.properties.error);
@@ -4079,7 +4114,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           const persistedHarnessPolicyDelivery = extractHarnessPolicyDelivery(input.resumeCursor);
           const existing = sessions.get(input.threadId);
           if (existing) {
-            yield* stopOpenCodeContext(
+            yield* stopOpenCodeContextTree(
               existing,
               settleAllOpenCodeBackgroundTasks(existing, { status: "stopped" }),
             );
@@ -4807,7 +4842,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           const context = sessions.get(threadId);
           if (!context) return;
           const wasStopped = yield* Ref.get(context.stopped);
-          yield* stopOpenCodeContext(
+          yield* stopOpenCodeContextTree(
             context,
             settleAllOpenCodeBackgroundTasks(context, { status: "stopped" }),
           );
@@ -5427,7 +5462,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             contexts,
             (context) =>
               Effect.ignoreCause(
-                stopOpenCodeContext(
+                stopOpenCodeContextTree(
                   context,
                   settleAllOpenCodeBackgroundTasks(context, { status: "stopped" }),
                 ),
