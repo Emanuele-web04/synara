@@ -20,6 +20,7 @@ import { ProjectionThreadMessageRepository } from "../../persistence/Services/Pr
  */
 import { computerSpaceDesignationForMessages } from "../../computer/computerSpaceDesignation.ts";
 import { randomUUID } from "node:crypto";
+import path from "node:path";
 
 import {
   COMPUTER_SETUP_REQUIRED_ACTIVITY_KIND,
@@ -49,7 +50,7 @@ import { runtimeModeEscalatesPrivilege } from "@synara/shared/runtimeMode";
 import { INLINE_VISUALS_BETA_FEATURE } from "@synara/shared/betaFeatures";
 import { pullRequestLinkKey, visiblePullRequestLinks } from "@synara/shared/threadPullRequestLinks";
 import { deriveProviderInstances, isProviderKind } from "@synara/shared/providerInstances";
-import { Effect, Layer, Option } from "effect";
+import { Effect, Layer, Option, Schedule } from "effect";
 
 import { GitCore } from "../../git/Services/GitCore.ts";
 import { GitManager } from "../../git/Services/GitManager.ts";
@@ -136,6 +137,8 @@ import { makeThreadDiagnosticTools } from "../threadDiagnosticTools.ts";
 import { makeAgentGatewayKanbanTools } from "../kanbanTools.ts";
 import { makeAgentGatewayTodoTools } from "../todoTools.ts";
 import { makeAgentGatewayInlineVisualTools } from "../inlineVisualTools.ts";
+import { makeAgentGatewaySecretTools } from "../secretTools.ts";
+import { secretRequestGate, sweepExpiredSecretFiles } from "../../secrets/SecretRequestGate.ts";
 import { makeAgentGatewayTurnPlanTools } from "../turnPlanTools.ts";
 import { TodoService } from "../../todo/Services/TodoService.ts";
 import { isServerBetaFeatureEnabled } from "../../betaFeatureGate.ts";
@@ -1782,6 +1785,39 @@ export const makeAgentGateway = Effect.gen(function* () {
     },
   });
 
+  const secretFilesDir = path.join(serverConfig.secretsDir, "requests");
+  // Delivered secret files expire after a day, even when no new request arrives.
+  yield* Effect.forkScoped(
+    Effect.promise(() => sweepExpiredSecretFiles(secretFilesDir)).pipe(
+      Effect.repeat(Schedule.spaced("1 hour")),
+    ),
+  );
+  const secretTools = makeAgentGatewaySecretTools({
+    gate: secretRequestGate,
+    filesDir: secretFilesDir,
+    appendActivity: ({ threadId, turnId, requestId, kind, summary, payload }) => {
+      const createdAt = isoNow();
+      const eventKey = `${requestId}:${kind}`;
+      return orchestrationEngine
+        .dispatch({
+          type: "thread.activity.append",
+          commandId: CommandId.makeUnsafe(eventKey),
+          threadId: ThreadId.makeUnsafe(threadId),
+          activity: {
+            id: EventId.makeUnsafe(eventKey),
+            tone: "info",
+            kind,
+            summary,
+            payload,
+            turnId: TurnId.makeUnsafe(turnId),
+            createdAt,
+          },
+          createdAt,
+        })
+        .pipe(Effect.asVoid);
+    },
+  });
+
   const tools: ReadonlyArray<ToolEntry> = [
     ...readTools,
     ...diagnosticTools,
@@ -1794,6 +1830,7 @@ export const makeAgentGateway = Effect.gen(function* () {
     unlinkThreadPullRequest,
     setThreadArchived,
     setThreadGoal,
+    ...secretTools,
     ...automationTools,
     ...connectorTools,
     ...browserTools,

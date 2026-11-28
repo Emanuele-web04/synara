@@ -105,6 +105,7 @@ import type {
   TodoStreamEvent,
   TodoUpdateInput,
 } from "./todo";
+import type { SecretRequestAnswerInput } from "./secretRequest";
 import type {
   ProjectAgentConfigureInput,
   ProjectAgentLinkProjectInput,
@@ -1703,6 +1704,10 @@ export interface NativeApi {
     update: (input: TodoUpdateInput) => Promise<Todo>;
     delete: (input: TodoDeleteInput) => Promise<void>;
     onEvent: (callback: (event: TodoStreamEvent) => void) => () => void;
+  };
+  secretRequest: {
+    /** Sends a secret (or a decline) for one pending agent request. */
+    answer: (input: SecretRequestAnswerInput) => Promise<void>;
   };
   browser: BrowserControlMethods & {
     annotations: BrowserAnnotationMethods;

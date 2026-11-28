@@ -62,6 +62,7 @@ import {
 } from "./agentActivity.logic";
 import { AutomationCreatedCard } from "./AutomationCreatedCard";
 import { McpConnectorProposalCard } from "../settings/McpConnectorProposalCard";
+import { SecretRequestCard } from "./SecretRequestCard";
 import { MCP_CONNECTORS_ON } from "~/betaFeatures";
 import { BackgroundTaskRow } from "./BackgroundTaskRow";
 import { getChatTranscriptTextStyle } from "./chatTypography";
@@ -836,6 +837,9 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
   // A created-automation row renders as its own card instead of a tool-call line.
   // Kept after the hooks above so the early return never changes hook order.
   const automation = workEntry.automation;
+  if (workEntry.secretRequest) {
+    return <SecretRequestCard request={workEntry.secretRequest} threadId={threadId} />;
+  }
   if (workEntry.connectorProposalId) {
     return MCP_CONNECTORS_ON ? (
       <McpConnectorProposalCard proposalId={workEntry.connectorProposalId} />

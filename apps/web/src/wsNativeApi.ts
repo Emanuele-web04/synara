@@ -1123,6 +1123,9 @@ export function createWsNativeApi(): NativeApi {
       delete: (input) => executionRequest(WS_METHODS.todoDelete, input),
       onEvent: todoEventListeners.subscribe,
     },
+    secretRequest: {
+      answer: (input) => executionRequest(WS_METHODS.secretRequestAnswer, input),
+    },
     device: {
       list: (input) => executionRequest(DEVICE_WS_METHODS.list, input),
       // Booting a cold simulator routinely outruns the default RPC deadline.

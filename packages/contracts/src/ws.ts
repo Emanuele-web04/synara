@@ -54,6 +54,7 @@ import {
   AutomationUpdateInput,
 } from "./automation";
 import { TodoCreateInput, TodoDeleteInput, TodoStreamEvent, TodoUpdateInput } from "./todo";
+import { SecretRequestAnswerInput } from "./secretRequest";
 import {
   ProjectAgentConfigureInput,
   ProjectAgentLinkProjectInput,
@@ -493,6 +494,9 @@ export const WS_METHODS = {
   todoUpdate: "todo.update",
   todoDelete: "todo.delete",
   subscribeTodoEvents: "todo.subscribe",
+
+  // Agent secret requests (the value never enters thread history)
+  secretRequestAnswer: "secretRequest.answer",
   projectAgentGetOverview: "projectAgent.getOverview",
   projectAgentListSummaries: "projectAgent.listSummaries",
   projectAgentConfigure: "projectAgent.configure",
@@ -833,6 +837,7 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.todoUpdate, TodoUpdateInput),
   tagRequestBody(WS_METHODS.todoDelete, TodoDeleteInput),
   tagRequestBody(WS_METHODS.subscribeTodoEvents, Schema.Struct({})),
+  tagRequestBody(WS_METHODS.secretRequestAnswer, SecretRequestAnswerInput),
   tagRequestBody(WS_METHODS.projectAgentGetOverview, ProjectAgentGetOverviewInput),
   tagRequestBody(WS_METHODS.projectAgentListSummaries, ProjectAgentListSummariesInput),
   tagRequestBody(WS_METHODS.projectAgentConfigure, ProjectAgentConfigureInput),

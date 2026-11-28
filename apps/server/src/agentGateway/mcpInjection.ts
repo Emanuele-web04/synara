@@ -43,6 +43,13 @@ function authorizationHeader(connection: AgentGatewayMcpConnection): string {
  * inherit the gateway bearer token. Appended per-table, so a user-defined
  * policy table is never duplicated (their policy then governs).
  */
+/**
+ * Codex cancels an MCP tool call after 60s by default. Synara tools that wait on
+ * the user (secret requests, approval cards) need longer and bound themselves,
+ * the longest at one hour.
+ */
+export const SYNARA_CODEX_MCP_TOOL_TIMEOUT_SEC = 3_700;
+
 export function buildCodexMcpConfigToml(
   endpointUrl: string,
   credentialTransport: "environment" | "thread" = "environment",
@@ -50,6 +57,7 @@ export function buildCodexMcpConfigToml(
   return [
     `[mcp_servers.${SYNARA_MCP_SERVER_NAME}]`,
     `url = ${JSON.stringify(endpointUrl)}`,
+    `tool_timeout_sec = ${SYNARA_CODEX_MCP_TOOL_TIMEOUT_SEC}`,
     ...(credentialTransport === "environment"
       ? [`bearer_token_env_var = ${JSON.stringify(SYNARA_AGENT_GATEWAY_TOKEN_ENV)}`]
       : []),
@@ -64,9 +72,17 @@ export function buildCodexMcpThreadConfig(connection: AgentGatewayMcpConnection)
   const headers = { Authorization: authorizationHeader(connection) };
   const mcpServers: Record<
     string,
-    { readonly url: string; readonly http_headers: Record<string, string> }
+    {
+      readonly url: string;
+      readonly http_headers: Record<string, string>;
+      readonly tool_timeout_sec?: number;
+    }
   > = {
-    [SYNARA_MCP_SERVER_NAME]: { url: connection.url, http_headers: headers },
+    [SYNARA_MCP_SERVER_NAME]: {
+      url: connection.url,
+      http_headers: headers,
+      tool_timeout_sec: SYNARA_CODEX_MCP_TOOL_TIMEOUT_SEC,
+    },
   };
   // Connectors only exist in the per-thread config: Codex starts servers it
   // first sees here, and the shared config.toml must stay secret-free.

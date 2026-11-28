@@ -2164,6 +2164,38 @@ describe("deriveWorkLogEntries", () => {
     );
   });
 
+  it("renders a secret request as a card and applies its resolution", () => {
+    const requested = makeActivity({
+      id: "secret-open",
+      turnId: "turn-1",
+      kind: "secret.requested",
+      tone: "info",
+      summary: "Asking for a secret: sudo password",
+      payload: { requestId: "secret:1", label: "sudo password", reason: "Install a package." },
+    });
+    const pending = deriveWorkLogEntries([requested], TurnId.makeUnsafe("turn-1"));
+    expect(pending.map((entry) => entry.secretRequest)).toEqual([
+      { requestId: "secret:1", label: "sudo password", reason: "Install a package." },
+    ]);
+
+    const resolved = deriveWorkLogEntries(
+      [
+        requested,
+        makeActivity({
+          id: "secret-closed",
+          turnId: "turn-1",
+          kind: "secret.resolved",
+          tone: "info",
+          summary: "Secret request saved",
+          payload: { requestId: "secret:1", status: "saved" },
+        }),
+      ],
+      TurnId.makeUnsafe("turn-1"),
+    );
+    expect(resolved).toHaveLength(1);
+    expect(resolved[0]?.secretRequest?.status).toBe("saved");
+  });
+
   it("exposes a provider-independent Synara thread creation recap", () => {
     const threads = [
       {
