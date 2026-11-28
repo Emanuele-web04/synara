@@ -5,12 +5,14 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  CODE_THEME_OPTIONS,
   DEFAULT_THEME_STATE,
   buildResolvedThemeTokens,
   buildThemeCssVariables,
   canParseThemeShareString,
   createThemeShareString,
   getCodeThemeSeed,
+  type ThemeVariant,
   normalizeThemeState,
   parseStoredThemeState,
   parseThemeShareString,
@@ -582,5 +584,136 @@ describe("resolveProfileThemeAccent", () => {
         }),
       ),
     ).toEqual({ light: "#339cff", dark: "#339cff" });
+  });
+});
+
+// ─── foreground contrast floors ──────────────────────────────────────────
+
+type ColorChannels = { red: number; green: number; blue: number; alpha: number };
+
+const colorChannels = (value: string): ColorChannels => {
+  const hex = /^#([0-9a-f]{6})$/i.exec(value.trim());
+  if (hex) {
+    const int = Number.parseInt(hex[1]!, 16);
+    return { alpha: 1, blue: int & 255, green: (int >> 8) & 255, red: (int >> 16) & 255 };
+  }
+  const rgb = /^rgba?\(([^)]+)\)$/i.exec(value.trim());
+  if (!rgb) throw new Error(`Unparseable theme color: ${value}`);
+  const [red, green, blue, alpha] = rgb[1]!.split(",").map((part) => Number(part));
+  return { alpha: alpha ?? 1, blue: blue!, green: green!, red: red! };
+};
+
+const linearize = (value: number) => {
+  const scaled = value / 255;
+  return scaled <= 0.03928 ? scaled / 12.92 : ((scaled + 0.055) / 1.055) ** 2.4;
+};
+
+const relativeLuminance = ({ red, green, blue }: Omit<ColorChannels, "alpha">) =>
+  0.2126 * linearize(red) + 0.7152 * linearize(green) + 0.0722 * linearize(blue);
+
+/** WCAG 2.1 contrast of a theme token over the opaque surface it is drawn on. */
+const contrastOver = (token: string, surface: string) => {
+  const background = colorChannels(surface);
+  const ink = colorChannels(token);
+  const composited = {
+    blue: ink.blue * ink.alpha + background.blue * (1 - ink.alpha),
+    green: ink.green * ink.alpha + background.green * (1 - ink.alpha),
+    red: ink.red * ink.alpha + background.red * (1 - ink.alpha),
+  };
+  const [lighter, darker] = [relativeLuminance(composited), relativeLuminance(background)].toSorted(
+    (left, right) => right - left,
+  );
+  return (lighter! + 0.05) / (darker! + 0.05);
+};
+
+/** The rgba() the derivation emits for a palette ink at a given alpha. */
+const inkAtAlpha = (ink: string, alpha: number) => {
+  const { red, green, blue } = colorChannels(ink);
+  const formatted = Math.min(1, Math.max(0, alpha))
+    .toFixed(3)
+    .replace(/0+$/, "")
+    .replace(/\.$/, "");
+  return `rgba(${red}, ${green}, ${blue}, ${formatted})`;
+};
+
+describe("foreground contrast floors", () => {
+  const LINK_FLOOR = 4.5;
+  const MUTED_FLOOR = 3;
+  const SHIPPED = CODE_THEME_OPTIONS.flatMap((option) =>
+    option.variants.map((variant) => ({ id: option.id, variant })),
+  );
+
+  /** A palette's link, muted and surface values as the derivation produced them, unfloored. */
+  const tokensFor = (id: string, variant: ThemeVariant) => {
+    const theme = getCodeThemeSeed(id, variant);
+    const resolved = buildResolvedThemeTokens({ codeThemeId: id, theme }, variant);
+    const { contrast } = resolved.computed;
+    const accent = colorChannels(theme.accent);
+    const brightened = (channel: number) =>
+      Math.round(channel + (255 - channel) * (0.3 + contrast * 0.15));
+    const accentRgb = `rgb(${accent.red}, ${accent.green}, ${accent.blue})`;
+    const brightenedRgb = `rgb(${brightened(accent.red)}, ${brightened(accent.green)}, ${brightened(accent.blue)})`;
+    return {
+      derived: resolved.derived,
+      // The light step is the palette's own accent, printed as a hex or as an rgb(); either
+      // print of the same colour counts as untouched.
+      link: variant === "light" ? [theme.accent, accentRgb] : [brightenedRgb],
+      muted: inkAtAlpha(theme.ink, 0.65 + contrast * 0.1),
+      surface: theme.surface,
+    };
+  };
+
+  it("floors the link and muted step of every shipped palette", () => {
+    const below: string[] = [];
+    for (const { id, variant } of SHIPPED) {
+      const { derived, surface } = tokensFor(id, variant);
+      const link = contrastOver(derived.textAccent, surface);
+      const muted = contrastOver(derived.textForegroundSecondary, surface);
+      if (link < LINK_FLOOR) below.push(`${id}/${variant} link ${link.toFixed(2)}`);
+      if (muted < MUTED_FLOOR) below.push(`${id}/${variant} muted ${muted.toFixed(2)}`);
+    }
+    expect(below).toEqual([]);
+  });
+
+  it("leaves a token that already clears its floor byte-identical", () => {
+    const moved: string[] = [];
+    for (const { id, variant } of SHIPPED) {
+      const { derived, link, muted, surface } = tokensFor(id, variant);
+      if (contrastOver(link[0]!, surface) >= LINK_FLOOR && !link.includes(derived.textAccent)) {
+        moved.push(`${id}/${variant} link ${link[0]} -> ${derived.textAccent}`);
+      }
+      if (
+        contrastOver(muted, surface) >= MUTED_FLOOR &&
+        derived.textForegroundSecondary !== muted
+      ) {
+        moved.push(`${id}/${variant} muted ${muted} -> ${derived.textForegroundSecondary}`);
+      }
+    }
+    expect(moved).toEqual([]);
+  });
+
+  it("takes the smallest step that clears the floor", () => {
+    // Rose Pine light's link step is the issue's worst case at 2.6:1; the raised token must
+    // land on the floor rather than overshoot it, and keep the palette's colour family.
+    const { derived, link, muted, surface } = tokensFor("rose-pine", "light");
+    expect(contrastOver(link[0]!, surface)).toBeLessThan(LINK_FLOOR);
+    const raised = contrastOver(derived.textAccent, surface);
+    expect(raised).toBeGreaterThanOrEqual(LINK_FLOOR);
+    expect(raised).toBeLessThan(LINK_FLOOR + 0.05);
+    const accent = colorChannels(link[0]!);
+    const floored = colorChannels(derived.textAccent);
+    expect(floored.red).toBeLessThan(accent.red);
+    expect(floored.green).toBeLessThan(accent.green);
+    expect(floored.blue).toBeLessThan(accent.blue);
+
+    // The muted step keeps the palette's ink and only stops being so sheer.
+    const sheer = colorChannels(muted);
+    const flooredMuted = colorChannels(derived.textForegroundSecondary);
+    expect([flooredMuted.red, flooredMuted.green, flooredMuted.blue]).toEqual([
+      sheer.red,
+      sheer.green,
+      sheer.blue,
+    ]);
+    expect(flooredMuted.alpha).toBeGreaterThan(sheer.alpha);
   });
 });
