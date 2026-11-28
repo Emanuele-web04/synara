@@ -272,6 +272,10 @@ export interface ProjectAgentRepositoryShape {
   readonly listManagedWorkers: (
     projectId: ProjectId,
   ) => Effect.Effect<ReadonlyArray<ProjectManagedWorker>, ProjectAgentRepositoryError>;
+  readonly hasPublishedWorkerBatchRollup: (input: {
+    readonly coordinatorThreadId: ThreadId;
+    readonly batchId: string;
+  }) => Effect.Effect<boolean, ProjectAgentRepositoryError>;
   readonly listManagedWorkersByBatch: (input: {
     readonly projectId: ProjectId;
     readonly batchId: string;

@@ -199,7 +199,8 @@ remembering to check.
 - **One summary per request.** When a request started more than one thread and all of them are
   done, one summary appears: "All 3 threads finished: …" (or "All 3 threads are done: …" when
   some failed or were interrupted). It lists each thread with its result or outcome and a **PR**
-  link. Threads still waiting on you do not count as done.
+  link. Threads still waiting on you do not count as done. After this summary, a follow-up
+  turn on any of the same workers posts only that worker’s own update.
 - **Stuck threads.** The server reacts to events as they happen, and runs a health check every
   minute for the rest:
 
