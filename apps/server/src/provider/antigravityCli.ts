@@ -17,6 +17,16 @@ const PROVIDER = "antigravity" as const;
 const MODEL_DISCOVERY_TIMEOUT_MS = 30_000;
 export const ANTIGRAVITY_PROCESS_OUTPUT_MAX_BYTES = 128 * 1024;
 
+export const ANTIGRAVITY_ACCOUNT_HOME_REQUIRED =
+  "This Antigravity account has no home directory of its own yet. Sign in to it from Settings > Accounts.";
+
+export function antigravityAccountNeedsHome(
+  instanceId: string | undefined,
+  environment: Readonly<Record<string, string>> | undefined,
+): boolean {
+  return instanceId !== undefined && instanceId !== PROVIDER && !environment?.HOME?.trim();
+}
+
 type AntigravityChildProcess = ChildProcess & {
   readonly stdout: NonNullable<ChildProcess["stdout"]>;
   readonly stderr: NonNullable<ChildProcess["stderr"]>;

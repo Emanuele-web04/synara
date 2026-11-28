@@ -2832,6 +2832,69 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
   });
 
   describe("checkAntigravityProviderStatus", () => {
+    it.effect("scopes Antigravity model probes to configured account homes", () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "provider-health-antigravity-home-",
+        });
+        const versionHomes: Array<string | undefined> = [];
+        const modelHomes: Array<string | undefined> = [];
+        const layer = makeProviderHealthLive().pipe(
+          Layer.provideMerge(
+            ServerSettingsService.layerTest({
+              ...allProvidersDisabledServerSettings,
+              providerInstances: {
+                agy_work: {
+                  driver: "antigravity",
+                  displayName: "Work",
+                  enabled: true,
+                  config: { profileDir: "/accounts/work" },
+                },
+                agy_unconfigured: {
+                  driver: "antigravity",
+                  displayName: "Unconfigured",
+                  enabled: true,
+                },
+              },
+            }),
+          ),
+          Layer.provideMerge(ServerConfig.layerTest(process.cwd(), baseDir)),
+          Layer.provideMerge(
+            mockSpawnerLayer((args, _command, env) => {
+              if (args.join(" ") === "--version") {
+                versionHomes.push(env?.HOME);
+                return { stdout: "1.5.18\n", stderr: "", code: 0 };
+              }
+              modelHomes.push(env?.HOME);
+              return {
+                stdout: "gemini-4-neon-high\tGemini 4 Neon (High)\n",
+                stderr: "",
+                code: 0,
+              };
+            }),
+          ),
+        );
+        const statuses = yield* TestClock.withLive(
+          Effect.gen(function* () {
+            const providerHealth = yield* ProviderHealth;
+            return yield* providerHealth.refresh;
+          }).pipe(Effect.provide(layer)),
+        );
+
+        assert.include(versionHomes, "/accounts/work");
+        assert.deepStrictEqual(modelHomes, ["/accounts/work"]);
+        assert.strictEqual(
+          statuses.find((status) => status.instanceId === "agy_work")?.authStatus,
+          "authenticated",
+        );
+        const unconfigured = statuses.find((status) => status.instanceId === "agy_unconfigured");
+        assert.strictEqual(unconfigured?.status, "error");
+        assert.strictEqual(unconfigured?.available, true);
+        assert.strictEqual(unconfigured?.authStatus, "unauthenticated");
+      }),
+    );
+
     it.effect("passes configured instance environment to the Antigravity version probe", () =>
       Effect.gen(function* () {
         const status = yield* checkAntigravityProviderStatus("/custom/bin/agy", {

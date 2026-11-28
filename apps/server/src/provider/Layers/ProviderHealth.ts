@@ -62,6 +62,10 @@ import {
   parseCodexCliVersion,
 } from "../codexCliVersion";
 import { buildClaudeInstanceProcessEnv } from "../claudeEnvironment";
+import {
+  ANTIGRAVITY_ACCOUNT_HOME_REQUIRED,
+  antigravityAccountNeedsHome,
+} from "../antigravityCli.ts";
 import { ServerConfig } from "../../config";
 import {
   buildProviderChildEnvironment,
@@ -2160,6 +2164,7 @@ export const checkOmpProviderStatus = (
 export const checkAntigravityProviderStatus = (
   binaryPath?: string,
   environment?: Readonly<Record<string, string>>,
+  instanceId?: ProviderInstanceId,
 ): Effect.Effect<ServerProviderStatus, never, ChildProcessSpawner.ChildProcessSpawner> =>
   Effect.gen(function* () {
     const checkedAt = new Date().toISOString();
@@ -2233,6 +2238,19 @@ export const checkAntigravityProviderStatus = (
         version: parsedVersion,
         checkedAt,
         message: `Antigravity CLI ${parsedVersion} is too old for Synara. Upgrade to ${MINIMUM_ANTIGRAVITY_CLI_VERSION} or newer.`,
+      } satisfies ServerProviderStatus;
+    }
+    if (antigravityAccountNeedsHome(instanceId, environment)) {
+      return {
+        provider: ANTIGRAVITY_PROVIDER,
+        instanceId: ANTIGRAVITY_PROVIDER,
+        driver: ANTIGRAVITY_PROVIDER,
+        status: "error",
+        available: true,
+        authStatus: "unauthenticated",
+        version: parsedVersion,
+        checkedAt,
+        message: ANTIGRAVITY_ACCOUNT_HOME_REQUIRED,
       } satisfies ServerProviderStatus;
     }
     const models = yield* runAntigravityCommand(["models"], executable, probeEnv).pipe(
@@ -3408,11 +3426,19 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
                 instance.environment,
               ),
             );
-          case "antigravity":
+          case "antigravity": {
+            // `agy` keeps its sign-in under the account's home, which a profile
+            // directory supplies only through the launch options.
+            const antigravityOptions = providerStartOptionsFromInstance(instance)?.antigravity;
             return checkProviderInstanceWhenEnabled(
               instance,
-              checkAntigravityProviderStatus(binaryPath, instance.environment),
+              checkAntigravityProviderStatus(
+                binaryPath,
+                antigravityOptions?.environment,
+                instance.instanceId,
+              ),
             );
+          }
           case "grok": {
             const grokOptions = providerStartOptionsFromInstance(instance)?.grok;
             return checkProviderInstanceWhenEnabled(

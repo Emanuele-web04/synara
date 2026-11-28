@@ -143,6 +143,8 @@ import {
 import { makeSessionTeardownGate } from "../acp/SessionTeardownGate.ts";
 import { cancelTurnAndWait } from "../acp/TurnCancellation.ts";
 import {
+  ANTIGRAVITY_ACCOUNT_HOME_REQUIRED,
+  antigravityAccountNeedsHome,
   parseAntigravityCliModelLabel,
   parseAntigravityModelLines,
   readAntigravityResumeSessionId,
@@ -818,6 +820,20 @@ export function makeAntigravityAdapter(dependencies: AntigravityAdapterDependenc
               issue: unsupportedAutoRuntimeModeMessage(PROVIDER),
             });
           }
+          const providerOptions = input.providerOptions?.antigravity;
+          const antigravitySettings = {
+            ...(providerOptions?.binaryPath ? { binaryPath: providerOptions.binaryPath } : {}),
+            ...(providerOptions?.environment ? { environment: providerOptions.environment } : {}),
+          };
+          if (
+            antigravityAccountNeedsHome(input.providerInstanceId, antigravitySettings.environment)
+          ) {
+            return yield* new ProviderAdapterValidationError({
+              provider: PROVIDER,
+              operation: "startSession",
+              issue: ANTIGRAVITY_ACCOUNT_HOME_REQUIRED,
+            });
+          }
           yield* sessionTeardownGate.awaitPending(input.threadId);
           const cwd = resolveAntigravitySessionCwd(input.cwd, serverConfig);
           if (cwd === undefined) {
@@ -903,11 +919,6 @@ export function makeAntigravityAdapter(dependencies: AntigravityAdapterDependenc
             );
 
           const resumeSessionId = readAntigravityResumeSessionId(input.resumeCursor);
-          const providerOptions = input.providerOptions?.antigravity;
-          const antigravitySettings = {
-            ...(providerOptions?.binaryPath ? { binaryPath: providerOptions.binaryPath } : {}),
-            ...(providerOptions?.environment ? { environment: providerOptions.environment } : {}),
-          };
           const acp = yield* makeRuntime({
             antigravitySettings,
             childProcessSpawner,
@@ -2020,6 +2031,13 @@ export function makeAntigravityAdapter(dependencies: AntigravityAdapterDependenc
 
     const listModels: NonNullable<AntigravityAdapterShape["listModels"]> = (input) =>
       Effect.gen(function* () {
+        if (antigravityAccountNeedsHome(input.instanceId, input.environment)) {
+          return yield* new ProviderAdapterValidationError({
+            provider: PROVIDER,
+            operation: "listModels",
+            issue: ANTIGRAVITY_ACCOUNT_HOME_REQUIRED,
+          });
+        }
         const cwd = resolveAntigravitySessionCwd(input.cwd, serverConfig);
         if (!cwd) return yield* listLegacyModels(input);
         // A disposable session reads this instance's catalog without changing the active thread.
