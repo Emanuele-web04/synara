@@ -1,9 +1,12 @@
 // FILE: useCustomTitleBarPreference.ts
-// Purpose: The Windows/Linux "use custom title bar" preference: whether it applies here,
-//          whether a restart is pending, and how to save it through the desktop bridge.
+// Purpose: The Windows/Linux "use custom title bar" and "rounded window corners"
+//          preferences: whether they apply here, whether a restart is pending, and how
+//          to save them through the desktop bridge.
 //          Shared by Settings › Appearance and Restore defaults.
 // Layer: Settings hook
 // Exports: useCustomTitleBarPreference
+
+import type { DesktopCustomTitleBarState } from "@synara/contracts";
 
 import type { AppSettingsBinding } from "~/appSettings";
 import { toastManager } from "~/components/ui/toast";
@@ -26,11 +29,25 @@ export function useCustomTitleBarPreference({
     supported &&
     (settings.useCustomTitleBar !== defaults.useCustomTitleBar ||
       (state.supported && state.preference !== defaults.useCustomTitleBar));
+  // Corners only exist on the frameless window, so they need no restart with the system frame.
+  const roundedCornersRestartRequired =
+    state.supported &&
+    state.active &&
+    settings.useCustomTitleBar &&
+    settings.useRoundedWindowCorners !== state.roundedCornersActive;
+  const roundedCornersDirty =
+    supported &&
+    (settings.useRoundedWindowCorners !== defaults.useRoundedWindowCorners ||
+      (state.supported && state.roundedCornersPreference !== defaults.useRoundedWindowCorners));
 
-  function showRestartToast(): void {
+  function showRestartToast(
+    title:
+      | "settings:restartToApplyTitleBar"
+      | "settings:restartToApplyWindowCorners" = "settings:restartToApplyTitleBar",
+  ): void {
     toastManager.add({
       type: "warning",
-      title: t("settings:restartToApplyTitleBar"),
+      title: t(title),
       description: t("settings:theWindowFrameUpdatesTheNextTimeSynaraLaunches"),
       actionProps: {
         "aria-label": t("settings:restartSynara"),
@@ -43,11 +60,32 @@ export function useCustomTitleBarPreference({
   }
 
   async function persist(enabled: boolean): Promise<{ readonly restartRequired: boolean } | null> {
+    return save(
+      (bridge) => bridge.setPreference(enabled),
+      (next) => next.preference === enabled,
+    );
+  }
+
+  async function persistRoundedCorners(
+    enabled: boolean,
+  ): Promise<{ readonly restartRequired: boolean } | null> {
+    return save(
+      (bridge) => bridge.setRoundedCorners(enabled),
+      (next) => next.roundedCornersPreference === enabled,
+    );
+  }
+
+  async function save(
+    write: (
+      bridge: NonNullable<NonNullable<typeof window.desktopBridge>["customTitleBar"]>,
+    ) => Promise<DesktopCustomTitleBarState>,
+    saved: (next: DesktopCustomTitleBarState) => boolean,
+  ): Promise<{ readonly restartRequired: boolean } | null> {
     try {
       const bridge = window.desktopBridge?.customTitleBar;
       if (!bridge) throw new Error("Desktop title bar bridge is unavailable.");
-      const next = await bridge.setPreference(enabled);
-      if (!next.supported || next.preference !== enabled) {
+      const next = await write(bridge);
+      if (!next.supported || !saved(next)) {
         throw new Error("Desktop title bar preference was not persisted.");
       }
       return next;
@@ -73,5 +111,27 @@ export function useCustomTitleBarPreference({
     if (next.restartRequired) showRestartToast();
   }
 
-  return { supported, restartRequired, preferenceDirty, persist, apply, showRestartToast };
+  async function applyRoundedCorners(enabled: boolean): Promise<void> {
+    const previous = settings.useRoundedWindowCorners;
+    updateSettings({ useRoundedWindowCorners: enabled });
+    const next = await persistRoundedCorners(enabled);
+    if (next === null) {
+      updateSettings({ useRoundedWindowCorners: previous });
+      return;
+    }
+    if (next.restartRequired) showRestartToast("settings:restartToApplyWindowCorners");
+  }
+
+  return {
+    supported,
+    restartRequired,
+    preferenceDirty,
+    roundedCornersRestartRequired,
+    roundedCornersDirty,
+    persist,
+    persistRoundedCorners,
+    apply,
+    applyRoundedCorners,
+    showRestartToast,
+  };
 }

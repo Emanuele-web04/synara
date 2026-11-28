@@ -15,6 +15,8 @@ const DEFAULT_STATE: DesktopCustomTitleBarState = {
   supported: false,
   preference: true,
   active: false,
+  roundedCornersPreference: true,
+  roundedCornersActive: true,
   restartRequired: false,
 };
 

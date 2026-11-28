@@ -107,6 +107,7 @@ export function useSettingsRestoreDefaults({
     ...(settings.chatWidth !== defaults.chatWidth ? ["settings:chatWidth"] : []),
     ...(settings.desktopAppIcon !== defaultDesktopAppIcon ? ["settings:appIcon"] : []),
     ...(customTitleBar.preferenceDirty ? ["settings:customTitleBar"] : []),
+    ...(customTitleBar.roundedCornersDirty ? ["settings:roundedWindowCorners"] : []),
     ...(settings.chatFontSizePx !== defaults.chatFontSizePx
       ? ["settings:changed_baseFontSize"]
       : []),
@@ -246,11 +247,25 @@ export function useSettingsRestoreDefaults({
     );
     if (!confirmed) return;
 
+    let titleBarRestartRequired = false;
     if (customTitleBar.preferenceDirty) {
       const state = await customTitleBar.persist(defaults.useCustomTitleBar);
       if (state === null) return;
-      if (state.restartRequired) customTitleBar.showRestartToast();
+      titleBarRestartRequired = state.restartRequired;
     }
+    if (customTitleBar.roundedCornersDirty) {
+      const state = await customTitleBar.persistRoundedCorners(defaults.useRoundedWindowCorners);
+      if (state === null) {
+        // The title bar default may already be on disk; keep the setting in step with it.
+        if (customTitleBar.preferenceDirty) {
+          updateSettings({ useCustomTitleBar: defaults.useCustomTitleBar });
+        }
+        if (titleBarRestartRequired) customTitleBar.showRestartToast();
+        return;
+      }
+      titleBarRestartRequired = state.restartRequired;
+    }
+    if (titleBarRestartRequired) customTitleBar.showRestartToast();
 
     setTheme("system");
     resetAllThemes();

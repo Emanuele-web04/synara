@@ -19,6 +19,8 @@ it("uses the controller's actual title bar state without a native bridge in the 
             supported: true,
             preference: true,
             active: true,
+            roundedCornersPreference: true,
+            roundedCornersActive: true,
             restartRequired: false,
           }),
         },

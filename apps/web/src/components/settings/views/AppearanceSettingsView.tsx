@@ -343,6 +343,51 @@ export function AppearanceSettingsView(binding: AppSettingsBinding) {
               }
             />
           ) : null}
+          {customTitleBar.supported && settings.useCustomTitleBar ? (
+            <SettingsRow
+              id="setting-rounded-window-corners"
+              title="settings:roundedWindowCorners"
+              description="settings:roundedWindowCornersDescription"
+              status={
+                customTitleBar.roundedCornersRestartRequired
+                  ? t("settings:restartRequired")
+                  : undefined
+              }
+              resetAction={
+                settings.useRoundedWindowCorners !== defaults.useRoundedWindowCorners ? (
+                  <SettingResetButton
+                    label={t("settings:roundedWindowCorners2")}
+                    onClick={() => {
+                      void customTitleBar.applyRoundedCorners(defaults.useRoundedWindowCorners);
+                    }}
+                  />
+                ) : null
+              }
+              control={
+                <div className="flex items-center gap-2">
+                  {customTitleBar.roundedCornersRestartRequired ? (
+                    <Button
+                      type="button"
+                      size="xs"
+                      variant="outline"
+                      onClick={() => {
+                        void window.desktopBridge?.customTitleBar?.relaunch();
+                      }}
+                    >
+                      {t("common:restart")}
+                    </Button>
+                  ) : null}
+                  <Switch
+                    checked={settings.useRoundedWindowCorners}
+                    onCheckedChange={(checked) => {
+                      void customTitleBar.applyRoundedCorners(Boolean(checked));
+                    }}
+                    aria-label={t("settings:roundedWindowCorners")}
+                  />
+                </div>
+              }
+            />
+          ) : null}
         </SettingsSection>
       ) : null}
 

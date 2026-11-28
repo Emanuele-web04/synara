@@ -27,6 +27,7 @@ export const DESKTOP_IPC_CHANNELS = {
   windowState: "desktop:window-state",
   customTitleBarGetState: "desktop:custom-title-bar-get-state",
   customTitleBarSetPreference: "desktop:custom-title-bar-set-preference",
+  customTitleBarSetRoundedCorners: "desktop:custom-title-bar-set-rounded-corners",
   customTitleBarRelaunch: "desktop:custom-title-bar-relaunch",
   keepAwake: {
     getState: "desktop:keep-awake-get-state",
