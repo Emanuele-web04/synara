@@ -238,6 +238,10 @@ export const DEFAULT_VOICE_ENTER_BEHAVIOR: VoiceEnterBehavior = "stop";
 export const UiDensity = Schema.Literals(UI_DENSITY_MODES);
 export type UiDensity = typeof UiDensity.Type;
 export { DEFAULT_UI_DENSITY };
+export const TRANSCRIPT_DETAIL_LEVELS = ["messages", "standard", "full"] as const;
+export type TranscriptDetail = (typeof TRANSCRIPT_DETAIL_LEVELS)[number];
+export const DEFAULT_TRANSCRIPT_DETAIL: TranscriptDetail = "standard";
+export const TranscriptDetailSchema = Schema.Literals(TRANSCRIPT_DETAIL_LEVELS);
 export const ChatWidthMode = Schema.Literals(CHAT_WIDTH_MODES);
 export type ChatWidthMode = typeof ChatWidthMode.Type;
 export { DEFAULT_CHAT_WIDTH };
@@ -529,9 +533,12 @@ export const AppSettingsSchema = Schema.Struct({
   followUpBehavior: FollowUpBehavior.pipe(withDefaults(() => DEFAULT_FOLLOW_UP_BEHAVIOR)),
   voiceEnterBehavior: VoiceEnterBehavior.pipe(withDefaults(() => DEFAULT_VOICE_ENTER_BEHAVIOR)),
   enableAssistantStreaming: Schema.Boolean.pipe(withDefaults(() => true)),
-  // Fold each finished turn's tool calls and intermediate messages behind one
-  // "Worked for…" line. Off keeps every step of finished turns visible.
-  collapseFinishedTurns: Schema.Boolean.pipe(withDefaults(() => true)),
+  // How much of the turn's work the transcript shows: only model messages, the
+  // standard inline work log, or everything fully expanded.
+  transcriptDetail: TranscriptDetailSchema.pipe(withDefaults(() => DEFAULT_TRANSCRIPT_DETAIL)),
+  // Legacy: "fold finished turns" predates the three detail levels. Read once to
+  // place a reader who turned folding off on the level that shows everything.
+  collapseFinishedTurns: Schema.optional(Schema.Boolean),
   // Started threads: show reasoning effort as a stepped slider card in the composer's
   // model menu instead of radio rows. New chats keep the split model/effort pickers.
   composerEffortSlider: Schema.Boolean.pipe(withDefaults(() => true)),
@@ -1572,6 +1579,7 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
     geminiBinaryPath: legacyGeminiBinaryPath,
     customGeminiModels: legacyCustomGeminiModels,
     showStudioSection: legacyShowStudioSection,
+    collapseFinishedTurns: legacyCollapseFinishedTurns,
     ...currentSettings
   } = settings;
   const codexAccounts = normalizeCodexAccounts(settings.codexAccounts);
@@ -1613,6 +1621,14 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
     piBinaryPath: normalizeProviderBinaryPathOverride("pi", settings.piBinaryPath),
     ompBinaryPath: normalizeProviderBinaryPathOverride("omp", settings.ompBinaryPath),
     uiDensity: normalizeUiDensityValue(settings.uiDensity),
+    // A saved "keep finished turns expanded" preference predates the level and has
+    // to win over the schema's decoding default, which has already filled one in.
+    // An explicit non-default level wins over the legacy preference.
+    transcriptDetail:
+      settings.transcriptDetail === DEFAULT_TRANSCRIPT_DETAIL &&
+      legacyCollapseFinishedTurns === false
+        ? "full"
+        : settings.transcriptDetail,
     chatWidth: normalizeChatWidthModeValue(settings.chatWidth),
     agentCursorFillColor: normalizeCursorHexColor(settings.agentCursorFillColor),
     agentCursorRimColor: normalizeCursorHexColor(settings.agentCursorRimColor),

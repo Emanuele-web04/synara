@@ -682,15 +682,12 @@ export function projectProviderRuntimeActivities(
   const commandProgressId = commandProgressKey
     ? EventId.makeUnsafe(`provider-command-progress:${commandProgressKey}`)
     : event.eventId;
-  // Claude previews are coalesced by ingestion; other providers publish their
-  // readable reasoning only at completion. Empty/encrypted boundaries stay hidden.
+  // Every provider that streams reasoning gets the same row: ingestion coalesces
+  // its deltas into a growing detail and settles it at item or turn end, so the
+  // row id is stable for the whole reasoning block. Empty/encrypted boundaries
+  // stay hidden.
   if (
-    (((event.provider === "codex" ||
-      event.provider === "antigravity" ||
-      event.provider === "opencode") &&
-      event.type === "item.completed") ||
-      (event.provider === "claudeAgent" &&
-        (event.type === "item.updated" || event.type === "item.completed"))) &&
+    (event.type === "item.updated" || event.type === "item.completed") &&
     event.payload.itemType === "reasoning" &&
     event.itemId !== undefined &&
     readableReasoningDetail(event.payload.detail) !== undefined
@@ -705,12 +702,16 @@ export function projectProviderRuntimeActivities(
         kind: "task.progress",
         summary: "Reasoning trace",
         payload: toActivityPayload({
+          itemType: "reasoning",
           ...(event.payload.status ? { status: event.payload.status } : {}),
+          // A live preview is rewritten every 250 ms as the trace grows, so it
+          // carries the plain activity cap; the settled row carries the whole
+          // trace once, for reading.
           detail: truncateDetail(
             reasoningDetail,
-            event.provider === "claudeAgent"
-              ? MAX_REASONING_DETAIL_CHARS
-              : MAX_ACTIVITY_DATA_STRING_CHARS,
+            event.payload.status === "inProgress"
+              ? MAX_ACTIVITY_DATA_STRING_CHARS
+              : MAX_REASONING_DETAIL_CHARS,
           ),
           data: { toolCallId: reasoningItemId },
         }),

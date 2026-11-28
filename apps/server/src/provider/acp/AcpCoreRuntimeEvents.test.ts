@@ -2,7 +2,7 @@ import { RuntimeRequestId, TurnId } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
-  makeAcpAssistantItemEvent,
+  makeAcpTranscriptItemEvent,
   makeAcpContentDeltaEvent,
   makeAcpPlanUpdatedEvent,
   makeAcpRequestOpenedEvent,
@@ -335,7 +335,7 @@ describe("AcpCoreRuntimeEvents", () => {
     });
 
     expect(
-      makeAcpAssistantItemEvent({
+      makeAcpTranscriptItemEvent({
         stamp,
         provider: "cursor",
         threadId: "thread-1" as never,

@@ -12,6 +12,7 @@ import { WorkspaceFileOpenerContext } from "../../lib/workspaceFileOpener";
 import { formatTimestamp } from "../../timestampFormat";
 import { deriveTimelineEntries, type TimelineEntry } from "../../workLog";
 import { MessagesTimeline } from "./MessagesTimeline";
+import { createTimelineHost } from "./MessagesTimeline.testHost";
 import { TimelineWorkEntryRow } from "./TimelineWorkEntryRow";
 
 function ToolDetailsTimeline({ entries }: { entries?: TimelineEntry[] }) {
@@ -96,12 +97,8 @@ function LiveActivityTimeline() {
   );
 }
 
-function createTimelineHost(): HTMLDivElement {
-  const host = document.createElement("div");
-  host.style.cssText = "display:flex;width:600px;height:520px;overflow:hidden;";
-  document.body.append(host);
-  return host;
-}
+const timelineHost = () =>
+  createTimelineHost("display:flex;width:600px;height:520px;overflow:hidden;");
 
 async function settleLayout(): Promise<void> {
   await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
@@ -206,7 +203,7 @@ describe("MessagesTimeline tool details", () => {
           },
         ],
       );
-    const host = createTimelineHost();
+    const host = timelineHost();
     const screen = await render(<ToolDetailsTimeline entries={entries(false)} />, {
       container: host,
     });
@@ -234,7 +231,7 @@ describe("MessagesTimeline tool details", () => {
   });
 
   it("opens and closes command details with the shared disclosure motion", async () => {
-    const host = createTimelineHost();
+    const host = timelineHost();
     const screen = await render(<ToolDetailsTimeline />, { container: host });
     const originalRequestAnimationFrame = window.requestAnimationFrame;
     const originalCancelAnimationFrame = window.cancelAnimationFrame;
@@ -313,7 +310,7 @@ describe("MessagesTimeline tool details", () => {
   });
 
   it("keeps live activity compact and reveals technical metadata on demand", async () => {
-    const host = createTimelineHost();
+    const host = timelineHost();
     const screen = await render(<LiveActivityTimeline />, { container: host });
 
     try {
@@ -347,7 +344,7 @@ describe("MessagesTimeline tool details", () => {
   it("keeps agent activity as the primary action when live metadata is present", async () => {
     const onOpenAgentActivity = vi.fn();
     const nowMs = Date.now();
-    const host = createTimelineHost();
+    const host = timelineHost();
     const screen = await render(
       <TimelineWorkEntryRow
         workEntry={{
@@ -392,7 +389,7 @@ describe("MessagesTimeline tool details", () => {
   it("opens the turn diff for activity-only file rows", async () => {
     const onOpenTurnDiff = vi.fn();
     const turnId = TurnId.makeUnsafe("turn-file-activity");
-    const host = createTimelineHost();
+    const host = timelineHost();
     const screen = await render(
       <TimelineWorkEntryRow
         workEntry={{
@@ -435,7 +432,7 @@ describe("MessagesTimeline tool details", () => {
 
   it("preserves the file-open action for activity-only read rows", async () => {
     const openFile = vi.fn(() => true);
-    const host = createTimelineHost();
+    const host = timelineHost();
     const screen = await render(
       <WorkspaceFileOpenerContext.Provider value={{ openFile }}>
         <TimelineWorkEntryRow

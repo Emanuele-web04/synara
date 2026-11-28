@@ -8,6 +8,7 @@ import {
   type AppSettingsBinding,
   type FollowUpBehavior,
   type GitHubLinkOpenTarget,
+  type TranscriptDetail,
   type VoiceEnterBehavior,
 } from "~/appSettings";
 import { BooleanSettingRow } from "~/components/settings/BooleanSettingRow";
@@ -31,6 +32,12 @@ const FOLLOW_UP_BEHAVIOR_OPTIONS = [
   { value: "queue", label: "settings:queue" },
   { value: "steer", label: "chat:queuedActions_steer" },
 ] as const satisfies ReadonlyArray<{ value: FollowUpBehavior; label: string }>;
+
+const TRANSCRIPT_DETAIL_OPTIONS = [
+  { value: "messages", label: "settings:transcriptDetail_messages" },
+  { value: "standard", label: "settings:transcriptDetail_standard" },
+  { value: "full", label: "settings:transcriptDetail_full" },
+] as const satisfies ReadonlyArray<{ value: TranscriptDetail; label: string }>;
 
 const SIDECHAT_EXPIRY_OPTIONS = [
   { value: "1h", label: "settings:1Hour" },
@@ -152,14 +159,30 @@ export function ChatsSettingsView(binding: AppSettingsBinding) {
           ariaLabel="settings:streamAssistantMessages"
         />
 
-        <BooleanSettingRow
-          {...binding}
-          id="setting-fold-finished-turns"
-          settingKey="collapseFinishedTurns"
-          title="settings:foldFinishedTurns"
-          description="settings:hideAFinishedTurnSToolCallsAndIntermediate2"
-          resetLabel="settings:foldFinishedTurns2"
-          ariaLabel="settings:foldFinishedTurns"
+        <SettingsRow
+          id="setting-transcript-detail"
+          title="settings:transcriptDetail"
+          description="settings:chooseHowMuchOfEachTurnSToolCallsAnd"
+          resetAction={
+            settings.transcriptDetail !== defaults.transcriptDetail ? (
+              <SettingResetButton
+                label={t("settings:transcriptDetail2")}
+                onClick={() =>
+                  updateSettings({
+                    transcriptDetail: defaults.transcriptDetail,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <SettingsSegmentedControl
+              value={settings.transcriptDetail}
+              onValueChange={(value) => updateSettings({ transcriptDetail: value })}
+              ariaLabel={t("settings:transcriptDetail")}
+              options={TRANSCRIPT_DETAIL_OPTIONS}
+            />
+          }
         />
 
         <BooleanSettingRow

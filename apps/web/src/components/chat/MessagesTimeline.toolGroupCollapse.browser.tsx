@@ -13,6 +13,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
 import { MessagesTimeline } from "./MessagesTimeline";
+import { createTimelineHost } from "./MessagesTimeline.testHost";
 import type { TimelineEntry } from "../../session-logic";
 import { deriveTimelineEntries, deriveWorkLogEntries } from "../../workLog";
 import { AgentActivityDetailView } from "./AgentActivityDetailView";
@@ -110,13 +111,7 @@ function ToolGroupCollapseTimeline(props: {
   );
 }
 
-function createTimelineHost(): HTMLDivElement {
-  const host = document.createElement("div");
-  host.style.cssText =
-    "display:flex;flex-direction:column;width:600px;height:520px;overflow:hidden;";
-  document.body.append(host);
-  return host;
-}
+const timelineHost = () => createTimelineHost();
 
 function findSummaryTrigger(label: string): HTMLButtonElement | null {
   return (
@@ -178,8 +173,11 @@ describe("MessagesTimeline tool group collapse", () => {
     document.body.innerHTML = "";
   });
 
-  it("keeps one Codex tool summary across reasoning updates while a command runs", async () => {
-    const reasoning = (id: string): Extract<TimelineEntry, { kind: "work" }>["entry"] => ({
+  it("keeps reasoning out of the tool summary while a command runs", async () => {
+    const reasoning = (
+      id: string,
+      reasoningStatus: "inProgress" | "completed",
+    ): Extract<TimelineEntry, { kind: "work" }>["entry"] => ({
       id,
       createdAt: "2026-03-17T19:12:28.000Z",
       activityKind: "task.progress",
@@ -187,18 +185,16 @@ describe("MessagesTimeline tool group collapse", () => {
       detail: "Checking the provider boundary.",
       tone: "tool",
       toolCallId: id,
+      reasoningStatus,
     });
-    const workEntries = deriveAgentActivityTimelineState(
-      [
-        commandEntry("first", "bun run lint").entry,
-        commandEntry("second", "bun run typecheck").entry,
-        reasoning("reasoned"),
-        commandEntry("third", "node scripts/check.mjs").entry,
-        commandEntry("fourth", "node scripts/tail.mjs", "running").entry,
-        reasoning("latest-reasoning"),
-      ],
-      "codex",
-    ).timelineWorkEntries;
+    const workEntries = deriveAgentActivityTimelineState([
+      commandEntry("first", "bun run lint").entry,
+      commandEntry("second", "bun run typecheck").entry,
+      reasoning("reasoned", "completed"),
+      commandEntry("third", "node scripts/check.mjs").entry,
+      commandEntry("fourth", "node scripts/tail.mjs", "running").entry,
+      reasoning("latest-reasoning", "inProgress"),
+    ]).timelineWorkEntries;
     const screen = await render(
       <ToolGroupCollapseTimeline
         isWorking
@@ -212,17 +208,22 @@ describe("MessagesTimeline tool group collapse", () => {
           })),
         ]}
       />,
-      { container: createTimelineHost() },
+      { container: timelineHost() },
     );
     try {
-      const summary = screen.getByRole("button", { name: "Ran 3 commands", exact: true });
-      await expect.element(summary).toBeVisible();
+      // Reasoning keeps its own rows; the commands still fold together.
+      expect(document.querySelectorAll("[data-work-entry-reasoning='true']")).toHaveLength(2);
+      const summary = [
+        ...document.querySelectorAll<HTMLButtonElement>("button[aria-expanded]"),
+      ].find((button) => /^Ran \d+ commands?/u.test((button.textContent ?? "").trim()));
+      expect(summary).not.toBeUndefined();
+      expect((summary!.textContent ?? "").includes("Checking the provider boundary.")).toBe(false);
       await expect.poll(workingToolCallText).toContain("node scripts/tail.mjs");
-      await summary.click();
+      await summary!.click();
+      // The reasoning row splits the run: the opened summary lists only the calls
+      // between it and the next row.
       await expect.element(screen.getByText("bun run lint", { exact: true })).toBeVisible();
-      await expect
-        .element(screen.getByText("node scripts/check.mjs", { exact: true }))
-        .toBeVisible();
+      await expect.element(screen.getByText("bun run typecheck", { exact: true })).toBeVisible();
       expect(document.body.textContent?.split("node scripts/tail.mjs")).toHaveLength(2);
     } finally {
       await screen.unmount();
@@ -312,7 +313,7 @@ describe("MessagesTimeline tool group collapse", () => {
       },
     ];
     const screen = await render(<ToolGroupCollapseTimeline timelineEntries={entries(false)} />, {
-      container: createTimelineHost(),
+      container: timelineHost(),
     });
     try {
       // No row stays pinned under the launching turn while the follow-up streams;
@@ -392,7 +393,7 @@ describe("MessagesTimeline tool group collapse", () => {
       message("follow-up", "assistant", "The suite passed.", "2026-03-17T19:12:12.000Z"),
     ];
     const screen = await render(<ToolGroupCollapseTimeline timelineEntries={entries} settled />, {
-      container: createTimelineHost(),
+      container: timelineHost(),
     });
     try {
       await expect.element(screen.getByText("The suite passed.", { exact: true })).toBeVisible();
@@ -439,7 +440,7 @@ describe("MessagesTimeline tool group collapse", () => {
       assistantEntry("after-question", "I applied your preference.", false),
     ];
     const screen = await render(<ToolGroupCollapseTimeline timelineEntries={entries} />, {
-      container: createTimelineHost(),
+      container: timelineHost(),
     });
     await expect.element(screen.getByText("Which accent color?", { exact: true })).toBeVisible();
     await expect.element(screen.getByText("Amber", { exact: true })).toBeVisible();
@@ -484,7 +485,7 @@ describe("MessagesTimeline tool group collapse", () => {
         />
       );
     }
-    const screen = await render(<LegacyReasoningTimeline />, { container: createTimelineHost() });
+    const screen = await render(<LegacyReasoningTimeline />, { container: timelineHost() });
     try {
       await screen.getByRole("button", { name: /2 updates/ }).click();
       await expect
@@ -498,60 +499,57 @@ describe("MessagesTimeline tool group collapse", () => {
     }
   });
 
-  it.each(["reasoning", "tool summary"] as const)(
-    "keeps %s between tool runs as full Markdown transcript text",
-    async (kind) => {
-      const host = createTimelineHost();
-      const onOpenAgentActivity = vi.fn();
-      const reasoning: TimelineEntry = {
-        id: "reasoning-row",
-        kind: "work",
+  // Reasoning used to render here as assistant prose; it now keeps its own
+  // surface (MessagesTimeline.reasoning.browser.tsx), so only summaries stay.
+  it("keeps a tool summary between tool runs as full Markdown transcript text", async () => {
+    const host = timelineHost();
+    const onOpenAgentActivity = vi.fn();
+    const summary: TimelineEntry = {
+      id: "summary-row",
+      kind: "work",
+      createdAt: "2026-03-17T19:12:28.000Z",
+      entry: {
+        id: "summary-row",
         createdAt: "2026-03-17T19:12:28.000Z",
-        entry: {
-          id: "reasoning-row",
-          createdAt: "2026-03-17T19:12:28.000Z",
-          label: kind === "reasoning" ? "Reasoning trace" : "Tool summary",
-          tone: kind === "reasoning" ? "tool" : "info",
-          ...(kind === "reasoning"
-            ? { toolCallId: "reasoning-item", toolStatus: "running" as const }
-            : { activityKind: "tool.summary" }),
-          detail: "First inspect the `provider` boundary.\n\nThen verify cancellation.",
-        },
-      };
-      const screen = await render(
-        <ToolGroupCollapseTimeline
-          timelineEntries={[
-            ...SETTLED_COMMANDS.map((command, index) => commandEntry(`before-${index}`, command)),
-            reasoning,
-            ...LIVE_COMMANDS.map((command, index) => commandEntry(`after-${index}`, command)),
-          ]}
-          onOpenAgentActivity={onOpenAgentActivity}
-        />,
-        { container: host },
-      );
+        label: "Tool summary",
+        tone: "info",
+        activityKind: "tool.summary",
+        detail: "First inspect the `provider` boundary.\n\nThen verify cancellation.",
+      },
+    };
+    const screen = await render(
+      <ToolGroupCollapseTimeline
+        timelineEntries={[
+          ...SETTLED_COMMANDS.map((command, index) => commandEntry(`before-${index}`, command)),
+          summary,
+          ...LIVE_COMMANDS.map((command, index) => commandEntry(`after-${index}`, command)),
+        ]}
+        onOpenAgentActivity={onOpenAgentActivity}
+      />,
+      { container: host },
+    );
 
-      try {
-        await expect.poll(() => findSummaryTrigger("Ran 4 commands") !== null).toBe(true);
-        await expectTailRunSettled();
-        expect(isVisibleOutsideClosedDisclosure("First inspect the")).toBe(true);
-        expect(isVisibleOutsideClosedDisclosure("Then verify cancellation.")).toBe(true);
-        const prose = host.querySelector<HTMLElement>("[data-work-entry-prose='true']");
-        expect(prose).not.toBeNull();
-        expect(prose!.querySelectorAll("p")).toHaveLength(2);
-        expect(prose!.querySelector("code")?.textContent).toBe("provider");
-        expect(prose!.textContent).not.toContain("`");
-        expect(prose!.closest("button")).toBeNull();
-        expect(prose!.querySelector("[data-work-entry-icon='true']")).toBeNull();
-        expect(onOpenAgentActivity).not.toHaveBeenCalled();
-      } finally {
-        await screen.unmount();
-        host.remove();
-      }
-    },
-  );
+    try {
+      await expect.poll(() => findSummaryTrigger("Ran 4 commands") !== null).toBe(true);
+      await expectTailRunSettled();
+      expect(isVisibleOutsideClosedDisclosure("First inspect the")).toBe(true);
+      expect(isVisibleOutsideClosedDisclosure("Then verify cancellation.")).toBe(true);
+      const prose = host.querySelector<HTMLElement>("[data-work-entry-prose='true']");
+      expect(prose).not.toBeNull();
+      expect(prose!.querySelectorAll("p")).toHaveLength(2);
+      expect(prose!.querySelector("code")?.textContent).toBe("provider");
+      expect(prose!.textContent).not.toContain("`");
+      expect(prose!.closest("button")).toBeNull();
+      expect(prose!.querySelector("[data-work-entry-icon='true']")).toBeNull();
+      expect(onOpenAgentActivity).not.toHaveBeenCalled();
+    } finally {
+      await screen.unmount();
+      host.remove();
+    }
+  });
 
   it("wears a Codex status only while it is the newest entry, and a running call over it", async () => {
-    const host = createTimelineHost();
+    const host = timelineHost();
     const statusEntry = (id: string, preview: string): TimelineEntry => ({
       id,
       kind: "work",
@@ -609,7 +607,7 @@ describe("MessagesTimeline tool group collapse", () => {
   });
 
   it("keeps calls made after steering reachable from the run's summary", async () => {
-    const host = createTimelineHost();
+    const host = timelineHost();
     const turnId = TurnId.makeUnsafe("steered-turn");
     const timelineEntries = deriveTimelineEntries(
       [
@@ -677,7 +675,7 @@ describe("MessagesTimeline tool group collapse", () => {
   });
 
   it("collapses every run behind a summary when no working row claims the tail", async () => {
-    const host = createTimelineHost();
+    const host = timelineHost();
     const screen = await render(
       <ToolGroupCollapseTimeline
         timelineEntries={[
@@ -724,7 +722,7 @@ describe("MessagesTimeline tool group collapse", () => {
   });
 
   it("collapses mid-turn as soon as a thinking block splits the live group", async () => {
-    const host = createTimelineHost();
+    const host = timelineHost();
     // One live inline group: settled commands, then a thinking boundary, then
     // the live tail. The run before the boundary must collapse while the turn
     // is still in progress — not only once it finishes.
@@ -759,7 +757,7 @@ describe("MessagesTimeline tool group collapse", () => {
     }
   });
   it("wears the live run's newest call in the working indicator, then settles it into history", async () => {
-    const host = createTimelineHost();
+    const host = timelineHost();
     const entries = (liveStatus: "running" | "completed") => [
       assistantEntry("narration-1", "Looking at the failing checks first.", false),
       ...SETTLED_COMMANDS.map((command, index) => commandEntry(`settled-${index}`, command)),
@@ -809,7 +807,7 @@ describe("MessagesTimeline tool group collapse", () => {
   });
 
   it("wears a lone call in the working indicator and returns it as a plain row", async () => {
-    const host = createTimelineHost();
+    const host = timelineHost();
     const [command] = LIVE_COMMANDS as [string];
     const entries = [
       assistantEntry("narration-1", "Checking the tree.", true),
@@ -843,7 +841,7 @@ describe("MessagesTimeline tool group collapse", () => {
   });
 
   it("shows the same command running after Codex approval and preserves the request in history", async () => {
-    const host = createTimelineHost();
+    const host = timelineHost();
     const turnId = TurnId.makeUnsafe("approval-turn");
     const createdAt = "2026-03-17T19:12:28.000Z";
     const command = 'python3 -c "import time; time.sleep(8)"';
@@ -937,7 +935,7 @@ describe("MessagesTimeline tool group collapse", () => {
   });
 
   it("keeps one height whichever line the working indicator wears", async () => {
-    const host = createTimelineHost();
+    const host = timelineHost();
     const [command] = LIVE_COMMANDS as [string];
     const entriesWith = (toolStatus: "running" | "completed" | "failed") => [
       assistantEntry("narration-1", "Checking the tree.", true),

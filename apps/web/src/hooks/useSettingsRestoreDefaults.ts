@@ -136,8 +136,8 @@ export function useSettingsRestoreDefaults({
     ...(settings.enableAssistantStreaming !== defaults.enableAssistantStreaming
       ? ["settings:changed_assistantOutput"]
       : []),
-    ...(settings.collapseFinishedTurns !== defaults.collapseFinishedTurns
-      ? ["settings:foldFinishedTurns"]
+    ...(settings.transcriptDetail !== defaults.transcriptDetail
+      ? ["settings:transcriptDetail"]
       : []),
     ...(settings.composerEffortSlider !== defaults.composerEffortSlider
       ? ["settings:effortSlider"]

@@ -259,7 +259,7 @@ describe("durable turn failure feedback", () => {
       timelineEntries: deriveTimelineEntries(messages, [], entries),
       isWorking: true,
       activeTurnId: TurnId.makeUnsafe("next-turn"),
-      collapseFinishedTurns: true,
+      transcriptDetail: "standard",
       worktreeSetup: null,
       worktreeSetupOpen: false,
       activeTurnStartedAt: nextAt,

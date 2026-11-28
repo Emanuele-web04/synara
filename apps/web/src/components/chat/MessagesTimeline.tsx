@@ -169,6 +169,8 @@ import {
   DEFAULT_CHAT_FONT_SIZE_PX,
   normalizeChatFontSizePx,
   type TimestampFormat,
+  DEFAULT_TRANSCRIPT_DETAIL,
+  type TranscriptDetail,
 } from "../../appSettings";
 import {
   CHAT_COLUMN_FRAME_CLASS_NAME,
@@ -451,8 +453,8 @@ interface MessagesTimelineProps {
   activeTurnInProgress: boolean;
   /** Subagent rows with a child still at work, shown at the end of their answer. */
   liveSubagentRunEntryIds?: ReadonlySet<string>;
-  /** User setting: false keeps every finished turn expanded instead of folding it. */
-  collapseFinishedTurns?: boolean;
+  /** How much of the turn's work the transcript shows. */
+  transcriptDetail?: TranscriptDetail;
   activeTurnStartedAt: string | null;
   /** Transient "New worktree" setup progress; rendered as an ephemeral step card at the tail. */
   worktreeSetup?: WorktreeSetupSnapshot | null;
@@ -599,7 +601,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   workingLabel: workingLabelProp,
   activeTurnInProgress,
   liveSubagentRunEntryIds: liveSubagentRunEntryIdsProp,
-  collapseFinishedTurns,
+  transcriptDetail,
   activeTurnStartedAt,
   worktreeSetup: worktreeSetupProp,
   worktreeSetupPendingAction: worktreeSetupPendingActionProp,
@@ -896,6 +898,14 @@ export const MessagesTimeline = memo(function MessagesTimeline({
 
   const presentedWorktreeSetup = useWorktreeSetupPresentation(worktreeSetup);
   const conversationOnly = conversationOnlyProp === true;
+  const detail = transcriptDetail ?? DEFAULT_TRANSCRIPT_DETAIL;
+  // Only the full level leaves a run in view: below it the cap and the folded
+  // summaries apply, and reasoning is the one trace that opens there.
+  const foldWork = detail !== "full";
+  const maxVisibleWorkEntries = foldWork ? MAX_VISIBLE_WORK_LOG_ENTRIES : Number.POSITIVE_INFINITY;
+  const maxVisibleInlineToolEntries = foldWork
+    ? MAX_VISIBLE_INLINE_TOOL_ENTRIES
+    : Number.POSITIVE_INFINITY;
   const rawRows = useMemo(
     () =>
       deriveMessagesTimelineRows({
@@ -904,7 +914,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         worktreeSetup: presentedWorktreeSetup?.snapshot ?? null,
         worktreeSetupOpen: presentedWorktreeSetup?.open ?? false,
         activeTurnInProgress,
-        collapseFinishedTurns: collapseFinishedTurns !== false,
+        ...(transcriptDetail ? { transcriptDetail } : {}),
         activeTurnId,
         activeTurnStartedAt,
         turnDiffSummaryByAssistantMessageId,
@@ -917,7 +927,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       isWorking,
       presentedWorktreeSetup,
       activeTurnInProgress,
-      collapseFinishedTurns,
+      transcriptDetail,
       activeTurnId,
       activeTurnStartedAt,
       turnDiffSummaryByAssistantMessageId,
@@ -1595,6 +1605,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             chatMetaFontSizePx={appTypographyScale.chatMetaPx}
             textFontSizePx={normalizedChatFontSizePx}
             density="compact"
+            reasoningExpanded={!foldWork}
             mutedProse
             markdownCwd={markdownCwd}
             threadId={threadId}
@@ -1847,6 +1858,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               chatMetaFontSizePx={appTypographyScale.chatMetaPx}
               textFontSizePx={normalizedChatFontSizePx}
               density="compact"
+              reasoningExpanded={!foldWork}
               markdownCwd={markdownCwd}
               threadId={threadId}
               onImageExpand={onImageExpand}
@@ -1861,10 +1873,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             return renderEntryRow(mergeSubagentRunEntries(groupedEntries));
           }
           const isExpanded = expandedWorkGroupsState[groupId] ?? false;
-          const plannedRenderChunks = planWorkEntryRenderChunks(groupedEntries);
+          const plannedRenderChunks = planWorkEntryRenderChunks(groupedEntries, foldWork);
           const cappedRenderPlan = capOpenWorkEntryRenderChunks(plannedRenderChunks, {
             expanded: isExpanded,
-            maxVisibleEntries: MAX_VISIBLE_WORK_LOG_ENTRIES,
+            maxVisibleEntries: maxVisibleWorkEntries,
             keep: "last",
             // The capability-denied card carries the only affordance to unblock
             // the agent, so it must never disappear behind the "Show more" cap.
@@ -1921,10 +1933,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             );
           }
           const hasOverflow =
-            collapsibleHiddenRowCount(groupedEntries.length, MAX_VISIBLE_WORK_LOG_ENTRIES) > 0;
+            collapsibleHiddenRowCount(groupedEntries.length, maxVisibleWorkEntries) > 0;
           const visibleEntries =
             hasOverflow && !isExpanded
-              ? groupedEntries.slice(-MAX_VISIBLE_WORK_LOG_ENTRIES)
+              ? groupedEntries.slice(-maxVisibleWorkEntries)
               : groupedEntries;
           const hiddenCount = groupedEntries.length - visibleEntries.length;
           const showOverflowToggle = hasOverflow;
@@ -2344,14 +2356,14 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               toolGroupId !== null ? (expandedWorkGroupsState[toolGroupId] ?? false) : false;
             const collapsibleToolCount = collapsibleHiddenRowCount(
               toolEntries.length,
-              MAX_VISIBLE_INLINE_TOOL_ENTRIES,
+              maxVisibleInlineToolEntries,
             );
             const visibleToolEntries =
               toolExpanded || collapsibleToolCount === 0
                 ? toolEntries
                 : activeTurnInProgress
-                  ? toolEntries.slice(-MAX_VISIBLE_INLINE_TOOL_ENTRIES)
-                  : toolEntries.slice(0, MAX_VISIBLE_INLINE_TOOL_ENTRIES);
+                  ? toolEntries.slice(-maxVisibleInlineToolEntries)
+                  : toolEntries.slice(0, maxVisibleInlineToolEntries);
             const hasGenericFileChangeEntry = toolEntries.some(
               (workEntry) =>
                 isFileChangeWorkLogEntry(workEntry) && (workEntry.changedFiles?.length ?? 0) === 0,
@@ -2503,6 +2515,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                 chatMetaFontSizePx={appTypographyScale.chatMetaPx}
                 textFontSizePx={normalizedChatFontSizePx}
                 density="compact"
+                reasoningExpanded={!foldWork}
                 fileDiffStatByPath={fileDiffStatByPath}
                 markdownCwd={markdownCwd}
                 threadId={threadId}
@@ -2516,10 +2529,13 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                 {...(turnSummary?.turnId ? { turnId: turnSummary.turnId } : {})}
               />
             );
-            const plannedRenderChunks = planWorkEntryRenderChunks(display.orderedRenderableEntries);
+            const plannedRenderChunks = planWorkEntryRenderChunks(
+              display.orderedRenderableEntries,
+              foldWork,
+            );
             const cappedRenderPlan = capOpenWorkEntryRenderChunks(plannedRenderChunks, {
               expanded: display.toolExpanded,
-              maxVisibleEntries: MAX_VISIBLE_INLINE_TOOL_ENTRIES,
+              maxVisibleEntries: maxVisibleInlineToolEntries,
               keep: activeTurnInProgress ? "last" : "first",
               shouldCapEntry: (workEntry) => workEntry.tone === "tool",
             });
@@ -2628,6 +2644,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                         chatMetaFontSizePx={appTypographyScale.chatMetaPx}
                         textFontSizePx={normalizedChatFontSizePx}
                         density="compact"
+                        reasoningExpanded={!foldWork}
                         markdownCwd={markdownCwd}
                         threadId={threadId}
                         onImageExpand={onImageExpand}
@@ -2723,6 +2740,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                       chatMetaFontSizePx={appTypographyScale.chatMetaPx}
                       textFontSizePx={normalizedChatFontSizePx}
                       density="compact"
+                      reasoningExpanded={!foldWork}
                       markdownCwd={markdownCwd}
                       threadId={threadId}
                       onImageExpand={onImageExpand}
@@ -2958,6 +2976,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                         chatMetaFontSizePx={appTypographyScale.chatMetaPx}
                         textFontSizePx={normalizedChatFontSizePx}
                         density="compact"
+                        reasoningExpanded={!foldWork}
                         markdownCwd={markdownCwd}
                         threadId={threadId}
                         onImageExpand={onImageExpand}

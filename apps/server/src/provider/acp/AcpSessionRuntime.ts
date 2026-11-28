@@ -608,6 +608,41 @@ interface EnsureActiveAssistantSegmentResult {
   readonly startedEvent?: Extract<AcpParsedSessionEvent, { readonly _tag: "AssistantItemStarted" }>;
 }
 
+type AcpContentDelta = Extract<AcpParsedSessionEvent, { readonly _tag: "ContentDelta" }>;
+type AcpReasoningItemCompleted = Extract<
+  AcpParsedSessionEvent,
+  { readonly _tag: "ReasoningItemCompleted" }
+>;
+
+// ACP permits thought chunks without messageId. Give each contiguous run an
+// identity of its own, using the same owner boundary as assistant segments.
+// Native IDs pass through without a synthetic lifecycle.
+function makeAcpReasoningSegments(runtimeInstanceId: string) {
+  let nextIndex = 0;
+  let active: { scope: string | undefined; completion: AcpReasoningItemCompleted } | undefined;
+  const close = () => {
+    const completion = active?.completion;
+    active = undefined;
+    return completion;
+  };
+  return {
+    close,
+    append(sessionId: string, scope: string | undefined, delta: AcpContentDelta) {
+      const previous = delta.itemId !== undefined || active?.scope !== scope ? close() : undefined;
+      if (delta.itemId !== undefined) return { delta, previous };
+      active ??= {
+        scope,
+        completion: {
+          _tag: "ReasoningItemCompleted",
+          itemId: `acp-reasoning:${sessionId}:${runtimeInstanceId}:${nextIndex++}`,
+          ...(delta.metadata ? { metadata: delta.metadata } : {}),
+        },
+      };
+      return { delta: { ...delta, itemId: active.completion.itemId }, previous };
+    },
+  };
+}
+
 interface AcpOwnedChildProcess {
   readonly pid: number;
   readonly exitCode: Effect.Effect<unknown, unknown>;
@@ -1187,6 +1222,7 @@ const makeAcpSessionRuntime = (
     // Unique per runtime instance so assistant message ids never collide across
     // server restarts or session resumes (segment index resets to 0 each time).
     const runtimeInstanceId = randomUUID().slice(0, 8);
+    const reasoningSegments = makeAcpReasoningSegments(runtimeInstanceId);
     const configOptionsRef = yield* Ref.make(sessionConfigOptionsFromSetup(undefined));
     const configOptionUpdateWaitersRef = yield* Ref.make<ReadonlyArray<ConfigOptionUpdateWaiter>>(
       [],
@@ -1347,6 +1383,7 @@ const makeAcpSessionRuntime = (
         if (resetState) {
           yield* Ref.set(toolCallsRef, new Map());
           yield* Ref.set(assistantSegmentRef, { nextSegmentIndex: 0 });
+          reasoningSegments.close();
         }
 
         yield* Ref.update(sessionEpochRef, (epoch) => ({
@@ -1369,6 +1406,7 @@ const makeAcpSessionRuntime = (
             toolCallsRef,
             assistantSegmentRef,
             runtimeInstanceId,
+            reasoningSegments,
             assistantItemScope: options.assistantItemScope,
             retainReplayToolState: options.loadReplayPolicy?.retainToolState === true,
             resolveConfigOptionUpdateWaiters,
@@ -1457,6 +1495,7 @@ const makeAcpSessionRuntime = (
               toolCallsRef,
               assistantSegmentRef,
               runtimeInstanceId,
+              reasoningSegments,
               assistantItemScope: options.assistantItemScope,
               retainReplayToolState: options.loadReplayPolicy?.retainToolState === true,
               resolveConfigOptionUpdateWaiters,
@@ -1622,6 +1661,7 @@ const makeAcpSessionRuntime = (
             toolCallsRef,
             assistantSegmentRef,
             runtimeInstanceId,
+            reasoningSegments,
             assistantItemScope: options.assistantItemScope,
             retainReplayToolState: options.loadReplayPolicy?.retainToolState === true,
             resolveConfigOptionUpdateWaiters,
@@ -1924,6 +1964,7 @@ const makeAcpSessionRuntime = (
             yield* Ref.set(modeStateRef, undefined);
             yield* Ref.set(toolCallsRef, new Map());
             yield* Ref.set(assistantSegmentRef, { nextSegmentIndex: 0 });
+            reasoningSegments.close();
 
             // Best-effort close so the agent does not keep the probe session alive.
             const supportsClose =
@@ -2224,8 +2265,19 @@ const makeAcpSessionRuntime = (
                   epoch,
                   assistantSegmentRef,
                 });
+                const continuing = promptOptions?.continueActiveTurn === true;
                 return (
-                  promptOptions?.continueActiveTurn === true ? Effect.void : closeSegment
+                  continuing
+                    ? Effect.void
+                    : closeSegment.pipe(
+                        Effect.andThen(
+                          Effect.sync(() => {
+                            // The provider's old turn has its own terminal/replay path.
+                            // Do not attribute a leftover block to this new prompt.
+                            reasoningSegments.close();
+                          }),
+                        ),
+                      )
                 ).pipe(
                   Effect.andThen(
                     runLoggedRequest(
@@ -2234,7 +2286,21 @@ const makeAcpSessionRuntime = (
                       acp.agent.prompt(requestPayload),
                     ),
                   ),
-                  Effect.tap(() => closeSegment),
+                  Effect.tap((response) =>
+                    Effect.gen(function* () {
+                      if (
+                        !continuing &&
+                        (yield* isCurrentSessionEpoch(getSessionEpoch, started.sessionId, epoch))
+                      ) {
+                        const completion = reasoningSegments.close();
+                        // Cancel has a turn-level terminal event which settles the
+                        // open block as failed instead of finishing it normally.
+                        if (completion && response.stopReason !== "cancelled")
+                          yield* offer(completion);
+                      }
+                      yield* closeSegment;
+                    }),
+                  ),
                 );
               }),
             ),
@@ -2440,6 +2506,7 @@ const processSessionUpdate = ({
   toolCallsRef,
   assistantSegmentRef,
   runtimeInstanceId,
+  reasoningSegments,
   skipTranscriptEvents,
   retainReplayToolState,
   assistantItemScope,
@@ -2456,6 +2523,7 @@ const processSessionUpdate = ({
   readonly toolCallsRef: Ref.Ref<Map<string, AcpToolCallState>>;
   readonly assistantSegmentRef: Ref.Ref<AcpAssistantSegmentState>;
   readonly runtimeInstanceId: string;
+  readonly reasoningSegments: ReturnType<typeof makeAcpReasoningSegments>;
   readonly skipTranscriptEvents: boolean;
   readonly retainReplayToolState: boolean;
   readonly assistantItemScope?: AcpSessionRuntimeOptions["assistantItemScope"];
@@ -2504,6 +2572,8 @@ const processSessionUpdate = ({
     for (const event of parsed.events) {
       if (event._tag === "ToolCallUpdated") {
         if (!(yield* isCurrentSessionEpoch(getSessionEpoch, sessionId, epoch))) return;
+        const completedThought = reasoningSegments.close();
+        if (completedThought) yield* offer(completedThought);
         yield* closeActiveAssistantSegment({
           getSessionEpoch,
           offer,
@@ -2533,18 +2603,22 @@ const processSessionUpdate = ({
         continue;
       }
       if (event._tag === "ContentDelta") {
+        if (!(yield* isCurrentSessionEpoch(getSessionEpoch, sessionId, epoch))) return;
+        const owner = assistantItemScope?.(event.metadata);
         if (event.streamKind === "reasoning_text") {
-          if (!(yield* isCurrentSessionEpoch(getSessionEpoch, sessionId, epoch))) return;
-          yield* offer(event);
+          const { delta, previous } = reasoningSegments.append(sessionId, owner, event);
+          if (previous) yield* offer(previous);
+          yield* offer(delta);
           continue;
         }
         if (event.text.trim().length === 0) {
-          if (!(yield* isCurrentSessionEpoch(getSessionEpoch, sessionId, epoch))) return;
           const assistantSegmentState = yield* Ref.get(assistantSegmentRef);
           if (!assistantSegmentState.activeItemId) {
             continue;
           }
         }
+        const completedThought = reasoningSegments.close();
+        if (completedThought) yield* offer(completedThought);
         const itemId = yield* ensureActiveAssistantSegment({
           getSessionEpoch,
           offer,
@@ -2553,7 +2627,7 @@ const processSessionUpdate = ({
           epoch,
           runtimeInstanceId,
           requestedItemId: event.itemId,
-          requestedItemScope: assistantItemScope?.(event.metadata),
+          requestedItemScope: owner,
         });
         yield* offer({
           ...event,

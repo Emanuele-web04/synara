@@ -228,8 +228,9 @@ export interface WorkLogEntry {
   // (e.g. user-input.requested -> question glyph) instead of the generic
   // tone fallback. Same rationale as `toolName` below.
   activityKind?: OrchestrationThreadActivity["kind"];
-  // Codex sends reasoning as its own item between tool calls in one work run.
-  codexReasoning?: true;
+  // Reasoning arrives as its own activity; its item status says whether the
+  // trace is still being written.
+  reasoningStatus?: "inProgress" | "completed" | "failed";
   // Provider-native event type carried through the activity payload (e.g.
   // "background_tasks_changed") so the timeline can pick a specific icon.
   nativeEventType?: string;
@@ -2122,6 +2123,14 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
     ...(toolCallId ? { toolCallId } : {}),
     ...(toolStatus ? { toolStatus } : {}),
   };
+  if (payload?.itemType === "reasoning") {
+    entry.reasoningStatus =
+      payload.status === "inProgress"
+        ? "inProgress"
+        : payload.status === "failed"
+          ? "failed"
+          : "completed";
+  }
   const itemType = extractWorkLogItemType(payload);
   const requestKind = extractWorkLogRequestKind(payload);
   if (payload && typeof payload.detail === "string" && payload.detail.length > 0) {

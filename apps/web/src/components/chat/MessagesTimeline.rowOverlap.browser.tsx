@@ -15,6 +15,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { render } from "vitest-browser-react";
 
 import { MessagesTimeline } from "./MessagesTimeline";
+import { createTimelineHost } from "./MessagesTimeline.testHost";
 import type { TimelineEntry } from "../../session-logic";
 
 const VIEWPORT_HEIGHT_PX = 480;
@@ -158,12 +159,8 @@ function RowOverlapTimeline({ handleRef }: { handleRef: { current: HarnessHandle
   );
 }
 
-function createTimelineHost(): HTMLDivElement {
-  const host = document.createElement("div");
-  host.style.cssText = `display:block;width:600px;height:${VIEWPORT_HEIGHT_PX}px;overflow:hidden;`;
-  document.body.append(host);
-  return host;
-}
+const timelineHost = () =>
+  createTimelineHost(`display:block;width:600px;height:${VIEWPORT_HEIGHT_PX}px;overflow:hidden;`);
 
 type OverlapSample = {
   frame: number;
@@ -229,7 +226,7 @@ describe("MessagesTimeline row overlap under streaming", () => {
 
   it("keeps a long transcript readable after batched updates and viewport resizing", async () => {
     const handleRef: { current: HarnessHandle | null } = { current: null };
-    const host = createTimelineHost();
+    const host = timelineHost();
     const screen = await render(<RowOverlapTimeline handleRef={handleRef} />, { container: host });
     try {
       await expect.poll(() => handleRef.current?.listRef.current != null).toBe(true);
@@ -277,7 +274,7 @@ describe("MessagesTimeline row overlap under streaming", () => {
 
   it("keeps virtualized rows from overlapping while tool calls stream, groups collapse, and disclosures animate", async () => {
     const handleRef: { current: HarnessHandle | null } = { current: null };
-    const host = createTimelineHost();
+    const host = timelineHost();
     const screen = await render(<RowOverlapTimeline handleRef={handleRef} />, {
       container: host,
     });

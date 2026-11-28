@@ -728,7 +728,7 @@ describe("provider runtime activity projection", () => {
     expect(events.map(projectProviderRuntimeActivities)).toEqual([[], [], []]);
   });
 
-  it("projects only readable completed Codex, Antigravity, and OpenCode reasoning", () => {
+  it("hides reasoning deltas and empty or encrypted reasoning boundaries", () => {
     const absent = [
       runtimeEvent({
         type: "content.delta",
@@ -750,41 +750,72 @@ describe("provider runtime activity projection", () => {
       }),
       runtimeEvent({
         type: "item.completed",
-        eventId: "reasoning-cursor",
-        provider: "cursor",
+        eventId: "reasoning-no-item",
         turnId: TURN_ID,
-        itemId: RuntimeItemId.makeUnsafe("reasoning-cursor"),
         payload: { itemType: "reasoning", status: "completed", detail: "Readable" },
       }),
     ];
     expect(absent.map(projectProviderRuntimeActivities)).toEqual([[], [], []]);
+  });
 
-    for (const provider of ["codex", "antigravity", "opencode"] as const) {
-      const [activity] = projectProviderRuntimeActivities(
-        runtimeEvent({
-          type: "item.completed",
-          eventId: `reasoning-${provider}`,
-          provider,
-          turnId: TURN_ID,
-          itemId: RuntimeItemId.makeUnsafe(`reasoning-${provider}`),
+  it("projects readable reasoning for every provider, streaming and completed", () => {
+    // A provider's identity may not decide whether its reasoning exists: every
+    // provider that reports a reasoning item gets the same stable row.
+    for (const provider of [
+      "codex",
+      "claudeAgent",
+      "cursor",
+      "antigravity",
+      "grok",
+      "droid",
+      "opencode",
+      "pi",
+      "devin",
+      "omp",
+    ] as const) {
+      for (const type of ["item.updated", "item.completed"] as const) {
+        const itemId = `reasoning-${provider}-${type}`;
+        const [activity] = projectProviderRuntimeActivities(
+          runtimeEvent({
+            type,
+            eventId: itemId,
+            provider,
+            turnId: TURN_ID,
+            itemId: RuntimeItemId.makeUnsafe(itemId),
+            payload: {
+              itemType: "reasoning",
+              status: type === "item.completed" ? "completed" : "inProgress",
+              detail: "Read the protocol mapping",
+            },
+          }),
+        );
+        expect(activity).toMatchObject({
+          id: `provider-reasoning:${THREAD_ID}:${itemId}`,
+          kind: "task.progress",
+          summary: "Reasoning trace",
           payload: {
-            itemType: "reasoning",
-            status: "completed",
+            status: type === "item.completed" ? "completed" : "inProgress",
             detail: "Read the protocol mapping",
+            data: { toolCallId: itemId },
           },
-        }),
-      );
-      expect(activity).toMatchObject({
-        id: `provider-reasoning:${THREAD_ID}:reasoning-${provider}`,
-        kind: "task.progress",
-        summary: "Reasoning trace",
-        payload: {
-          status: "completed",
-          detail: "Read the protocol mapping",
-          data: { toolCallId: `reasoning-${provider}` },
-        },
-      });
+        });
+      }
     }
+  });
+
+  it("keeps a long reasoning detail whole for every provider", () => {
+    const detail = "x".repeat(6_000);
+    const [activity] = projectProviderRuntimeActivities(
+      runtimeEvent({
+        type: "item.completed",
+        eventId: "reasoning-long",
+        provider: "grok",
+        turnId: TURN_ID,
+        itemId: RuntimeItemId.makeUnsafe("reasoning-long"),
+        payload: { itemType: "reasoning", status: "completed", detail },
+      }),
+    );
+    expect((activity?.payload as { detail?: string }).detail).toHaveLength(detail.length);
   });
 
   it("maps tool progress without losing call identity", () => {

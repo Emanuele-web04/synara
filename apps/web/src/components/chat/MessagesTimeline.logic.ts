@@ -19,7 +19,8 @@ import {
   type WorkLogUserInputExchangeItem,
 } from "../../workLog";
 import { normalizeCompactToolLabel as normalizeCompactToolLabelValue } from "../../lib/toolCallLabel";
-import { isCodexActivityStatusWorkEntry } from "./agentActivity.logic";
+import { DEFAULT_TRANSCRIPT_DETAIL, type TranscriptDetail } from "../../appSettings";
+import { isCodexActivityStatusWorkEntry, isReasoningUpdateWorkEntry } from "./agentActivity.logic";
 import { mergeSubagentRunEntries } from "./SubagentRunCard.logic";
 import {
   isSummarizableToolCallEntry,
@@ -85,7 +86,7 @@ export function chunkCollapsedTurnItems(
   const flushPendingRun = () => {
     if (pendingRun.length === 0) return;
     const pendingRowCount = pendingRun.reduce(
-      (total, item) => total + (item.entry.codexReasoning ? 0 : workEntryRowCount(item.entry)),
+      (total, item) => total + workEntryRowCount(item.entry),
       0,
     );
     if (pendingRowCount >= MIN_COLLAPSIBLE_TOOL_GROUP_SIZE) {
@@ -103,10 +104,7 @@ export function chunkCollapsedTurnItems(
   };
 
   for (const item of items) {
-    if (
-      item.kind === "work" &&
-      (item.entry.codexReasoning || isSummarizableToolCallEntry(item.entry))
-    ) {
+    if (item.kind === "work" && isSummarizableToolCallEntry(item.entry)) {
       pendingRun.push(item);
       continue;
     }
@@ -138,12 +136,16 @@ export interface WorkEntryRenderPlanChunk {
 }
 
 // Plans a work group's entries block by block. Boundaries are the entries a
-// summary can never absorb — thinking/info narration, errors, rich cards — so
-// each tool run between boundaries folds independently into its summary.
-// Codex reasoning travels with the calls without contributing to tool counts.
+// summary can never absorb — narration, errors, rich cards — so each tool run
+// between boundaries folds independently into its summary. `groupRuns` is off at
+// the full detail level, where every row stays in view.
 export function planWorkEntryRenderChunks(
   entries: ReadonlyArray<WorkLogEntry>,
+  groupRuns = true,
 ): WorkEntryRenderPlanChunk[] {
+  if (!groupRuns) {
+    return entries.map((entry) => ({ id: entry.id, entries: [entry], summary: null }));
+  }
   return chunkWorkEntries(entries).map((chunk) =>
     chunk.kind === "item"
       ? { id: chunk.id, entries: [chunk.entry], summary: null }
@@ -302,7 +304,9 @@ function trailingToolRunTarget(
   let start = entries.length;
   while (start > 0) {
     const entry = entries[start - 1]!;
-    if (!entry.codexReasoning && !isSummarizableToolCallEntry(entry)) break;
+    // Reasoning interrupts a run of calls without ending the live activity: the
+    // indicator still wears the running call the agent is thinking about.
+    if (!isSummarizableToolCallEntry(entry) && !isReasoningUpdateWorkEntry(entry)) break;
     start -= 1;
   }
   if (start === entries.length) return null;
@@ -1227,8 +1231,8 @@ export function deriveMessagesTimelineRows(input: {
   worktreeSetup: WorktreeSetupSnapshot | null;
   worktreeSetupOpen: boolean;
   activeTurnInProgress?: boolean;
-  // User setting: false keeps every finished turn expanded.
-  collapseFinishedTurns?: boolean;
+  // How much of the turn's work the transcript shows.
+  transcriptDetail?: TranscriptDetail;
   activeTurnId?: TurnId | null | undefined;
   activeTurnStartedAt: string | null;
   turnDiffSummaryByAssistantMessageId: ReadonlyMap<MessageId, TurnDiffSummary>;
@@ -1530,9 +1534,11 @@ export function deriveMessagesTimelineRows(input: {
   }
 
   if (input.conversationOnly !== true) {
+    const detail = input.transcriptDetail ?? DEFAULT_TRANSCRIPT_DETAIL;
+    if (detail === "messages") hideNonActionableWorkRows(nextRows);
     collapseSettledTurns(nextRows, {
       terminalAssistantMessageIds,
-      collapseWork: input.collapseFinishedTurns !== false,
+      collapseWork: detail !== "full" && detail !== "messages",
       // A turn folds when the agent's own turn ends. Background subagents that
       // outlive it fold too; live ones stay at the end of the answer.
       activeTurnInProgress: input.activeTurnInProgress ?? false,
@@ -2063,6 +2069,43 @@ function collapseSettledTurns(
   }
 }
 
+// Messages hides the work log, not the controls a reader needs to unblock work
+// or recover a failed turn.
+function isActionableWorkEntry(entry: WorkLogEntry): boolean {
+  return Boolean(
+    entry.computerControlDenied ||
+    entry.computerSetupRequired ||
+    entry.connectorProposalId ||
+    entry.automation?.proposalState === "pending" ||
+    entry.turnFailure,
+  );
+}
+
+function hideNonActionableWorkRows(rows: MessagesTimelineRow[]): void {
+  let kept = 0;
+  for (const row of rows) {
+    if (row.kind === "work") {
+      row.groupedEntries = row.groupedEntries.filter(isActionableWorkEntry);
+      if (row.groupedEntries.length === 0) continue;
+    } else if (row.kind === "message") {
+      const leading = row.leadingWorkEntries?.filter(isActionableWorkEntry);
+      if (leading?.length) row.leadingWorkEntries = leading;
+      else {
+        delete row.leadingWorkEntries;
+        delete row.leadingWorkGroupId;
+      }
+      const inline = row.inlineWorkEntries?.filter(isActionableWorkEntry);
+      if (inline?.length) row.inlineWorkEntries = inline;
+      else {
+        delete row.inlineWorkEntries;
+        delete row.inlineWorkGroupId;
+      }
+    }
+    rows[kept++] = row;
+  }
+  rows.length = kept;
+}
+
 // The background tasks whose completion rows end at `index`, oldest first.
 function collectWakeEntries(
   rows: ReadonlyArray<MessagesTimelineRow>,
@@ -2311,7 +2354,7 @@ function workLogEntryContentEqual(a: WorkLogEntry, b: WorkLogEntry): boolean {
     a.requestKind === b.requestKind &&
     a.grantedCommandApproval === b.grantedCommandApproval &&
     a.activityKind === b.activityKind &&
-    a.codexReasoning === b.codexReasoning &&
+    a.reasoningStatus === b.reasoningStatus &&
     a.toolName === b.toolName &&
     a.toolCallId === b.toolCallId &&
     a.toolStatus === b.toolStatus &&

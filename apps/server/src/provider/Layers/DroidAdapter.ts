@@ -95,7 +95,7 @@ import {
 import { forkViaAcpRuntime } from "../acp/acpFork.ts";
 import { type AcpSessionRuntimeShape } from "../acp/AcpSessionRuntime.ts";
 import {
-  makeAcpAssistantItemEvent,
+  makeAcpTranscriptItemEvent,
   makeAcpContentDeltaEvent,
   makeAcpPlanUpdatedEvent,
   makeAcpRequestOpenedEvent,
@@ -1108,6 +1108,7 @@ export function makeDroidAdapter(
                       // Content deltas open the visible message; empty starts only add noise.
                     }
                     return;
+                  case "ReasoningItemCompleted":
                   case "AssistantItemCompleted":
                     {
                       const activeTurnId = yield* activeTurnIdForDroidRuntimeEvent(ctx, event._tag);
@@ -1118,7 +1119,10 @@ export function makeDroidAdapter(
                         activeTurnId,
                         event.itemId,
                       );
-                      if (!ctx.activeAssistantItemsWithContent.has(scopedItemId)) {
+                      if (
+                        event._tag === "AssistantItemCompleted" &&
+                        !ctx.activeAssistantItemsWithContent.delete(scopedItemId)
+                      ) {
                         if (isDroidAcpDebugEnabled()) {
                           yield* Effect.logInfo("droid.acp.empty_assistant_item_suppressed", {
                             threadId: ctx.threadId,
@@ -1128,16 +1132,18 @@ export function makeDroidAdapter(
                         }
                         return;
                       }
-                      ctx.activeAssistantItemsWithContent.delete(scopedItemId);
                       yield* offerRuntimeEvent(
                         input.lifecycleGeneration,
-                        makeAcpAssistantItemEvent({
+                        makeAcpTranscriptItemEvent({
                           stamp: yield* makeEventStamp(),
                           provider: PROVIDER,
                           threadId: ctx.threadId,
                           turnId: activeTurnId,
                           itemId: scopedItemId,
                           lifecycle: "item.completed",
+                          ...(event._tag === "ReasoningItemCompleted"
+                            ? { itemType: "reasoning" }
+                            : {}),
                         }),
                       );
                     }

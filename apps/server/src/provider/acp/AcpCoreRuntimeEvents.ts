@@ -215,12 +215,13 @@ export function makeAcpToolCallEvent(input: {
   };
 }
 
-export function makeAcpAssistantItemEvent(input: {
+export function makeAcpTranscriptItemEvent(input: {
   readonly stamp: AcpEventStamp;
   readonly provider: ProviderKind;
   readonly threadId: ThreadId;
   readonly turnId: TurnId | undefined;
   readonly itemId: string;
+  readonly itemType?: "assistant_message" | "reasoning";
   readonly lifecycle: "item.started" | "item.completed";
   readonly providerRefs?: ProviderRuntimeEvent["providerRefs"];
 }): ProviderRuntimeEvent {
@@ -233,7 +234,7 @@ export function makeAcpAssistantItemEvent(input: {
     itemId: RuntimeItemId.makeUnsafe(input.itemId),
     ...(input.providerRefs ? { providerRefs: input.providerRefs } : {}),
     payload: {
-      itemType: "assistant_message",
+      itemType: input.itemType ?? "assistant_message",
       status: input.lifecycle === "item.completed" ? "completed" : "inProgress",
     },
   };

@@ -891,7 +891,7 @@ describe("deriveMessagesTimelineRows", () => {
       ...baseInput,
       activeTurnInProgress: false,
       activeTurnId: TurnId.makeUnsafe("t2"),
-      collapseFinishedTurns: false,
+      transcriptDetail: "full",
       timelineEntries: entries,
     });
     expect(messageRow(idle, "untagged")?.assistantTurnInProgress).toBe(false);
@@ -2419,10 +2419,10 @@ describe("deriveMessagesTimelineRows", () => {
     ]);
   });
 
-  it("keeps finished turns expanded when folding is turned off", () => {
+  it("keeps finished turns expanded at the full detail level", () => {
     const rows = deriveMessagesTimelineRows({
       ...baseInput,
-      collapseFinishedTurns: false,
+      transcriptDetail: "full",
       timelineEntries: [
         userEntry("u1", "2026-01-01T00:00:00Z"),
         assistantEntry("a1", "2026-01-01T00:00:01Z", {
@@ -2566,9 +2566,9 @@ describe("deriveMessagesTimelineRows", () => {
     expect(collapsedSignature(messageRow(rows, "a2")!)).toEqual(["narration:a1", "work:w1"]);
   });
 
-  it.each([true, false])(
-    "puts MCP proposals in the answer recap with collapseFinishedTurns=%s",
-    (collapseFinishedTurns) => {
+  it.each(["messages", "standard", "full"] as const)(
+    "puts MCP proposals in the answer recap at detail level %s",
+    (transcriptDetail) => {
       const createdAt = "2026-01-01T00:00:02Z";
       const proposal: TimelineEntry = {
         id: "entry-mcp",
@@ -2584,7 +2584,7 @@ describe("deriveMessagesTimelineRows", () => {
       };
       const rows = deriveMessagesTimelineRows({
         ...baseInput,
-        collapseFinishedTurns,
+        transcriptDetail,
         timelineEntries: [
           userEntry("u1", "2026-01-01T00:00:00Z"),
           workEntry("w1", "2026-01-01T00:00:01Z", "List connectors"),
@@ -2602,7 +2602,7 @@ describe("deriveMessagesTimelineRows", () => {
       expect(answer.connectorProposalIds).toEqual(["paper"]);
       expect(rows.some((row) => row.id === proposal.id)).toBe(false);
       expect(collapsedSignature(answer)).toEqual(
-        collapseFinishedTurns ? ["work:w1", "work:w2"] : [],
+        transcriptDetail === "standard" ? ["work:w1", "work:w2"] : [],
       );
     },
   );
@@ -2960,7 +2960,7 @@ describe("deriveMessagesTimelineRows", () => {
       const rows = deriveMessagesTimelineRows({
         ...baseInput,
         conversationOnly: true,
-        collapseFinishedTurns: true,
+        transcriptDetail: "standard",
         timelineEntries: [
           userEntry("u1", "2026-01-01T00:00:00Z"),
           ...(position === "before" ? [warning, assistant] : [assistant, warning]),

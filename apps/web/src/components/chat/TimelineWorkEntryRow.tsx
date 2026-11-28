@@ -78,6 +78,7 @@ import { SynaraLogo } from "@synara/profile-ui/logo";
 import { ToolCallDetailsContent } from "./ToolCallDetailsDialog";
 import { DisclosureChevron } from "../ui/DisclosureChevron";
 import { DisclosureRegion } from "../ui/DisclosureRegion";
+import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { fileDiffStatsByPath, resolveFileDiffStatByChangedPath } from "~/lib/diffTheme";
 import {
@@ -608,13 +609,10 @@ function isFileChangeWorkEntry(workEntry: TimelineWorkEntry): boolean {
   return isFileChangeWorkLogEntry(workEntry);
 }
 
-// Item-scoped reasoning and summaries keep full prose. Legacy reasoning groups
-// only carry a compact preview; their existing opener retains all original updates.
+// Summaries keep full prose. Reasoning has its own surface now, and legacy
+// reasoning groups keep their existing opener for the original updates.
 function isProseWorkEntry(workEntry: TimelineWorkEntry): boolean {
-  return (
-    (isReasoningUpdateWorkEntry(workEntry) && Boolean(workEntry.toolCallId)) ||
-    workEntry.activityKind === "tool.summary"
-  );
+  return workEntry.activityKind === "tool.summary";
 }
 
 function proseWorkEntryText(workEntry: TimelineWorkEntry, displayText: string): string | null {
@@ -622,6 +620,77 @@ function proseWorkEntryText(workEntry: TimelineWorkEntry, displayText: string): 
   // Codex summaries end in an empty `<!-- -->` block separator.
   const text = source.replace(/<!--[\s\S]*?-->/gu, "").trim();
   return text.length > 0 ? text : null;
+}
+
+// One reasoning block, from the provider's first delta to its last: a muted
+// labelled line while it is closed, the whole trace while it is open. A trace
+// that is still streaming stays open so the reader watches it arrive.
+function ReasoningTraceRow(props: {
+  workEntry: TimelineWorkEntry;
+  textFontSizePx: number | undefined;
+  markdownCwd: string | undefined;
+  threadId: string | null | undefined;
+  mutedProse: boolean | undefined;
+  reasoningExpanded: boolean;
+  onImageExpand: (preview: ExpandedImagePreview) => void;
+}) {
+  const { t } = useTranslation();
+  const { workEntry } = props;
+  const trace = proseWorkEntryText(workEntry, workEntry.detail ?? "");
+  const live = workEntry.reasoningStatus === "inProgress";
+  const [userOpen, setUserOpen] = useState<boolean | null>(null);
+  const open = userOpen ?? (live || props.reasoningExpanded);
+  if (!trace) return null;
+  const firstLine =
+    trace
+      .split(/\r?\n/u)
+      .find((line) => line.trim().length > 0)
+      ?.trim() ?? "";
+  return (
+    <div className="py-1" data-work-entry-reasoning="true">
+      <Collapsible open={open} onOpenChange={setUserOpen}>
+        <CollapsibleTrigger
+          className={cn(
+            "group/reasoning flex w-full items-baseline gap-1.5 text-left",
+            MUTED_LABEL_TEXT_CLASS_NAME,
+          )}
+          style={{ fontSize: `${props.textFontSizePx ?? 13}px` }}
+        >
+          <span className="shrink-0">{t("chat:timeline_thinking")}</span>
+          {open ? null : (
+            <span className="min-w-0 flex-1 truncate text-muted-foreground/70">{firstLine}</span>
+          )}
+          <DisclosureChevron
+            open={open}
+            className={cn("text-muted-foreground/70", open ? null : "shrink-0")}
+          />
+        </CollapsibleTrigger>
+        <CollapsiblePanel>
+          <div
+            className={cn(
+              "mt-1 border-l-2 border-border/60 pl-3",
+              props.mutedProse ? "opacity-80" : null,
+            )}
+          >
+            <ChatMarkdown
+              text={trace}
+              cwd={props.markdownCwd}
+              threadId={props.threadId}
+              directionMode="auto-blocks"
+              // A growing trace arrives as whole previews; the smooth-reveal loop
+              // belongs to the answer, not to a row that re-renders per preview.
+              isStreaming={false}
+              style={{
+                ...getChatTranscriptTextStyle(props.textFontSizePx),
+                color: MUTED_LABEL_TEXT_COLOR,
+              }}
+              onImageExpand={props.onImageExpand}
+            />
+          </div>
+        </CollapsiblePanel>
+      </Collapsible>
+    </div>
+  );
 }
 
 function commandTooltipContent(command: string, displayText: string) {
@@ -681,6 +750,8 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
   textFontSizePx?: number;
   density?: "default" | "compact";
   mutedProse?: boolean;
+  /** Open reasoning traces by default; the full transcript level sets this. */
+  reasoningExpanded?: boolean;
   fileDiffStatByPath?: ReadonlyMap<string, { additions: number; deletions: number }>;
   markdownCwd: string | undefined;
   threadId?: string | null | undefined;
@@ -704,6 +775,7 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
     textFontSizePx: textFontSizePxProp,
     density: densityProp,
     mutedProse,
+    reasoningExpanded,
     fileDiffStatByPath,
     markdownCwd,
     threadId,
@@ -854,6 +926,27 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
           {...(onOpenAutomation ? { onOpen: () => onOpenAutomation(automation.id) } : {})}
         />
       </div>
+    );
+  }
+
+  // Provider reasoning is never assistant narration: it keeps its own labelled,
+  // muted surface so a reader can always tell what the agent thought from what
+  // it said, and it opens to the full trace. A canonical reasoning item is one
+  // block per row; legacy compacted updates keep their existing drill-in.
+  if (
+    isReasoningUpdateWorkEntry(workEntry) &&
+    (workEntry.reasoningStatus !== undefined || workEntry.toolCallId !== undefined)
+  ) {
+    return (
+      <ReasoningTraceRow
+        workEntry={workEntry}
+        textFontSizePx={textFontSizePx}
+        markdownCwd={markdownCwd}
+        threadId={threadId}
+        mutedProse={mutedProse}
+        reasoningExpanded={reasoningExpanded === true}
+        onImageExpand={onImageExpand}
+      />
     );
   }
 

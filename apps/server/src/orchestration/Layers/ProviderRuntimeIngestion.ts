@@ -477,22 +477,16 @@ function reasoningSummaryBufferKey(
   event: ProviderRuntimeEvent,
   threadId = event.threadId,
 ): string | null {
-  if (
-    (event.provider !== "codex" &&
-      event.provider !== "antigravity" &&
-      event.provider !== "claudeAgent" &&
-      event.provider !== "opencode") ||
-    !event.itemId
-  ) {
+  if (!event.itemId) {
     return null;
   }
   if (
     event.type === "content.delta" &&
     (event.payload.streamKind === "reasoning_summary_text" ||
-      ((event.provider === "antigravity" ||
-        event.provider === "claudeAgent" ||
-        event.provider === "opencode") &&
-        event.payload.streamKind === "reasoning_text"))
+      // Codex streams raw reasoning content beside its own summary and keeps the
+      // raw content out of transcript rows (see `reasoningSummaryDetail` in the
+      // Codex adapter); every other provider's reasoning text is the trace.
+      (event.payload.streamKind === "reasoning_text" && event.provider !== "codex"))
   ) {
     return [threadId, event.turnId ?? "no-turn", event.itemId].join(":");
   }
@@ -1217,12 +1211,11 @@ const make = Effect.gen(function* () {
     threadId: ThreadId,
     activity: OrchestrationThreadActivity,
   ) {
-    const isClaudeReasoning =
-      event.provider === "claudeAgent" &&
+    const isReasoningActivity =
       (event.type === "item.updated" || event.type === "item.completed") &&
       event.payload.itemType === "reasoning";
     const hasStableActivity =
-      isClaudeReasoning || providerRuntimeCommandProgressKey(event) !== undefined;
+      isReasoningActivity || providerRuntimeCommandProgressKey(event) !== undefined;
     let updatedAt: string | undefined;
     if (hasStableActivity) {
       const cached = Option.getOrUndefined(yield* Cache.getOption(stableActivityById, activity.id));
@@ -1565,13 +1558,14 @@ const make = Effect.gen(function* () {
   const getBufferedReasoningSummary = (key: string) =>
     Cache.getOption(bufferedReasoningSummaryByKey, key).pipe(Effect.map(Option.getOrUndefined));
 
-  // Publish one stable row while Claude thinks, without a projection write for every token.
-  // Event time keeps the same coalescing behavior when the runtime journal is replayed.
+  // Publish one stable row while the agent thinks, without a projection write for
+  // every token. Event time keeps the same coalescing behavior when the runtime
+  // journal is replayed.
   const publishReasoningPreview = Effect.fnUntraced(function* (key: string, threadId: ThreadId) {
     const summary = Option.getOrUndefined(
       yield* Cache.getOption(bufferedReasoningSummaryByKey, key),
     );
-    if (!summary || summary.sourceEvent.provider !== "claudeAgent") return;
+    if (!summary) return;
     const previewAt = Date.parse(summary.sourceEvent.createdAt);
     if (
       summary.lastPreviewAt !== undefined &&
@@ -1623,10 +1617,7 @@ const make = Effect.gen(function* () {
                   ),
                   threadId,
                   type: "item.completed",
-                  ...(summary.sourceEvent.provider === "claudeAgent" ||
-                  summary.sourceEvent.provider === "opencode"
-                    ? { createdAt: summary.createdAt }
-                    : {}),
+                  createdAt: summary.createdAt,
                   payload: {
                     itemType: "reasoning",
                     status,
@@ -1637,10 +1628,7 @@ const make = Effect.gen(function* () {
                 // Consume the buffer only once its row is durable, so a retried
                 // terminal event can still settle it.
                 return Effect.forEach(
-                  projectProviderRuntimeActivities(
-                    completionEvent,
-                    summary.sourceEvent.provider === "claudeAgent" ? summary.sequence : undefined,
-                  ),
+                  projectProviderRuntimeActivities(completionEvent, summary.sequence),
                   (activity) => dispatchActivityUpdate(completionEvent, threadId, activity),
                 ).pipe(Effect.andThen(Cache.invalidate(bufferedReasoningSummaryByKey, key)));
               }),
@@ -4057,9 +4045,8 @@ const make = Effect.gen(function* () {
       const activityEvent =
         event.type === "item.completed" && reasoningSummaryKey
           ? withBufferedReasoningSummary(
-              event.provider === "claudeAgent" && completedReasoning
-                ? { ...event, createdAt: completedReasoning.createdAt }
-                : event,
+              // The row keeps where reasoning started, not where its item closed.
+              completedReasoning ? { ...event, createdAt: completedReasoning.createdAt } : event,
               completedReasoning,
             )
           : completedToolOutputKey
@@ -4095,9 +4082,7 @@ const make = Effect.gen(function* () {
       const snapshotKey = providerRuntimeProgressKey(event);
       const activities = projectProviderRuntimeActivities(
         scopedActivityEvent,
-        event.provider === "claudeAgent"
-          ? (completedReasoning?.sequence ?? runtimeSequence)
-          : runtimeSequence,
+        completedReasoning?.sequence ?? runtimeSequence,
       );
       if (rebuildAcceptedProgress && snapshotKey !== undefined) {
         // Acknowledgement also covers suppressed snapshots. Only restore a
