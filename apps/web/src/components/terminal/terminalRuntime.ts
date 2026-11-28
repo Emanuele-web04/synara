@@ -62,6 +62,7 @@ const VISUAL_RESIZE_MIN_INTERVAL_MS = 64;
 const BACKEND_RESIZE_DEBOUNCE_MS = 120;
 const WRITE_BATCH_SIZE_LIMIT = 262_144;
 const WRITE_BATCH_MAX_LATENCY_MS = 50;
+const HIDDEN_OUTPUT_BUFFER_MAX_BYTES = 131_072;
 const LINK_MATCH_CACHE_LIMIT = 512;
 const OPEN_SNAPSHOT_RECONCILE_DELAY_MS = 250;
 const TERMINAL_TEXT_ENCODER = new TextEncoder();
@@ -149,10 +150,87 @@ function scheduleFontSettleRefit(entry: TerminalRuntimeEntry): void {
   });
 }
 
+function isEntryActivelyVisible(entry: TerminalRuntimeEntry): boolean {
+  return entry.container !== null && entry.viewState.isVisible;
+}
+
+function setTerminalCursorBlink(entry: TerminalRuntimeEntry, blink: boolean): void {
+  if (entry.terminal.options.cursorBlink !== blink) {
+    entry.terminal.options.cursorBlink = blink;
+  }
+}
+
+function clearHiddenOutputBuffer(entry: TerminalRuntimeEntry): void {
+  entry.hiddenOutputChunks.length = 0;
+  entry.hiddenOutputBytes = 0;
+}
+
+function bufferHiddenOutput(entry: TerminalRuntimeEntry, data: string, byteLength: number): void {
+  // Always ACK immediately while hidden so backend PTY flow control never stalls
+  // a running command in a background thread.
+  acknowledgeParsedOutput(entry, byteLength);
+  if (entry.needsSnapshotReconcileOnShow) {
+    return;
+  }
+  if (entry.hiddenOutputBytes + byteLength <= HIDDEN_OUTPUT_BUFFER_MAX_BYTES) {
+    entry.hiddenOutputChunks.push(data);
+    entry.hiddenOutputBytes += byteLength;
+    return;
+  }
+  clearHiddenOutputBuffer(entry);
+  entry.needsSnapshotReconcileOnShow = true;
+}
+
+function parkPendingWritesWhileHidden(entry: TerminalRuntimeEntry): void {
+  if (entry.writeRafHandle !== null) {
+    window.cancelAnimationFrame(entry.writeRafHandle);
+    entry.writeRafHandle = null;
+  }
+  if (entry.writeFlushTimeout !== null) {
+    window.clearTimeout(entry.writeFlushTimeout);
+    entry.writeFlushTimeout = null;
+  }
+  if (entry.pendingWrites.length === 0) {
+    entry.pendingWriteLength = 0;
+    entry.pendingWriteBytes = 0;
+    return;
+  }
+  const combined = entry.pendingWrites.map((write) => write.data).join("");
+  const byteLength = entry.pendingWriteBytes;
+  entry.pendingWrites.length = 0;
+  entry.pendingWriteLength = 0;
+  entry.pendingWriteBytes = 0;
+  bufferHiddenOutput(entry, combined, byteLength);
+}
+
+function wakeHiddenEntryForDisplay(entry: TerminalRuntimeEntry): void {
+  if (entry.disposed) return;
+  setTerminalCursorBlink(entry, true);
+  if (entry.pendingThemeSync) {
+    entry.pendingThemeSync = false;
+    syncTheme(entry);
+  }
+  if (entry.needsSnapshotReconcileOnShow) {
+    entry.needsSnapshotReconcileOnShow = false;
+    clearHiddenOutputBuffer(entry);
+    if (entry.opened && !entry.hasHandledExit) {
+      reconcileTerminalSnapshot(entry);
+    }
+    return;
+  }
+  if (entry.hiddenOutputChunks.length > 0) {
+    const combined = entry.hiddenOutputChunks.join("");
+    clearHiddenOutputBuffer(entry);
+    entry.terminal.write(combined);
+  }
+}
+
 function resetForSnapshotReplay(entry: TerminalRuntimeEntry): void {
   entry.titleInputBuffer = "";
   entry.linkMatchCache.clear();
   clearPendingWrites(entry);
+  clearHiddenOutputBuffer(entry);
+  entry.needsSnapshotReconcileOnShow = false;
   entry.terminal.write("\u001bc");
 }
 
@@ -539,10 +617,10 @@ function syncTheme(entry: TerminalRuntimeEntry): void {
   if (shouldClearTextureAtlas) {
     scheduleFontSettleRefit(entry);
   }
-  if (entry.viewState.isVisible) {
+  if (isEntryActivelyVisible(entry)) {
     runTerminalResize(entry, { clearTextureAtlas: shouldClearTextureAtlas, refresh: true });
   } else {
-    entry.terminal.refresh(0, Math.max(0, entry.terminal.rows - 1));
+    entry.pendingThemeSync = true;
   }
 }
 
@@ -870,6 +948,11 @@ export function createRuntimeEntry(config: TerminalRuntimeConfig): TerminalRunti
       isVisible: false,
     },
     unsubscribeTerminalEvents: null,
+    pendingThemeSync: false,
+    hiddenOutputChunks: [],
+    hiddenOutputBytes: 0,
+    needsSnapshotReconcileOnShow: false,
+    lastDetachedAt: null,
   };
   if (config.runtimeEnv !== undefined) {
     entry.runtimeEnv = config.runtimeEnv;
@@ -900,7 +983,12 @@ export function createRuntimeEntry(config: TerminalRuntimeConfig): TerminalRunti
   const unsubscribeTransportState = addWsTransportStateListener((state) => {
     if (entry.disposed || !entry.opened || entry.hasHandledExit) return;
     if (state === "open") {
-      reconcileTerminalSnapshot(entry);
+      if (isEntryActivelyVisible(entry)) {
+        reconcileTerminalSnapshot(entry);
+      } else {
+        clearHiddenOutputBuffer(entry);
+        entry.needsSnapshotReconcileOnShow = true;
+      }
       return;
     }
     if (state === "connecting" || state === "closed") {
@@ -1023,9 +1111,17 @@ export function createRuntimeEntry(config: TerminalRuntimeConfig): TerminalRunti
   );
 
   entry.themeObserver = new MutationObserver(() => {
+    if (!isEntryActivelyVisible(entry)) {
+      entry.pendingThemeSync = true;
+      return;
+    }
     if (entry.themeRefreshFrame !== 0) return;
     entry.themeRefreshFrame = window.requestAnimationFrame(() => {
       entry.themeRefreshFrame = 0;
+      if (!isEntryActivelyVisible(entry)) {
+        entry.pendingThemeSync = true;
+        return;
+      }
       syncTheme(entry);
     });
   });
@@ -1041,12 +1137,24 @@ export function createRuntimeEntry(config: TerminalRuntimeConfig): TerminalRunti
       if (event.type === "output") {
         setRuntimeStatus(entry, "ready");
         entry.outputEventVersion += 1;
-        scheduleWrite(entry, event.data, event.byteLength ?? terminalByteLength(event.data));
+        const byteLength = event.byteLength ?? terminalByteLength(event.data);
+        if (!isEntryActivelyVisible(entry)) {
+          bufferHiddenOutput(entry, event.data, byteLength);
+          return;
+        }
+        scheduleWrite(entry, event.data, byteLength);
         return;
       }
 
       if (event.type === "started" || event.type === "restarted") {
         entry.hasHandledExit = false;
+        if (!isEntryActivelyVisible(entry)) {
+          clearPendingWrites(entry);
+          clearHiddenOutputBuffer(entry);
+          entry.needsSnapshotReconcileOnShow = true;
+          setRuntimeStatus(entry, "ready");
+          return;
+        }
         const shouldReplaySnapshot =
           event.type === "restarted" || snapshotHasReplayPayload(event.snapshot);
         if (shouldReplaySnapshot) {
@@ -1061,6 +1169,11 @@ export function createRuntimeEntry(config: TerminalRuntimeConfig): TerminalRunti
         entry.titleInputBuffer = "";
         entry.linkMatchCache.clear();
         clearPendingWrites(entry);
+        clearHiddenOutputBuffer(entry);
+        if (!isEntryActivelyVisible(entry)) {
+          entry.needsSnapshotReconcileOnShow = true;
+          return;
+        }
         terminal.clear();
         terminal.write("\u001bc");
         return;
@@ -1237,10 +1350,16 @@ export function attachRuntimeToContainer(
   if (entry.container !== container) {
     detachRuntimeFromContainer(entry);
     entry.container = container;
+    entry.lastDetachedAt = null;
     container.append(entry.wrapper);
   }
 
   updateRuntimeViewState(entry, viewState);
+  if (viewState.isVisible) {
+    wakeHiddenEntryForDisplay(entry);
+  } else {
+    setTerminalCursorBlink(entry, false);
+  }
   maybeLoadWebglAddon(entry);
   ensureResizeObserver(entry);
   startVisibilityRecovery(entry);
@@ -1256,6 +1375,7 @@ export function updateRuntimeViewState(
 
   if (entry.container) {
     if (nextViewState.isVisible && !wasVisible) {
+      wakeHiddenEntryForDisplay(entry);
       maybeLoadWebglAddon(entry);
       applyInitialVisualResize(entry);
       ensureResizeObserver(entry);
@@ -1265,6 +1385,8 @@ export function updateRuntimeViewState(
       stopVisibilityRecovery(entry);
       disposeWebglAddon(entry);
       clearAttachDisposables(entry);
+      parkPendingWritesWhileHidden(entry);
+      setTerminalCursorBlink(entry, false);
     }
   }
 
@@ -1279,9 +1401,12 @@ export function detachRuntimeFromContainer(entry: TerminalRuntimeEntry): void {
   disposeWebglAddon(entry);
   clearAttachDisposables(entry);
   clearBackendResizeTimer(entry);
+  parkPendingWritesWhileHidden(entry);
+  setTerminalCursorBlink(entry, false);
   entry.pendingResize = null;
   entry.lastSentResize = null;
   entry.lastVisualResizeAt = 0;
+  entry.lastDetachedAt = Date.now();
   getTerminalParkingContainer().append(entry.wrapper);
   entry.container = null;
 }
@@ -1292,6 +1417,9 @@ export function disposeRuntimeEntry(entry: TerminalRuntimeEntry): void {
   // Closing a terminal should not synchronously paint queued output into a buffer
   // that is about to be destroyed; acknowledge and drop it to keep close latency low.
   clearPendingWrites(entry);
+  clearHiddenOutputBuffer(entry);
+  entry.needsSnapshotReconcileOnShow = false;
+  entry.wrapper.remove();
   entry.unsubscribeTerminalEvents?.();
   entry.unsubscribeTerminalEvents = null;
   entry.querySuppressionDispose?.();

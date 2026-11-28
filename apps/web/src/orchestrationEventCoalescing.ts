@@ -35,6 +35,24 @@ function mergeThreadMessageSentEvents(
 }
 
 /**
+ * Streaming token deltas and activity updates for threads that are not currently
+ * visible can be coalesced at a lower cadence without affecting the active thread,
+ * sidebar shell status, or Remote/iOS clients.
+ */
+export function isDeferrableBackgroundDomainEvent(
+  event: OrchestrationEvent,
+  isThreadVisible: boolean,
+): boolean {
+  if (isThreadVisible) {
+    return false;
+  }
+  if (event.type === "thread.message-sent") {
+    return event.payload.streaming === true && event.payload.role === "assistant";
+  }
+  return event.type === "thread.activity-appended";
+}
+
+/**
  * Only unrelated threads may intervene between merged deltas. Even a streaming
  * message updates turn state and diff bindings, so every other event in its own
  * thread is an ordering barrier. Project/space events can affect multiple threads.

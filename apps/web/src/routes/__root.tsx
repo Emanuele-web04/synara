@@ -72,6 +72,7 @@ import WhatsNewDialog from "../components/WhatsNewDialog";
 import { useWhatsNew } from "../whatsNew/useWhatsNew";
 import { WhatsNewPopoutCard } from "../whatsNew/WhatsNewPopoutCard";
 import { shouldRenderTerminalWorkspace } from "../components/ChatView.logic";
+import { terminalEventDispatcher } from "../components/terminal/terminalEventDispatcher";
 import { Button, dialogActionButtonClassName } from "../components/ui/button";
 import { AnchoredToastProvider, ToastProvider, toastManager } from "../components/ui/toast";
 import { useGitProgressToastPreview } from "../components/useGitProgressToastPreview";
@@ -132,9 +133,11 @@ import { TaskCompletionNotifications } from "../notifications/taskCompletion";
 import { useWorkspacePathsStore } from "../workspacePathsStore";
 import {
   isThreadDetailRetained,
+  isThreadDetailVisible,
   resolveThreadDetailSubscriptionLeaseIds,
   setVisibleThreadDetailIds,
   subscribeThreadDetailEvictions,
+  subscribeVisibleThreadDetailIds,
   useRetainedThreadDetailIds,
 } from "../threadDetailSubscriptionRetention";
 import {
@@ -159,7 +162,10 @@ import {
   isTerminalThreadSessionStatus,
 } from "./-threadTerminalFence";
 import { getThreadFromState, getThreadsFromState } from "../threadDerivation";
-import { coalesceOrchestrationUiEvents } from "../orchestrationEventCoalescing";
+import {
+  coalesceOrchestrationUiEvents,
+  isDeferrableBackgroundDomainEvent,
+} from "../orchestrationEventCoalescing";
 import {
   isLiveThreadStreamDelivering,
   isThreadDetailVerifiedInSync,
@@ -1433,6 +1439,14 @@ function EventRouter() {
     let pendingTurnDiffInvalidationThreadIds = new Set<ThreadId>();
     let pendingStudioOutputInvalidationThreadIds = new Set<ThreadId>();
     let pendingDomainEvents: OrchestrationEvent[] = [];
+    // Background threads' streaming deltas/activities coalesce at a lower cadence
+    // so offscreen agents keep running on the server without forcing 10Hz store
+    // commits in the renderer. Drained synchronously whenever a thread becomes
+    // visible or receives a non-deferrable lifecycle event.
+    const pendingBackgroundDomainEventsByThread = new Map<ThreadId, OrchestrationEvent[]>();
+    let backgroundDomainEventFlushTimer: number | null = null;
+    const BACKGROUND_DOMAIN_EVENT_FLUSH_VISIBLE_MS = 1_000;
+    const BACKGROUND_DOMAIN_EVENT_FLUSH_HIDDEN_MS = 2_500;
     const immediatelyFlushedAssistantMessageIds = new Set<string>();
     // Set while a batched cursor-resume replay is being queued: the batch ends
     // with one synchronous flush, so no event inside it may flush on its own.
@@ -2040,7 +2054,81 @@ function EventRouter() {
       removeOrphanedTerminalRuntimes(activeThreadIds);
     };
 
-    const flushPendingDomainEvents = () => {
+    const clearBackgroundDomainEventFlushTimer = () => {
+      if (backgroundDomainEventFlushTimer !== null) {
+        window.clearTimeout(backgroundDomainEventFlushTimer);
+        backgroundDomainEventFlushTimer = null;
+      }
+    };
+
+    const drainAllBackgroundDomainEvents = (): OrchestrationEvent[] => {
+      clearBackgroundDomainEventFlushTimer();
+      if (pendingBackgroundDomainEventsByThread.size === 0) {
+        return [];
+      }
+      const drained: OrchestrationEvent[] = [];
+      for (const events of pendingBackgroundDomainEventsByThread.values()) {
+        for (const event of events) {
+          drained.push(event);
+        }
+      }
+      pendingBackgroundDomainEventsByThread.clear();
+      return drained;
+    };
+
+    const flushPendingBackgroundDomainEvents = (onlyVisible = false) => {
+      if (pendingBackgroundDomainEventsByThread.size === 0) {
+        clearBackgroundDomainEventFlushTimer();
+        return;
+      }
+      if (!onlyVisible) {
+        const drained = drainAllBackgroundDomainEvents();
+        if (drained.length > 0) {
+          applyOrchestrationEventsHotPath(coalesceOrchestrationUiEvents(drained));
+        }
+        return;
+      }
+      const drained: OrchestrationEvent[] = [];
+      for (const [threadId, events] of [...pendingBackgroundDomainEventsByThread.entries()]) {
+        if (!isThreadDetailVisible(threadId)) continue;
+        pendingBackgroundDomainEventsByThread.delete(threadId);
+        for (const event of events) {
+          drained.push(event);
+        }
+      }
+      if (pendingBackgroundDomainEventsByThread.size === 0) {
+        clearBackgroundDomainEventFlushTimer();
+      }
+      if (drained.length > 0) {
+        applyOrchestrationEventsHotPath(coalesceOrchestrationUiEvents(drained));
+      }
+    };
+
+    const scheduleBackgroundDomainEventFlush = () => {
+      if (backgroundDomainEventFlushTimer !== null || disposed) {
+        return;
+      }
+      const delayMs =
+        typeof document !== "undefined" && document.visibilityState === "hidden"
+          ? BACKGROUND_DOMAIN_EVENT_FLUSH_HIDDEN_MS
+          : BACKGROUND_DOMAIN_EVENT_FLUSH_VISIBLE_MS;
+      backgroundDomainEventFlushTimer = window.setTimeout(() => {
+        backgroundDomainEventFlushTimer = null;
+        if (disposed) return;
+        flushPendingBackgroundDomainEvents(false);
+      }, delayMs);
+    };
+
+    const flushPendingDomainEvents = (options?: { readonly includeBackground?: boolean }) => {
+      if (options?.includeBackground) {
+        const backgroundEvents = drainAllBackgroundDomainEvents();
+        if (backgroundEvents.length > 0) {
+          pendingDomainEvents =
+            pendingDomainEvents.length > 0
+              ? [...backgroundEvents, ...pendingDomainEvents]
+              : backgroundEvents;
+        }
+      }
       if (pendingDomainEvents.length > 0) {
         applyOrchestrationEventsHotPath(coalesceOrchestrationUiEvents(pendingDomainEvents));
         pendingDomainEvents = [];
@@ -2140,11 +2228,43 @@ function EventRouter() {
     // regress newer session state.
     const flushQueuedDomainEventsBeforeSnapshot = () => {
       domainEventFlushThrottler.cancel();
-      flushPendingDomainEvents();
+      flushPendingDomainEvents({ includeBackground: true });
     };
 
     const queueDomainEvent = (event: OrchestrationEvent) => {
-      pendingDomainEvents.push(event);
+      const eventThreadId =
+        "threadId" in event.payload ? ThreadId.makeUnsafe(String(event.payload.threadId)) : null;
+      const isVisible = eventThreadId === null ? true : isThreadDetailVisible(eventThreadId);
+      const deferBackground =
+        !queueingThreadReplayBatch &&
+        eventThreadId !== null &&
+        isDeferrableBackgroundDomainEvent(event, isVisible);
+
+      if (deferBackground) {
+        const existing = pendingBackgroundDomainEventsByThread.get(eventThreadId);
+        if (existing) {
+          existing.push(event);
+        } else {
+          pendingBackgroundDomainEventsByThread.set(eventThreadId, [event]);
+        }
+      } else {
+        // Preserve per-thread event order: drain any buffered background deltas
+        // for this thread ahead of a non-deferrable lifecycle/settled event.
+        if (eventThreadId !== null) {
+          const buffered = pendingBackgroundDomainEventsByThread.get(eventThreadId);
+          if (buffered && buffered.length > 0) {
+            pendingBackgroundDomainEventsByThread.delete(eventThreadId);
+            for (const bufferedEvent of buffered) {
+              pendingDomainEvents.push(bufferedEvent);
+            }
+          }
+          if (pendingBackgroundDomainEventsByThread.size === 0) {
+            clearBackgroundDomainEventFlushTimer();
+          }
+        }
+        pendingDomainEvents.push(event);
+      }
+
       if (shouldInvalidateProviderQueriesForEvent(event)) {
         needsProviderInvalidation = true;
       }
@@ -2169,6 +2289,21 @@ function EventRouter() {
         } else {
           needsBroadGitInvalidation = true;
         }
+      }
+      if (deferBackground) {
+        scheduleBackgroundDomainEventFlush();
+        if (
+          needsProviderInvalidation ||
+          needsBroadGitInvalidation ||
+          pendingTurnDiffInvalidationThreadIds.size > 0 ||
+          pendingProjectFileInvalidationThreadIds.size > 0 ||
+          pendingStudioOutputInvalidationThreadIds.size > 0 ||
+          pendingGitInvalidationThreadIds.size > 0 ||
+          pendingLocalGitInvalidationThreadIds.size > 0
+        ) {
+          domainEventFlushThrottler.maybeExecute();
+        }
+        return;
       }
       if (
         shouldFlushDomainEventImmediately(event, immediatelyFlushedAssistantMessageIds) &&
@@ -2597,7 +2732,7 @@ function EventRouter() {
           queueingThreadReplayBatch = false;
         }
         domainEventFlushThrottler.cancel();
-        flushPendingDomainEvents();
+        flushPendingDomainEvents({ includeBackground: true });
         return;
       }
       applyThreadStreamEvent(item.event);
@@ -2695,7 +2830,53 @@ function EventRouter() {
       pendingThreadEventsById.set(threadId, createPreSnapshotThreadEventBuffer());
       void refreshThreadSnapshot(threadId);
     });
+    const pendingHibernatedTerminalAckBytes = new Map<
+      string,
+      { threadId: string; terminalId: string; bytes: number }
+    >();
+    let hibernatedTerminalAckTimer: number | null = null;
+    const flushHibernatedTerminalAcks = () => {
+      if (hibernatedTerminalAckTimer !== null) {
+        window.clearTimeout(hibernatedTerminalAckTimer);
+        hibernatedTerminalAckTimer = null;
+      }
+      if (pendingHibernatedTerminalAckBytes.size === 0) return;
+      const entries = [...pendingHibernatedTerminalAckBytes.values()];
+      pendingHibernatedTerminalAckBytes.clear();
+      const ackOutput = api.terminal.ackOutput;
+      if (typeof ackOutput !== "function") return;
+      for (const entry of entries) {
+        void ackOutput(entry).catch(() => undefined);
+      }
+    };
     const unsubTerminalEvent = api.terminal.onEvent((event) => {
+      if (
+        event.type === "output" &&
+        !terminalEventDispatcher.hasListeners(event.threadId, event.terminalId)
+      ) {
+        // Keep backend PTY flow control moving when a background thread's xterm
+        // runtime is hibernated/disposed so background commands never stall.
+        const bytes = event.byteLength ?? event.data.length;
+        if (bytes > 0) {
+          const key = `${event.threadId}::${event.terminalId}`;
+          const existing = pendingHibernatedTerminalAckBytes.get(key);
+          if (existing) {
+            existing.bytes += bytes;
+          } else {
+            pendingHibernatedTerminalAckBytes.set(key, {
+              threadId: event.threadId,
+              terminalId: event.terminalId,
+              bytes,
+            });
+          }
+          if ((existing?.bytes ?? bytes) >= 32_768) {
+            flushHibernatedTerminalAcks();
+          } else if (hibernatedTerminalAckTimer === null) {
+            hibernatedTerminalAckTimer = window.setTimeout(flushHibernatedTerminalAcks, 200);
+          }
+        }
+        return;
+      }
       const terminalThreadId = ThreadId.makeUnsafe(event.threadId);
       if (event.type === "activity") {
         const terminalStore = useTerminalStateStore.getState();
@@ -2908,7 +3089,38 @@ function EventRouter() {
     });
     subscribed = true;
     void ensureScopedSubscriptions();
+    const unsubscribeVisibleThreads = subscribeVisibleThreadDetailIds(() => {
+      if (disposed) return;
+      flushPendingBackgroundDomainEvents(true);
+    });
+    let hiddenCatchupTickCount = 0;
+    const handleDocumentVisibilityChange = () => {
+      if (disposed || document.visibilityState !== "visible") return;
+      hiddenCatchupTickCount = 0;
+      flushPendingBackgroundDomainEvents(true);
+    };
+    if (typeof document !== "undefined") {
+      document.addEventListener("visibilitychange", handleDocumentVisibilityChange);
+    }
     const threadDetailCatchupInterval = window.setInterval(() => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+        hiddenCatchupTickCount += 1;
+        let hasUrgentPendingDispatch = false;
+        for (const threadId of subscribedThreadIds) {
+          if (hasPendingTurnDispatch(threadId)) {
+            hasUrgentPendingDispatch = true;
+            break;
+          }
+        }
+        // When the window is hidden/unfocused, throttle non-urgent catchup ticks
+        // to every 5th tick (~7.5s instead of 1.5s). Agent work runs server-side
+        // and Remote/iOS clients connect directly to the server.
+        if (!hasUrgentPendingDispatch && hiddenCatchupTickCount % 5 !== 0) {
+          return;
+        }
+      } else {
+        hiddenCatchupTickCount = 0;
+      }
       const now = Date.now();
       let availableProjectionReconcileSlots = Math.max(
         0,
@@ -2998,8 +3210,14 @@ function EventRouter() {
     }, THREAD_DETAIL_CATCHUP_INTERVAL_MS);
 
     return () => {
-      flushPendingDomainEvents();
+      flushPendingDomainEvents({ includeBackground: true });
       disposed = true;
+      clearBackgroundDomainEventFlushTimer();
+      flushHibernatedTerminalAcks();
+      unsubscribeVisibleThreads();
+      if (typeof document !== "undefined") {
+        document.removeEventListener("visibilitychange", handleDocumentVisibilityChange);
+      }
       if (shellSnapshotFallbackTimer !== null) {
         window.clearTimeout(shellSnapshotFallbackTimer);
         shellSnapshotFallbackTimer = null;

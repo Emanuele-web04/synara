@@ -33,6 +33,11 @@ class TerminalEventDispatcher {
     };
   }
 
+  hasListeners(threadId: string, terminalId: string): boolean {
+    const listeners = this.listenersByKey.get(terminalEventKey(threadId, terminalId));
+    return listeners !== undefined && listeners.size > 0;
+  }
+
   private ensureSharedListener(): void {
     if (this.unsubscribeSharedListener) return;
     const api = readNativeApi();

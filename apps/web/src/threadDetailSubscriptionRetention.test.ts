@@ -5,12 +5,14 @@ import {
   MAX_CACHED_THREAD_DETAIL_SUBSCRIPTIONS,
   getRetainedThreadDetailIdsSnapshot,
   isThreadDetailRetained,
+  isThreadDetailVisible,
   resetRetainedThreadDetailSubscriptionsForTests,
   resolveThreadDetailSubscriptionLeaseIds,
   retainThreadDetailSubscription,
   setVisibleThreadDetailIds,
   shouldReconcileThreadDetailRetention,
   subscribeThreadDetailEvictions,
+  subscribeVisibleThreadDetailIds,
 } from "./threadDetailSubscriptionRetention";
 
 describe("threadDetailSubscriptionRetention", () => {
@@ -521,5 +523,52 @@ describe("threadDetailSubscriptionRetention", () => {
     // The lease owner evicts on lease drop precisely because retention disclaims it.
     useStore.getState().evictThreadDetail(threadId);
     expect(useStore.getState().messageByThreadId?.[threadId]).toBeUndefined();
+  });
+
+  it("immediately evicts archived threads instead of keeping detail hydrated for 15 minutes", () => {
+    vi.useFakeTimers();
+    const threadId = ThreadId.makeUnsafe("thread-archived-evict");
+    registerIdleSidebarThread(threadId);
+    useStore.setState({
+      messageIdsByThreadId: { [threadId]: [] },
+      messageByThreadId: { [threadId]: {} },
+    });
+
+    const release = retainThreadDetailSubscription(threadId);
+    release();
+    expect(getRetainedThreadDetailIdsSnapshot()).toEqual([threadId]);
+
+    // Archiving the thread triggers immediate eviction on store reconciliation.
+    const existingSummary = useStore.getState().sidebarThreadSummaryById[threadId]!;
+    useStore.setState({
+      sidebarThreadSummaryById: {
+        ...useStore.getState().sidebarThreadSummaryById,
+        [threadId]: {
+          ...existingSummary,
+          archivedAt: "2026-01-02T00:00:00.000Z",
+        },
+      },
+    });
+
+    expect(getRetainedThreadDetailIdsSnapshot()).toEqual([]);
+    expect(useStore.getState().messageByThreadId?.[threadId]).toBeUndefined();
+  });
+
+  it("notifies visibility subscribers synchronously when switching back to a background thread", () => {
+    const threadA = ThreadId.makeUnsafe("thread-vis-a");
+    const threadB = ThreadId.makeUnsafe("thread-vis-b");
+    const observed: boolean[] = [];
+
+    setVisibleThreadDetailIds([threadA]);
+    const unsubscribe = subscribeVisibleThreadDetailIds(() => {
+      observed.push(isThreadDetailVisible(threadB));
+    });
+
+    setVisibleThreadDetailIds([threadB]);
+    expect(observed).toEqual([true]);
+
+    unsubscribe();
+    setVisibleThreadDetailIds([threadA]);
+    expect(observed).toEqual([true]);
   });
 });

@@ -97,4 +97,9 @@ export interface TerminalRuntimeEntry {
   querySuppressionDispose: (() => void) | null;
   viewState: TerminalRuntimeViewState;
   unsubscribeTerminalEvents: (() => void) | null;
+  pendingThemeSync: boolean;
+  hiddenOutputChunks: string[];
+  hiddenOutputBytes: number;
+  needsSnapshotReconcileOnShow: boolean;
+  lastDetachedAt: number | null;
 }

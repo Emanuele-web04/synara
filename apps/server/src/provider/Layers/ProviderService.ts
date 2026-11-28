@@ -146,6 +146,8 @@ export interface ProviderServiceLiveOptions {
   readonly canonicalEventLogPath?: string;
   readonly canonicalEventLogger?: EventNdjsonLogger;
   readonly runtimeIdleStopMs?: number;
+  /** Maximum number of idle, resumable provider CLI processes retained warm concurrently. */
+  readonly maxIdleRuntimes?: number;
   /** Test/embedding override for the lossless runtime-event fan-out budget. */
   readonly runtimeEventBufferCapacity?: number;
   /** Production journal hook. The event must be durable before this effect returns. */
@@ -167,12 +169,20 @@ export interface ProviderServiceLiveOptions {
 }
 
 const DEFAULT_PROVIDER_RUNTIME_IDLE_STOP_MS = 10 * 60 * 1000;
+const DEFAULT_MAX_IDLE_PROVIDER_RUNTIMES = 2;
 export const PROVIDER_RUNTIME_EVENT_BUFFER_CAPACITY = 2_048;
 export const PROVIDER_RUNTIME_QUARANTINE_CAUSE_MAX_BYTES = 16 * 1024;
 const configuredProviderRuntimeIdleStopMs = process.env.SYNARA_PROVIDER_RUNTIME_IDLE_STOP_MS;
 const PROVIDER_RUNTIME_IDLE_STOP_MS = Number.isFinite(Number(configuredProviderRuntimeIdleStopMs))
   ? Math.max(0, Number(configuredProviderRuntimeIdleStopMs))
   : DEFAULT_PROVIDER_RUNTIME_IDLE_STOP_MS;
+const configuredMaxIdleProviderRuntimes = process.env.SYNARA_MAX_IDLE_PROVIDER_RUNTIMES;
+const MAX_IDLE_PROVIDER_RUNTIMES =
+  configuredMaxIdleProviderRuntimes !== undefined &&
+  configuredMaxIdleProviderRuntimes.trim() !== "" &&
+  Number.isFinite(Number(configuredMaxIdleProviderRuntimes))
+    ? Math.max(0, Math.floor(Number(configuredMaxIdleProviderRuntimes)))
+    : DEFAULT_MAX_IDLE_PROVIDER_RUNTIMES;
 const MAX_TARGETED_CHILD_INTERRUPT_TOMBSTONES = 16_384;
 const PROVIDER_OPTIONS_FINGERPRINT_HMAC_SECRET = "provider-options-fingerprint-hmac-key";
 
@@ -1139,6 +1149,13 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       0,
       options?.runtimeIdleStopMs ?? PROVIDER_RUNTIME_IDLE_STOP_MS,
     );
+    const maxIdleProviderRuntimes = Math.max(
+      0,
+      Math.floor(options?.maxIdleRuntimes ?? MAX_IDLE_PROVIDER_RUNTIMES),
+    );
+    // Insertion-ordered LRU of threads currently armed for idle stop (oldest first).
+    // Never includes threads with an active turn or live background runtime tasks.
+    const idleReadyRuntimeOrder = new Map<ThreadId, symbol>();
     let stopIdleRuntimeSession:
       | ((threadId: ThreadId, generation: symbol, cleanupStarted?: boolean) => void)
       | null = null;
@@ -1146,6 +1163,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
     const invalidateRuntimeIdleGeneration = (threadId: ThreadId): symbol => {
       const generation = Symbol(String(threadId));
       runtimeIdleCleanupGenerations.delete(threadId);
+      idleReadyRuntimeOrder.delete(threadId);
       runtimeIdleGenerations.set(threadId, generation);
       return generation;
     };
@@ -1157,6 +1175,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       if (generation === undefined || isRuntimeIdleGenerationCurrent(threadId, generation)) {
         runtimeIdleGenerations.delete(threadId);
         runtimeIdleCleanupGenerations.delete(threadId);
+        idleReadyRuntimeOrder.delete(threadId);
       }
     };
 
@@ -1168,6 +1187,27 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       }
       clearTimeout(timer);
       runtimeIdleTimers.delete(threadId);
+    };
+
+    const evictExcessIdleRuntimes = (excludeThreadId?: ThreadId) => {
+      if (runtimeIdleStopMs <= 0 || idleReadyRuntimeOrder.size <= maxIdleProviderRuntimes) {
+        return;
+      }
+      for (const [candidateThreadId, candidateGeneration] of [...idleReadyRuntimeOrder.entries()]) {
+        if (idleReadyRuntimeOrder.size <= maxIdleProviderRuntimes) {
+          break;
+        }
+        if (candidateThreadId === excludeThreadId) {
+          continue;
+        }
+        idleReadyRuntimeOrder.delete(candidateThreadId);
+        const timer = runtimeIdleTimers.get(candidateThreadId);
+        if (timer) {
+          clearTimeout(timer);
+          runtimeIdleTimers.delete(candidateThreadId);
+        }
+        stopIdleRuntimeSession?.(candidateThreadId, candidateGeneration);
+      }
     };
 
     const scheduleRuntimeIdleStop = (threadId: ThreadId) => {
@@ -1184,12 +1224,15 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       }
 
       const generation = invalidateRuntimeIdleGeneration(threadId);
+      idleReadyRuntimeOrder.set(threadId, generation);
       const timer = setTimeout(() => {
         runtimeIdleTimers.delete(threadId);
+        idleReadyRuntimeOrder.delete(threadId);
         stopIdleRuntimeSession?.(threadId, generation);
       }, runtimeIdleStopMs);
       timer.unref();
       runtimeIdleTimers.set(threadId, timer);
+      evictExcessIdleRuntimes(threadId);
     };
 
     const markRuntimeTaskLive = (threadId: ThreadId, taskId: string): void => {
