@@ -352,6 +352,44 @@ layer("ProjectAgentRepository", (it) => {
     }),
   );
 
+  it.effect("delivers an oversized legacy worker roll-up and the wake behind it", () =>
+    Effect.gen(function* () {
+      const repo = yield* ProjectAgentRepository;
+      const sql = yield* SqlClient.SqlClient;
+      const project = ProjectId.makeUnsafe("project-legacy-inbox");
+      const id = ProjectInboxEventId.makeUnsafe("legacy-rollup");
+      const source =
+        "worker-batch:hub-work-batch:" +
+        "x".repeat(40) +
+        ":" +
+        Array(23).fill("interrupted").join("|");
+      yield* sql`INSERT INTO project_agent_event_inbox
+        (inbox_id, project_id, source_thread_id, source_event_id, event_type, eligible_wake, created_at)
+        VALUES (${id}, ${project}, 'worker', ${source}, 'workers.settled', 1, ${now})`;
+      yield* repo.insertInboxEvent({
+        id: ProjectInboxEventId.makeUnsafe("next-wake"),
+        projectId: project,
+        sourceThreadId: coordinatorThreadId,
+        sourceEventId: "next",
+        eventType: "worker.completed",
+        taskId: null,
+        eligibleWake: true,
+        createdAt: now,
+      });
+      const page = yield* repo.listInboxAfter({ projectId: project, limit: 10 });
+      assert.deepEqual(
+        page.map((row) => row.id),
+        [id, "next-wake"],
+      );
+      assert.equal(page[0]?.eligibleWake, true);
+      assert.match(page[0]!.sourceEventId, /^worker-batch:legacy:[0-9a-f]{64}$/u);
+      assert.deepEqual(
+        Option.getOrThrow(yield* repo.getInboxEvent({ projectId: project, inboxId: id })),
+        page[0],
+      );
+    }),
+  );
+
   it.effect("allocates activity sequences atomically across concurrent appends", () =>
     Effect.gen(function* () {
       const repository = yield* ProjectAgentRepository;

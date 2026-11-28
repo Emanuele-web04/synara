@@ -3988,6 +3988,7 @@ it.effect("posts a settle row into the coordinator thread and wakes it", () => {
 });
 
 it.effect("posts one roll-up when every worker in the creation batch settles", () => {
+  const now = "2026-09-20T00:08:01.000Z";
   const harness = makeTestLayer();
   return Effect.gen(function* () {
     const service = yield* ProjectAgentService;
@@ -4033,11 +4034,24 @@ it.effect("posts one roll-up when every worker in the creation batch settles", (
     // Waiting on approval is not an end state: no roll-up yet.
     assert.equal(rollups().length, 0);
 
+    harness.threadShells[threadC] = quietRunningShell("2026-09-20T00:08:00.000Z");
     yield* service.ingestSettledThreadEvent({
       threadId: threadC,
       sourceEventId: "roll-c-done",
       eventType: "thread.turn-diff-completed",
       createdAt: "2026-09-20T00:08:00.000Z",
+    });
+    assert.equal(rollups().length, 0);
+    harness.threadShells[threadC] = {
+      projectId: groupId,
+      title: "Gamma page",
+      session: { status: "ready", updatedAt: now, lastError: null },
+    };
+    yield* service.ingestSettledThreadEvent({
+      threadId: threadC,
+      sourceEventId: "roll-c-idle",
+      eventType: "thread.session-set",
+      createdAt: now,
     });
     assert.equal(rollups().length, 1);
     const rollup = rollups()[0]!;
@@ -4064,6 +4078,15 @@ it.effect("posts one roll-up when every worker in the creation batch settles", (
     const settledRows = activityRows(harness, "synara.worker.settled");
     // Alpha done, Beta done, Gamma waiting, Gamma done.
     assert.equal(settledRows.length, 4);
+    // Correcting a terminal classification changes the worker row, not the wave.
+    yield* service.ingestSettledThreadEvent({
+      threadId: threadC,
+      sourceEventId: "roll-c-corrected",
+      eventType: "worker.interrupted",
+      createdAt: now,
+    });
+    assert.equal(rollups().length, 1);
+    assert.match(batchEvent!.sourceEventId, /^worker-batch:[0-9a-f]{64}$/u);
   }).pipe(Effect.provide(harness.layer));
 });
 

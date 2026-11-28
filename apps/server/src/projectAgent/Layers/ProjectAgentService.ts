@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -45,7 +45,11 @@ import {
   type ProjectTaskStatus,
   type ProviderSession,
 } from "@synara/contracts";
-import { groupThreadStateLabel, resolveGroupThreadState } from "@synara/shared/groupThreadState";
+import {
+  groupThreadStateLabel,
+  isThreadActivelyWorking,
+  resolveGroupThreadState,
+} from "@synara/shared/groupThreadState";
 import { HubWorkRepository } from "../../persistence/Services/HubWorkRepository";
 import { coordinatorCheckinTurnReport } from "@synara/shared/coordinatorCheckin";
 import { resolveThreadWorkspaceCwd } from "@synara/shared/threadEnvironment";
@@ -658,8 +662,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
   // Apply one settle/stuck event to a managed worker: post the compact system
   // row into the coordinator thread, update the durable worker row, then post
   // the all-workers roll-up once every worker in the creation batch has
-  // settled (deduped by the batch's outcome signature so it fires once per
-  // distinct settled state).
+  // settled. The roll-up is keyed by worker admissions, not mutable outcomes.
   const recordWorkerMonitorEvent = (input: {
     readonly worker: ProjectManagedWorker;
     readonly eventType: string;
@@ -677,8 +680,18 @@ export const makeProjectAgentService = Effect.gen(function* () {
   }) =>
     Effect.gen(function* () {
       const notice = workerMonitorNoticeForEvent(input.eventType);
-      if (notice === null) return;
       const worker = input.worker;
+      // A checkpoint can settle before the provider session becomes idle.
+      // Recheck on the session update without repeating the individual notice.
+      if (notice === null) {
+        if (
+          input.eventType === "thread.session-set" &&
+          isTerminalWorkerSettleOutcome(worker.settleOutcome)
+        ) {
+          yield* postWorkerBatchRollup({ ...input, worker });
+        }
+        return;
+      }
       // A terminal settle already reported: same-episode re-ingests — a
       // replayed stop or the health loop's status pass — must not post a
       // second row, and a settled worker cannot go stuck. A genuinely new
@@ -807,7 +820,11 @@ export const makeProjectAgentService = Effect.gen(function* () {
         ? batch
         : batch.map((row) => (row.threadId === worker.threadId ? worker : row));
 
-      let unstartedWork: ReadonlyArray<{ readonly title: string; readonly state: string }> = [];
+      let unstartedWork: ReadonlyArray<{
+        readonly id: string;
+        readonly title: string;
+        readonly state: string;
+      }> = [];
       if (worker.batchId.startsWith("hub-work-batch:")) {
         if (Option.isNone(hubWorkRepository)) return;
         const anchor = yield* hubWorkRepository.value
@@ -842,8 +859,23 @@ export const makeProjectAgentService = Effect.gen(function* () {
           (row) => row.settledAt !== null && isTerminalWorkerSettleOutcome(row.settleOutcome),
         )
       ) {
-        const signature = peers.map((row) => row.settleOutcome ?? "pending").join("|");
-        const rollupKey = `${worker.batchId}:${signature}`;
+        const peerShells = yield* snapshotQuery
+          .getThreadShellsByIds(peers.map((row) => row.threadId))
+          .pipe(Effect.mapError(toServiceError("Failed to check worker batch activity.")));
+        if (peerShells.some(isThreadActivelyWorking)) return;
+
+        // listManagedWorkersByBatch has stable ordering. Corrections to a
+        // terminal outcome do not admit more work; a new worker or turn does.
+        const rollupKey = createHash("sha256")
+          .update(
+            JSON.stringify([
+              worker.projectId,
+              worker.batchId,
+              peers.map((peer) => [peer.threadId, peer.activeTurnCommandId]),
+              unstartedWork.map((item) => item.id).sort(),
+            ]),
+          )
+          .digest("hex");
         const rollupInserted = yield* repository
           .insertInboxEvent({
             id: branded.inbox(),
@@ -857,13 +889,6 @@ export const makeProjectAgentService = Effect.gen(function* () {
           })
           .pipe(Effect.mapError(toServiceError("Failed to record worker batch roll-up.")));
         if (rollupInserted.inserted || input.replayDelivery) {
-          // Each finished worker's tracked PR belongs in the roll-up — the
-          // current shell is already read; batch-fetch the peers' for theirs.
-          const peerShells = yield* snapshotQuery
-            .getThreadShellsByIds(peers.map((row) => row.threadId))
-            .pipe(
-              Effect.catch(() => Effect.succeed([] as ReadonlyArray<OrchestrationThreadShell>)),
-            );
           const prByThread = new Map(
             peerShells.map((peer) => [peer.id, peer.lastKnownPr?.url ?? null]),
           );

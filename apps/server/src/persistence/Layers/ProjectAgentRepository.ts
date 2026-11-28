@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   AutomationId,
   IsoDateTime,
@@ -39,6 +40,24 @@ import {
   type ProjectAgentRepositoryShape,
   normalizeDigestError,
 } from "../Services/ProjectAgentRepository.ts";
+
+// Previous versions stored one outcome per worker in this key. Adapt oversized
+// roll-ups on read so their durable inbox IDs, dedupe keys and cursor order survive.
+function decodeInboxRow(row: Record<string, unknown>) {
+  const source = row.sourceEventId;
+  const legacyRollup =
+    row.eventType === "workers.settled" &&
+    typeof source === "string" &&
+    source.length > 256 &&
+    source.startsWith("worker-batch:");
+  return Schema.decodeUnknownEffect(ProjectInboxEvent)({
+    ...row,
+    sourceEventId: legacyRollup
+      ? `worker-batch:legacy:${createHash("sha256").update(source).digest("hex")}`
+      : source,
+    eligibleWake: row.eligibleWake === 1 || row.eligibleWake === true,
+  });
+}
 
 const ConfigRow = Schema.Struct({
   projectId: ProjectId,
@@ -1455,10 +1474,7 @@ const makeProjectAgentRepository = Effect.gen(function* () {
         Effect.mapError(toPersistenceSqlError("ProjectAgentRepository.listInboxAfter")),
         Effect.flatMap((rows) =>
           Effect.forEach(rows, (row) =>
-            Schema.decodeUnknownEffect(ProjectInboxEvent)({
-              ...row,
-              eligibleWake: row.eligibleWake === 1 || row.eligibleWake === true,
-            }).pipe(
+            decodeInboxRow(row).pipe(
               Effect.mapError(toPersistenceDecodeError("ProjectAgentRepository.listInboxAfter")),
             ),
           ),
@@ -1477,10 +1493,7 @@ const makeProjectAgentRepository = Effect.gen(function* () {
         Effect.mapError(toPersistenceSqlError("ProjectAgentRepository.getInboxEvent")),
         Effect.flatMap((rows) =>
           rows[0]
-            ? Schema.decodeUnknownEffect(ProjectInboxEvent)({
-                ...rows[0],
-                eligibleWake: rows[0].eligibleWake === 1 || rows[0].eligibleWake === true,
-              }).pipe(
+            ? decodeInboxRow(rows[0]).pipe(
                 Effect.map(Option.some),
                 Effect.mapError(toPersistenceDecodeError("ProjectAgentRepository.getInboxEvent")),
               )
