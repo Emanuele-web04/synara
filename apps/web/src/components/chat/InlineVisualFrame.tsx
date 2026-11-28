@@ -15,7 +15,7 @@ import {
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
-import { isElectron } from "~/env";
+import { isDesktopPresentation } from "~/lib/hosts/workspacePresentation";
 import { useInlineVisualTheme } from "~/hooks/useInlineVisualTheme";
 import { DISCLOSURE_FADE_MOTION_CLASS } from "~/lib/disclosureMotion";
 import { RotateCcwIcon } from "~/lib/icons";
@@ -42,8 +42,9 @@ export function InlineVisualFrame(props: {
   const { t } = useTranslation();
 
   // Browsers cannot intercept a document navigating its own iframe before the
-  // network request. Execute agent HTML only where the native guard can do so.
-  return isElectron ? (
+  // network request. Desktop workspace frames share the controller's native
+  // navigation guard, even though they intentionally have no preload bridge.
+  return isDesktopPresentation ? (
     <DesktopInlineVisualFrame {...props} />
   ) : (
     <InlineVisualNotice title={props.visual.title} message={t("chat:htmlDesktopOnly")} />

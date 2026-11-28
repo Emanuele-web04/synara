@@ -88,13 +88,24 @@ const shell = `<!doctype html><html><body><script>
   setInterval(() => window.beats.push(Date.now()), 20);
   addEventListener("message", (event) => { if (event.data && event.data.probe) window.probes.push({ ...event.data, at: Date.now() }); });
   const documents = ${JSON.stringify(documents).replaceAll("<", "\\u003c")};
-  window.showVisual = (name) => {
+  window.showVisual = (name, remoteWorkspace = false) => {
     const frame = document.createElement("iframe");
     frame.setAttribute("sandbox", "allow-scripts allow-forms");
     frame.setAttribute("referrerpolicy", "no-referrer");
     frame.dataset.visual = name;
     frame.srcdoc = documents[name];
-    document.body.appendChild(frame);
+    if (remoteWorkspace) {
+      const workspace = document.createElement("iframe");
+      workspace.setAttribute("sandbox", "allow-same-origin allow-scripts allow-forms");
+      document.body.appendChild(workspace);
+      workspace.contentWindow.addEventListener("message", (event) => {
+        if (event.source === frame.contentWindow && event.data && event.data.probe)
+          window.postMessage(event.data, "*");
+      });
+      workspace.contentDocument.body.appendChild(frame);
+    } else {
+      document.body.appendChild(frame);
+    }
   };
   window.showControlWebview = () => {
     const guest = document.createElement("webview");

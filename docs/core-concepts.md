@@ -271,7 +271,10 @@ pages, your session, or your files, or open windows or dialogs, and the page's f
 scripts, fonts, and images are blocked. WebRTC entry points are removed before page scripts.
 A visual that tries to navigate
 stops and offers **Reload**: the desktop app refuses the navigation before the request. HTML
-execution is disabled in plain browsers; use native component specs there instead. HTML pages
+execution also works in connected-computer chats inside the desktop app: the owning computer
+supplies the document, and the desktop controller's navigation guard protects its frame.
+Execution is disabled in plain browsers, including browser-hosted connected-computer chats;
+use native component specs there instead. HTML pages
 cannot open external links through the host. Hover
 a page to copy its source or reload it. Each page is limited to 256 KiB and each component spec to
 64 KiB, and a turn can show at most six visuals. A turn you stop after it showed a visual ends with the stop line below that

@@ -114,43 +114,47 @@ test("a visual cannot create a webview, even with the in-app browser's partition
   }
 });
 
-test("a visual cannot navigate its own frame away; fetches are refused separately by policy", async () => {
-  const app = await launch();
-  try {
-    // The recorder is reachable from this machine: a page that got a request
-    // out would show up here.
-    expect(await fetch(`${app.recorder.origin}/control`).then((response) => response.status)).toBe(
-      200,
-    );
+for (const remoteWorkspace of [false, true]) {
+  test(`a visual cannot navigate or fetch from ${remoteWorkspace ? "a remote workspace" : "the app window"}`, async () => {
+    const app = await launch();
+    try {
+      // The recorder is reachable from this machine: a page that got a request
+      // out would show up here.
+      expect(
+        await fetch(`${app.recorder.origin}/control`).then((response) => response.status),
+      ).toBe(200);
 
-    for (const name of ["scriptNavigation", "metaRefresh", "fetch"]) {
-      await app.page.evaluate(
-        (visual) =>
-          (window as unknown as { showVisual: (name: string) => void }).showVisual(visual),
-        name,
+      for (const name of ["scriptNavigation", "metaRefresh", "fetch"]) {
+        await app.page.evaluate(
+          ({ visual, remoteWorkspace }) =>
+            (
+              window as unknown as { showVisual: (name: string, remote: boolean) => void }
+            ).showVisual(visual, remoteWorkspace),
+          { visual: name, remoteWorkspace },
+        );
+      }
+      const scripted = await app.probe("script-navigation");
+      const refreshed = await app.probe("meta-refresh");
+      const fetched = await app.probe("fetch");
+
+      // Navigation: attempted, refused by the main process, page still in place.
+      expect(scripted.stillHere).toBe("about:srcdoc");
+      expect(refreshed.stillHere).toBe("about:srcdoc");
+      const navigations = (await app.records()).subframeNavigations.map((entry) => entry.url);
+      expect(navigations).toEqual(
+        expect.arrayContaining([
+          expect.stringContaining("via=location"),
+          expect.stringContaining("via=refresh"),
+        ]),
       );
+      // Fetch: refused by the frame's content security policy, never sent.
+      expect(fetched.fetched).toBe("TypeError");
+      expect(app.recorder.requests).toEqual(["/control"]);
+    } finally {
+      await app.close();
     }
-    const scripted = await app.probe("script-navigation");
-    const refreshed = await app.probe("meta-refresh");
-    const fetched = await app.probe("fetch");
-
-    // Navigation: attempted, refused by the main process, page still in place.
-    expect(scripted.stillHere).toBe("about:srcdoc");
-    expect(refreshed.stillHere).toBe("about:srcdoc");
-    const navigations = (await app.records()).subframeNavigations.map((entry) => entry.url);
-    expect(navigations).toEqual(
-      expect.arrayContaining([
-        expect.stringContaining("via=location"),
-        expect.stringContaining("via=refresh"),
-      ]),
-    );
-    // Fetch: refused by the frame's content security policy, never sent.
-    expect(fetched.fetched).toBe("TypeError");
-    expect(app.recorder.requests).toEqual(["/control"]);
-  } finally {
-    await app.close();
-  }
-});
+  });
+}
 
 test("a visual that blocks its own thread does not freeze the app window", async () => {
   const app = await launch();

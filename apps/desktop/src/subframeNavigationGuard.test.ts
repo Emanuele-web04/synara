@@ -52,9 +52,11 @@ describe("attachAppSubframeNavigationGuard", () => {
     ).toBe(false);
   });
 
-  it("lets an initialized workspace retry its own shell document", () => {
+  it("limits shell reloads to direct workspace frames", () => {
     const frame = { url: "synara-remote://app/index.html", parent: mainFrame };
     expect(navigate(emitter, frame.url, false, { frame, initiator: frame })).toBe(false);
+    const nested = { ...frame, parent: frame };
+    expect(navigate(emitter, nested.url, false, { frame: nested, initiator: nested })).toBe(true);
   });
 
   it.each([
