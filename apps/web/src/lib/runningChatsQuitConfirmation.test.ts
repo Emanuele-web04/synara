@@ -17,6 +17,23 @@ describe("running chats quit confirmation", () => {
     expect(isRunningChatForQuit({ session: null })).toBe(false);
   });
 
+  it("counts a settled chat that still owns background work as in progress", () => {
+    expect(
+      isRunningChatForQuit({
+        pendingBackgroundWorkCount: 1,
+        hasLiveTailWork: false,
+        session: { status: "ready" },
+      }),
+    ).toBe(true);
+    expect(
+      isRunningChatForQuit({
+        pendingBackgroundWorkCount: 0,
+        hasLiveTailWork: false,
+        session: { status: "ready" },
+      }),
+    ).toBe(false);
+  });
+
   it("lists sidebar and session-only running chats without duplicates", () => {
     const chats = listRunningChatsFromDesktopStore({
       sidebarThreadSummaryById: {

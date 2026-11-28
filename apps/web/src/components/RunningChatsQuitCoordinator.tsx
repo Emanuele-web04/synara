@@ -1,11 +1,14 @@
 // FILE: RunningChatsQuitCoordinator.tsx
-// Purpose: Answers Electron quit requests with the running-chats confirmation.
+// Purpose: Answers Electron quit requests with the running-chats confirmation, and
+//          quits straight away when nothing is running and the question is off.
 // Layer: Root web coordinator
 // Depends on: Desktop bridge quit IPC, the orchestration store, and the quit-resume RPC.
 
-import { ThreadId } from "@synara/contracts";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { ThreadId, type DesktopQuitConfirmationReference } from "@synara/contracts";
+import { useCallback, useEffect, useEffectEvent, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 
+import { useAppSettings } from "~/appSettings";
 import { APP_DISPLAY_NAME } from "~/branding";
 import {
   listRunningChatsFromDesktopStore,
@@ -20,36 +23,58 @@ import { useStore } from "~/store";
 import { RunningChatsQuitDialog, type RunningChatsQuitDecision } from "./RunningChatsQuitDialog";
 
 export function RunningChatsQuitCoordinator() {
+  const { settings, updateSettings } = useAppSettings();
+  const settingsRef = useRef(settings);
+
+  useEffect(() => {
+    settingsRef.current = settings;
+  }, [settings]);
+
   const [chats, setChats] = useState<ReadonlyArray<RunningChatQuitSummary> | null>(null);
   // True while the resume record is being written: the dialog stays up (inert) so the
   // user does not see a bare window for the bounded wait before the desktop hides it.
   const [quitting, setQuitting] = useState(false);
+  const [quietQuit, setQuietQuit] = useState(false);
   const pendingRequestIdRef = useRef<string | null>(null);
+  const settlingRequestIdRef = useRef<string | null>(null);
+  const chatsRef = useRef<ReadonlyArray<RunningChatQuitSummary> | null>(null);
 
-  const settle = useCallback(
-    (decision: RunningChatsQuitDecision | null) => {
+  const clearQuestion = useCallback(() => {
+    pendingRequestIdRef.current = null;
+    settlingRequestIdRef.current = null;
+    chatsRef.current = null;
+    setChats(null);
+    setQuitting(false);
+  }, []);
+
+  // Stops the running chats and, when asked, writes the resume record the desktop
+  // waits for. False means main had already closed the question — it expired or
+  // was withdrawn — so nothing was stopped and the caller must not reply.
+  const commitAndStopChats = useCallback(
+    async (
+      chatsToStop: ReadonlyArray<RunningChatQuitSummary>,
+      resume: boolean,
+    ): Promise<boolean> => {
       const requestId = pendingRequestIdRef.current;
       if (!requestId) {
-        return;
+        return false;
       }
-      const allow = decision != null;
-      const chatsToStop = allow ? chats : null;
-      pendingRequestIdRef.current = null;
-      if (!decision?.resume) {
-        setChats(null);
-      }
-
-      const reply = (allowQuit: boolean) => {
-        window.desktopBridge?.replyQuitConfirmation({
-          requestId,
-          phase: "decision",
-          allow: allowQuit,
-        });
-      };
-
-      if (!allow || chatsToStop == null || chatsToStop.length === 0) {
-        reply(allow);
-        return;
+      // Stopping chats is not withdrawable, so the desktop accepts the quit
+      // first. A build without the channel keeps the old behavior.
+      const beginCommit = window.desktopBridge?.beginQuitConfirmation;
+      if (beginCommit) {
+        try {
+          if (!(await beginCommit({ requestId }))) return false;
+        } catch {
+          // Do not stop chats without an acknowledgement. Main ignores a denial
+          // if it did receive the commit and will finish by its own deadline.
+          window.desktopBridge?.replyQuitConfirmation({
+            requestId,
+            phase: "decision",
+            allow: false,
+          });
+          return false;
+        }
       }
 
       const stopped = stopRunningChatsForQuit({
@@ -66,7 +91,7 @@ export function RunningChatsQuitCoordinator() {
             createdAt: new Date().toISOString(),
           });
         },
-        ...(decision.resume
+        ...(resume
           ? {
               resume: {
                 prepare: (threadIds: ReadonlyArray<string>) => {
@@ -84,23 +109,55 @@ export function RunningChatsQuitCoordinator() {
           : {}),
       });
 
-      if (decision.resume) {
-        // The resume record must be durable before the desktop is allowed to stop the
-        // backend; the wait is bounded so quit stays snappy even if the server is slow.
-        setQuitting(true);
-        void stopped.finally(() => {
-          reply(true);
-          setQuitting(false);
-          setChats(null);
-        });
-        return;
+      if (resume) {
+        // The resume record must be durable before the desktop stops the backend;
+        // the wait is bounded so quit stays snappy even if the server is slow.
+        await stopped;
+      } else {
+        // Interrupt in the background so the window can close immediately.
+        void stopped;
       }
-      // Interrupt in the background so the window can close immediately.
-      void stopped;
-      reply(true);
+      return true;
     },
-    [chats],
+    [],
   );
+
+  const settle = async (decision: RunningChatsQuitDecision | null) => {
+    const requestId = pendingRequestIdRef.current;
+    if (!requestId || settlingRequestIdRef.current === requestId) {
+      return;
+    }
+    settlingRequestIdRef.current = requestId;
+
+    const reply = (allow: boolean) => {
+      window.desktopBridge?.replyQuitConfirmation({
+        requestId,
+        phase: "decision",
+        allow,
+      });
+    };
+
+    if (!decision) {
+      clearQuestion();
+      reply(false);
+      return;
+    }
+
+    setQuitting(true);
+    const committed = await commitAndStopChats(chatsRef.current ?? [], decision.resume);
+
+    // A newer question may have replaced this one while the resume record was
+    // being written; leave it alone.
+    if (pendingRequestIdRef.current !== requestId) {
+      return;
+    }
+    if (committed && quietQuit) {
+      // The renderer can close as soon as main receives the allow reply.
+      flushSync(() => updateSettings({ askBeforeQuitting: false }));
+    }
+    clearQuestion();
+    if (committed) reply(true);
+  };
 
   useEffect(() => {
     const subscribe = window.desktopBridge?.onQuitConfirmationRequest;
@@ -110,24 +167,73 @@ export function RunningChatsQuitCoordinator() {
     }
 
     return subscribe((request) => {
-      const running = listRunningChatsFromDesktopStore(useStore.getState());
-      reply({
-        requestId: request.requestId,
-        phase: "ready",
-        runningCount: running.length,
-        chats: running,
-      });
+      const state = useStore.getState();
+      const running = listRunningChatsFromDesktopStore(state);
       pendingRequestIdRef.current = request.requestId;
+      settlingRequestIdRef.current = null;
+
+      // The question appears when work is in flight, and only while the person
+      // still wants to be asked. An unhydrated store cannot prove nothing is
+      // running, so it asks.
+      const ask =
+        settingsRef.current.askBeforeQuitting && (running.length > 0 || !state.threadsHydrated);
+      if (!ask) {
+        if (running.length === 0) {
+          pendingRequestIdRef.current = null;
+          reply({ requestId: request.requestId, phase: "decision", allow: true });
+          return;
+        }
+        // No question, but the person turned it off while expecting their chats
+        // back: the resume record still has to be written before the desktop goes.
+        settlingRequestIdRef.current = request.requestId;
+        void commitAndStopChats(running, settingsRef.current.resumeChatsAfterQuit).then(
+          (committed) => {
+            if (pendingRequestIdRef.current !== request.requestId) return;
+            clearQuestion();
+            if (committed) {
+              reply({ requestId: request.requestId, phase: "decision", allow: true });
+            }
+          },
+        );
+        return;
+      }
+
+      chatsRef.current = running;
+      setQuietQuit(false);
+      reply({ requestId: request.requestId, phase: "ready" });
       setChats(running);
     });
+  }, [clearQuestion, commitAndStopChats]);
+
+  // A repeated ⌘Q confirms the same open question, including the choices
+  // currently set in it.
+  const confirmRepeat = useEffectEvent((reference: DesktopQuitConfirmationReference) => {
+    if (pendingRequestIdRef.current !== reference.requestId) return;
+    void settle({ resume: settings.resumeChatsAfterQuit });
+  });
+  useEffect(() => {
+    return window.desktopBridge?.onQuitConfirmationRepeat?.(confirmRepeat);
   }, []);
+
+  // The app withdrew a question it stopped waiting on, such as one left open
+  // when the window closes. Take it down without quitting.
+  useEffect(() => {
+    const subscribe = window.desktopBridge?.onQuitConfirmationWithdrawn;
+    if (typeof subscribe !== "function") return;
+    return subscribe((withdrawal) => {
+      if (pendingRequestIdRef.current !== withdrawal.requestId) return;
+      clearQuestion();
+    });
+  }, [clearQuestion]);
 
   return (
     <RunningChatsQuitDialog
       chats={chats}
       quitting={quitting}
-      onStay={() => settle(null)}
-      onQuit={settle}
+      quietQuit={quietQuit}
+      onQuietQuitChange={setQuietQuit}
+      onStay={() => void settle(null)}
+      onQuit={(decision) => void settle(decision)}
     />
   );
 }

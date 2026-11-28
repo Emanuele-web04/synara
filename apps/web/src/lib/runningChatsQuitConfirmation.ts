@@ -9,6 +9,7 @@ export interface RunningChatQuitCandidate {
   readonly id: string;
   readonly title: string;
   readonly hasLiveTailWork?: boolean | undefined;
+  readonly pendingBackgroundWorkCount?: number | undefined;
   readonly session?: { readonly status?: string | null } | null | undefined;
 }
 
@@ -43,9 +44,14 @@ function runningChatDisplayTitle(title: string | null | undefined): string {
 
 export function isRunningChatForQuit(thread: {
   readonly hasLiveTailWork?: boolean | undefined;
+  readonly pendingBackgroundWorkCount?: number | undefined;
   readonly session?: { readonly status?: string | null } | null | undefined;
 }): boolean {
   if (thread.hasLiveTailWork === true) {
+    return true;
+  }
+  // A settled turn can still own background work, and quitting stops it.
+  if ((thread.pendingBackgroundWorkCount ?? 0) > 0) {
     return true;
   }
   const status = thread.session?.status;

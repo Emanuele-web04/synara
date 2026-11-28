@@ -2,9 +2,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   makeRunningChatsQuitGuard,
-  parseQuitConfirmationRequest,
+  parseQuitConfirmationReference,
   parseQuitConfirmationResponse,
-  quitConfirmationPresentationForPlatform,
   shouldPromptForRunningChatsBeforeQuit,
 } from "./runningChatsQuitGuard";
 
@@ -21,44 +20,22 @@ describe("running chats quit guard", () => {
     expect(shouldPromptForRunningChatsBeforeQuit("custom-title-bar-relaunch")).toBe(false);
   });
 
-  it("uses the in-app dialog on every desktop platform", () => {
-    expect(quitConfirmationPresentationForPlatform()).toBe("in-app");
+  it("parses quit requests", () => {
+    expect(parseQuitConfirmationReference(null)).toBeNull();
+    expect(parseQuitConfirmationReference({ requestId: " " })).toBeNull();
+    expect(parseQuitConfirmationReference({ requestId: "q1" })).toEqual({ requestId: "q1" });
   });
 
-  it("parses quit requests and defaults unknown presentation to in-app", () => {
-    expect(parseQuitConfirmationRequest(null)).toBeNull();
-    expect(parseQuitConfirmationRequest({ requestId: "q1", presentation: "native" })).toEqual({
-      requestId: "q1",
-      presentation: "native",
-    });
-    expect(parseQuitConfirmationRequest({ requestId: "q1" })).toEqual({
-      requestId: "q1",
-      presentation: "in-app",
-    });
-  });
-
-  it("rejects malformed renderer replies", () => {
+  it("rejects malformed renderer replies and parses the two phases", () => {
     expect(parseQuitConfirmationResponse(null)).toBeNull();
     expect(parseQuitConfirmationResponse({ phase: "decision", allow: true })).toBeNull();
-    expect(
-      parseQuitConfirmationResponse({ requestId: "q1", phase: "ready", runningCount: "2" }),
-    ).toBeNull();
-  });
-
-  it("parses ready replies with the running chat list", () => {
-    expect(
-      parseQuitConfirmationResponse({
-        requestId: "q1",
-        phase: "ready",
-        runningCount: 1,
-        chats: [{ id: "a", title: "Fix the tray" }, { id: 2 }],
-      }),
-    ).toEqual({
+    expect(parseQuitConfirmationResponse({ requestId: "q1", phase: "ready" })).toEqual({
       requestId: "q1",
       phase: "ready",
-      runningCount: 1,
-      chats: [{ id: "a", title: "Fix the tray" }],
     });
+    expect(
+      parseQuitConfirmationResponse({ requestId: "q1", phase: "decision", allow: true }),
+    ).toEqual({ requestId: "q1", phase: "decision", allow: true });
   });
 
   it("allows quit immediately when the renderer is unavailable", async () => {
@@ -82,8 +59,8 @@ describe("running chats quit guard", () => {
       isRendererAvailable: () => true,
     });
 
-    expect(send).toHaveBeenCalledWith({ requestId: "q1", presentation: "in-app" });
-    guard.receiveResponse({ requestId: "q1", phase: "ready", runningCount: 0, chats: [] });
+    expect(send).toHaveBeenCalledWith({ requestId: "q1" });
+    guard.receiveResponse({ requestId: "q1", phase: "ready" });
     expect(guard.hasPendingAsk()).toBe(true);
     expect(guard.hasAllowedQuit()).toBe(false);
     guard.receiveResponse({ requestId: "q1", phase: "decision", allow: true });
@@ -97,7 +74,7 @@ describe("running chats quit guard", () => {
       send: vi.fn(),
       isRendererAvailable: () => true,
     });
-    guard.receiveResponse({ requestId: "q1", phase: "ready", runningCount: 2 });
+    guard.receiveResponse({ requestId: "q1", phase: "ready" });
     guard.receiveResponse({ requestId: "q1", phase: "decision", allow: false });
     await expect(first).resolves.toBe(false);
     expect(guard.hasAllowedQuit()).toBe(false);
@@ -134,7 +111,7 @@ describe("running chats quit guard", () => {
     const decision = guard.askRenderer({
       send: vi.fn(),
       isRendererAvailable: () => true,
-      readyTimeoutMs: 50,
+      timeoutMs: 50,
     });
 
     await vi.advanceTimersByTimeAsync(50);
@@ -147,9 +124,9 @@ describe("running chats quit guard", () => {
     const decision = guard.askRenderer({
       send: vi.fn(),
       isRendererAvailable: () => true,
-      readyTimeoutMs: 50,
+      timeoutMs: 50,
     });
-    guard.receiveResponse({ requestId: "q1", phase: "ready", runningCount: 1 });
+    guard.receiveResponse({ requestId: "q1", phase: "ready" });
 
     await vi.advanceTimersByTimeAsync(200);
     guard.receiveResponse({ requestId: "q1", phase: "decision", allow: false });
@@ -175,7 +152,7 @@ describe("running chats quit guard", () => {
 
     const send = vi.fn();
     const second = guard.askRenderer({ send, isRendererAvailable: () => true });
-    expect(send).toHaveBeenCalledWith({ requestId: "q2", presentation: "in-app" });
+    expect(send).toHaveBeenCalledWith({ requestId: "q2" });
     guard.receiveResponse({ requestId: "q2", phase: "decision", allow: true });
     await expect(second).resolves.toBe(true);
   });
@@ -187,58 +164,163 @@ describe("running chats quit guard", () => {
       send: vi.fn(),
       isRendererAvailable: () => true,
     });
-    guard.receiveResponse({ requestId: "q1", phase: "ready", runningCount: 1 });
+    guard.receiveResponse({ requestId: "q1", phase: "ready" });
 
     guard.cancelPending();
 
     await expect(first).resolves.toBe(false);
     const send = vi.fn();
     const second = guard.askRenderer({ send, isRendererAvailable: () => true });
-    expect(send).toHaveBeenCalledWith({ requestId: "q2", presentation: "in-app" });
+    expect(send).toHaveBeenCalledWith({ requestId: "q2" });
     guard.receiveResponse({ requestId: "q2", phase: "decision", allow: true });
     await expect(second).resolves.toBe(true);
   });
 
-  it("shows the native sheet after the renderer reports running chats", async () => {
+  it("calls onReady once when the page acknowledges the question", async () => {
+    const onReady = vi.fn();
     const guard = makeRunningChatsQuitGuard(() => "q1");
-    const presentNativeConfirmation = vi.fn(async () => false);
-    const decision = guard.askRenderer({
-      send: vi.fn(),
-      isRendererAvailable: () => true,
-      presentation: "native",
-      presentNativeConfirmation,
-    });
+    const decision = guard.askRenderer({ send: vi.fn(), isRendererAvailable: () => true, onReady });
 
-    guard.receiveResponse({
-      requestId: "q1",
-      phase: "ready",
-      runningCount: 1,
-      chats: [{ id: "a", title: "Fix the tray" }],
-    });
+    expect(onReady).not.toHaveBeenCalled();
 
+    guard.receiveResponse({ requestId: "q1", phase: "ready" });
+    expect(onReady).toHaveBeenCalledTimes(1);
+
+    guard.receiveResponse({ requestId: "q1", phase: "decision", allow: false });
     await expect(decision).resolves.toBe(false);
-    expect(presentNativeConfirmation).toHaveBeenCalledWith([{ id: "a", title: "Fix the tray" }]);
-    expect(guard.hasAllowedQuit()).toBe(false);
+    expect(onReady).toHaveBeenCalledTimes(1);
   });
 
-  it("fails open if the native sheet presenter throws", async () => {
+  it("asks the page to answer a repeated quit", async () => {
+    const guard = makeRunningChatsQuitGuard(() => "q1");
+    const decision = guard.askRenderer({ send: vi.fn(), isRendererAvailable: () => true });
+    guard.receiveResponse({ requestId: "q1", phase: "ready" });
+
+    const notify = vi.fn();
+    guard.repeatQuit(notify);
+    expect(notify).toHaveBeenCalledWith("q1");
+
+    guard.receiveResponse({ requestId: "q1", phase: "decision", allow: true });
+    await expect(decision).resolves.toBe(true);
+  });
+
+  it("arms a repeat that arrives before the page acknowledged it", async () => {
+    const guard = makeRunningChatsQuitGuard(() => "q1");
+    const decision = guard.askRenderer({ send: vi.fn(), isRendererAvailable: () => true });
+    const notify = vi.fn();
+
+    guard.repeatQuit(notify);
+    expect(notify).not.toHaveBeenCalled();
+
+    guard.receiveResponse({ requestId: "q1", phase: "ready" });
+    expect(notify).toHaveBeenCalledWith("q1");
+
+    guard.receiveResponse({ requestId: "q1", phase: "decision", allow: true });
+    await expect(decision).resolves.toBe(true);
+  });
+
+  it("forces a repeated quit when the page never answers it", async () => {
+    vi.useFakeTimers();
     const guard = makeRunningChatsQuitGuard(() => "q1");
     const decision = guard.askRenderer({
       send: vi.fn(),
       isRendererAvailable: () => true,
-      presentation: "native",
-      presentNativeConfirmation: () => {
-        throw new Error("sheet failed");
-      },
+      timeoutMs: 20,
     });
+    guard.receiveResponse({ requestId: "q1", phase: "ready" });
 
-    guard.receiveResponse({
-      requestId: "q1",
-      phase: "ready",
-      runningCount: 1,
-      chats: [{ id: "a", title: "Fix the tray" }],
-    });
+    guard.repeatQuit(vi.fn());
+    await vi.advanceTimersByTimeAsync(50);
 
     await expect(decision).resolves.toBe(true);
+    expect(guard.hasAllowedQuit()).toBe(true);
+  });
+
+  it("tells the page to take down a question the app stopped waiting on", async () => {
+    const guard = makeRunningChatsQuitGuard(() => "q1");
+    const withdraw = vi.fn();
+    const decision = guard.askRenderer({
+      send: vi.fn(),
+      isRendererAvailable: () => true,
+      withdraw,
+    });
+    guard.receiveResponse({ requestId: "q1", phase: "ready" });
+
+    guard.cancelPending();
+
+    await expect(decision).resolves.toBe(false);
+    expect(withdraw).toHaveBeenCalledWith("q1");
+  });
+
+  it("quits a committed ask the page never answers", async () => {
+    vi.useFakeTimers();
+    const guard = makeRunningChatsQuitGuard(() => "q1");
+    const decision = guard.askRenderer({
+      send: vi.fn(),
+      isRendererAvailable: () => true,
+      timeoutMs: 50,
+    });
+    guard.receiveResponse({ requestId: "q1", phase: "ready" });
+
+    expect(guard.beginCommit("q1")).toBe(true);
+    await vi.advanceTimersByTimeAsync(50);
+
+    await expect(decision).resolves.toBe(true);
+    expect(guard.hasAllowedQuit()).toBe(true);
+  });
+
+  it("does not cancel or withdraw a committed ask", async () => {
+    const guard = makeRunningChatsQuitGuard(() => "q1");
+    const withdraw = vi.fn();
+    const decision = guard.askRenderer({
+      send: vi.fn(),
+      isRendererAvailable: () => true,
+      withdraw,
+    });
+    guard.receiveResponse({ requestId: "q1", phase: "ready" });
+    let settled: boolean | null = null;
+    void decision.then((allow) => {
+      settled = allow;
+    });
+
+    expect(guard.beginCommit("q2")).toBe(false);
+    expect(guard.beginCommit("q1")).toBe(true);
+    guard.cancelPending();
+    await Promise.resolve();
+
+    expect(settled).toBeNull();
+    expect(withdraw).not.toHaveBeenCalled();
+    expect(guard.hasPendingAsk()).toBe(true);
+
+    guard.receiveResponse({ requestId: "q1", phase: "decision", allow: true });
+    await expect(decision).resolves.toBe(true);
+    expect(guard.hasAllowedQuit()).toBe(true);
+  });
+
+  it("ignores a denial after the commit", async () => {
+    vi.useFakeTimers();
+    const guard = makeRunningChatsQuitGuard(() => "q1");
+    const decision = guard.askRenderer({
+      send: vi.fn(),
+      isRendererAvailable: () => true,
+      timeoutMs: 20,
+    });
+    guard.receiveResponse({ requestId: "q1", phase: "ready" });
+    expect(guard.beginCommit("q1")).toBe(true);
+    let settled: boolean | null = null;
+    void decision.then((allow) => {
+      settled = allow;
+    });
+
+    guard.receiveResponse({ requestId: "q1", phase: "decision", allow: false });
+    await Promise.resolve();
+
+    expect(settled).toBeNull();
+    expect(guard.hasAllowedQuit()).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(50);
+
+    await expect(decision).resolves.toBe(true);
+    expect(guard.hasAllowedQuit()).toBe(true);
   });
 });

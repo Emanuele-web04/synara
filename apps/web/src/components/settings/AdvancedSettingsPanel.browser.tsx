@@ -4,15 +4,13 @@
 
 import "../../index.css";
 
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { ReactNode } from "react";
 import { page } from "vitest/browser";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
 const harness = vi.hoisted(() => ({
-  config: {
-    keybindingsConfigPath: "/tmp/keybindings.json",
-    availableEditors: [],
-  },
   auth: { authenticated: true, role: "client" },
   threadShells: [] as unknown[],
   allThreadsMessageless: false,
@@ -27,13 +25,15 @@ vi.mock("@tanstack/react-router", async (importOriginal) => ({
   useNavigate: () => harness.navigate,
 }));
 
-vi.mock("@tanstack/react-query", () => ({
+vi.mock("@tanstack/react-query", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@tanstack/react-query")>()),
   useQuery: (options: { queryKey: readonly string[] }) => ({
-    data: options.queryKey[0] === "config" ? harness.config : harness.auth,
+    data: options.queryKey[1] === "settings" ? undefined : harness.auth,
   }),
 }));
 
-vi.mock("~/lib/serverReactQuery", () => ({
+vi.mock("~/lib/serverReactQuery", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("~/lib/serverReactQuery")>()),
   serverConfigQueryOptions: () => ({ queryKey: ["config"] }),
   serverAuthSessionQueryOptions: () => ({ queryKey: ["auth"] }),
 }));
@@ -59,13 +59,18 @@ import {
   AppTourSettingsRow,
 } from "./AdvancedSettingsPanel";
 
+function renderPanel(node: ReactNode) {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(<QueryClientProvider client={queryClient}>{node}</QueryClientProvider>);
+}
+
 describe("AdvancedSettingsPanel", () => {
   afterEach(() => {
     document.body.innerHTML = "";
   });
 
   it("owns recovery eligibility and shared disclosure motion", async () => {
-    await render(<AdvancedSettingsPanel active resetEpoch={0} />);
+    await renderPanel(<AdvancedSettingsPanel active resetEpoch={0} />);
 
     const repairButton = page.getByRole("button", { name: "Repair state" });
     expect((repairButton.element() as HTMLButtonElement).disabled).toBe(false);
@@ -87,7 +92,7 @@ describe("AdvancedSettingsPanel", () => {
 
   it("hands release history off from the About section", async () => {
     const onOpenReleaseHistory = vi.fn();
-    await render(<AboutSettingsSection onOpenReleaseHistory={onOpenReleaseHistory} />);
+    await renderPanel(<AboutSettingsSection onOpenReleaseHistory={onOpenReleaseHistory} />);
 
     await page.getByRole("button", { name: "View release history" }).click();
     expect(onOpenReleaseHistory).toHaveBeenCalledOnce();
@@ -95,7 +100,7 @@ describe("AdvancedSettingsPanel", () => {
 
   it("replays the app tour from the workspace, where its controls are on screen", async () => {
     useFeatureTourStore.getState().close();
-    await render(<AppTourSettingsRow />);
+    await renderPanel(<AppTourSettingsRow />);
 
     await page.getByRole("button", { name: "Replay tour" }).click();
 

@@ -84,6 +84,7 @@ export const SETTINGS_ROW_SOURCES: ReadonlyArray<{
       AppTourSettingsRow: "general",
       AboutSettingsSection: "about",
       AdvancedSettingsPanel: "advanced",
+      DesktopQuitSettingsSection: "advanced",
     },
   },
   {

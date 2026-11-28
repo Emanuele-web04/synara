@@ -69,6 +69,7 @@ import type {
   BrowserWindowConstructorOptions,
   FileFilter,
   IpcMainEvent,
+  IpcMainInvokeEvent,
   MenuItemConstructorOptions,
   MessageBoxOptions,
 } from "electron";
@@ -117,6 +118,7 @@ import {
   requireWindowsBackendExit,
   runAfterDesktopShutdown,
   shouldDeferDesktopWindowClose,
+  shouldHideMainWindowOnClose,
   stopPosixBackendAndWait,
   stopWindowsBackendAndWait,
 } from "./backendShutdown";
@@ -136,7 +138,7 @@ import { DesktopBetaChannel, readBetaImportResult, resolveBetaHomeDir } from "./
 import type { ExpectedTeamId } from "./betaInstaller";
 import { BetaDiagnostics, type BetaDiagnosticsEventName } from "./betaDiagnostics";
 import { attachBetaRendererDiagnostics } from "./betaRendererDiagnostics";
-import { guardDesktopWindowClose, showDesktopConfirmDialog } from "./confirmDialog";
+import { showDesktopConfirmDialog } from "./confirmDialog";
 import {
   desktopAppIconResourceName,
   isDesktopAppIcon,
@@ -171,7 +173,7 @@ import {
 } from "./desktopQuitIntent";
 import {
   makeRunningChatsQuitGuard,
-  quitConfirmationPresentationForPlatform,
+  parseQuitConfirmationReference,
   shouldPromptForRunningChatsBeforeQuit,
 } from "./runningChatsQuitGuard";
 import { installShutdownSignalHandlers } from "./shutdownSignals";
@@ -604,6 +606,12 @@ const browserPerfLoggingEnabled = process.env.SYNARA_BROWSER_PERF === "1";
 type DesktopUpdateErrorContext = DesktopUpdateState["errorContext"];
 
 let mainWindow: BrowserWindow | null = null;
+/**
+ * Cancels a hide armed by {@link hideMainWindow} while the window leaves a
+ * macOS fullscreen Space. Showing the window withdraws the hide, so an armed
+ * hide can never order out a window the app just brought back.
+ */
+let cancelPendingMainWindowHide: (() => void) | null = null;
 /** Whether the live BrowserWindow was created with `frame: false` (win32/linux). */
 let customTitleBarActive = false;
 let backendProcess: ChildProcess.ChildProcess | null = null;
@@ -631,7 +639,6 @@ let updaterWindowToRestore: BrowserWindow | null = null;
 const updateInstallPreparation = makeUpdateInstallPreparationCoordinator();
 const deferredDesktopQuitIntent = makeDeferredDesktopQuitIntentCoordinator();
 const runningChatsQuitGuard = makeRunningChatsQuitGuard();
-let nativeQuitConfirmationPromise: Promise<boolean> | null = null;
 let desktopShutdownPromise: Promise<void> | null = null;
 let desktopStartupBlockedForDatabaseRestore = false;
 const migrationConsentHandoff = new MigrationConsentHandoff();
@@ -1833,6 +1840,10 @@ function dispatchMenuAction(action: string): void {
   const send = () => {
     if (targetWindow.isDestroyed() || isMacUpdateShuttingDown()) return;
     targetWindow.webContents.send(IPC.menuAction, action);
+    if (targetWindow === mainWindow) {
+      // A hide armed for a fullscreen Space would otherwise order this window out.
+      cancelPendingMainWindowHide?.();
+    }
     if (!targetWindow.isVisible()) {
       targetWindow.show();
     }
@@ -2350,6 +2361,7 @@ function focusMainWindow(options: { stealAppFocus?: boolean } = {}): void {
   if (mainWindow.isMinimized()) {
     mainWindow.restore();
   }
+  cancelPendingMainWindowHide?.();
   if (!mainWindow.isVisible()) {
     mainWindow.show();
   }
@@ -5190,6 +5202,16 @@ function hideDesktopWindowForImmediateQuit(): void {
     if (process.platform === "win32") {
       window.setSkipTaskbar(true);
     }
+    if (window.isFullScreen()) {
+      // The close path waits for the Space to leave; a quitting process does not need to.
+      try {
+        window.setFullScreen(false);
+      } catch (error: unknown) {
+        writeDesktopLogHeader(
+          `leave fullscreen for quit failed message=${formatErrorMessage(error)}`,
+        );
+      }
+    }
     window.hide();
   } catch (error: unknown) {
     writeDesktopLogHeader(`hide window for quit failed message=${formatErrorMessage(error)}`);
@@ -5263,6 +5285,45 @@ function isMainRendererAvailable(): boolean {
   );
 }
 
+/** Only the main window's own top frame may drive quit IPC. */
+function isMainRendererIpc(event: IpcMainEvent | IpcMainInvokeEvent): boolean {
+  return (
+    event.sender === mainWindow?.webContents &&
+    event.senderFrame !== null &&
+    event.senderFrame === event.sender.mainFrame
+  );
+}
+
+/**
+ * Hides the main window. A window that owns a macOS fullscreen Space must leave
+ * it first: orderOut under the Space leaves it black and unreachable. The timer
+ * covers a transition that never reports its end, so ⌘W always hides.
+ */
+function hideMainWindow(window: BrowserWindow): void {
+  cancelPendingMainWindowHide?.();
+  if (!window.isFullScreen()) {
+    window.hide();
+    return;
+  }
+  let hidden = false;
+  const hide = (): void => {
+    if (hidden) return;
+    hidden = true;
+    clearTimeout(fallbackTimer);
+    window.removeListener("leave-full-screen", hide);
+    cancelPendingMainWindowHide = null;
+    if (!window.isDestroyed()) window.hide();
+  };
+  const fallbackTimer = setTimeout(hide, 1000).unref();
+  window.once("leave-full-screen", hide);
+  cancelPendingMainWindowHide = () => {
+    clearTimeout(fallbackTimer);
+    window.removeListener("leave-full-screen", hide);
+    cancelPendingMainWindowHide = null;
+  };
+  window.setFullScreen(false);
+}
+
 async function confirmRunningChatsThenQuit(reason: string): Promise<void> {
   if (
     !shouldPromptForRunningChatsBeforeQuit(reason) ||
@@ -5277,38 +5338,31 @@ async function confirmRunningChatsThenQuit(reason: string): Promise<void> {
 
   const window = mainWindow;
   if (!isMainRendererAvailable()) {
-    nativeQuitConfirmationPromise ??= showDesktopConfirmDialog(
-      t("desktop:quit4", { value0: APP_DISPLAY_NAME }),
-      null,
-    )
-      .catch((error) => {
-        console.warn("[desktop] Failed to confirm app quit", error);
-        return false;
-      })
-      .finally(() => {
-        nativeQuitConfirmationPromise = null;
-      });
-    if (await nativeQuitConfirmationPromise) requestGracefulAppQuit(reason);
+    // There is no page to ask, and the app does not fall back to a native
+    // alert: a quit nobody can see is not worth delaying.
+    writeDesktopLogHeader(`${reason} quitting without the quit question (no renderer)`);
+    requestGracefulAppQuit(reason);
     return;
   }
-  const presentation = quitConfirmationPresentationForPlatform();
   const allowed = await runningChatsQuitGuard.askRenderer({
     send: (request) => {
       if (!isMainRendererAvailable() || !window) {
         throw new Error("Renderer unavailable.");
       }
-      if (window.isMinimized()) {
-        window.restore();
-      }
-      window.show();
-      window.focus();
       window.webContents.send(IPC.quitConfirmationRequest, request);
     },
     isRendererAvailable: isMainRendererAvailable,
-    presentation,
+    // The page acks only when it will show the question, so a quit that never
+    // asks never flashes the window.
+    onReady: () => focusMainWindow({ stealAppFocus: true }),
+    withdraw: (requestId) => {
+      if (isMainRendererAvailable() && mainWindow) {
+        mainWindow.webContents.send(IPC.quitConfirmationWithdrawn, { requestId });
+      }
+    },
   });
   if (!allowed) {
-    writeDesktopLogHeader(`${reason} stayed because chats are still running`);
+    writeDesktopLogHeader(`${reason} stayed because the quit question was not confirmed`);
     return;
   }
   requestGracefulAppQuit(reason);
@@ -5379,11 +5433,7 @@ function registerIpcHandlers(): void {
 
   ipcMain.removeAllListeners(IPC.betaDiagnostics.enabled);
   ipcMain.on(IPC.betaDiagnostics.enabled, (event: IpcMainEvent) => {
-    event.returnValue = Boolean(
-      betaDiagnostics?.isCollecting() &&
-      event.sender === mainWindow?.webContents &&
-      event.senderFrame === event.sender.mainFrame,
-    );
+    event.returnValue = Boolean(betaDiagnostics?.isCollecting() && isMainRendererIpc(event));
   });
 
   ipcMain.removeAllListeners(IPC.browser.webMcpCompatibilityPolicy);
@@ -5472,8 +5522,17 @@ function registerIpcHandlers(): void {
   });
 
   ipcMain.removeAllListeners(IPC.quitConfirmationResponse);
-  ipcMain.on(IPC.quitConfirmationResponse, (_event, payload: unknown) => {
+  ipcMain.on(IPC.quitConfirmationResponse, (event, payload: unknown) => {
+    if (!isMainRendererIpc(event)) return;
     runningChatsQuitGuard.receiveResponse(payload);
+  });
+
+  ipcMain.removeHandler(IPC.quitConfirmationBegin);
+  ipcMain.handle(IPC.quitConfirmationBegin, (event, payload: unknown) => {
+    if (!isMainRendererIpc(event)) return false;
+    const reference = parseQuitConfirmationReference(payload);
+    if (!reference) return false;
+    return runningChatsQuitGuard.beginCommit(reference.requestId);
   });
 
   ipcMain.removeHandler(IPC.setMenuShortcuts);
@@ -6214,17 +6273,6 @@ function createWindow(): BrowserWindow {
   window.on("unmaximize", () => emitDesktopWindowState(window));
   window.on("enter-full-screen", () => emitDesktopWindowState(window));
   window.on("leave-full-screen", () => emitDesktopWindowState(window));
-  if (process.platform === "darwin") {
-    guardDesktopWindowClose(
-      window,
-      () => t("desktop:closeTheWindow", { app: APP_DISPLAY_NAME }),
-      () =>
-        !isQuitting &&
-        !desktopShutdownComplete &&
-        !isUpdaterQuitAndInstallInFlight &&
-        !isUpdaterInstallPreparing,
-    );
-  }
   window.on("close", (event) => {
     try {
       writeDesktopWindowState(DESKTOP_WINDOW_STATE_PATH, {
@@ -6234,6 +6282,24 @@ function createWindow(): BrowserWindow {
       });
     } catch (error) {
       console.warn(`[desktop] Failed to persist window state: ${formatErrorMessage(error)}`);
+    }
+
+    // On macOS closing hides: the app, its renderer and its running chats stay
+    // active, and the Dock icon brings the window back. Closing the window is
+    // not a quit, so an open quit question stops waiting for an answer.
+    if (
+      shouldHideMainWindowOnClose({
+        platform: process.platform,
+        quitting: isQuitting,
+        shutdownComplete: desktopShutdownComplete,
+        updaterHandoffActive: isUpdaterQuitAndInstallInFlight,
+        updaterInstallPreparing: isUpdaterInstallPreparing,
+      })
+    ) {
+      event.preventDefault();
+      runningChatsQuitGuard.cancelPending();
+      hideMainWindow(window);
+      return;
     }
 
     if (
@@ -6246,15 +6312,6 @@ function createWindow(): BrowserWindow {
       event.preventDefault();
       void confirmRunningChatsThenQuit("window-close");
       return;
-    }
-
-    if (
-      process.platform === "linux" &&
-      !desktopShutdownComplete &&
-      !isUpdaterQuitAndInstallInFlight
-    ) {
-      event.preventDefault();
-      void confirmRunningChatsThenQuit("window-close");
     }
   });
 
@@ -6702,6 +6759,18 @@ app.on("before-quit", (event) => {
     // Keep user/system quits from preempting the pending updater install with a plain app.quit().
     deferDesktopQuitUntilUpdaterSettles("before-quit");
     event.preventDefault();
+    return;
+  }
+
+  // Quit asked again while its question is open confirms it, so a second ⌘Q
+  // quits through the same interrupt and resume path as the Quit button.
+  if (runningChatsQuitGuard.hasPendingAsk()) {
+    event.preventDefault();
+    runningChatsQuitGuard.repeatQuit((requestId) => {
+      if (isMainRendererAvailable() && mainWindow) {
+        mainWindow.webContents.send(IPC.quitConfirmationRepeat, { requestId });
+      }
+    });
     return;
   }
 

@@ -11,6 +11,7 @@ import {
   requireWindowsBackendExit,
   runAfterDesktopShutdown,
   shouldDeferDesktopWindowClose,
+  shouldHideMainWindowOnClose,
   startDesktopBackendShutdownRequest,
   stopPosixBackendAndWait,
   stopWindowsBackendAndWait,
@@ -719,8 +720,34 @@ describe("runAfterDesktopShutdown", () => {
   });
 });
 
+describe("shouldHideMainWindowOnClose", () => {
+  const idle = {
+    platform: "darwin" as NodeJS.Platform,
+    quitting: false,
+    shutdownComplete: false,
+    updaterHandoffActive: false,
+    updaterInstallPreparing: false,
+  };
+
+  it("hides an ordinary close on macOS", () => {
+    expect(shouldHideMainWindowOnClose(idle)).toBe(true);
+  });
+
+  it("lets a quit, shutdown, or updater-owned close pass through", () => {
+    expect(shouldHideMainWindowOnClose({ ...idle, quitting: true })).toBe(false);
+    expect(shouldHideMainWindowOnClose({ ...idle, shutdownComplete: true })).toBe(false);
+    expect(shouldHideMainWindowOnClose({ ...idle, updaterHandoffActive: true })).toBe(false);
+    expect(shouldHideMainWindowOnClose({ ...idle, updaterInstallPreparing: true })).toBe(false);
+  });
+
+  it("closes on platforms that have nowhere to reopen the window", () => {
+    expect(shouldHideMainWindowOnClose({ ...idle, platform: "win32" })).toBe(false);
+    expect(shouldHideMainWindowOnClose({ ...idle, platform: "linux" })).toBe(false);
+  });
+});
+
 describe("shouldDeferDesktopWindowClose", () => {
-  it("keeps Windows windows alive until shutdown or updater handoff is proven", () => {
+  it("keeps Windows and Linux windows alive until shutdown or updater handoff is proven", () => {
     expect(
       shouldDeferDesktopWindowClose({
         platform: "win32",
@@ -734,7 +761,7 @@ describe("shouldDeferDesktopWindowClose", () => {
         shutdownComplete: false,
         updaterHandoffActive: false,
       }),
-    ).toBe(false);
+    ).toBe(true);
     expect(
       shouldDeferDesktopWindowClose({
         platform: "win32",
