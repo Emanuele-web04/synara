@@ -108,6 +108,20 @@ export interface ProjectionTurnWaitSnapshot {
   }>;
 }
 
+export const ProjectionAgentWaitTarget = Schema.Struct({
+  threadId: ThreadId,
+  turnId: Schema.NullOr(TurnId),
+  pendingMessageId: Schema.NullOr(MessageId),
+});
+export type ProjectionAgentWaitTarget = typeof ProjectionAgentWaitTarget.Type;
+
+export const ProjectionAgentWaitSnapshot = Schema.Struct({
+  ...ProjectionAgentWaitTarget.fields,
+  state: Schema.NullOr(ProjectionTurnState),
+  error: Schema.NullOr(Schema.String),
+});
+export type ProjectionAgentWaitSnapshot = typeof ProjectionAgentWaitSnapshot.Type;
+
 export const GetProjectionPendingTurnStartInput = Schema.Struct({
   threadId: ThreadId,
 });
@@ -184,6 +198,12 @@ export interface ProjectionTurnRepositoryShape {
     readonly threadIds: ReadonlyArray<GetProjectionTurnByTurnIdInput["threadId"]>;
     readonly turns: ReadonlyArray<GetProjectionTurnByTurnIdInput>;
   }) => Effect.Effect<ProjectionTurnWaitSnapshot, ProjectionRepositoryError>;
+
+  /** Resolve one ordered row per agent wait target, including pending provider starts. */
+  readonly getManyAgentWaitSnapshots: (input: {
+    readonly targets: ReadonlyArray<ProjectionAgentWaitTarget>;
+    readonly resolveUnpinned: boolean;
+  }) => Effect.Effect<ReadonlyArray<ProjectionAgentWaitSnapshot | null>, ProjectionRepositoryError>;
 
   /**
    * Clears checkpoint fields on conflicting rows that reuse the same checkpoint turn count in a thread, excluding the provided turn.

@@ -51,7 +51,12 @@ import { GitCore } from "../../git/Services/GitCore.ts";
 import { GitManager } from "../../git/Services/GitManager.ts";
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
-import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
+import {
+  ProjectionTurnRepository,
+  type ProjectionTurnRepositoryShape,
+} from "../../persistence/Services/ProjectionTurns.ts";
+import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 import {
   ProjectionThread,
   ProjectionThreadRepository,
@@ -393,6 +398,7 @@ function makeHarnessLayer(
     readonly threadPrincipal?: "unmanaged" | "group-member" | "worker" | "coordinator";
     readonly listModels?: (typeof ProviderDiscoveryService)["Service"]["listModels"];
     readonly threadDetails?: ReadonlyMap<string, OrchestrationThread>;
+    readonly projectionTurns?: ProjectionTurnRepositoryShape;
     readonly hubCoordinator?: boolean;
     readonly dispatch?: (typeof OrchestrationEngineService)["Service"]["dispatch"];
     readonly commandReceipts?: (typeof OrchestrationCommandReceiptRepository)["Service"];
@@ -1354,32 +1360,35 @@ function makeHarnessLayer(
         }
       : undefined;
   };
-  const projectionTurnsLayer = Layer.succeed(ProjectionTurnRepository, {
-    getByTurnId: ({ threadId, turnId }: { threadId: string; turnId: string }) =>
-      Effect.succeed(Option.fromNullishOr(readProjectionTurn(threadId, turnId))),
-    getManyByTurnId: (input: ReadonlyArray<{ threadId: string; turnId: string }>) =>
-      Effect.sync(() => {
-        batchTurnReads += 1;
-        return input.flatMap(({ threadId, turnId }) => {
-          const turn = readProjectionTurn(threadId, turnId);
-          return turn ? [turn] : [];
-        });
-      }),
-    getManyWaitSnapshot: (input: {
-      readonly threadIds: ReadonlyArray<string>;
-      readonly turns: ReadonlyArray<{ threadId: string; turnId: string }>;
-    }) =>
-      Effect.sync(() => {
-        batchTurnReads += 1;
+  const getManyAgentWaitSnapshots: ProjectionTurnRepositoryShape["getManyAgentWaitSnapshots"] = ({
+    targets,
+    resolveUnpinned,
+  }) =>
+    Effect.sync(() => {
+      batchTurnReads += 1;
+      return targets.map(({ threadId, turnId }) => {
+        const thread = threadsById.get(threadId);
+        if (!thread) return null;
+        const selectedTurnId = turnId ?? (resolveUnpinned ? thread.latestTurn?.turnId : null);
+        const turn = selectedTurnId ? readProjectionTurn(threadId, selectedTurnId) : undefined;
         return {
-          existingThreadIds: input.threadIds.filter((threadId) => threadsById.has(threadId)),
-          turns: input.turns.flatMap(({ threadId, turnId }) => {
-            const turn = readProjectionTurn(threadId, turnId);
-            return turn ? [turn] : [];
-          }),
+          threadId,
+          turnId: turn?.turnId ?? null,
+          pendingMessageId: null,
+          state: turn?.state ?? null,
+          error: null,
         };
-      }),
-  } as unknown as (typeof ProjectionTurnRepository)["Service"]);
+      });
+    });
+  const mockProjectionTurns = {
+    getByTurnId: ({ threadId, turnId }) =>
+      Effect.succeed(Option.fromNullishOr(readProjectionTurn(threadId, turnId))),
+    getManyAgentWaitSnapshots,
+  } satisfies Pick<ProjectionTurnRepositoryShape, "getByTurnId" | "getManyAgentWaitSnapshots">;
+  const projectionTurnsLayer = Layer.succeed(
+    ProjectionTurnRepository,
+    options.projectionTurns ?? (mockProjectionTurns as unknown as ProjectionTurnRepositoryShape),
+  );
 
   const gatewayLayer = AgentGatewayLive.pipe(
     Layer.provide(
@@ -5015,6 +5024,107 @@ describe("AgentGateway", () => {
       assert.equal(harness.getWaitReadCounts().detailReads, 0);
     }).pipe(Effect.provide(gatewayLayer));
   });
+
+  it.effect("waits on a queued child and pins the turn started for its request", () =>
+    Effect.gen(function* () {
+      const projectionTurns = yield* ProjectionTurnRepository;
+      const sql = yield* SqlClient.SqlClient;
+      const child = makeThreadShell("queued-wait-child");
+      const messageId = MessageId.makeUnsafe("queued-wait-message");
+      const runId = TurnId.makeUnsafe("queued-wait-run");
+      const readPendingSnapshot = yield* Deferred.make<void>();
+      let observingLongWait = false;
+      const { gatewayLayer, makeHarness } = makeHarnessLayer(
+        [makeThreadShell("thread-parent"), child],
+        [],
+        {
+          projectionTurns: {
+            ...projectionTurns,
+            getManyAgentWaitSnapshots: (input) =>
+              projectionTurns
+                .getManyAgentWaitSnapshots(input)
+                .pipe(
+                  Effect.tap((rows) =>
+                    observingLongWait && rows[0]?.state === "pending"
+                      ? Deferred.succeed(readPendingSnapshot, undefined)
+                      : Effect.void,
+                  ),
+                ),
+          },
+        },
+      );
+      yield* sql`INSERT INTO projection_threads
+        (thread_id, project_id, title, model_selection_json, created_at, updated_at)
+        VALUES (${child.id}, ${PROJECT_ID}, ${child.title}, '{"provider":"codex","model":"gpt-5.5"}', ${NOW}, ${NOW})`;
+      yield* projectionTurns.replacePendingTurnStart({
+        threadId: child.id,
+        messageId,
+        sourceProposedPlanThreadId: null,
+        sourceProposedPlanId: null,
+        requestedAt: NOW,
+      });
+      yield* Effect.gen(function* () {
+        const harness = yield* makeHarness;
+        const callWait = (timeoutMs: number) =>
+          harness.callTool({
+            token: "token-parent",
+            name: "synara_wait_for_threads",
+            args: { threadIds: [child.id], timeoutMs, runIds: [null] },
+          });
+
+        const queued = yield* callWait(0);
+        assert.isFalse(isToolError(queued.result), toolErrorText(queued.result));
+        assert.include(toolResultJson(queued.result), { allTerminal: false, timedOut: true });
+        assert.deepEqual(toolResultJson(queued.result).runIds, [null]);
+        assert.deepEqual(
+          (toolResultJson(queued.result).threads as ReadonlyArray<{ state: string }>).map(
+            (entry) => entry.state,
+          ),
+          ["pending"],
+        );
+
+        observingLongWait = true;
+        const waiting = yield* callWait(5_000).pipe(Effect.forkChild);
+        yield* Deferred.await(readPendingSnapshot);
+        const completedTurn = {
+          threadId: child.id,
+          turnId: runId,
+          pendingMessageId: messageId,
+          sourceProposedPlanThreadId: null,
+          sourceProposedPlanId: null,
+          assistantMessageId: null,
+          state: "completed" as const,
+          requestedAt: NOW,
+          startedAt: NOW,
+          completedAt: NOW,
+          checkpointTurnCount: null,
+          checkpointRef: null,
+          checkpointStatus: null,
+          checkpointFiles: [],
+        };
+        yield* projectionTurns.upsertByTurnId(completedTurn);
+        yield* projectionTurns.deletePendingTurnStartByThreadId({ threadId: child.id });
+        yield* projectionTurns.upsertByTurnId({
+          ...completedTurn,
+          turnId: TurnId.makeUnsafe("queued-wait-unrelated-later-run"),
+          pendingMessageId: null,
+          state: "running",
+          requestedAt: "2026-03-01T10:00:01.000Z",
+          completedAt: null,
+        });
+        yield* TestClock.adjust("200 millis");
+        const completed = yield* Fiber.join(waiting);
+        assert.isFalse(isToolError(completed.result), toolErrorText(completed.result));
+        assert.include(toolResultJson(completed.result), { allTerminal: true, timedOut: false });
+        assert.deepEqual(toolResultJson(completed.result).runIds, [runId]);
+      }).pipe(Effect.provide(gatewayLayer));
+    }).pipe(
+      Effect.provide(
+        ProjectionTurnRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
+      ),
+      Effect.provide(NodeServices.layer),
+    ),
+  );
 
   it.effect("replays the original two-agent incident without runaway replacements", () => {
     const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);
