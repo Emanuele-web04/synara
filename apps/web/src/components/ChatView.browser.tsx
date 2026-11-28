@@ -13342,6 +13342,7 @@ describe("ChatView transcript geometry (full app)", () => {
       viewport: DEFAULT_VIEWPORT,
       snapshot: { ...snapshot, threads: [{ ...snapshot.threads[0]!, session: null }] },
     });
+    const shellAtmosphere = () => document.querySelector<HTMLElement>("[data-shell-atmosphere]");
     const background = () => document.querySelector("[data-empty-chat-backdrop]");
     const styleOf = () => background()?.getAttribute("data-empty-chat-backdrop") ?? null;
     const storedSettings = () => JSON.parse(localStorage.getItem("synara:app-settings:v1") ?? "{}");
@@ -13370,6 +13371,7 @@ describe("ChatView transcript geometry (full app)", () => {
       await goToChat();
       await expect.element(page.getByTestId("empty-landing-heading")).toBeVisible();
       expect(background()).toBeNull();
+      expect(shellAtmosphere()).toBeNull();
       await goToSettings();
       await expect.element(option("Off")).toHaveAttribute("aria-checked", "true");
       await page.getByRole("button", { name: "Reset Empty chat background to default" }).click();
@@ -13378,6 +13380,20 @@ describe("ChatView transcript geometry (full app)", () => {
       await expect.poll(styleOf).toBe("temple");
       useTerminalStateStore.getState().openTerminalThreadPage(THREAD_ID, { terminalOnly: false });
       await expect.poll(background).toBeNull();
+      const atmosphere = shellAtmosphere()!;
+      expect(atmosphere).not.toHaveAttribute("data-empty-chat-backdrop-host");
+      const { left, top, width, height } = atmosphere.getBoundingClientRect();
+      // Make the clip hit-testable. In the app the whole effect is pointer-transparent.
+      atmosphere.style.pointerEvents = "auto";
+      atmosphere.style.zIndex = "100";
+      try {
+        expect(document.elementFromPoint(left + width / 2, top + height / 2)).not.toBe(atmosphere);
+        expect(document.elementFromPoint(left + width / 2, top + 2)).toBe(atmosphere);
+        expect(document.elementFromPoint(left + 2, top + height / 2)).toBe(atmosphere);
+      } finally {
+        atmosphere.style.removeProperty("pointer-events");
+        atmosphere.style.removeProperty("z-index");
+      }
       useTerminalStateStore.getState().setTerminalWorkspaceTab(THREAD_ID, "chat");
       await expect.poll(background).not.toBeNull();
     } finally {

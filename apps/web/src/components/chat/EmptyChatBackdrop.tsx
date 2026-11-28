@@ -519,8 +519,14 @@ function ditherDots(density: Uint8Array, cols: number, rows: number): Uint8Array
 
 export type EmptyChatBackdropStyle = "temple" | "gradient";
 
-export function EmptyChatBackdrop(props: { style: EmptyChatBackdropStyle }) {
-  const { style } = props;
+export function EmptyChatBackdrop({
+  style,
+  placement = "landing",
+}: {
+  style: EmptyChatBackdropStyle;
+  placement?: "landing" | "shell";
+}) {
+  const isLanding = placement === "landing";
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const { activeTheme, resolvedTheme } = useTheme();
@@ -558,8 +564,9 @@ export function EmptyChatBackdrop(props: { style: EmptyChatBackdropStyle }) {
     let lastFrameMs = 0;
     const startMs = performance.now();
     let lastInputMs = startMs;
-    // The gradient moves unless reduced motion asks for a still frame.
-    const animate = style === "gradient" && !reduceMotion;
+    // The persistent shell only needs a still; keep motion local to the landing.
+    const interactive = isLanding && !reduceMotion;
+    const animate = style === "gradient" && interactive;
     // The scene is only fetched once the field is first built in an idle slot.
     let scenePromise: Promise<HTMLImageElement | null> | null = null;
 
@@ -740,8 +747,8 @@ export function EmptyChatBackdrop(props: { style: EmptyChatBackdropStyle }) {
       paintRect(field, { x0: 0, y0: 0, x1: cols, y1: rows }, nowMs);
       lastFrameMs = nowMs;
       container.dataset.ready = "true";
-      // Lets the landing text add a legibility halo while the backdrop is showing.
-      host.dataset.emptyChatBackdropHost = "";
+      // The landing text adds a legibility halo while its backdrop is showing.
+      if (isLanding) host.dataset.emptyChatBackdropHost = "";
       if (animate || ripples.length > 0) wake();
     };
 
@@ -774,8 +781,7 @@ export function EmptyChatBackdrop(props: { style: EmptyChatBackdropStyle }) {
       if (ripples.length > MAX_RIPPLES) ripples.shift();
       wake();
     };
-    // Reduced motion keeps the still picture: no ripples and no drifting gradient.
-    if (!reduceMotion) {
+    if (interactive) {
       host.addEventListener("pointerdown", onPointerDown, { passive: true });
       host.addEventListener("pointerup", onPointerUp, { passive: true });
     }
@@ -802,7 +808,7 @@ export function EmptyChatBackdrop(props: { style: EmptyChatBackdropStyle }) {
     const onVisibilityChange = () => {
       if (animate || ripples.length > 0 || dirty) wake();
     };
-    document.addEventListener("visibilitychange", onVisibilityChange);
+    if (interactive) document.addEventListener("visibilitychange", onVisibilityChange);
     const onInput = () => {
       lastInputMs = performance.now();
     };
@@ -815,7 +821,7 @@ export function EmptyChatBackdrop(props: { style: EmptyChatBackdropStyle }) {
 
     return () => {
       disposed = true;
-      delete host.dataset.emptyChatBackdropHost;
+      if (isLanding) delete host.dataset.emptyChatBackdropHost;
       host.removeEventListener("pointerdown", onPointerDown);
       host.removeEventListener("pointerup", onPointerUp);
       clearTimeout(startTimer);
@@ -828,13 +834,13 @@ export function EmptyChatBackdrop(props: { style: EmptyChatBackdropStyle }) {
       if (frameId !== 0) cancelAnimationFrame(frameId);
       window.clearTimeout(timerId);
     };
-  }, [accent, isDark, reduceMotion, style]);
+  }, [accent, isDark, isLanding, reduceMotion, style]);
 
   return (
     <div
       ref={containerRef}
       aria-hidden
-      data-empty-chat-backdrop={style}
+      data-empty-chat-backdrop={isLanding ? style : undefined}
       className="pointer-events-none absolute inset-0 overflow-hidden opacity-0 transition-opacity duration-700 ease-out select-none contrast-more:hidden data-[ready=true]:opacity-100 motion-reduce:transition-none forced-colors:hidden"
     >
       {skyMask ? (
