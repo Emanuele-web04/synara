@@ -3377,6 +3377,111 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
   });
 
   describe("checkDevinProviderStatus", () => {
+    it.effect("probes the curl-installed Devin CLI when Electron PATH is sparse", () =>
+      Effect.acquireUseRelease(
+        Effect.sync(() => {
+          const home = mkdtempSync(join(OS.tmpdir(), "synara-devin-health-"));
+          const localBin = join(home, ".local", "bin");
+          mkdirSync(localBin, { recursive: true });
+          const executable = join(localBin, "devin");
+          writeFileSync(executable, "#!/bin/sh\nexit 0\n");
+          chmodSync(executable, 0o755);
+          return { home, executable };
+        }),
+        ({ home, executable }) =>
+          Effect.gen(function* () {
+            if (process.platform === "win32") return;
+            yield* scopedEnv({
+              HOME: home,
+              PATH: "/usr/bin:/bin",
+              WINDSURF_API_KEY: undefined,
+              DEVIN_API_KEY: undefined,
+            });
+            let spawnedCommand: string | undefined;
+            const status = yield* makeCheckDevinProviderStatus(
+              undefined,
+              async () => undefined,
+            ).pipe(
+              Effect.provide(
+                Layer.succeed(
+                  ChildProcessSpawner.ChildProcessSpawner,
+                  ChildProcessSpawner.make((command) => {
+                    spawnedCommand = (command as unknown as { command: string }).command;
+                    return Effect.succeed(
+                      mockHandle({ stdout: "devin 3000.15.14\n", stderr: "", code: 0 }),
+                    );
+                  }),
+                ),
+              ),
+            );
+            assert.strictEqual(spawnedCommand, executable);
+            assert.strictEqual(status.status, "ready");
+            assert.strictEqual(status.available, true);
+            assert.strictEqual(status.version, "3000.15.14");
+          }),
+        ({ home }) => Effect.sync(() => rmSync(home, { recursive: true, force: true })),
+      ),
+    );
+
+    it.effect("allows a cold Devin CLI to finish its first version probe", () =>
+      Effect.gen(function* () {
+        const started = yield* Deferred.make<void>();
+        const probe = yield* makeCheckDevinProviderStatus(undefined, async () => undefined).pipe(
+          Effect.provide(
+            Layer.succeed(
+              ChildProcessSpawner.ChildProcessSpawner,
+              ChildProcessSpawner.make(() =>
+                Deferred.succeed(started, undefined).pipe(
+                  Effect.andThen(
+                    Effect.succeed(
+                      mockHandle(
+                        { stdout: "devin 3000.14.30821\n", stderr: "", code: 0 },
+                        {
+                          exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)).pipe(
+                            Effect.delay(Duration.seconds(12)),
+                          ),
+                        },
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+          Effect.forkChild,
+        );
+        yield* Deferred.await(started);
+        yield* TestClock.adjust(Duration.seconds(12));
+        const status = yield* Fiber.join(probe);
+        assert.strictEqual(status.status, "ready");
+        assert.strictEqual(status.available, true);
+        assert.strictEqual(status.version, "3000.14.30821");
+      }),
+    );
+
+    it.effect("keeps the first Devin CLI probe bounded when it never finishes", () =>
+      Effect.gen(function* () {
+        const started = yield* Deferred.make<void>();
+        const probe = yield* makeCheckDevinProviderStatus(undefined, async () => undefined).pipe(
+          Effect.provide(
+            Layer.succeed(
+              ChildProcessSpawner.ChildProcessSpawner,
+              ChildProcessSpawner.make(() =>
+                Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never)),
+              ),
+            ),
+          ),
+          Effect.forkChild,
+        );
+        yield* Deferred.await(started);
+        yield* TestClock.adjust(Duration.seconds(20));
+        const status = yield* Fiber.join(probe);
+        assert.strictEqual(status.status, "error");
+        assert.strictEqual(status.available, false);
+        assert.match(status.message ?? "", /Timed out while running command/);
+      }),
+    );
+
     it.effect("returns ready and authenticated when WINDSURF_API_KEY is present", () =>
       Effect.gen(function* () {
         yield* scopedEnv({ WINDSURF_API_KEY: "windsurf-test-key", DEVIN_API_KEY: undefined });

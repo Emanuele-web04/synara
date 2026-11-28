@@ -3,7 +3,7 @@
 // Layer: Server provider runtime
 
 import { existsSync, readdirSync } from "node:fs";
-import { join, win32 } from "node:path";
+import { join, posix, win32 } from "node:path";
 
 import {
   envPathKeyFor,
@@ -55,6 +55,32 @@ export function commandExistsOnPath(
     if (canExecute(candidate.path)) return true;
   }
   return false;
+}
+
+export function resolvePosixBinaryAtPaths(
+  candidates: ReadonlyArray<string>,
+  options: ProviderBinaryResolutionOptions = {},
+): string | undefined {
+  const resolved = resolveOptions(options);
+  if (resolved.platform === "win32") return undefined;
+
+  const canExecute =
+    options.isExecutable ?? (options.pathExists ? resolved.pathExists : resolved.isExecutable);
+  for (const candidate of candidates) {
+    if (canExecute(candidate)) return candidate;
+  }
+  return undefined;
+}
+
+export function resolvePosixUserLocalBinary(
+  command: string,
+  options: ProviderBinaryResolutionOptions = {},
+): string | undefined {
+  const resolved = resolveOptions(options);
+  const home = resolved.env.HOME?.trim();
+  if (!home) return undefined;
+
+  return resolvePosixBinaryAtPaths([posix.join(home, ".local", "bin", command)], options);
 }
 
 export function resolveWindowsLocalAppDataBinary(

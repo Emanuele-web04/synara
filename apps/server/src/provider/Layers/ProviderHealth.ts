@@ -140,6 +140,7 @@ const DEFAULT_TIMEOUT_MS = 4_000;
 const CLAUDE_HEALTH_TIMEOUT_MS = 20_000;
 const OPENCODE_HEALTH_TIMEOUT_MS = 20_000;
 const PI_HEALTH_TIMEOUT_MS = 20_000;
+const DEVIN_HEALTH_TIMEOUT_MS = 20_000;
 const CODEX_AUTH_STATUS_ARGS = ["-c", "mcp_servers={}", "login", "status"] as const;
 const CODEX_PROVIDER = "codex" as const;
 const CLAUDE_AGENT_PROVIDER = "claudeAgent" as const;
@@ -2518,12 +2519,12 @@ export const makeCheckDevinProviderStatus = (
 ): Effect.Effect<ServerProviderStatus, never, ChildProcessSpawner.ChildProcessSpawner> =>
   Effect.gen(function* () {
     const checkedAt = new Date().toISOString();
-    const executable = resolveDevinBinaryPath(binaryPath);
     const env = makeProviderProbeEnv(DEVIN_PROVIDER, environment);
+    const executable = resolveDevinBinaryPath(binaryPath, { env });
 
     const versionProbe = yield* probeProviderCliVersion(
       runProviderCommand(executable, ["--version"], { env }),
-      DEFAULT_TIMEOUT_MS,
+      DEVIN_HEALTH_TIMEOUT_MS,
     );
 
     if (versionProbe.outcome === "missing" || versionProbe.outcome === "failure") {
