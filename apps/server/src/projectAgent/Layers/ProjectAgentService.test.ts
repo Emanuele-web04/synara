@@ -5,6 +5,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
   AutomationId,
+  CommandId,
   DEFAULT_SERVER_SETTINGS,
   ProjectActivityId,
   ProjectDocumentRevisionId,
@@ -13,8 +14,10 @@ import {
   ProjectInboxEventId,
   ProjectTaskId,
   ThreadId,
+  TurnId,
   type HubWorkRecord,
   type OrchestrationCommand,
+  type OrchestrationEvent,
   type ProviderKind,
   type ProjectAgentStreamEvent,
   type ServerProviderStatus,
@@ -35,11 +38,14 @@ import { GitCore } from "../../git/Services/GitCore.ts";
 import { AutomationService } from "../../automation/Services/AutomationService.ts";
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
+import { checkpointRefForThreadTurn } from "../../checkpointing/Utils.ts";
 import { ProjectAgentRepositoryLive } from "../../persistence/Layers/ProjectAgentRepository.ts";
 import { HubWorkRepositoryLive } from "../../persistence/Layers/HubWorkRepository.ts";
 import { HubWorkRepository } from "../../persistence/Services/HubWorkRepository.ts";
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
 import { ProjectAgentRepository } from "../../persistence/Services/ProjectAgentRepository.ts";
+import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
+import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
 import { ProjectionThreadRepository } from "../../persistence/Services/ProjectionThreads.ts";
 import { coordinatorWelcomeMessageId } from "../groupCoordinatorHost.ts";
 import {
@@ -341,7 +347,19 @@ function makeTestLayer(options?: {
       } as unknown as ProjectionSnapshotQuery["Service"];
     }),
   );
+  const threadEvents: Array<
+    Pick<OrchestrationEvent, "aggregateId" | "type" | "commandId" | "sequence">
+  > = [];
   const orchestrationLayer = Layer.succeed(OrchestrationEngineService, {
+    readThreadEvents: (threadId: string, after: number, eventTypes: ReadonlyArray<string>) =>
+      Stream.fromIterable(
+        threadEvents.filter(
+          (event) =>
+            event.aggregateId === threadId &&
+            event.sequence > after &&
+            eventTypes.includes(event.type),
+        ),
+      ),
     dispatch: (command: OrchestrationCommand) =>
       Effect.gen(function* () {
         dispatched.push(command);
@@ -425,6 +443,7 @@ function makeTestLayer(options?: {
     digestGenerationInputs,
     threadShells,
     threadDetails,
+    threadEvents,
     providerSessions,
     toolInFlightByThread,
     shellBatchCalls: () => shellBatchCalls,
@@ -477,6 +496,7 @@ function makeTestLayer(options?: {
       ),
       Layer.provideMerge(ProjectAgentRepositoryLive),
       Layer.provideMerge(HubWorkRepositoryLive),
+      Layer.provideMerge(ProjectionTurnRepositoryLive),
       Layer.provideMerge(SqlitePersistenceMemory),
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "pa-group-" })),
       Layer.provideMerge(NodeServices.layer),
@@ -5280,11 +5300,7 @@ it.effect("logs coordinator check-ins to the activity log without waking it", ()
   }).pipe(Effect.provide(harness.layer));
 });
 
-// A turn-diff that closed missing/error belongs to a turn the ladder
-// interrupted — it settles `interrupted`, never `completed`: the recovery
-// count survives and no false "finished" row posts. A `ready` diff still
-// settles completed and refunds the count (a genuine success).
-it.effect("settles a missing diff as interrupted without resetting the recovery count", () => {
+it.effect("ignores provisional diffs and reports the confirmed interruption once", () => {
   const harness = makeTestLayer();
   return Effect.gen(function* () {
     const service = yield* ProjectAgentService;
@@ -5312,17 +5328,42 @@ it.effect("settles a missing diff as interrupted without resetting the recovery 
     const mid = yield* repository.findManagedWorkerByThread(workerThreadId);
     assert.equal(Option.isSome(mid) ? mid.value.recoveriesUsed : null, 2);
 
-    // The ladder's own interrupt closes the checkpoint `missing`: the
-    // diff-completed event must not read as a clean finish.
-    yield* service.ingestSettledThreadEvent({
-      threadId: workerThreadId,
-      sourceEventId: "diff-missing-1",
-      eventType: "thread.turn-diff-completed",
-      checkpointStatus: "missing",
-      createdAt: "1970-01-01T00:18:00.000Z",
-    });
+    const wakesBeforeDiffs = harness.runNowCalls.length;
+    for (const [i, status] of ["missing", "error", "missing"].entries()) {
+      yield* service.ingestSettledThreadEvent({
+        threadId: workerThreadId,
+        sourceEventId: `diff-${i}`,
+        eventType: "thread.turn-diff-completed",
+        checkpointStatus: status,
+        checkpointRef: `provider-diff:partial-${i}`,
+        createdAt: "1970-01-01T00:18:00.000Z",
+      });
+    }
+    const running = yield* repository.findManagedWorkerByThread(workerThreadId);
+    assert.equal(Option.getOrThrow(running).settleOutcome, null);
+    assert.equal(activityRows(harness, "synara.worker.settled").length, 0);
+    assert.equal(harness.runNowCalls.length, wakesBeforeDiffs);
+
+    const stoppedAt = "1970-01-01T00:18:01.000Z";
+    // The projection already sees the next turn, while the ordered worker
+    // event handler is still consuming the previous interruption.
+    harness.threadShells[workerThreadId] = quietRunningShell("1970-01-01T00:18:02.000Z");
+    for (const id of ["session-interrupted-1", "session-interrupted-replayed"]) {
+      yield* service.ingestSettledThreadEvent({
+        threadId: workerThreadId,
+        sourceEventId: id,
+        eventType: "thread.session-set",
+        confirmedInterruption: { sequence: 12, updatedAt: stoppedAt, lastError: null },
+        createdAt: stoppedAt,
+      });
+    }
     const worker = yield* repository.findManagedWorkerByThread(workerThreadId);
     assert.equal(Option.isSome(worker) ? worker.value.settleOutcome : null, "interrupted");
+    harness.threadShells[workerThreadId] = {
+      ...quietRunningShell(stoppedAt),
+      session: { status: "interrupted", updatedAt: stoppedAt, lastError: null, activeTurnId: null },
+    };
+    yield* service.inspectWorkerHealth();
     // The ladder's own interrupt never refunds the attempts it spent.
     assert.equal(Option.isSome(worker) ? worker.value.recoveriesUsed : null, 2);
     assert.equal(activityRows(harness, "synara.worker.settled").length, 1);
@@ -5337,6 +5378,31 @@ it.effect("settles a missing diff as interrupted without resetting the recovery 
       eventType: "thread.turn-start-requested",
       createdAt: "1970-01-01T00:19:00.000Z",
     });
+    harness.threadEvents.push({
+      aggregateId: workerThreadId,
+      type: "thread.turn-start-requested",
+      commandId: CommandId.makeUnsafe("coordinator:follow-up"),
+      sequence: 14,
+    });
+    yield* service.ingestSettledThreadEvent({
+      threadId: workerThreadId,
+      sourceEventId: "session-interrupted-delayed",
+      eventType: "thread.session-set",
+      confirmedInterruption: {
+        sequence: 13,
+        updatedAt: "1970-01-01T00:18:02.000Z",
+        lastError: null,
+      },
+      createdAt: "1970-01-01T00:19:01.000Z",
+    });
+    const followUp = yield* repository.findManagedWorkerByThread(workerThreadId);
+    assert.equal(Option.getOrThrow(followUp).settleOutcome, null);
+    assert.equal(activityRows(harness, "synara.worker.settled").length, 1);
+    harness.threadShells[workerThreadId] = {
+      projectId: groupId,
+      title: "Stalled worker",
+      session: { status: "ready", updatedAt: "1970-01-01T00:25:00.000Z", lastError: null },
+    };
     yield* service.ingestSettledThreadEvent({
       threadId: workerThreadId,
       sourceEventId: "diff-ready-1",
@@ -5349,6 +5415,185 @@ it.effect("settles a missing diff as interrupted without resetting the recovery 
     assert.equal(Option.isSome(finished) ? finished.value.recoveriesUsed : null, 0);
     assert.equal(activityRows(harness, "synara.worker.settled").length, 2);
   }).pipe(Effect.provide(Layer.merge(harness.layer, TestClock.layer())));
+});
+
+it.effect("settles a completed Git turn whose final checkpoint has no baseline", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    const turns = yield* ProjectionTurnRepository;
+    const overview = yield* configureTestGroup(service, "missing-baseline-setup");
+    const threadId = ThreadId.makeUnsafe("thread-missing-baseline-worker");
+    const turnId = TurnId.makeUnsafe("turn-missing-baseline");
+    const checkpointRef = checkpointRefForThreadTurn(threadId, 1);
+    yield* service.recordManagedWorkerThreads({
+      requestId: "register-missing-baseline-worker",
+      callerThreadId: overview.config!.coordinatorThreadId,
+      threadIds: [threadId],
+      titles: ["Worker without baseline"],
+    });
+    yield* turns.upsertByTurnId({
+      threadId,
+      turnId,
+      pendingMessageId: null,
+      sourceProposedPlanThreadId: null,
+      sourceProposedPlanId: null,
+      assistantMessageId: null,
+      state: "completed",
+      requestedAt: now,
+      startedAt: now,
+      completedAt: now,
+      checkpointTurnCount: 1,
+      checkpointRef,
+      checkpointStatus: "missing",
+      checkpointFiles: [],
+    });
+    const checkpoint = {
+      threadId,
+      turnId,
+      eventType: "thread.turn-diff-completed",
+      checkpointStatus: "missing",
+      checkpointRef,
+      createdAt: now,
+    };
+    // A canonical missing checkpoint can itself create the above projection
+    // row even when the cancelled provider turn has not been ingested yet.
+    yield* service.ingestSettledThreadEvent({
+      ...checkpoint,
+      sourceEventId: "canonical-missing-unconfirmed",
+    });
+    assert.isNull(
+      Option.getOrThrow(yield* repository.findManagedWorkerByThread(threadId)).settleOutcome,
+    );
+    assert.equal(harness.runNowCalls.length, 0);
+    yield* service.ingestSettledThreadEvent({
+      ...checkpoint,
+      sourceEventId: "canonical-missing-success",
+      providerTurnSucceeded: true,
+    });
+    const worker = Option.getOrThrow(yield* repository.findManagedWorkerByThread(threadId));
+    assert.equal(worker.settleOutcome, "completed");
+    assert.equal(activityRows(harness, "synara.worker.settled").length, 1);
+    assert.equal(harness.runNowCalls.length, 1);
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("keeps an accepted Retry queued until the interrupted attempt settles", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    const overview = yield* configureTestGroup(service, "queued-retry-setup");
+    const threadId = ThreadId.makeUnsafe("thread-queued-retry");
+    yield* service.recordManagedWorkerThreads({
+      requestId: "register-queued-retry",
+      callerThreadId: overview.config!.coordinatorThreadId,
+      threadIds: [threadId],
+      titles: ["Retrying worker"],
+      prompts: ["Finish the review"],
+    });
+    yield* service.recordWorkerTurnRequest({
+      threadId,
+      commandId: "original-attempt",
+      dispatchOrigin: "agent",
+      turnId: "original-turn",
+      eventType: "thread.turn-start-requested",
+      createdAt: now,
+    });
+    harness.threadShells[threadId] = quietRunningShell(now);
+    yield* service.resolveWorkerAlert(
+      { requestId: "queued-retry", projectId: groupId, threadId, action: "retry" },
+      { kind: "user" },
+    );
+    const queued = Option.getOrThrow(yield* repository.findManagedWorkerByThread(threadId));
+    assert.equal(queued.activeTurnCommandId, "original-attempt");
+    yield* service.ingestSettledThreadEvent({
+      threadId,
+      sourceEventId: "stop-after-retry-queued",
+      eventType: "thread.session-set",
+      confirmedInterruption: { sequence: 13, updatedAt: now, lastError: null },
+      createdAt: now,
+    });
+    const stopped = Option.getOrThrow(yield* repository.findManagedWorkerByThread(threadId));
+    assert.equal(stopped.activeTurnCommandId, "original-attempt");
+    assert.equal(stopped.settleOutcome, "interrupted");
+    yield* service.recordWorkerTurnRequest({
+      threadId,
+      commandId: "server:dispatch-queued-turn:12",
+      messageId: "agent-resolve:queued-retry:retry:message",
+      dispatchOrigin: "user",
+      turnId: null,
+      eventType: "thread.turn-start-requested",
+      createdAt: "2026-09-20T00:00:01.000Z",
+    });
+    const promoted = Option.getOrThrow(yield* repository.findManagedWorkerByThread(threadId));
+    assert.equal(promoted.activeTurnOrigin, "user");
+    assert.equal(promoted.activeTurnCommandId, "server:dispatch-queued-turn:12");
+    assert.equal(promoted.settleOutcome, null);
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("replays a confirmed interruption after monitor row delivery fails", () => {
+  const failing: Array<OrchestrationCommand["type"]> = [];
+  const harness = makeTestLayer({ failCommandTypes: failing });
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    const overview = yield* configureTestGroup(service, "interruption-replay-setup");
+    const threadId = ThreadId.makeUnsafe("thread-interruption-replay");
+    const peerThreadId = ThreadId.makeUnsafe("thread-interruption-replay-peer");
+    yield* service.recordManagedWorkerThreads({
+      requestId: "register-interruption-replay",
+      callerThreadId: overview.config!.coordinatorThreadId,
+      threadIds: [threadId, peerThreadId],
+      titles: ["Interrupted worker", "Completed peer"],
+    });
+    yield* service.ingestSettledThreadEvent({
+      threadId: peerThreadId,
+      sourceEventId: "peer-settled-while-stop-confirmation-lagged",
+      eventType: "thread.turn-diff-completed",
+      createdAt: "2026-09-20T00:00:02.000Z",
+    });
+    const initialWakeCount = harness.runNowCalls.length;
+    const before = yield* repository.getCursor(groupId);
+    failing.push("thread.activity.append");
+    yield* service.ingestSettledThreadEvent({
+      threadId,
+      sourceEventId: "interruption-to-replay",
+      eventType: "thread.session-set",
+      confirmedInterruption: { sequence: 12, updatedAt: now, lastError: "Provider interrupted" },
+      createdAt: now,
+    });
+    const worker = Option.getOrThrow(yield* repository.findManagedWorkerByThread(threadId));
+    assert.equal(worker.settleOutcome, "interrupted");
+    assert.equal(harness.runNowCalls.length, initialWakeCount);
+    assert.equal(
+      (yield* repository.getCursor(groupId)).processedThroughInboxId,
+      before.processedThroughInboxId,
+    );
+    failing.length = 0;
+    harness.dispatched.length = 0;
+    yield* service.reconcilePendingWakes();
+    yield* service.reconcilePendingWakes();
+    yield* service.ingestSettledThreadEvent({
+      threadId,
+      sourceEventId: "same-interruption-new-timestamp",
+      eventType: "thread.session-set",
+      confirmedInterruption: {
+        sequence: 13,
+        updatedAt: "2026-09-20T00:00:01.000Z",
+        lastError: "Provider interrupted",
+      },
+      createdAt: "2026-09-20T00:00:01.000Z",
+    });
+    assert.equal(activityRows(harness, "synara.worker.settled").length, 1);
+    assert.equal(activityRows(harness, "synara.workers.settled").length, 1);
+    const inbox = yield* repository.listInboxAfter({ projectId: groupId, limit: 20 });
+    const rollup = inbox.find((row) => row.eventType === "workers.settled");
+    assert.isDefined(rollup);
+    assert.equal((yield* repository.getCursor(groupId)).processedThroughInboxId, rollup?.id);
+  }).pipe(Effect.provide(harness.layer));
 });
 
 // A provider that only echoes the recovery steer emits activity without real

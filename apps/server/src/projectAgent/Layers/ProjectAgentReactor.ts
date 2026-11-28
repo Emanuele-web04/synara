@@ -13,7 +13,6 @@ import { ProjectAgentService } from "../Services/ProjectAgentService.ts";
 
 const SETTLE_EVENT_TYPES: ReadonlySet<OrchestrationEvent["type"]> = new Set([
   "thread.turn-diff-completed",
-  "thread.turn-interrupt-requested",
   "thread.session-set",
   "thread.session-stop-requested",
 ]);
@@ -78,6 +77,9 @@ const make = Effect.gen(function* () {
         yield* projectAgent.recordWorkerTurnRequest({
           threadId: payload.threadId as ThreadId,
           commandId: event.commandId,
+          ...("messageId" in payload && typeof payload.messageId === "string"
+            ? { messageId: payload.messageId }
+            : {}),
           dispatchOrigin:
             "dispatchOrigin" in payload && typeof payload.dispatchOrigin === "string"
               ? payload.dispatchOrigin
@@ -117,14 +119,28 @@ const make = Effect.gen(function* () {
       }
       const payload = event.payload;
       if (!("threadId" in payload)) return;
+      if (event.type === "thread.turn-diff-completed" && event.payload.preserveLatestTurn) return;
       yield* projectAgent.ingestSettledThreadEvent({
         threadId: payload.threadId as ThreadId,
         sourceEventId: `${event.sequence}:${event.type}`,
         eventType: event.type,
-        // A turn-diff that closed missing/error (e.g. a turn the ladder
-        // interrupted) is reclassified inside ingest as an interruption.
-        ...("status" in payload && typeof payload.status === "string"
-          ? { checkpointStatus: payload.status }
+        ...(event.type === "thread.session-set" && event.payload.session.status === "interrupted"
+          ? {
+              confirmedInterruption: {
+                sequence: event.sequence,
+                updatedAt: event.payload.session.updatedAt,
+                lastError: event.payload.session.lastError,
+              },
+            }
+          : {}),
+        ...(event.type === "thread.turn-diff-completed"
+          ? {
+              checkpointStatus: event.payload.status,
+              checkpointRef: event.payload.checkpointRef,
+              ...(event.payload.providerTurnSucceeded
+                ? { providerTurnSucceeded: true as const }
+                : {}),
+            }
           : {}),
         ...("turnId" in payload && typeof payload.turnId === "string"
           ? { turnId: payload.turnId }

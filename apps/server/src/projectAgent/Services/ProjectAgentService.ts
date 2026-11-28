@@ -249,10 +249,16 @@ export interface ProjectAgentServiceShape {
     readonly threadId: ThreadId;
     readonly sourceEventId: string;
     readonly eventType: string;
-    /** Checkpoint status carried by `thread.turn-diff-completed` — a diff that
-     * ended `missing`/`error` describes an interrupted turn, never a clean
-     * finish, and must not settle the worker as `completed`. */
+    /** A final Git checkpoint can have no usable baseline. */
     readonly checkpointStatus?: string;
+    readonly checkpointRef?: string;
+    readonly providerTurnSucceeded?: true;
+    /** Confirmed status from the event, even if the projection has already advanced. */
+    readonly confirmedInterruption?: {
+      readonly sequence: number;
+      readonly updatedAt: string;
+      readonly lastError: string | null;
+    };
     /** Turn the event belongs to — used to classify coordinator check-in
      * turns for the group activity log. */
     readonly turnId?: string;
@@ -265,11 +271,12 @@ export interface ProjectAgentServiceShape {
    * Turn-ownership signal from the reactor: classifies the originating
    * command (coordinator / ladder / user), clears a latched needs-you on any
    * new turn, and re-arms monitoring on a terminally settled worker when the
-   * new turn is coordinator- or ladder-originated.
+   * new turn is coordinator- or ladder-originated or an explicit Retry.
    */
   readonly recordWorkerTurnRequest: (input: {
     readonly threadId: ThreadId;
     readonly commandId: string | null;
+    readonly messageId?: string;
     readonly dispatchOrigin: string | null;
     readonly turnId: string | null;
     /** Orchestration event type that carried the request

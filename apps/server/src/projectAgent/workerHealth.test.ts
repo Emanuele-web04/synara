@@ -174,13 +174,13 @@ describe("worker health", () => {
     ).toBe("failed");
   });
 
-  it("maps an interrupt to interrupted", () => {
+  it("requires an observed interruption before reporting interrupted", () => {
     expect(
       classifyWorkerSettlement({
         eventType: "thread.turn-interrupt-requested",
         sessionStatus: "running",
       }),
-    ).toBe("interrupted");
+    ).toBe("updated");
     expect(
       classifyWorkerSettlement({
         eventType: "worker.interrupted",

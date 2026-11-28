@@ -144,6 +144,7 @@ import { LibraryError, ProjectAgentServiceError } from "../Errors.ts";
 import { isAllowedGroupCoordinatorCreateTarget } from "../groupCreateAllowlist.ts";
 import { gateProjectAgentServiceForStable, isServerGroupsEnabled } from "../groupsBetaGate.ts";
 import { cleanupGroupWorkspaceRoot } from "../../groupWorkspaceScaffold.ts";
+import { isManagedCheckpointRefForThread } from "../../checkpointing/Utils.ts";
 import {
   hashDocumentContent,
   materializeDocumentPath,
@@ -346,9 +347,10 @@ const SEED_DOCUMENTS: ReadonlyArray<{ path: string; content: string }> = [
   },
 ];
 
-// A completion receipt stores only facts needed to finish its existing effects.
-const NonGitDelivery = Schema.Struct({
-  turnId: TurnId,
+// Older completion receipts always have a turnId and imply a completed outcome.
+const WorkerSettlementDelivery = Schema.Struct({
+  turnId: Schema.optional(TurnId),
+  interrupted: Schema.optional(Schema.Literal(true)),
   completedAt: Schema.String,
   report: Schema.String,
   goalId: Schema.NullOr(ProjectGoalId),
@@ -363,7 +365,9 @@ const NonGitDelivery = Schema.Struct({
     activeTurnCommandId: ProjectManagedWorker.fields.activeTurnCommandId,
   }),
 });
-const decodeNonGitDelivery = Schema.decodeUnknownSync(Schema.fromJsonString(NonGitDelivery));
+const decodeWorkerSettlementDelivery = Schema.decodeUnknownSync(
+  Schema.fromJsonString(WorkerSettlementDelivery),
+);
 
 export const makeProjectAgentService = Effect.gen(function* () {
   const repository = yield* ProjectAgentRepository;
@@ -627,7 +631,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
         const fresh = yield* repository
           .findManagedWorkerByThread(worker.threadId)
           .pipe(Effect.mapError(toServiceError("Failed to re-read managed worker.")));
-        // A non-Git completion belongs to the observed attempt, never a newer
+        // An attempt-specific settlement belongs to the observed attempt, never a newer
         // coordinator/user turn that won the monitor write while we awaited I/O.
         if (
           input.expectedTurnCommandId !== undefined &&
@@ -665,6 +669,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
     readonly eventType: string;
     readonly sourceEventId: string;
     readonly createdAt: string;
+    readonly rollupCreatedAt?: string;
     readonly coordinatorThreadId: ThreadId;
     readonly taskId: ProjectTaskId | null;
     /** Paused/archived groups keep recording worker state but post no rows. */
@@ -778,7 +783,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
       yield* postWorkerBatchRollup({
         worker: persistedWorker,
         coordinatorThreadId: input.coordinatorThreadId,
-        createdAt: input.createdAt,
+        createdAt: input.rollupCreatedAt ?? input.createdAt,
         suppressRows: input.suppressRows,
         taskId: input.taskId,
         prUrl,
@@ -1947,12 +1952,16 @@ export const makeProjectAgentService = Effect.gen(function* () {
       })
       .pipe(Effect.mapError(toServiceError("Failed to persist request receipt.")));
 
-  // Replay only the already-admitted completion; never mutate a newer attempt.
-  const finishNonGitDelivery = (event: ProjectInboxEvent, config: ProjectAgentConfig) =>
+  // Replay already-admitted settlements without mutating a newer attempt.
+  const finishWorkerSettlementDelivery = (event: ProjectInboxEvent, config: ProjectAgentConfig) =>
     Effect.gen(function* () {
       if (
-        event.eventType !== "worker.completed" ||
-        !event.sourceEventId.startsWith("worker-non-git-completed:")
+        !(
+          (event.eventType === "worker.completed" &&
+            event.sourceEventId.startsWith("worker-non-git-completed:")) ||
+          (event.eventType === "worker.interrupted" &&
+            event.sourceEventId.startsWith(`worker-health:${event.sourceThreadId}:interrupted:`))
+        )
       )
         return;
       const doneId = `${event.sourceEventId}:delivered`;
@@ -1968,9 +1977,11 @@ export const makeProjectAgentService = Effect.gen(function* () {
       });
       if (Option.isNone(pending)) return;
       const delivery = yield* Effect.try({
-        try: () => decodeNonGitDelivery(pending.value.resultJson),
-        catch: toServiceError("Failed to decode worker completion receipt."),
+        try: () => decodeWorkerSettlementDelivery(pending.value.resultJson),
+        catch: toServiceError("Failed to decode worker settlement receipt."),
       });
+      const outcome = delivery.interrupted ? "interrupted" : "completed";
+      const sourceTurn = delivery.turnId === undefined ? {} : { turnId: delivery.turnId };
       const current = yield* repository.findManagedWorkerByThread(event.sourceThreadId);
       if (Option.isNone(current)) {
         yield* storeReceipt(doneId, event.projectId, "worker-completion-delivered", {
@@ -1978,10 +1989,10 @@ export const makeProjectAgentService = Effect.gen(function* () {
         });
         return; // A deleted worker is never resurrected.
       }
-      const worker = {
+      const worker: ProjectManagedWorker = {
         ...current.value,
         ...delivery.worker,
-        settleOutcome: "completed" as const,
+        settleOutcome: outcome,
         settledAt: delivery.completedAt,
       };
       const reportPath = workerInboxReportPath(event.sourceThreadId);
@@ -2008,16 +2019,20 @@ export const makeProjectAgentService = Effect.gen(function* () {
           logicalPath: reportPath,
           content: delivery.report,
           authorThreadId: event.sourceThreadId,
-          sources: [{ threadId: event.sourceThreadId, turnId: delivery.turnId, path: reportPath }],
+          sources: [{ threadId: event.sourceThreadId, ...sourceTurn, path: reportPath }],
           ensureMirror: true,
         });
       yield* recordWorkerMonitorEvent({
         worker,
         settledWorker: worker,
         replayDelivery: true,
-        eventType: "worker.completed",
+        eventType: event.eventType,
         sourceEventId: event.sourceEventId,
         createdAt: delivery.completedAt,
+        // A replayed interruption may be older than the acknowledged cursor.
+        ...(delivery.interrupted
+          ? { rollupCreatedAt: new Date(Date.parse(event.createdAt) + 1).toISOString() }
+          : {}),
         coordinatorThreadId: config.coordinatorThreadId,
         taskId: delivery.worker.taskId,
         lastKnownPr: delivery.prUrl ? { url: delivery.prUrl } : null,
@@ -2041,8 +2056,8 @@ export const makeProjectAgentService = Effect.gen(function* () {
               actorThreadId: event.sourceThreadId,
               goalId: delivery.goalId,
               taskId: delivery.worker.taskId,
-              source: { path: reportPath, threadId: event.sourceThreadId, turnId: delivery.turnId },
-              summary: `Worker ${delivery.worker.title} reported: completed.`,
+              source: { path: reportPath, threadId: event.sourceThreadId, ...sourceTurn },
+              summary: `Worker ${delivery.worker.title} reported: ${outcome}.`,
               createdAt: delivery.completedAt,
             });
             if (delivery.worker.taskId !== null)
@@ -2057,17 +2072,17 @@ export const makeProjectAgentService = Effect.gen(function* () {
                 authorThreadId: event.sourceThreadId,
                 sourceThreadId: event.sourceThreadId,
                 sourceMessageId: null,
-                sourceTurnId: delivery.turnId,
+                sourceTurnId: delivery.turnId ?? null,
                 summary: delivery.report.slice(0, 4_000).trim() || "Worker settlement report.",
                 createdAt: delivery.completedAt,
               });
             yield* storeReceipt(doneId, event.projectId, "worker-completion-delivered", {
-              turnId: delivery.turnId,
+              ...sourceTurn,
             });
           }),
         )
-        .pipe(Effect.mapError(toServiceError("Failed to finish worker completion delivery.")));
-    }).pipe(Effect.mapError(toServiceError("Failed to deliver worker completion.")));
+        .pipe(Effect.mapError(toServiceError("Failed to finish worker settlement delivery.")));
+    }).pipe(Effect.mapError(toServiceError("Failed to deliver worker settlement.")));
 
   interface WakeReceiptResult {
     readonly runId?: string;
@@ -5757,6 +5772,33 @@ export const makeProjectAgentService = Effect.gen(function* () {
 
     ingestSettledThreadEvent: (input) =>
       Effect.gen(function* () {
+        // A live provider diff carries no outcome. A canonical missing
+        // checkpoint can still describe a completed Git turn without a baseline.
+        const missingFinalCheckpoint =
+          input.eventType === "thread.turn-diff-completed" && input.checkpointStatus === "missing";
+        if (
+          input.eventType === "thread.turn-diff-completed" &&
+          input.checkpointStatus !== undefined &&
+          input.checkpointStatus !== "ready"
+        ) {
+          if (
+            !missingFinalCheckpoint ||
+            input.providerTurnSucceeded !== true ||
+            !input.checkpointRef ||
+            !isManagedCheckpointRefForThread(input.checkpointRef, input.threadId) ||
+            input.turnId === undefined
+          )
+            return;
+          const turn = yield* projectionTurns
+            .getByTurnId({ threadId: input.threadId, turnId: TurnId.makeUnsafe(input.turnId) })
+            .pipe(Effect.mapError(toServiceError("Failed to verify final worker checkpoint.")));
+          if (
+            Option.isNone(turn) ||
+            turn.value.state !== "completed" ||
+            turn.value.checkpointRef !== input.checkpointRef
+          )
+            return;
+        }
         const task = yield* repository
           .findTaskByAssignedThread(input.threadId)
           .pipe(Effect.mapError(toServiceError("Failed to resolve task for event.")));
@@ -5783,15 +5825,31 @@ export const makeProjectAgentService = Effect.gen(function* () {
           .getConfig(projectId)
           .pipe(Effect.mapError(toServiceError("Failed to load coordinator for event.")));
         if (Option.isNone(config) || !config.value.enabled) return;
-        // A diff-completed event whose checkpoint closed missing/error belongs
-        // to a turn that did not finish cleanly — e.g. a turn the recovery
-        // ladder itself interrupted. Reclassify it so everything downstream
-        // treats it as an interruption (never `completed`): no false
-        // "finished" row, and the recovery counter is not reset by the
-        // ladder's own interrupt.
+        const managedWorker = Option.isSome(task) || Option.isSome(worker);
+        const confirmedInterruption =
+          input.eventType === "thread.session-set" && managedWorker
+            ? input.confirmedInterruption
+            : undefined;
+        const activeCommandId = Option.isSome(worker) ? worker.value.activeTurnCommandId : null;
+        if (confirmedInterruption && activeCommandId !== null) {
+          // A retry can update the worker row outside the ordered event consumer.
+          // Use the durable command order to keep an old stop off a newer attempt.
+          const newerRequest = yield* orchestrationEngine
+            .readThreadEvents(input.threadId, confirmedInterruption.sequence, [
+              "thread.turn-start-requested",
+              "thread.turn-queued",
+            ])
+            .pipe(
+              Stream.filter((event) => event.commandId === activeCommandId),
+              Stream.runHead,
+              Effect.mapError(toServiceError("Failed to verify the interrupted worker attempt.")),
+            );
+          if (Option.isSome(newerRequest)) return;
+        }
         const nonGitTurn =
+          !confirmedInterruption &&
           (input.eventType === "thread.session-set" || input.eventType === "worker.completed") &&
-          (Option.isSome(worker) || Option.isSome(task)) &&
+          managedWorker &&
           Option.isSome(shell)
             ? yield* completedNonGitTurn(shell.value)
             : null;
@@ -5800,16 +5858,16 @@ export const makeProjectAgentService = Effect.gen(function* () {
           (!nonGitTurn || nonGitTurn.turnId !== input.turnId)
         )
           return;
-        const sourceEventId = nonGitTurn
-          ? `worker-non-git-completed:${input.threadId}:${nonGitTurn.turnId}`
-          : input.sourceEventId;
-        const eventType = nonGitTurn
-          ? "worker.completed"
-          : input.eventType === "thread.turn-diff-completed" &&
-              input.checkpointStatus !== undefined &&
-              input.checkpointStatus !== "ready"
-            ? "worker.interrupted"
-            : input.eventType;
+        let sourceEventId = input.sourceEventId;
+        let eventType = input.eventType;
+        if (nonGitTurn) {
+          sourceEventId = `worker-non-git-completed:${input.threadId}:${nonGitTurn.turnId}`;
+          eventType = "worker.completed";
+        } else if (confirmedInterruption) {
+          // Use the health poller's identity so both observations deliver one wake.
+          sourceEventId = `worker-health:${input.threadId}:interrupted:${confirmedInterruption.updatedAt}`;
+          eventType = "worker.interrupted";
+        }
         if (Option.isSome(configByCoordinator)) {
           // Coordinator self-events never wake coordination. Automation
           // "check-in" turns additionally stay out of the coordinator
@@ -5860,7 +5918,6 @@ export const makeProjectAgentService = Effect.gen(function* () {
         // (silent/nudged/redispatched/waiting-overdue/never-started/… )
         // posts its rows but never burns a coordinator turn; the model is
         // woken only when the ladder gives up or the worker settles.
-        const managedWorker = Option.isSome(task) || Option.isSome(worker);
         const eligibleWake = managedWorker
           ? WORKER_WAKE_EVENT_TYPES.has(eventType)
           : isWorkerAlertEvent(eventType);
@@ -5877,31 +5934,46 @@ export const makeProjectAgentService = Effect.gen(function* () {
           eligibleWake,
           createdAt: input.createdAt,
         };
-        let delivery: typeof NonGitDelivery.Type | undefined;
-        if (nonGitTurn && Option.isSome(worker)) {
-          const newest = yield* projectionMessages
-            .getNewestIdByThreadTurnRole({
-              threadId: input.threadId,
-              turnId: nonGitTurn.turnId,
-              role: "assistant",
-            })
-            .pipe(Effect.mapError(toServiceError("Failed to read completed worker reply.")));
+        const interrupted =
+          eventType === "worker.interrupted" &&
+          sourceEventId.startsWith(`worker-health:${input.threadId}:interrupted:`);
+        let delivery: typeof WorkerSettlementDelivery.Type | undefined;
+        if ((nonGitTurn || interrupted) && Option.isSome(worker)) {
+          const newest = nonGitTurn
+            ? yield* projectionMessages
+                .getNewestIdByThreadTurnRole({
+                  threadId: input.threadId,
+                  turnId: nonGitTurn.turnId,
+                  role: "assistant",
+                })
+                .pipe(Effect.mapError(toServiceError("Failed to read completed worker reply.")))
+            : Option.none();
           const message = Option.isSome(newest)
             ? yield* projectionMessages
                 .getByThreadAndMessageId({ threadId: input.threadId, messageId: newest.value })
                 .pipe(Effect.mapError(toServiceError("Failed to read completed worker reply.")))
             : Option.none();
           delivery = {
-            turnId: nonGitTurn.turnId,
-            completedAt: nonGitTurn.completedAt!,
+            ...(nonGitTurn ? { turnId: nonGitTurn.turnId } : { interrupted: true }),
+            completedAt:
+              nonGitTurn?.completedAt ??
+              confirmedInterruption?.updatedAt ??
+              (Option.isSome(shell) ? shell.value.session?.updatedAt : undefined) ??
+              input.createdAt,
             goalId: Option.isSome(task) ? task.value.goalId : null,
             prUrl: Option.isSome(shell) ? (shell.value.lastKnownPr?.url ?? null) : null,
             report: formatWorkerSettlementReport({
               title: worker.value.title,
               threadId: input.threadId,
-              eventType: "worker.completed",
-              status: "ready",
-              lastError: null,
+              eventType,
+              status: interrupted ? "interrupted" : "ready",
+              lastError: interrupted
+                ? confirmedInterruption
+                  ? confirmedInterruption.lastError
+                  : Option.isSome(shell)
+                    ? shell.value.session?.lastError
+                    : null
+                : null,
               lastAssistantText: Option.isSome(message) ? message.value.text.slice(0, 4_000) : null,
             }),
             worker: {
@@ -5919,32 +5991,43 @@ export const makeProjectAgentService = Effect.gen(function* () {
           .insertInboxEvent(inboxEvent)
           .pipe(Effect.mapError(toServiceError("Failed to record project inbox event.")));
         const admitted =
-          nonGitTurn && Option.isSome(worker)
+          delivery && Option.isSome(worker)
             ? yield* withProjectLock(
                 projectId,
                 sql
                   .withTransaction(
                     Effect.gen(function* () {
                       // The engine writes pending starts/turns in the same SQLite database.
-                      // Claim before any report or wake; a queued or newer attempt wins.
-                      const current = yield* snapshotQuery.getThreadShellById(input.threadId);
-                      const pending = yield* projectionTurns.getPendingTurnStartByThreadId({
-                        threadId: input.threadId,
-                      });
+                      // Claim before any report or wake; a newer attempt wins.
                       const freshWorker = yield* repository.findManagedWorkerByThread(
                         input.threadId,
                       );
                       if (
-                        Option.isNone(current) ||
-                        Option.isSome(pending) ||
                         Option.isNone(freshWorker) ||
-                        current.value.latestTurn?.turnId !== nonGitTurn.turnId ||
-                        current.value.latestTurn.state !== "completed" ||
-                        current.value.session?.status !== "ready" ||
-                        current.value.session.activeTurnId !== null ||
                         freshWorker.value.activeTurnCommandId !== worker.value.activeTurnCommandId
                       )
                         return null;
+                      if (interrupted && freshWorker.value.settleOutcome === "interrupted") {
+                        return { inserted: false, event: inboxEvent };
+                      }
+                      if (!confirmedInterruption) {
+                        const current = yield* snapshotQuery.getThreadShellById(input.threadId);
+                        const pending = yield* projectionTurns.getPendingTurnStartByThreadId({
+                          threadId: input.threadId,
+                        });
+                        if (Option.isNone(current) || Option.isSome(pending)) return null;
+                        const session = current.value.session;
+                        if (
+                          nonGitTurn
+                            ? current.value.latestTurn?.turnId !== nonGitTurn.turnId ||
+                              current.value.latestTurn.state !== "completed" ||
+                              session?.status !== "ready" ||
+                              session.activeTurnId !== null
+                            : session?.status !== "interrupted" ||
+                              session.updatedAt !== delivery.completedAt
+                        )
+                          return null;
+                      }
                       const cursor = yield* repository.getCursor(projectId);
                       const frozen = cursor.frozenToInboxId
                         ? yield* repository.getInboxEvent({
@@ -5971,15 +6054,15 @@ export const makeProjectAgentService = Effect.gen(function* () {
                       if (!inserted.inserted) return inserted;
                       const saved = yield* persistWorkerSettlement({
                         worker: freshWorker.value,
-                        outcome: "completed",
+                        outcome: interrupted ? "interrupted" : "completed",
                         taskId: Option.isSome(task) ? task.value.id : null,
-                        createdAt: nonGitTurn.completedAt!,
+                        createdAt: delivery.completedAt,
                         updatedAt: observedAt,
                         expectedTurnCommandId: freshWorker.value.activeTurnCommandId,
                       });
                       if (!saved)
                         return yield* Effect.fail(
-                          fail("Completed worker attempt changed before settlement."),
+                          fail("Worker attempt changed before settlement."),
                         );
                       yield* storeReceipt(
                         sourceEventId,
@@ -5990,12 +6073,12 @@ export const makeProjectAgentService = Effect.gen(function* () {
                       return inserted;
                     }),
                   )
-                  .pipe(Effect.mapError(toServiceError("Failed to claim completed worker turn."))),
+                  .pipe(Effect.mapError(toServiceError("Failed to claim settled worker turn."))),
               )
             : yield* insert;
         if (!admitted) return;
         const inserted = admitted;
-        if (nonGitTurn && Option.isSome(worker)) {
+        if (delivery) {
           // The wake owner replays delivery before acknowledging its inbox row.
           yield* impl.processPendingWakes(projectId);
           yield* impl.scheduleDigest(projectId);
@@ -6015,16 +6098,26 @@ export const makeProjectAgentService = Effect.gen(function* () {
           const lastAssistantText = Option.isSome(detail)
             ? lastAssistantTextFromMessages(detail.value.messages)
             : null;
+          const session = Option.isSome(shell) ? shell.value.session : null;
+          const status = confirmedInterruption
+            ? "interrupted"
+            : missingFinalCheckpoint
+              ? "ready"
+              : session?.status;
           const outcome = classifyWorkerSettlement({
             eventType,
-            sessionStatus: Option.isSome(shell) ? shell.value.session?.status : null,
+            sessionStatus: status,
           });
           const report = formatWorkerSettlementReport({
             title,
             threadId: input.threadId,
             eventType,
-            status: Option.isSome(shell) ? shell.value.session?.status : null,
-            lastError: Option.isSome(shell) ? shell.value.session?.lastError : null,
+            status,
+            lastError: confirmedInterruption
+              ? confirmedInterruption.lastError
+              : missingFinalCheckpoint
+                ? null
+                : session?.lastError,
             lastAssistantText,
           });
           const written = yield* upsertSystemDocument({
@@ -6093,7 +6186,9 @@ export const makeProjectAgentService = Effect.gen(function* () {
             worker: worker.value,
             eventType,
             sourceEventId,
-            ...(nonGitTurn ? { expectedTurnCommandId: worker.value.activeTurnCommandId } : {}),
+            ...(nonGitTurn || confirmedInterruption
+              ? { expectedTurnCommandId: worker.value.activeTurnCommandId }
+              : {}),
             createdAt: nonGitTurn?.completedAt ?? input.createdAt,
             coordinatorThreadId: config.value.coordinatorThreadId,
             taskId: Option.isSome(task) ? task.value.id : null,
@@ -6138,7 +6233,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
             if (pending.length === 0) break;
             const readyPrefix: ProjectInboxEvent[] = [];
             for (const event of pending) {
-              const delivered = yield* finishNonGitDelivery(event, config).pipe(
+              const delivered = yield* finishWorkerSettlementDelivery(event, config).pipe(
                 Effect.as(true),
                 // Keep the durable hole pending and materialize other ready
                 // completions without clearing an unrelated frozen continuation.
@@ -6526,13 +6621,16 @@ export const makeProjectAgentService = Effect.gen(function* () {
             : input.commandId !== null && input.commandId.startsWith(WORKER_RECOVERY_COMMAND_PREFIX)
               ? ("ladder" as const)
               : ("coordinator" as const);
+        const isAlertRetry =
+          origin === "user" &&
+          input.messageId?.startsWith("agent-resolve:") === true &&
+          input.messageId.endsWith(":retry:message");
         const updated: ProjectManagedWorker = {
           ...worker,
           activeTurnOrigin: origin,
           activeTurnCommandId: input.commandId ?? worker.activeTurnCommandId,
-          // Re-arm: a new coordinator/ladder turn on a settled worker re-opens
-          // monitoring — the next settle reports again.
-          ...(origin !== "user"
+          // A queued Retry belongs to the stopped attempt until promotion.
+          ...(origin !== "user" || isAlertRetry
             ? {
                 settledAt: null,
                 settleOutcome: null,
@@ -6668,16 +6766,9 @@ export const makeProjectAgentService = Effect.gen(function* () {
             createdAt: nowIso,
           })
           .pipe(Effect.mapError(toServiceError("Failed to re-dispatch the worker turn.")));
-        // The retry belongs to the user — mark ownership so the health ladder
-        // doesn't steer over it — and the worker is monitored again.
-        yield* persistWorkerResolve({
-          activeTurnOrigin: "user",
-          activeTurnCommandId: commandId,
-          needsYou: false,
-          needsYouAt: null,
-          settledAt: null,
-          settleOutcome: null,
-        });
+        // Dismiss the alert now. Only the ordered turn-start request can
+        // transfer ownership and re-arm monitoring for the accepted retry.
+        yield* persistWorkerResolve({ needsYou: false, needsYouAt: null });
         return { resolved: true };
       }),
 

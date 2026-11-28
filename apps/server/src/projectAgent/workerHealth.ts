@@ -93,7 +93,6 @@ export function isWorkerAlertEvent(eventType: string): boolean {
 export const WORKER_WAKE_EVENT_TYPES: ReadonlySet<string> = new Set([
   "thread.turn-diff-completed",
   "worker.completed",
-  "thread.turn-interrupt-requested",
   "thread.session-stop-requested",
   "approval.requested",
   "user-input.requested",
@@ -127,7 +126,6 @@ const WORKER_REPORT_ASSISTANT_TEXT_MAX_CHARS = 4_000;
 
 const WORKER_SETTLEMENT_REPORT_EVENTS = new Set([
   "thread.turn-diff-completed",
-  "thread.turn-interrupt-requested",
   "thread.session-stop-requested",
 ]);
 
@@ -147,11 +145,7 @@ export function classifyWorkerSettlement(input: {
 }): WorkerSettlementOutcome {
   const status = input.sessionStatus ?? "";
   const eventType = input.eventType;
-  if (
-    eventType.includes("interrupt") ||
-    status === "interrupted" ||
-    eventType === "worker.interrupted"
-  ) {
+  if (status === "interrupted" || eventType === "worker.interrupted") {
     return "interrupted";
   }
   if (
@@ -220,7 +214,6 @@ export function workerMonitorNoticeForEvent(eventType: string): WorkerMonitorNot
         marker: "\u26a0",
         phrase: "needs your input",
       };
-    case "thread.turn-interrupt-requested":
     case "worker.interrupted":
       return {
         kind: "settle",

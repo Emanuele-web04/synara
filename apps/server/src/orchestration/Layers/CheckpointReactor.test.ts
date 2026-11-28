@@ -2426,6 +2426,135 @@ describe("CheckpointReactor", () => {
     payload: { state: "completed" },
   });
 
+  it.each(["completed", "cancelled"] as const)(
+    "distinguishes provider %s from a missing Git baseline before lifecycle ingestion",
+    async (state) => {
+      const workspace = createGitRepository();
+      tempDirs.push(workspace);
+      const wakes: string[] = [];
+      const h = await createHarness({
+        projectWorkspaceRoot: workspace,
+        threadWorktreePath: workspace,
+        providerSessionCwd: workspace,
+        seedFilesystemCheckpoints: false,
+        simulateProviderBaseline: false,
+        hubWakes: wakes,
+      });
+      const service = await runtime!.runPromise(
+        Effect.serviceOption(ProjectAgentService).pipe(Effect.map(Option.getOrThrow)),
+      );
+      const repository = await runtime!.runPromise(
+        Effect.serviceOption(ProjectAgentRepository).pipe(Effect.map(Option.getOrThrow)),
+      );
+      const projectId = asProjectId("project-1");
+      const threadId = ThreadId.makeUnsafe("thread-1");
+      const coordinatorThreadId = ThreadId.makeUnsafe("baseline-hub-coordinator");
+      const createdAt = new Date().toISOString();
+      const modelSelection = { provider: "codex" as const, model: "fixture" };
+      await Effect.runPromise(
+        h.engine.dispatch({
+          type: "thread.create",
+          commandId: CommandId.makeUnsafe("baseline-hub-create"),
+          threadId: coordinatorThreadId,
+          projectId,
+          title: "Coordinator",
+          modelSelection,
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          branch: null,
+          worktreePath: null,
+          createdAt,
+        }),
+      );
+      await runtime!.runPromise(
+        repository.saveConfig(
+          {
+            projectId,
+            coordinatorThreadId,
+            coordinatorName: "Coordinator",
+            coordinatorModelSelection: modelSelection,
+            limits: {
+              maxConcurrentWorkers: 1,
+              maxNewWorkersPerTurn: 2,
+              maxWorkerCreationsPerGoal: 10,
+              maxAutomaticContinuationsPerGoal: 4,
+              maxRepairRoundsPerTask: 1,
+            },
+            captureEnabled: true,
+            enabled: true,
+            automationId: AutomationId.makeUnsafe("baseline-hub-wake"),
+            revision: 1,
+            createdAt,
+            updatedAt: createdAt,
+            disabledAt: null,
+            pausedAt: null,
+            archivedAt: null,
+          },
+          null,
+        ),
+      );
+      await runtime!.runPromise(
+        service.recordManagedWorkerThreads({
+          requestId: "baseline-worker",
+          callerThreadId: coordinatorThreadId,
+          threadIds: [threadId],
+          titles: ["Git worker"],
+        }),
+      );
+      const getWorker = async () =>
+        Option.getOrThrow(
+          await runtime!.runPromise(repository.findManagedWorkerByThread(threadId)),
+        );
+      await runtime!.runPromise(
+        repository.upsertManagedWorker({ ...(await getWorker()), recoveriesUsed: 2 }),
+      );
+      const turnId = asTurnId("missing-git-baseline");
+      const setSession = (status: "running" | "interrupted") =>
+        Effect.runPromise(
+          h.engine.dispatch({
+            type: "thread.session.set",
+            commandId: CommandId.makeUnsafe(`baseline-session-${status}`),
+            threadId,
+            session: {
+              threadId,
+              status,
+              providerName: "codex",
+              runtimeMode: "approval-required",
+              activeTurnId: status === "running" ? turnId : null,
+              lastError: null,
+              updatedAt: createdAt,
+            },
+            createdAt,
+          }),
+        );
+      await setSession("running");
+      await runtime!.runPromise(
+        h.runtimeEvents.append({
+          type: "turn.completed",
+          eventId: EventId.makeUnsafe("terminal-provider-event"),
+          provider: "codex",
+          threadId,
+          turnId,
+          createdAt,
+          payload: { state },
+        }),
+      );
+      await h.drain();
+      const thread = await waitForThread(h.engine, (entry) => entry.checkpoints.length === 1);
+      expect(thread.checkpoints[0]?.status).toBe("missing");
+      if (state === "cancelled") await setSession("interrupted");
+      await expect
+        .poll(async () => (await getWorker()).settleOutcome)
+        .toBe(state === "completed" ? "completed" : "interrupted");
+      expect((await getWorker()).recoveriesUsed).toBe(state === "completed" ? 0 : 2);
+      await expect.poll(() => wakes.length).toBe(1);
+      const inbox = await runtime!.runPromise(repository.listInboxAfter({ projectId, limit: 20 }));
+      expect(inbox.filter((event) => event.eligibleWake).map((event) => event.eventType)).toEqual([
+        state === "completed" ? "thread.turn-diff-completed" : "worker.interrupted",
+      ]);
+    },
+  );
+
   it.each([
     "live",
     "recovery",
