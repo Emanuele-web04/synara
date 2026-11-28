@@ -8,6 +8,7 @@ import {
   SPACE_JUMP_KEYBINDING_COMMANDS,
   STATIC_KEYBINDING_COMMANDS,
   THREAD_JUMP_KEYBINDING_COMMANDS,
+  THREAD_TAB_JUMP_KEYBINDING_COMMANDS,
   type KeybindingCommand,
   type ResolvedKeybindingRule,
   type ResolvedKeybindingsConfig,
@@ -71,6 +72,16 @@ const SPACE_JUMP_DEFINITIONS: readonly ShortcutDefinition[] = Array.from(
       index === 0
         ? "Switch straight to the Void tab of the space switcher."
         : "Switch straight to this tab of the space switcher.",
+  }),
+);
+
+// Tab jumps address the open-thread tab strip from left to right.
+const THREAD_TAB_JUMP_DEFINITIONS: readonly ShortcutDefinition[] = Array.from(
+  { length: 9 },
+  (_, index) => ({
+    command: `threadTab.jump.${index + 1}` as KeybindingCommand,
+    label: `Jump to tab ${index + 1}`,
+    description: "Switch straight to this open thread tab, counted from the left.",
   }),
 );
 
@@ -300,6 +311,7 @@ const AVAILABLE_NOW_DEFINITIONS: readonly ShortcutDefinition[] = [
     label: "Close tab",
     description: "Close the active open-thread tab, like a browser tab.",
   },
+  ...THREAD_TAB_JUMP_DEFINITIONS,
   {
     command: "editor.openFavorite",
     label: "Open in favorite editor",
@@ -458,18 +470,21 @@ function singleCommandEditorDefinitions(
 
 /**
  * Every built-in command in the order Settings → Keybindings lists it, bound or not.
- * The two 1–9 families come back as one definition each so the editor can show and
+ * The three 1–9 families come back as one definition each so the editor can show and
  * rebind them as a single shortcut.
  */
 export function listShortcutEditorDefinitions(): ShortcutEditorDefinition[] {
-  const spaceJumpCommands = new Set<KeybindingCommand>(SPACE_JUMP_KEYBINDING_COMMANDS);
+  const numberedFamilyCommands = new Set<KeybindingCommand>([
+    ...SPACE_JUMP_KEYBINDING_COMMANDS,
+    ...THREAD_TAB_JUMP_KEYBINDING_COMMANDS,
+  ]);
   const definitions: ShortcutEditorDefinition[] = [
     ...singleCommandEditorDefinitions([SIDEBAR_TOGGLE_DEFINITION]),
     ...singleCommandEditorDefinitions(
       AVAILABLE_NOW_DEFINITIONS.filter(
         (definition) =>
           Array.isArray(definition.command) ||
-          !spaceJumpCommands.has(definition.command as KeybindingCommand),
+          !numberedFamilyCommands.has(definition.command as KeybindingCommand),
       ),
     ),
     ...(NATIVE_EDITOR_ON ? singleCommandEditorDefinitions(CODE_EDITOR_DEFINITIONS) : []),
@@ -487,6 +502,13 @@ export function listShortcutEditorDefinitions(): ShortcutEditorDefinition[] {
       description: "Switch straight to a tab of the space switcher. 1 is always Void.",
       commands: SPACE_JUMP_KEYBINDING_COMMANDS,
       members: singleCommandEditorDefinitions(SPACE_JUMP_DEFINITIONS),
+    },
+    {
+      id: "threadTab.jump",
+      label: "Jump to tab 1–9",
+      description: "Switch straight to an open thread tab, counted from the left.",
+      commands: THREAD_TAB_JUMP_KEYBINDING_COMMANDS,
+      members: singleCommandEditorDefinitions(THREAD_TAB_JUMP_DEFINITIONS),
     },
   ];
 

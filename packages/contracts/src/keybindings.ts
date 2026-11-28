@@ -88,6 +88,15 @@ export const STATIC_KEYBINDING_COMMANDS = [
   "threadTab.next",
   "threadTab.previous",
   "threadTab.close",
+  "threadTab.jump.1",
+  "threadTab.jump.2",
+  "threadTab.jump.3",
+  "threadTab.jump.4",
+  "threadTab.jump.5",
+  "threadTab.jump.6",
+  "threadTab.jump.7",
+  "threadTab.jump.8",
+  "threadTab.jump.9",
   "editor.openFavorite",
   "editor.file.save",
   "editor.commands",
@@ -137,6 +146,21 @@ export const SPACE_JUMP_KEYBINDING_COMMANDS = [
   "space.jump.9",
 ] as const;
 export type SpaceJumpKeybindingCommand = (typeof SPACE_JUMP_KEYBINDING_COMMANDS)[number];
+
+// Shared list of numbered open-thread-tab jumps used by the web shortcut UI. Index 0 is
+// the leftmost tab in the chat header's tab strip. They ship without default bindings.
+export const THREAD_TAB_JUMP_KEYBINDING_COMMANDS = [
+  "threadTab.jump.1",
+  "threadTab.jump.2",
+  "threadTab.jump.3",
+  "threadTab.jump.4",
+  "threadTab.jump.5",
+  "threadTab.jump.6",
+  "threadTab.jump.7",
+  "threadTab.jump.8",
+  "threadTab.jump.9",
+] as const;
+export type ThreadTabJumpKeybindingCommand = (typeof THREAD_TAB_JUMP_KEYBINDING_COMMANDS)[number];
 
 export const SCRIPT_RUN_COMMAND_PATTERN = Schema.TemplateLiteral([
   Schema.Literal("script."),

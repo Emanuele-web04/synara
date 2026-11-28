@@ -20,7 +20,7 @@ import {
 } from "~/hooks/useOpenThreadTabs";
 import { useOptimisticTabSelection } from "~/hooks/useOptimisticTabSelection";
 import { useStableCallback } from "~/hooks/useStableCallback";
-import { resolveShortcutCommand } from "~/keybindings";
+import { resolveShortcutCommand, threadTabJumpIndexFromCommand } from "~/keybindings";
 import { PlusSignIcon, TerminalIcon } from "~/lib/icons";
 import { isTerminalFocused } from "~/lib/terminalFocus";
 import { showThreadContextMenu } from "~/lib/threadContextMenu";
@@ -90,11 +90,22 @@ export function OpenThreadTabStrip(props: {
 
   // Previous/next tab, wrapping at either end like a browser. Steps from the tab painted
   // as active, so a quick run of presses walks the strip before each thread renders.
+  // threadTab.jump.N selects the Nth tab in strip order; a number past the last tab
+  // leaves the key alone.
   const onKeyDown = useStableCallback((event: KeyboardEvent) => {
     if (event.defaultPrevented || event.repeat) return;
     const command = resolveShortcutCommand(event, keybindings, {
       context: { terminalFocus: isTerminalFocused() },
     });
+    const jumpIndex = command ? threadTabJumpIndexFromCommand(command) : null;
+    if (jumpIndex !== null) {
+      const target = tabs[jumpIndex];
+      if (!target) return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (target.threadId !== shownThreadId) selectTab(target.threadId);
+      return;
+    }
     if (command !== "threadTab.next" && command !== "threadTab.previous") return;
     event.preventDefault();
     event.stopPropagation();
