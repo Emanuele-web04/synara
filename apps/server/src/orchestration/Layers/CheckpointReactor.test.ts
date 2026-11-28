@@ -540,6 +540,7 @@ describe("CheckpointReactor", () => {
   const tempDirs: string[] = [];
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     if (scope) {
       await Effect.runPromise(Scope.close(scope, Exit.void));
     }
@@ -2396,9 +2397,11 @@ describe("CheckpointReactor", () => {
         createdAt: now,
       }),
     );
-    const sessions = harness.provider.service.listSessions;
-    vi.spyOn(harness.provider.service, "listSessions").mockImplementation(() =>
-      sessions().pipe(
+    // Capture the listing before replacing an existing spy: wrapping that spy
+    // would make a second peer call the new implementation recursively.
+    const sessions = harness.provider.service.listSessions();
+    vi.spyOn(harness.provider.service, "listSessions").mockReturnValue(
+      sessions.pipe(
         Effect.map((entries) => [
           ...entries,
           {

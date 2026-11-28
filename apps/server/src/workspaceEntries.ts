@@ -7,6 +7,8 @@ import { runProcess } from "./processRunner";
 import {
   FilesystemBrowseInput,
   FilesystemBrowseResult,
+  FilesystemCreateFolderInput,
+  FILESYSTEM_PATH_MAX_LENGTH,
   ProjectDiscoverScriptsInput,
   ProjectDiscoverScriptsResult,
   ProjectDirectoryEntry,
@@ -35,6 +37,7 @@ import {
   isWindowsAbsolutePath,
   isWorkspaceRelativePathSafe,
 } from "@synara/shared/path";
+import { normalizeProjectDirectoryName } from "@synara/shared/projectDirectoryName";
 import { normalizeWorkspaceEntrySearchQuery } from "@synara/shared/searchQuery";
 import { resolveRealPathWithinRoot } from "./workspace/realPathContainment";
 
@@ -857,15 +860,30 @@ function resolveBrowseTarget(input: FilesystemBrowseInput): string {
     throw new Error("Windows-style paths are only supported on Windows.");
   }
 
-  if (!isExplicitRelativePath(input.partialPath)) {
-    return path.resolve(expandHomePath(input.partialPath));
-  }
-
-  if (!input.cwd) {
+  if (!input.cwd && isExplicitRelativePath(input.partialPath)) {
     throw new Error("Relative filesystem browse paths require a current project.");
   }
 
-  return path.resolve(expandHomePath(input.cwd), input.partialPath);
+  return path.resolve(
+    input.cwd ? expandHomePath(input.cwd) : "",
+    expandHomePath(input.partialPath),
+  );
+}
+
+/** Picker mutation: one new child of an existing absolute parent, never mkdir -p. */
+export async function createWorkspaceFolder({
+  parentPath,
+  name,
+}: FilesystemCreateFolderInput): Promise<string> {
+  if (!path.isAbsolute(parentPath) || normalizeProjectDirectoryName(name) !== name) {
+    throw new Error("Choose an absolute parent folder and a valid folder name.");
+  }
+  const fullPath = path.join(parentPath, name);
+  if (fullPath.length + 1 > FILESYSTEM_PATH_MAX_LENGTH) {
+    throw new Error("The folder path is too long to browse.");
+  }
+  await fs.mkdir(fullPath);
+  return fullPath;
 }
 
 export async function browseWorkspaceEntries(

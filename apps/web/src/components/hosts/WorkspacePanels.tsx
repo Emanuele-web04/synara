@@ -36,11 +36,18 @@ import {
   ProjectId,
   ThreadId,
   type AutomationRun,
+  WS_GITHUB_PROJECT_PROVISIONING_CAPABILITY,
+  WS_FILESYSTEM_CREATE_FOLDER_CAPABILITY,
 } from "@synara/contracts";
 import { appHistory } from "../../appNavigation";
 import { useHandleNewChat } from "../../hooks/useHandleNewChat";
 import { resolveNewChatDefault, useAppSettings } from "../../appSettings";
-import { ensureNativeApi } from "../../nativeApi";
+import {
+  ensureNativeApi,
+  onNativeApiServerCapabilitiesChange,
+  readNativeApiServerCapability,
+} from "../../nativeApi";
+import { provisionGitHubProjectOnHost } from "../../lib/hosts/githubProjectCreation";
 import { createOrRecoverProjectFromPath } from "../../lib/projectCreation";
 import { deleteProjectFromClient } from "../../lib/projectDelete";
 import { readExecutionContext } from "../../lib/hosts/executionContext";
@@ -92,6 +99,7 @@ import { useWorkspacePathsStore } from "../../workspacePathsStore";
 import { useTerminalStateStore } from "../../terminalStateStore";
 import { useSidebar } from "../ui/sidebar";
 import { modelPickerShortcutRowIndex } from "../chat/ComposerModelPicker.logic";
+import { t } from "~/i18n";
 
 function hasUnsentProjectDraft(projectId: ProjectId): boolean {
   const drafts = useComposerDraftStore.getState();
@@ -417,9 +425,25 @@ export function WorkspacePanels() {
   });
 }
 
+const readGitHubProvisioningCapability = () =>
+  readNativeApiServerCapability(WS_GITHUB_PROJECT_PROVISIONING_CAPABILITY);
+const readServerGitHubProvisioningCapability = () => false;
+const readFolderCreationCapability = () =>
+  readNativeApiServerCapability(WS_FILESYSTEM_CREATE_FOLDER_CAPABILITY);
+
 /** Runs inside the host's own router, stores, query client, event router, and transport. */
 export function WorkspaceFrameNavigation() {
   const frame = readWorkspaceFrame();
+  const githubProvisioningAvailable = useSyncExternalStore(
+    onNativeApiServerCapabilitiesChange,
+    readGitHubProvisioningCapability,
+    readServerGitHubProvisioningCapability,
+  );
+  const folderCreationAvailable = useSyncExternalStore(
+    onNativeApiServerCapabilitiesChange,
+    readFolderCreationCapability,
+    readServerGitHubProvisioningCapability,
+  );
   const { data: automationData } = useAutomationList();
   const automations = useMemo(() => {
     const latestRuns = new Map<string, AutomationRun>();
@@ -664,6 +688,14 @@ export function WorkspaceFrameNavigation() {
       navigate: (next) => {
         if (isWorkspacePath(next) && next !== appHistory.location.href) appHistory.replace(next);
       },
+      ...(folderCreationAvailable
+        ? ({
+            createFolder: (input) => {
+              if (!available()) throw new Error(t("workspace:createFolderComputerUnavailable"));
+              return ensureNativeApi().filesystem.createFolder(input);
+            },
+          } satisfies Pick<WorkspaceNavigation, "createFolder">)
+        : {}),
       browseFolders: (input) => ensureNativeApi().filesystem.browse(input),
       createProject: (input) =>
         runExclusiveProjectAddition(projectAdditionLockRef, async () => {
@@ -687,6 +719,22 @@ export function WorkspaceFrameNavigation() {
             );
           return { projectId: result.projectId, path: `/${id}` };
         }),
+      ...(githubProvisioningAvailable
+        ? ({
+            cloneGitHubProject: (input, options) =>
+              runExclusiveProjectAddition(projectAdditionLockRef, () =>
+                provisionGitHubProjectOnHost({
+                  api: ensureNativeApi(),
+                  input,
+                  ...options,
+                  available,
+                  syncSnapshot: (snapshot) => useStore.getState().syncServerShellSnapshot(snapshot),
+                  openProject: (projectId, signal) =>
+                    navigation.openProject(projectId, { signal, deferNavigation: true }),
+                }),
+              ),
+          } satisfies Pick<WorkspaceNavigation, "cloneGitHubProject">)
+        : {}),
       newChat: async (projectId) => {
         if (!projectId) {
           const result = await homeChatRef.current();
@@ -706,7 +754,9 @@ export function WorkspaceFrameNavigation() {
         actions();
         openWorkspaceTerminal();
       },
-      openProject: async (projectId) => {
+      openProject: async (projectId, options) => {
+        options?.signal.throwIfAborted();
+        if (!available()) throw new Error(t("git:cloneConnectionChanged"));
         const store = useStore.getState();
         if (!store.projects.some((project) => project.id === projectId))
           throw new Error("This checkout is no longer available on this computer.");
@@ -716,7 +766,8 @@ export function WorkspaceFrameNavigation() {
             (b.updatedAt ?? b.createdAt).localeCompare(a.updatedAt ?? a.createdAt),
           )[0];
         if (thread) return `/${thread.id}`;
-        const id = await newChatRef.current(ProjectId.makeUnsafe(projectId));
+        const id = await newChatRef.current(ProjectId.makeUnsafe(projectId), undefined, options);
+        options?.signal.throwIfAborted();
         if (!id) throw new Error("This project is not ready.");
         return `/${id}`;
       },
@@ -724,7 +775,7 @@ export function WorkspaceFrameNavigation() {
     };
     frame.ready(navigation);
     return () => frame.ready(null);
-  }, [frame, hydrated]);
+  }, [folderCreationAvailable, frame, githubProvisioningAvailable, hydrated]);
   useEffect(() => {
     if (!frame || !hydrated) return;
     const allThreads = Object.values(shell ?? {});

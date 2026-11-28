@@ -180,6 +180,18 @@ Git repositories unlock the complete delivery workflow:
 Non-Git folders can still be useful for simpler work, but they do not provide the same isolation and
 review guarantees.
 
+When adding a project, type a source path, a **Clone into** destination, or an additional
+folder path on the selected computer to see matching folders. Tab completes a unique folder
+or the shared prefix; Shift+Tab moves focus back.
+In the host folder picker, Tab and **Go** resolve relative paths from the displayed folder.
+When available, **New folder** creates a child there. Creating that folder does not add a
+project until you confirm the project dialog. Paths that start or end with whitespace cannot
+be registered as project folders.
+The **GitHub** source clones and registers a project on the selected computer, using
+GitHub access configured there. An unavailable computer or a server without clone
+support shows an explanation instead of silently cloning on another computer.
+Cancellation recovery keeps an already registered project available; it does not open a chat.
+
 A project can also span several folders, such as a frontend, an API, and a shared package that
 change together. Add them under **Source folders** when you create the project, or later from
 **Edit project**. One folder is the primary folder: it is the project's working directory and keeps

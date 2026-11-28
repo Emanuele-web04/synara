@@ -6,6 +6,7 @@
 // Exports: ProjectFolderList, ProjectFolderAddRow
 
 import { deriveProjectFolderLabels } from "@synara/shared/projectFolders";
+import { FolderPathInput, type BrowseFolders } from "~/lib/hosts/FolderPathInput";
 import { useId, useState, type ReactNode } from "react";
 
 import { FolderAddIcon, FolderIcon, XIcon } from "~/lib/icons";
@@ -105,6 +106,7 @@ export function ProjectFolderAddRow(props: {
   /** A folder is being dragged over the window. */
   readonly highlighted?: boolean | undefined;
   readonly inputId?: string | undefined;
+  readonly browse: BrowseFolders | undefined;
   readonly onBrowse: () => void;
   /** Adds a typed folder; returns false to keep the text for correction. */
   readonly onAdd: (path: string) => boolean;
@@ -112,6 +114,7 @@ export function ProjectFolderAddRow(props: {
 }) {
   const { t } = useTranslation();
   const [value, setValue] = useState("");
+  const inputId = useId();
 
   if (props.picker) {
     return (
@@ -135,22 +138,20 @@ export function ProjectFolderAddRow(props: {
   return (
     <div className="flex min-h-12 items-center gap-2.5 px-3.5">
       <FolderAddIcon className="size-4.5 shrink-0" aria-hidden="true" />
-      <input
-        id={props.inputId}
+      <FolderPathInput
+        render={<input />}
+        browse={props.browse}
+        id={props.inputId ?? inputId}
         value={value}
         aria-label={t("workspace:additionalFolderPath")}
         placeholder={t("workspace:pathToAnotherFolder")}
-        spellCheck={false}
-        autoCorrect="off"
-        autoCapitalize="off"
         disabled={props.disabled}
         className="min-w-0 flex-1 bg-transparent text-ui text-foreground outline-none placeholder:text-muted-foreground/70"
-        onChange={(event) => {
-          setValue(event.target.value);
+        onChange={(next) => {
+          setValue(next);
           props.onInputChange?.();
         }}
-        onKeyDown={(event) => {
-          if (event.key !== "Enter") return;
+        onEnter={(event) => {
           event.preventDefault();
           add();
         }}

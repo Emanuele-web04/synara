@@ -1026,22 +1026,7 @@ export async function runExclusiveProjectAddition<T>(
   }
 }
 
-export async function runProjectProvisionWithCancellationRecovery<T>(input: {
-  readonly signal: AbortSignal;
-  readonly provision: () => Promise<T>;
-  readonly recoverCommittedProject: () => Promise<boolean>;
-}): Promise<
-  { readonly status: "completed"; readonly result: T } | { readonly status: "recovered" }
-> {
-  try {
-    return { status: "completed", result: await input.provision() };
-  } catch (error) {
-    if (!input.signal.aborted || !(await input.recoverCommittedProject())) {
-      throw error;
-    }
-    return { status: "recovered" };
-  }
-}
+export { runProjectProvisionWithCancellationRecovery } from "../lib/githubProjectProvisioning";
 
 // Rechecks an existing local project against the server before the add flow decides to reuse it.
 export async function recoverExistingAddProjectTarget(input: {

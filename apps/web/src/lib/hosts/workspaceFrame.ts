@@ -5,6 +5,9 @@ import type {
   ExecutionEnvironmentDescriptor,
   FilesystemBrowseInput,
   FilesystemBrowseResult,
+  FilesystemCreateFolderInput,
+  GitHubProjectProvisionInput,
+  GitHubProjectProvisionProgressEvent,
   ProjectId,
   ResolvedKeybindingsConfig,
   ThreadId,
@@ -49,6 +52,7 @@ export interface WorkspaceNavigation {
   newChat(projectId?: string): Promise<string>;
   createChat(command: WorkspaceChatCreationCommand): Promise<void>;
   openTerminal(): void;
+  createFolder?(input: FilesystemCreateFolderInput): Promise<string>;
   browseFolders(input: FilesystemBrowseInput): Promise<FilesystemBrowseResult>;
   createProject(input: {
     name: string;
@@ -56,7 +60,21 @@ export interface WorkspaceNavigation {
     additionalFolders?: ReadonlyArray<string>;
     createIfMissing: boolean;
   }): Promise<{ projectId: ProjectId; path: string }>;
-  openProject(projectId: string): Promise<string>;
+  /** Present only when this host advertises GitHub provisioning. Credentials stay on that host. */
+  cloneGitHubProject?(
+    input: Pick<
+      GitHubProjectProvisionInput,
+      "operationId" | "repository" | "destinationParent" | "directoryName"
+    >,
+    options: {
+      signal: AbortSignal;
+      onProgress: (event: GitHubProjectProvisionProgressEvent) => void;
+    },
+  ): Promise<{ projectId: ProjectId; path: string; created: boolean }>;
+  openProject(
+    projectId: string,
+    options?: { signal: AbortSignal; deferNavigation?: boolean },
+  ): Promise<string>;
   recover(): void | (() => void);
 }
 

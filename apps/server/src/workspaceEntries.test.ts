@@ -4,13 +4,14 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 
-import { FilesystemBrowseResult } from "@synara/contracts";
+import { FilesystemBrowseInput, FilesystemBrowseResult } from "@synara/contracts";
 import { Schema } from "effect";
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
 
 import * as ProcessRunner from "./processRunner";
 import {
   browseWorkspaceEntries,
+  createWorkspaceFolder,
   clearWorkspaceIndexCache,
   discoverProjectScripts,
   listWorkspaceDirectories,
@@ -482,6 +483,40 @@ describe("browseWorkspaceEntries", () => {
     }
   });
 
+  it("creates only one new child of an existing parent and never replaces an existing folder", async () => {
+    const root = makeTempDir("synara-picker-mkdir-");
+    const fullPath = await createWorkspaceFolder({ parentPath: root, name: "New project" });
+    const { entries } = await browseWorkspaceEntries({ partialPath: root + "/" });
+    expect(entries).toEqual([{ name: "New project", fullPath }]);
+    await expect(
+      createWorkspaceFolder({ parentPath: root, name: "New project" }),
+    ).rejects.toMatchObject({ code: "EEXIST" });
+    await expect(
+      createWorkspaceFolder({ parentPath: path.join(root, "absent"), name: "child" }),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    for (const name of ["../escape", "child/escape", "child\\\\escape"]) {
+      await expect(createWorkspaceFolder({ parentPath: root, name })).rejects.toThrow(
+        "valid folder name",
+      );
+    }
+  });
+
+  it("resolves bare and explicit relative browse paths against cwd", async () => {
+    const root = makeTempDir("synara-relative-browse-");
+    const child = path.join(root, "child");
+    fs.mkdirSync(child);
+    for (const partialPath of ["chi", "./chi"]) {
+      await expect(browseWorkspaceEntries({ partialPath, cwd: root })).resolves.toEqual({
+        parentPath: root,
+        entries: [{ name: "child", fullPath: child }],
+      });
+    }
+    await expect(browseWorkspaceEntries({ partialPath: "child/", cwd: root })).resolves.toEqual({
+      parentPath: child,
+      entries: [],
+    });
+  });
+
   it("keeps folder names with surrounding whitespace encodable over RPC", async () => {
     const root = makeTempDir("synara-filesystem-browse-");
     fs.mkdirSync(path.join(root, "Photos ", "2026"), { recursive: true });
@@ -498,7 +533,12 @@ describe("browseWorkspaceEntries", () => {
       ],
     });
 
-    const nested = await browseWorkspaceEntries({ partialPath: `${path.join(root, "Photos ")}/` });
+    const nested = await browseWorkspaceEntries(
+      Schema.decodeUnknownSync(FilesystemBrowseInput)({
+        cwd: path.join(root, "Photos "),
+        partialPath: "./",
+      }),
+    );
     expect(encode(nested)).toEqual({
       parentPath: path.join(root, "Photos "),
       entries: [{ name: "2026", fullPath: path.join(root, "Photos ", "2026") }],

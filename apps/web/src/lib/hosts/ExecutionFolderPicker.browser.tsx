@@ -1,5 +1,6 @@
 import "../../index.css";
-import { page } from "vitest/browser";
+import type { FilesystemBrowseInput, FilesystemBrowseResult } from "@synara/contracts";
+import { page, userEvent } from "vitest/browser";
 import { afterEach, expect, it, vi } from "vitest";
 import { showExecutionFolderPicker } from "./ExecutionFolderPicker";
 
@@ -56,16 +57,127 @@ it("preserves a typed destination while the initial folder listing is still load
     partialPath === "~/" ? initial : { parentPath: "/chosen", entries: [] },
   );
   const selected = showExecutionFolderPicker({ label: "Mac mini", browse });
-  await page.getByRole("textbox", { name: "Folder path", exact: true }).fill("/chosen");
+  await page.getByLabelText("Folder path", { exact: true }).fill("/chosen");
   resolveInitial({ parentPath: "/home", entries: [] });
   await expect.element(page.getByText("/home", { exact: true })).toBeVisible();
-  await expect
-    .element(page.getByRole("textbox", { name: "Folder path", exact: true }))
-    .toHaveValue("/chosen");
+  await expect.element(page.getByLabelText("Folder path", { exact: true })).toHaveValue("/chosen");
   await expect.element(page.getByRole("button", { name: "Use folder" })).toBeDisabled();
   await page.getByRole("button", { name: "Go", exact: true }).click();
   await page.getByRole("button", { name: "Use folder" }).click();
   expect(await selected).toBe("/chosen");
+});
+
+it("completes a host path, opens it, and creates a child there", async () => {
+  let resolveStale!: (listing: FilesystemBrowseResult) => void;
+  const stale = new Promise<FilesystemBrowseResult>((resolve) => {
+    resolveStale = resolve;
+  });
+  const browse = vi.fn(async ({ partialPath }: { partialPath: string }) => {
+    if (partialPath === "/older") return stale;
+    if (partialPath === "/vol/d")
+      return { parentPath: "/vol", entries: [{ name: "data", fullPath: "/vol/data" }] };
+    return {
+      parentPath: partialPath === "~/" ? "/vol" : partialPath.replace(/\/$/, ""),
+      entries: [],
+    };
+  });
+  const createFolder = vi.fn(async ({ parentPath, name }: { parentPath: string; name: string }) => {
+    if (name === "taken") throw new Error("Folder already exists");
+    return parentPath + "/" + name;
+  });
+  const selected = showExecutionFolderPicker({ label: "Mac mini", browse, createFolder });
+  const field = page.getByLabelText("Folder path", { exact: true });
+  await expect.element(field).toHaveValue("/vol");
+  await field.fill("/older");
+  await userEvent.keyboard("{Tab}");
+  await vi.waitFor(() =>
+    expect(browse).toHaveBeenCalledWith({ partialPath: "/older", cwd: "/vol" }),
+  );
+  await field.fill("/vol/d");
+  await userEvent.keyboard("{Tab}");
+  await expect.element(field).toHaveValue("/vol/data/");
+  resolveStale({
+    parentPath: "/",
+    entries: [{ name: "older-result", fullPath: "/older-result" }],
+  });
+  await expect.element(field).toHaveFocus();
+  await userEvent.keyboard("{Enter}");
+  await page.getByRole("button", { name: "New folder" }).click();
+  const name = page.getByLabelText("Folder name");
+  await name.fill("taken");
+  await page.getByRole("button", { name: "Create folder" }).click();
+  await expect.element(page.getByRole("alert")).toHaveTextContent("Folder already exists");
+  await name.fill("child");
+  await userEvent.keyboard("{Enter}");
+  await expect.element(field).toHaveValue("/vol/data/child");
+  await page.getByRole("button", { name: "Use folder" }).click();
+  expect(await selected).toBe("/vol/data/child");
+});
+
+it("completes and opens relative paths from the displayed folder", async () => {
+  const browse = vi.fn(async ({ partialPath, cwd }: FilesystemBrowseInput) => {
+    if (partialPath === "~/") return { parentPath: "/workspace", entries: [] };
+    if (cwd === "/workspace" && partialPath === "./chi")
+      return {
+        parentPath: cwd,
+        entries: [{ name: "child", fullPath: "/workspace/child" }],
+      };
+    if (cwd === "/workspace" && partialPath === "child/")
+      return { parentPath: "/workspace/child", entries: [] };
+    throw new Error("Folder not found");
+  });
+  const selected = showExecutionFolderPicker({ label: "Mac mini", browse });
+  const field = page.getByLabelText("Folder path");
+  await expect.element(field).toHaveValue("/workspace");
+  await field.fill("./chi");
+  await userEvent.keyboard("{Tab}");
+  await expect.element(field).toHaveValue("/workspace/child/");
+  await field.fill("child");
+  await page.getByRole("button", { name: "Go", exact: true }).click();
+  await page.getByRole("button", { name: "Use folder" }).click();
+  expect(await selected).toBe("/workspace/child");
+});
+
+it("preserves a Unix folder name ending in a literal backslash", async () => {
+  const parent = "/folders/name\\";
+  const browse = vi.fn(async ({ partialPath }: { partialPath: string }) =>
+    partialPath === "~/"
+      ? { parentPath: "/folders", entries: [{ name: "name\\", fullPath: parent }] }
+      : { parentPath: parent, entries: [] },
+  );
+  const selected = showExecutionFolderPicker({ label: "Linux", browse });
+  await page.getByRole("button", { name: "name\\", exact: true }).click();
+  await expect.element(page.getByLabelText("Folder path")).toHaveValue(parent);
+  expect(browse).toHaveBeenCalledWith({ partialPath: parent + "/" });
+  await page.getByRole("button", { name: "Use folder" }).click();
+  expect(await selected).toBe(parent);
+});
+
+it("keeps a pending folder write visible until its outcome can be shown", async () => {
+  let finish!: () => void;
+  const createFolder = vi.fn(
+    () =>
+      new Promise<string>((resolve) => {
+        finish = () => resolve("/parent/child");
+      }),
+  );
+  const browse = vi.fn(async ({ partialPath }: { partialPath: string }) => ({
+    parentPath: partialPath === "~/" ? "/parent" : "/parent/child",
+    entries: [],
+  }));
+  const selected = showExecutionFolderPicker({ label: "Computer", browse, createFolder });
+  await page.getByRole("button", { name: "New folder" }).click();
+  await page.getByLabelText("Folder name").fill("child");
+  await page.getByRole("button", { name: "Create folder" }).click();
+  await expect.element(page.getByRole("button", { name: "Cancel", exact: true })).toBeDisabled();
+  await userEvent.keyboard("{Escape}");
+  await expect
+    .element(page.getByRole("heading", { name: "Choose a folder on Computer" }))
+    .toBeVisible();
+  finish();
+  await expect.element(page.getByLabelText("Folder path")).toHaveValue("/parent/child");
+  await page.getByRole("button", { name: "Use folder" }).click();
+  expect(await selected).toBe("/parent/child");
 });
 
 it("shows the host's reason for string defects and errors from a workspace frame", async () => {
@@ -83,7 +195,7 @@ it("shows the host's reason for string defects and errors from a workspace frame
     await expect
       .element(page.getByRole("alert"))
       .toHaveTextContent("Expected a string, got a folder name");
-    await page.getByRole("textbox", { name: "Folder path", exact: true }).fill("/Volumes/SSD");
+    await page.getByLabelText("Folder path", { exact: true }).fill("/Volumes/SSD");
     await page.getByRole("button", { name: "Go", exact: true }).click();
     await expect
       .element(page.getByRole("alert"))

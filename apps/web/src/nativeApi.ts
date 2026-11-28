@@ -1,5 +1,6 @@
 import {
   WS_GITHUB_PROJECT_PROVISIONING_CAPABILITY,
+  WS_FILESYSTEM_CREATE_FOLDER_CAPABILITY,
   WS_PROJECT_FILE_WATCH_CAPABILITY,
   type NativeApi,
 } from "@synara/contracts";
@@ -37,6 +38,9 @@ export function readNativeApiServerCapability(capability: string): boolean {
   if (window.nativeApi) {
     if (capability === WS_GITHUB_PROJECT_PROVISIONING_CAPABILITY) {
       return typeof window.nativeApi.projects?.provisionFromGitHub === "function";
+    }
+    if (capability === WS_FILESYSTEM_CREATE_FOLDER_CAPABILITY) {
+      return typeof window.nativeApi.filesystem?.createFolder === "function";
     }
     if (capability === WS_PROJECT_FILE_WATCH_CAPABILITY) {
       return typeof window.nativeApi.projects?.onFileChange === "function";

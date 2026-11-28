@@ -50,6 +50,7 @@ import {
   ServerVoiceTranscriptionResult,
   type TerminalEvent,
   ORCHESTRATION_WS_CHANNELS,
+  WS_FILESYSTEM_CREATE_FOLDER_CAPABILITY,
   ORCHESTRATION_WS_METHODS,
   type ContextMenuItem,
   type NativeApi,
@@ -604,6 +605,12 @@ export function createWsNativeApi(): NativeApi {
           return showExecutionFolderPicker({
             label: context?.execution.label ?? "this computer",
             browse: (input) => executionRequest(WS_METHODS.filesystemBrowse, input),
+            ...(readWsServerCapabilities()?.includes(WS_FILESYSTEM_CREATE_FOLDER_CAPABILITY)
+              ? {
+                  createFolder: (input) =>
+                    executionRequest(WS_METHODS.filesystemCreateFolder, input),
+                }
+              : {}),
           });
         }
         if (!window.desktopBridge) return null;
@@ -682,6 +689,7 @@ export function createWsNativeApi(): NativeApi {
       onProvisionProgress: projectProvisionProgressListeners.subscribe,
     },
     filesystem: {
+      createFolder: (input) => executionRequest(WS_METHODS.filesystemCreateFolder, input),
       browse: (input) => executionRequest(WS_METHODS.filesystemBrowse, input),
     },
     studio: {

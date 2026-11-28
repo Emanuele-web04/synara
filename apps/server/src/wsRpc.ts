@@ -2368,6 +2368,8 @@ const makeWsRpcHandlersLayer = () =>
             }),
             "Failed to list studio thread outputs",
           ),
+        [WS_METHODS.filesystemCreateFolder]: (input) =>
+          rpcEffect(workspaceEntries.createFolder(input), "Failed to create folder"),
         [WS_METHODS.filesystemBrowse]: (input) =>
           rpcEffect(workspaceEntries.browse(input), "Failed to browse filesystem"),
         [WS_METHODS.shellOpenInEditor]: (input) =>

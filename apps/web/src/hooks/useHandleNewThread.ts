@@ -61,6 +61,10 @@ import { useTerminalStateStore } from "../terminalStateStore";
 import { useTranslation } from "~/i18n";
 
 export interface NewThreadNavigationOptions {
+  /** Cancels staged draft creation before its route commits. */
+  signal?: AbortSignal;
+  /** Prepare the draft only; the controlling dialog commits the route after checking its lifetime. */
+  deferNavigation?: boolean;
   /**
    * Search params applied when the hook navigates to the created thread.
    * Lets callers keep view-level state (e.g. the editor workspace view)
@@ -105,7 +109,7 @@ export function useHandleNewThread() {
   ): Promise<ThreadId | null> => {
     // Project/thread targets are not authoritative until hydration completes. Read the
     // store at call time so a stale UI callback cannot mint a draft during hydration.
-    if (!useStore.getState().threadsHydrated) {
+    if (navigation?.signal?.aborted || !useStore.getState().threadsHydrated) {
       return Promise.resolve(null);
     }
 
@@ -377,11 +381,13 @@ export function useHandleNewThread() {
           }
           return bootstrapPlan.threadId;
         }
-        await navigate({
-          to: "/$threadId",
-          params: { threadId: bootstrapPlan.threadId },
-          ...(navigation?.search ? { search: navigation.search } : {}),
-        });
+        if (!navigation?.deferNavigation) {
+          await navigate({
+            to: "/$threadId",
+            params: { threadId: bootstrapPlan.threadId },
+            ...(navigation?.search ? { search: navigation.search } : {}),
+          });
+        }
         restoreComposerDraft(bootstrapPlan.threadId, preservedComposerDraft);
         if (entryPoint === "terminal") {
           await createTerminalThread(
@@ -425,6 +431,9 @@ export function useHandleNewThread() {
     }
 
     return runDraftNavigationOnce(draftNavigationSlotKey(projectId, entryPoint), async (signal) => {
+      const navigationSignal = navigation?.signal
+        ? AbortSignal.any([signal, navigation.signal])
+        : signal;
       const threadId = newThreadId();
       if (wantsTemporaryThread) {
         markTemporaryThread(threadId);
@@ -442,7 +451,7 @@ export function useHandleNewThread() {
         entryPoint,
       });
       const committed = await stageDraftNavigation({
-        signal,
+        signal: navigationSignal,
         // Keep the previous routed draft alive while the destination loads. Replacing the
         // project's primary slot earlier makes the route guard redirect the old URL to Home.
         stage: () => {
@@ -464,18 +473,21 @@ export function useHandleNewThread() {
         // subtree renders interruptibly and the browser can paint the chat
         // mount loader immediately instead of freezing on the synchronous commit.
         navigate: () =>
-          new Promise<void>((resolve, reject) => {
-            startTransition(() => {
-              navigate({
-                to: "/$threadId",
-                params: { threadId },
-                ...(navigation?.search ? { search: navigation.search } : {}),
-              }).then(resolve, reject);
-            });
-          }),
+          navigation?.deferNavigation
+            ? Promise.resolve()
+            : new Promise<void>((resolve, reject) => {
+                startTransition(() => {
+                  navigate({
+                    to: "/$threadId",
+                    params: { threadId },
+                    ...(navigation?.search ? { search: navigation.search } : {}),
+                  }).then(resolve, reject);
+                });
+              }),
         // TanStack resolves an older navigate() promise when a newer navigation supersedes it.
         // Verify the committed route before deleting the previous project draft.
-        isDestinationActive: () => router.state.location.pathname === `/${threadId}`,
+        isDestinationActive: () =>
+          navigation?.deferNavigation === true || router.state.location.pathname === `/${threadId}`,
         finalize: () => setProjectDraftThreadId(projectId, threadId, draftSeed),
         rollback: () => {
           clearDraftThread(threadId);

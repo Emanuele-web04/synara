@@ -52,6 +52,7 @@ export const WS_NEGOTIATE_QUERY = {
 } as const;
 
 export const WS_GITHUB_PROJECT_PROVISIONING_CAPABILITY = "projects.github-provisioning";
+export const WS_FILESYSTEM_CREATE_FOLDER_CAPABILITY = "filesystem.create-folder";
 export const WS_PROJECT_FILE_WATCH_CAPABILITY = "projects.file-watch";
 export const WS_TURN_DISPATCH_SETTLEMENT_CAPABILITY = "orchestration.turn-dispatch-settlement";
 export const WS_USAGE_LIMIT_RECOVERY_CAPABILITY = "orchestration.usage-limit-recovery";
@@ -79,6 +80,7 @@ export const WS_SERVER_CAPABILITIES = [
   // Optional feature capability: older servers may omit it without making the
   // rest of a newer client unusable during a staggered rollout.
   WS_GITHUB_PROJECT_PROVISIONING_CAPABILITY,
+  WS_FILESYSTEM_CREATE_FOLDER_CAPABILITY,
   WS_PROJECT_FILE_WATCH_CAPABILITY,
   WS_TURN_DISPATCH_SETTLEMENT_CAPABILITY,
   WS_THREAD_GOAL_VISIBLE_START_CAPABILITY,

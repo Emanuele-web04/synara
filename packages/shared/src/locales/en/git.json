@@ -1,4 +1,12 @@
 {
+  "cloneComputerUnavailable": "This computer is no longer available. Reconnect before cloning.",
+  "cloneConnectionChanged": "The connection changed. Reconnect to check whether the project was added.",
+  "cloneProjectStillSyncing": "The GitHub project was added, but is still syncing. Reopen it from the sidebar.",
+  "cloneCancelledCheckProjects": "Clone cancelled. Check the selected computer’s projects before retrying; project registration may already have completed.",
+  "cloneHostNeedsUpdate": "Update Synara on the selected computer to enable GitHub cloning.",
+  "cloneHostUnavailable": "Reconnect the selected computer to clone from GitHub.",
+  "cloneOnComputer": "Clone on",
+  "cloneUsesSelectedComputer": "The repository is cloned on the selected computer. Private repositories use GitHub access configured on that computer.",
   "to": "to",
   "detail_done": "Done",
   "profile_edit": "Edit",
