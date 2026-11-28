@@ -840,6 +840,9 @@ export const makeProjectAgentService = Effect.gen(function* () {
         const peerById = new Map(peers.map((peer) => [peer.threadId, peer]));
         if (
           workItems.some((record) => {
+            // Follow-up admission reserves the slot before the provider starts
+            // its turn. The previous worker settlement is still visible here.
+            if (record.slotHeld) return true;
             if (!record.workerThreadId)
               return record.state !== "failed" && record.state !== "cancelled";
             const peer = peerById.get(record.workerThreadId);

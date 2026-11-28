@@ -4192,6 +4192,15 @@ it.effect("rolls up one created worker only after its unstarted Hub peers fail o
       expectedRevision: 0,
     });
     yield* service.notifyWorkItemChanged!({ projectId: groupId, workItemId: cancelled!.id });
+    // The worker has a previous settlement and no live shell yet. Its
+    // reservation alone must hold back the roll-up until work is released.
+    assert.equal(rollups().length, 0);
+    const running = yield* workRepository.get("hub-roll-a");
+    yield* workRepository.save({
+      record: { ...running!, state: "idle", slotHeld: false, revision: 1 },
+      expectedRevision: 0,
+    });
+    yield* service.notifyWorkItemChanged!({ projectId: groupId, workItemId: running!.id });
     assert.equal(rollups().length, 1);
     const rollup = rollups()[0]!;
     if (rollup.type === "thread.activity.append")
