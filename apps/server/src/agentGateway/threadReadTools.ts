@@ -4,7 +4,6 @@ import {
   SYNARA_GATEWAY_MAX_THREADS_PER_TURN,
   ThreadId,
   ProjectId,
-  TurnId,
   type OrchestrationThreadShell,
   type ProviderKind,
 } from "@synara/contracts";
@@ -15,7 +14,10 @@ import {
   type SpaceAssignmentWorkspacePaths,
 } from "../orchestration/commandInvariants.ts";
 import type { ProjectionSnapshotQueryShape } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
-import type { ProjectionTurnRepositoryShape } from "../persistence/Services/ProjectionTurns.ts";
+import type {
+  ProjectionAgentWaitTarget,
+  ProjectionTurnRepositoryShape,
+} from "../persistence/Services/ProjectionTurns.ts";
 import type { ProviderDiscoveryServiceShape } from "../provider/Services/ProviderDiscoveryService.ts";
 import { SYNARA_HARNESS_POLICY_VERSION } from "./harnessPolicy.ts";
 import { mcpToolResultError, mcpToolResultJson } from "./protocol.ts";
@@ -429,7 +431,8 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
             type: "array",
             maxItems: SYNARA_GATEWAY_MAX_THREADS_PER_OPERATION,
             items: { type: ["string", "null"] },
-            description: "Optional pinned turn ids from a prior wait. Must match threadIds length.",
+            description:
+              "Optional pinned turn IDs from a prior wait. Keep null for a child with no provider turn ID yet. Must match threadIds length.",
           },
           timeoutMs: {
             type: "integer",
@@ -460,102 +463,59 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
           WAIT_PROGRESS_INTERVAL_MS,
         );
         const deadline = (yield* Clock.currentTimeMillis) + timeoutMs;
-        const pinned = yield* Effect.forEach(waitInput.threadIds, (threadId, index) =>
-          snapshotQuery.getThreadShellById(threadId).pipe(
-            Effect.mapError((error) => new ToolInputError(errorText(error))),
-            Effect.flatMap(
-              Option.match({
-                onNone: () =>
-                  Effect.fail(
-                    new GatewayToolError("thread_not_found", `Thread "${threadId}" was not found.`),
-                  ),
-                onSome: (thread) =>
-                  Effect.succeed({
-                    threadId,
-                    runId: waitInput.runIds?.[index] ?? thread.latestTurn?.turnId ?? null,
-                    shell: thread,
-                  }),
-              }),
-            ),
-          ),
-        );
-
-        const initialStateByKey = new Map(
-          pinned.map((pin) => {
-            const shell = pin.shell;
-            return [
-              `${pin.threadId}\u0000${pin.runId ?? ""}`,
-              shell.latestTurn?.turnId === pin.runId ? shell.latestTurn.state : "pending",
-            ] as const;
-          }),
-        );
-        const readPinnedStates = () =>
-          projectionTurns
-            .getManyWaitSnapshot({
-              threadIds: pinned.map((pin) => ThreadId.makeUnsafe(pin.threadId)),
-              turns: pinned.flatMap((pin) =>
-                pin.runId === null
-                  ? []
-                  : [{ threadId: pin.threadId, turnId: TurnId.makeUnsafe(pin.runId) }],
-              ),
-            })
-            .pipe(
-              Effect.mapError((error) => new ToolInputError(errorText(error))),
-              Effect.flatMap((snapshot) => {
-                const existingThreadIds = new Set(snapshot.existingThreadIds);
-                const missing = pinned.find((pin) => !existingThreadIds.has(pin.threadId));
-                if (missing) {
-                  return Effect.fail(
-                    new GatewayToolError(
-                      "thread_not_found",
-                      `Thread "${missing.threadId}" was not found.`,
-                    ),
-                  );
-                }
-                const turnsByKey = new Map(
-                  snapshot.turns.map(
-                    (turn) => [`${turn.threadId}\u0000${turn.turnId}`, turn] as const,
+        const targets: ProjectionAgentWaitTarget[] = waitInput.threadIds.map((threadId, index) => ({
+          threadId,
+          turnId: waitInput.runIds?.[index] ?? null,
+          pendingMessageId: null,
+        }));
+        const readPinnedStates = (resolveUnpinned: boolean) =>
+          Effect.gen(function* () {
+            const snapshots = yield* projectionTurns
+              .getManyAgentWaitSnapshots({ targets, resolveUnpinned })
+              .pipe(Effect.mapError((error) => new ToolInputError(errorText(error))));
+            return yield* Effect.forEach(targets, (target, index) => {
+              const snapshot = snapshots[index];
+              if (!snapshot) {
+                return Effect.fail(
+                  new GatewayToolError(
+                    "thread_not_found",
+                    `Thread "${target.threadId}" was not found.`,
                   ),
                 );
-                return Effect.succeed(
-                  pinned.map((pin) => {
-                    const state =
-                      pin.runId === null
-                        ? ("idle" as const)
-                        : (turnsByKey.get(`${pin.threadId}\u0000${pin.runId}`)?.state ??
-                          initialStateByKey.get(`${pin.threadId}\u0000${pin.runId}`) ??
-                          "pending");
-                    const terminal =
-                      state === "idle" ||
-                      state === "completed" ||
-                      state === "error" ||
-                      state === "interrupted";
-                    return {
-                      threadId: pin.threadId,
-                      runId: pin.runId,
-                      state,
-                      terminal,
-                      timedOut: false,
-                      summary: null as string | null,
-                      summaryTruncated: false,
-                      error: null as string | null,
-                      readThread: {
-                        tool: "synara_read_thread" as const,
-                        arguments: { threadId: pin.threadId },
-                      },
-                    };
-                  }),
-                );
-              }),
-            );
+              }
+              const runId = target.turnId ?? snapshot.turnId;
+              const pendingMessageId =
+                runId === null ? (target.pendingMessageId ?? snapshot.pendingMessageId) : null;
+              targets[index] = { ...target, turnId: runId, pendingMessageId };
+              // A pending request that disappeared without creating its own turn
+              // was cancelled or superseded. Do not switch to unrelated work.
+              const unresolvedState =
+                runId !== null ? "pending" : pendingMessageId !== null ? "interrupted" : "idle";
+              const state = snapshot.state ?? unresolvedState;
+              return Effect.succeed({
+                threadId: target.threadId,
+                runId,
+                state,
+                terminal: state !== "pending" && state !== "running",
+                timedOut: false,
+                summary: null as string | null,
+                summaryTruncated: false,
+                error: state === "error" ? (snapshot.error ?? "Turn failed.") : null,
+                readThread: {
+                  tool: "synara_read_thread" as const,
+                  arguments: { threadId: target.threadId },
+                },
+              });
+            });
+          });
 
-        let results = yield* readPinnedStates();
+        let results = yield* readPinnedStates(true);
         let pollDelayMs = 200;
         while (results.some((result) => !result.terminal)) {
           const remainingMs = deadline - (yield* Clock.currentTimeMillis);
           if (remainingMs <= 0) break;
           yield* Effect.sleep(Math.min(pollDelayMs, remainingMs));
-          results = yield* readPinnedStates();
+          results = yield* readPinnedStates(false);
           pollDelayMs = Math.min(1_000, Math.ceil(pollDelayMs * 1.5));
         }
         const timedOut = results.some((result) => !result.terminal);
@@ -565,12 +525,8 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
             if (!result.terminal || result.runId === null) {
               return { ...result, timedOut: !result.terminal && timedOut };
             }
-            const outcome = {
-              ...result,
-              error: result.state === "error" ? "Turn failed." : null,
-            };
             const remainingMs = summaryDeadline - (yield* Clock.currentTimeMillis);
-            if (remainingMs <= 0) return outcome;
+            if (remainingMs <= 0) return result;
             const detail = yield* snapshotQuery.getThreadDetailById(result.threadId).pipe(
               Effect.mapError((error) => new ToolInputError(errorText(error))),
               Effect.flatMap(
@@ -590,22 +546,22 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
                 onTimeout: () => Effect.succeed(null),
               }),
             );
-            if (detail === null) return outcome;
+            if (detail === null) return result;
             const assistantMessage = detail.messages.findLast(
               (message) => message.role === "assistant" && message.turnId === result.runId,
             );
             const summary = summarizeWaitThreadText(assistantMessage?.text);
             return {
-              ...outcome,
+              ...result,
               summary: summary.summary,
               summaryTruncated: summary.truncated,
-              error: result.state === "error" ? (detail.session?.lastError ?? outcome.error) : null,
+              error: result.state === "error" ? (detail.session?.lastError ?? result.error) : null,
             };
           }),
         );
         return mcpToolResultJson({
           callerThreadId: context.callerThreadId,
-          runIds: pinned.map((pin) => pin.runId),
+          runIds: finalResults.map((result) => result.runId),
           allTerminal: finalResults.every((result) => result.terminal),
           timedOut,
           threads: finalResults,

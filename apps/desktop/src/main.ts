@@ -116,6 +116,7 @@ import {
   retainLiveBackendAfterShutdownFailure,
   requireWindowsBackendExit,
   runAfterDesktopShutdown,
+  shutdownDesktopServices,
   shouldDeferDesktopWindowClose,
   stopPosixBackendAndWait,
   stopWindowsBackendAndWait,
@@ -584,6 +585,7 @@ const UPDATE_CHECK_REASON_MIGRATION_RECOVERY = "migration recovery";
 const UPDATE_INSTALL_MARKER_FILE_NAME = "pending-update-install.json";
 const BACKEND_FORCE_KILL_DELAY_MS = 8_000;
 const BACKEND_SHUTDOWN_TIMEOUT_MS = 10_000;
+const DESKTOP_AUXILIARY_SHUTDOWN_TIMEOUT_MS = 5_000;
 // Provider finalizers stop every owned runtime concurrently, but POSIX leaves
 // extra headroom for the rest of the Effect scope to close cleanly.
 const POSIX_BACKEND_TERMINATE_DELAY_MS = 15_000;
@@ -3719,6 +3721,7 @@ async function stopBackendForUpdateInstall(
     updaterWindowToRestore = mainWindow;
     hideDesktopWindowForImmediateQuit();
   }
+  await cuaDriverHost?.suspend();
   await stopBackendAndWaitForExit();
   updateInstallPreparation.requireActive(attempt);
 }
@@ -5116,7 +5119,6 @@ function takeBackendProcessForShutdown(): ChildProcess.ChildProcess | null {
 }
 
 async function stopBackendAndWaitForExit(): Promise<void> {
-  await cuaDriverHost?.suspend();
   const child = takeBackendProcessForShutdown();
   if (!child) return;
   const backendChild = child;
@@ -5205,9 +5207,11 @@ async function shutdownDesktopRuntime(reason: string): Promise<void> {
   isQuitting = true;
   hideDesktopWindowForImmediateQuit();
   writeDesktopLogHeader(`${reason} shutdown start`);
-  const shutdown = runAfterDesktopShutdown(
-    stopBackendAndWaitForExit(),
-    async () => {
+  const shutdown = shutdownDesktopServices({
+    suspendNativeInput: () => cuaDriverHost?.suspend(),
+    stopBackend: stopBackendAndWaitForExit,
+    auxiliaryTimeoutMs: DESKTOP_AUXILIARY_SHUTDOWN_TIMEOUT_MS,
+    disposeDesktop: async () => {
       clearUpdateBackgroundBlurTimer();
       clearUpdateCheckTimeoutTimer();
       clearUpdatePollTimer();
@@ -5240,8 +5244,7 @@ async function shutdownDesktopRuntime(reason: string): Promise<void> {
       backendLogSink?.close();
       desktopLogSink?.close();
     },
-    { runAfterShutdownFailure: true },
-  );
+  });
   desktopShutdownPromise = shutdown;
 
   try {

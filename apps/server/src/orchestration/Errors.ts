@@ -6,6 +6,10 @@ import type { ProjectionRepositoryError } from "../persistence/Errors.ts";
 export const NATIVE_REVIEW_ATTACHMENTS_UNSUPPORTED =
   "Native code reviews do not support attachments. Send the files as a normal message.";
 
+// The decider found nothing to change, e.g. a repeated idempotent command. Callers that
+// treat such a repeat as success match this detail.
+export const COMMAND_PRODUCED_NO_EVENTS = "Command produced no events.";
+
 export const threadModelSelectionChangedDetail = (threadId: string): string =>
   `Thread '${threadId}' model selection changed before the conditional update.`;
 

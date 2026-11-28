@@ -1,3 +1,4 @@
+// Coordinates desktop shutdown and owns the backend process exit proof.
 import * as Http from "node:http";
 import type { ChildProcess } from "node:child_process";
 
@@ -74,6 +75,47 @@ export async function runAfterDesktopShutdown(
   if (shutdownFailed) {
     throw shutdownFailure;
   }
+}
+
+/** Run the bounded desktop stages around the existing backend exit protocol. */
+export async function shutdownDesktopServices(input: {
+  readonly suspendNativeInput: () => void | Promise<void>;
+  readonly stopBackend: () => Promise<void>;
+  readonly disposeDesktop: () => Promise<void>;
+  readonly auxiliaryTimeoutMs: number;
+}): Promise<void> {
+  const runAuxiliaryStage = async (
+    name: string,
+    run: () => void | Promise<void>,
+  ): Promise<void> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        Promise.resolve().then(run),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () => reject(new Error(`Timed out waiting for ${name} during desktop shutdown.`)),
+            input.auxiliaryTimeoutMs,
+          );
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
+  // Native input must stop accepting work before backend teardown. A stuck
+  // helper still has to let the backend run its own exit protocol.
+  const backend = runAfterDesktopShutdown(
+    runAuxiliaryStage("native input", input.suspendNativeInput),
+    input.stopBackend,
+    { runAfterShutdownFailure: true },
+  );
+  return runAfterDesktopShutdown(
+    backend,
+    () => runAuxiliaryStage("desktop services", input.disposeDesktop),
+    { runAfterShutdownFailure: true },
+  );
 }
 
 export function shouldDeferDesktopWindowClose(input: {

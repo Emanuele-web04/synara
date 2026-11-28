@@ -4,6 +4,7 @@
  * Owns retry, restart, and health tracking at the ProviderAdapter.streamEvents
  * seam. An event is retried in place until its canonical processing succeeds,
  * so transient persistence failures cannot consume and lose terminal events.
+ * Server shutdown gives failed writes a deadline to release adapter backpressure.
  *
  * @module providerRuntimeEventPump
  */
@@ -46,6 +47,8 @@ export interface ProviderRuntimeEventPumpOptions<R> {
   ) => Effect.Effect<void, unknown, R>;
   readonly retryBaseDelayMs?: number;
   readonly retryMaxDelayMs?: number;
+  /** Monotonic deadline set by the server when it starts shutting down. */
+  readonly shutdownRetryDeadline?: () => number | undefined;
   readonly degradedHealAfterSuccesses?: number;
   /** Only for an adapter declaring fresh-ids-once delivery, before durable acceptance. */
   readonly batchAssistantText?: boolean;
@@ -184,6 +187,21 @@ export function runProviderRuntimeEventPump<R>(
       ),
     );
 
+  // End the subscription if a failed write outlives shutdown's grace period.
+  // That releases publishers blocked on a full adapter event buffer.
+  const waitBeforePersistenceRetry = (event: ProviderRuntimeEvent, delayMs: number) =>
+    Effect.suspend(() => {
+      const deadline = options.shutdownRetryDeadline?.();
+      if (deadline === undefined) return Effect.sleep(delayMs);
+      const remainingMs = deadline - performance.now();
+      if (remainingMs > 0) return Effect.sleep(Math.min(delayMs, remainingMs));
+      return Effect.logWarning("provider.runtime_event_pump.shutdown_retry_exhausted", {
+        provider: options.provider,
+        eventId: event.eventId,
+        eventType: event.type,
+      }).pipe(Effect.andThen(Effect.interrupt));
+    });
+
   const persistQuarantineReliably = (
     event: ProviderRuntimeEvent,
     detail: string,
@@ -211,7 +229,7 @@ export function runProviderRuntimeEventPump<R>(
                 cause: quarantineDetail,
               }),
             ),
-            Effect.andThen(Effect.sleep(delayMs)),
+            Effect.andThen(waitBeforePersistenceRetry(event, delayMs)),
             Effect.andThen(persistQuarantineReliably(event, detail, attempt + 1)),
           );
         }),
@@ -285,7 +303,7 @@ export function runProviderRuntimeEventPump<R>(
             : Effect.void;
           return setHealth("recovering", attempt, detail).pipe(
             Effect.andThen(retryLog),
-            Effect.andThen(Effect.sleep(delayMs)),
+            Effect.andThen(waitBeforePersistenceRetry(event, delayMs)),
             Effect.andThen(processEventReliably(event, attempt + 1)),
           );
         }),

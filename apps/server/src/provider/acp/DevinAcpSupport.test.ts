@@ -1,3 +1,7 @@
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { Effect, Layer, Schedule, Stream } from "effect";
 import * as AcpErrors from "./AcpErrors.ts";
 import * as OfficialAcp from "@agentclientprotocol/sdk";
@@ -29,6 +33,39 @@ import {
 const textEncoder = new TextEncoder();
 
 describe("resolveDevinBinaryPath", () => {
+  it("discovers the official curl-installed Devin binary outside PATH on posix", () => {
+    const installedPath = "/home/me/.local/bin/devin";
+    expect(
+      resolveDevinBinaryPath(undefined, {
+        platform: "linux",
+        env: { HOME: "/home/me", PATH: "/usr/bin:/bin" },
+        pathExists: (path) => path === installedPath,
+      }),
+    ).toBe(installedPath);
+  });
+
+  it("discovers the Homebrew Devin binary outside PATH on posix", () => {
+    const installedPath = "/opt/homebrew/bin/devin";
+    expect(
+      resolveDevinBinaryPath(undefined, {
+        platform: "darwin",
+        env: { HOME: "/Users/me", PATH: "/usr/bin:/bin" },
+        pathExists: (path) => path === installedPath,
+      }),
+    ).toBe(installedPath);
+  });
+
+  it("keeps PATH-resolved Devin ahead of the posix install fallback", () => {
+    expect(
+      resolveDevinBinaryPath(undefined, {
+        platform: "linux",
+        env: { HOME: "/home/me", PATH: "/opt/devin/bin" },
+        pathExists: (path) =>
+          path === "/opt/devin/bin/devin" || path === "/home/me/.local/bin/devin",
+      }),
+    ).toBe("devin");
+  });
+
   it("discovers native Windows Devin installs outside PATH", () => {
     const installedPath = "C:\\Users\\me\\AppData\\Local\\devin\\cli\\bin\\devin.exe";
     expect(
@@ -404,11 +441,26 @@ function initializeWithAuthMethods(ids: ReadonlyArray<string>): Acp.InitializeRe
 
 describe("buildDevinAcpSpawnInput", () => {
   it("builds the default Devin ACP command", () => {
-    expect(buildDevinAcpSpawnInput(undefined, "/tmp/project", "approval-required")).toMatchObject({
-      command: "devin",
-      args: ["acp"],
-      cwd: "/tmp/project",
-    });
+    const pathDirectory = mkdtempSync(join(tmpdir(), "synara-devin-path-"));
+    try {
+      const executableName = process.platform === "win32" ? "devin.EXE" : "devin";
+      const executablePath = join(pathDirectory, executableName);
+      writeFileSync(executablePath, "");
+      chmodSync(executablePath, 0o755);
+
+      expect(
+        buildDevinAcpSpawnInput(undefined, "/tmp/project", "approval-required", {
+          PATH: pathDirectory,
+          HOME: join(pathDirectory, "missing-home"),
+        }),
+      ).toMatchObject({
+        command: "devin",
+        args: ["acp"],
+        cwd: "/tmp/project",
+      });
+    } finally {
+      rmSync(pathDirectory, { recursive: true, force: true });
+    }
   });
 
   it("passes the model as a process-start flag", () => {

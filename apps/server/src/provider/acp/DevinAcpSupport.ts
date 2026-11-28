@@ -33,6 +33,8 @@ import {
 import {
   commandExistsOnPath,
   type ProviderBinaryResolutionOptions,
+  resolvePosixBinaryAtPaths,
+  resolvePosixUserLocalBinary,
   resolveWindowsLocalAppDataBinary,
 } from "../providerBinaryResolution.ts";
 
@@ -148,6 +150,7 @@ const WINDOWS_DEVIN_RELATIVE_PATHS = [
   ["devin", "cli", "bin", "devin.exe"],
   ["devin", "bin", "devin.exe"],
 ] as const;
+const POSIX_DEVIN_SYSTEM_PATHS = ["/opt/homebrew/bin/devin", "/usr/local/bin/devin"] as const;
 
 export function resolveDevinBinaryPath(
   binaryPath?: string | null | undefined,
@@ -156,7 +159,12 @@ export function resolveDevinBinaryPath(
   const trimmed = binaryPath?.trim();
   if (trimmed && trimmed !== "devin") return trimmed;
   if (commandExistsOnPath("devin", options)) return "devin";
-  return resolveWindowsLocalAppDataBinary(WINDOWS_DEVIN_RELATIVE_PATHS, options) ?? "devin";
+  return (
+    resolveWindowsLocalAppDataBinary(WINDOWS_DEVIN_RELATIVE_PATHS, options) ??
+    resolvePosixUserLocalBinary("devin", options) ??
+    resolvePosixBinaryAtPaths(POSIX_DEVIN_SYSTEM_PATHS, options) ??
+    "devin"
+  );
 }
 
 export function getDevinApiServerUrlEnv(env: NodeJS.ProcessEnv = process.env): string | undefined {

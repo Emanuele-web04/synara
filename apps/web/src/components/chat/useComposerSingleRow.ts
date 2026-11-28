@@ -67,6 +67,15 @@ export function useComposerSingleRow(input: {
   predictionRef.current = prediction;
   const singleRowRef = useRef(singleRow);
   singleRowRef.current = singleRow;
+  // The measured input the row layout has rejected, so the wider block editor cannot
+  // measure the same line as fitting and flip the layout back. The row's own verdict is
+  // the only one trusted for that input; it is released when the input changes or the
+  // surface widens enough that the row deserves a fresh measurement.
+  const rowRejectedInputRef = useRef<{
+    readonly prompt: string;
+    readonly prediction: string | null;
+    readonly surfaceWidth: number;
+  } | null>(null);
   // The editor and surface currently measured, with the observer watching them.
   const attachmentRef = useRef<{
     readonly form: HTMLFormElement;
@@ -127,7 +136,24 @@ export function useComposerSingleRow(input: {
         ? surface.querySelector<HTMLElement>(PREDICTION_LINE_SELECTOR)
         : null;
       const lineWidth = ghost ? measureLineWidth(ghost, ghost) : measureDraftLineWidth(editor);
-      setFits(lineWidth <= slotWidth - SLOT_FIT_MARGIN_PX);
+      const lineFits = lineWidth <= slotWidth - SLOT_FIT_MARGIN_PX;
+      if (singleRowRef.current) {
+        rowRejectedInputRef.current = lineFits
+          ? null
+          : { prompt: currentPrompt, prediction: currentPrediction, surfaceWidth };
+      } else {
+        const rejected = rowRejectedInputRef.current;
+        if (
+          rejected !== null &&
+          rejected.prompt === currentPrompt &&
+          rejected.prediction === currentPrediction &&
+          surfaceWidth <= rejected.surfaceWidth
+        ) {
+          setFits(false);
+          return;
+        }
+      }
+      setFits(lineFits);
     };
     const observer =
       typeof ResizeObserver === "undefined"

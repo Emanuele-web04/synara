@@ -42,6 +42,19 @@ instance deleted after import. The browser keeps its existing local credentials 
 the server acknowledges the import. Older builds can discard this receipt metadata
 when rewriting the settings file, so replay protection depends on a supporting build.
 
+## Idle provider sessions
+
+The server checks for stale provider sessions every five minutes. Set
+`SYNARA_PROVIDER_SESSION_REAPER_MS` in the server environment to change how long
+a session must be inactive before the sweep can stop it. Use a non-negative
+whole number of milliseconds. Unset or invalid values use the 30-minute default.
+Set it to `0` to disable the sweep.
+
+The separate runtime idle timer still uses `SYNARA_PROVIDER_RUNTIME_IDLE_STOP_MS`
+and defaults to ten minutes. To turn off both idle cleanup mechanisms, set both
+environment variables to `0` before starting the server. Idle provider processes
+can then continue to hold memory until they stop for another reason.
+
 ## Crash recovery
 
 Crash recovery distinguishes previous-process turns from work started by pending
@@ -54,9 +67,14 @@ older automatic continuation; it must not be submitted again by that record.
 At graceful shutdown, provider exit events have a bounded one-second drain
 window to reach the durable journal before the event consumer closes. Only the
 matching root session/provider/lifecycle exit satisfies that drain; a child-task
-exit or an early persisted stop intent does not prove clean completion. If the
-deadline expires, normal crash recovery remains available. This does not prove
+exit or an early persisted stop intent does not prove clean completion. When
+the journal keeps rejecting writes during shutdown, runtime consumers end their
+retries after the grace period so provider teardown can finish. On restart,
+Synara replays journaled events and reconciles interrupted turns. This does not prove
 native process cleanup on every platform or survive an immediate process kill.
+The desktop app also bounds its native-input and local-service shutdown stages
+so a stalled helper can release the desktop instance lock. The backend retains
+its own graceful shutdown and process-exit checks.
 Opted-in desktop installations report fixed recovery failure categories through
 the [anonymous reliability lane](diagnostics.md#anonymous-reliability-reports).
 
@@ -493,6 +511,12 @@ or Gemini Enterprise. [Google ACP guidance](https://antigravity.google/docs/ide/
 Antigravity shows native questions in the composer, including in Full Access. For ACP
 sessions that identify Antigravity 1.5.0 or newer, steering sends the message to the active
 session and lets its child work continue. Older or unidentified runtimes use interrupt and queue.
+
+If a prompt fails with `ACP connection closed`, check the Antigravity CLI log for the same time.
+For a transport failure during a prompt, the local Synara server log records
+`antigravity.acp.prompt_transport_failed` with the available bytes on the Antigravity profile volume,
+when that measurement is available. If the CLI reports that the disk is full, free space on
+that volume before sending a follow-up in the same conversation.
 
 ### Provider-native subagents
 
@@ -934,8 +958,10 @@ When an orchestrator needs delegated results to finish the user's request, it mu
 `synara_wait_for_threads` with the returned `runIds` until `allTerminal` is true, then read and
 synthesize the results, or use the explicitly requested asynchronous continuation described
 below. A timeout reports progress; it is not completion. Each call polls for up to 30
-seconds. If summary collection exceeds its budget, the response still includes the known
-states and run IDs. Use the returned `readThread` action to retrieve the result. Native
+seconds. For a queued start, the call follows the original message until a provider run ID
+exists. If the call returns a null run ID, a later wait resolves the currently queued or latest
+turn for that thread. If summary collection exceeds its budget, the response still includes the
+known states and run IDs. Use the returned `readThread` action to retrieve the result. Native
 provider subagents use their provider's own completion mechanism. Neither launching work nor opting
 into passive receipts is a substitute for collecting required results before ending the turn.
 
