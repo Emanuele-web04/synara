@@ -41,6 +41,8 @@ export async function fetchJson(input: {
   bodyFormat?: "json" | "form";
   timeoutMs?: number;
   allowLoopbackHttp?: boolean;
+  /** User-configured hosts (a usage hub on a tailnet or LAN) may resolve to private addresses. */
+  allowPrivateAddress?: boolean;
 }): Promise<FetchJsonResult> {
   const encodedBody =
     input.body === undefined
@@ -59,7 +61,7 @@ export async function fetchJson(input: {
       maxRedirects: 0,
       maxConcurrent: 4,
       maxQueued: 8,
-      requirePublicAddress: true,
+      requirePublicAddress: input.allowPrivateAddress !== true,
       // Fake-ip DNS proxies resolve the hard-coded provider origins these calls
       // are pinned to into the RFC 2544 benchmark range.
       allowBenchmarkAddressRange: true,

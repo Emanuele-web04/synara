@@ -382,6 +382,11 @@ import {
   ServerGetProviderUsageSnapshotResult,
   ServerListProviderUsageInput,
   ServerListProviderUsageResult,
+  ServerListUsageHubsInput,
+  ServerListUsageHubsResult,
+  ServerAddUsageHubInput,
+  ServerUsageHub,
+  ServerRemoveUsageHubInput,
   ServerLifecycleStreamEvent,
   ServerGetSettingsResult,
   ServerKeepAwakeUpdatedPayload,
@@ -1608,6 +1613,24 @@ export const WsServerConsumeCodexResetCreditRpc = Rpc.make(
   },
 );
 
+export const WsServerListUsageHubsRpc = Rpc.make(WS_METHODS.serverListUsageHubs, {
+  payload: ServerListUsageHubsInput,
+  success: ServerListUsageHubsResult,
+  error: WsRpcError,
+});
+
+export const WsServerAddUsageHubRpc = Rpc.make(WS_METHODS.serverAddUsageHub, {
+  payload: ServerAddUsageHubInput,
+  success: ServerUsageHub,
+  error: WsRpcError,
+});
+
+export const WsServerRemoveUsageHubRpc = Rpc.make(WS_METHODS.serverRemoveUsageHub, {
+  payload: ServerRemoveUsageHubInput,
+  success: Schema.Void,
+  error: WsRpcError,
+});
+
 export const WsStatsGetProfileStatsRpc = Rpc.make(WS_METHODS.statsGetProfileStats, {
   payload: StatsGetProfileStatsInput,
   success: StatsGetProfileStatsResult,
@@ -2462,6 +2485,9 @@ export type WsFeatureRpc =
   | typeof WsServerGetProviderUsageSnapshotRpc
   | typeof WsServerListProviderUsageRpc
   | typeof WsServerConsumeCodexResetCreditRpc
+  | typeof WsServerListUsageHubsRpc
+  | typeof WsServerAddUsageHubRpc
+  | typeof WsServerRemoveUsageHubRpc
   | typeof WsStatsGetProfileStatsRpc
   | typeof WsStatsGetProfileTokenStatsRpc
   | typeof WsStatsGetRecapRpc
@@ -2669,6 +2695,9 @@ const wsApplicationRpcGroup = RpcGroup.make(
   WsServerGetProviderUsageSnapshotRpc,
   WsServerListProviderUsageRpc,
   WsServerConsumeCodexResetCreditRpc,
+  WsServerListUsageHubsRpc,
+  WsServerAddUsageHubRpc,
+  WsServerRemoveUsageHubRpc,
   WsStatsGetProfileStatsRpc,
   WsStatsGetProfileTokenStatsRpc,
   WsStatsGetRecapRpc,
