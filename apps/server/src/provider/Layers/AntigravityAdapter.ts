@@ -9,6 +9,10 @@
  *
  * @module AntigravityAdapterLive
  */
+// @effect-diagnostics nodeBuiltinImport:off -- Effect FileSystem has no filesystem capacity API.
+import { statfs } from "node:fs/promises";
+import { join } from "node:path";
+
 import {
   ApprovalRequestId,
   EventId,
@@ -1642,6 +1646,25 @@ export function makeAntigravityAdapter(dependencies: AntigravityAdapterDependenc
             ? Effect.interrupt
             : ctx.acp.prompt({ prompt: promptParts }),
         ).pipe(
+          Effect.tapError((error) =>
+            error._tag !== "AcpTransportError" || ctx.pendingTurnInterrupted
+              ? Effect.void
+              : Effect.gen(function* () {
+                  // The CLI can lose its transport while persisting the turn.
+                  // Keep support evidence local and omit the native log and profile path.
+                  const availableProfileBytes = yield* Effect.promise(() =>
+                    statfs(join(ctx.antigravityProfile, "antigravity-cli")).then(
+                      ({ bavail, bsize }) => bavail * bsize,
+                      () => null,
+                    ),
+                  ).pipe(Effect.timeoutOption(250), Effect.map(Option.getOrNull));
+                  yield* Effect.logWarning("antigravity.acp.prompt_transport_failed", {
+                    threadId: ctx.threadId,
+                    turnId,
+                    availableProfileBytes,
+                  });
+                }),
+          ),
           Effect.mapError((error) =>
             mapAcpToAdapterError(PROVIDER, input.threadId, "session/prompt", error),
           ),

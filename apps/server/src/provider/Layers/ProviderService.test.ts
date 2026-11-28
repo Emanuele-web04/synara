@@ -38,6 +38,7 @@ import { assertFailure } from "@effect/vitest/utils";
 
 import {
   Cause,
+  Clock,
   Deferred,
   Effect,
   Exit,
@@ -362,6 +363,7 @@ function makeFakeCodexAdapter(
   options?: {
     readonly conversationRollback?: "native" | "restart-session";
     readonly runtimeEventDelivery?: "fresh-ids-once";
+    readonly runtimeEventCapacity?: number;
     readonly didResumeSession?: NonNullable<
       ProviderAdapterShape<ProviderAdapterError>["didResumeSession"]
     >;
@@ -372,7 +374,11 @@ function makeFakeCodexAdapter(
   // production state where an interrupted stop marked the context stopped but
   // never reached the map deletion.
   const stoppedSessions = new Set<ThreadId>();
-  const runtimeEventPubSub = Effect.runSync(PubSub.unbounded<ProviderRuntimeEvent>());
+  const runtimeEventPubSub = Effect.runSync(
+    options?.runtimeEventCapacity === undefined
+      ? PubSub.unbounded<ProviderRuntimeEvent>()
+      : PubSub.bounded<ProviderRuntimeEvent>(options.runtimeEventCapacity),
+  );
 
   const startSession = vi.fn(
     (
@@ -573,8 +579,10 @@ function makeFakeCodexAdapter(
     streamEvents: Stream.fromPubSub(runtimeEventPubSub),
   };
 
+  const publish = (event: LegacyProviderRuntimeEvent) =>
+    PubSub.publish(runtimeEventPubSub, event as unknown as ProviderRuntimeEvent);
   const emit = (event: LegacyProviderRuntimeEvent): void => {
-    Effect.runSync(PubSub.publish(runtimeEventPubSub, event as unknown as ProviderRuntimeEvent));
+    Effect.runSync(publish(event));
   };
 
   const waitForRuntimeSubscribers = (count = 1): Effect.Effect<void> =>
@@ -600,6 +608,7 @@ function makeFakeCodexAdapter(
     adapter,
     prepareSessionReplacement,
     emit,
+    publish,
     waitForRuntimeSubscribers,
     updateSession,
     startSession,
@@ -668,6 +677,7 @@ function makeProviderServiceLayer(
   options?: Parameters<typeof makeProviderServiceLive>[0],
   providers?: {
     readonly freshRuntimeEventDelivery?: boolean;
+    readonly antigravityEventCapacity?: number;
     readonly includeRestartRollbackDroid?: boolean;
     readonly includeOpenCode?: boolean;
     readonly codexDidResumeSession?: NonNullable<
@@ -691,7 +701,12 @@ function makeProviderServiceLayer(
       : {}),
   });
   const claude = makeFakeCodexAdapter("claudeAgent");
-  const antigravity = makeFakeCodexAdapter("antigravity");
+  const antigravity = makeFakeCodexAdapter(
+    "antigravity",
+    providers?.antigravityEventCapacity === undefined
+      ? undefined
+      : { runtimeEventCapacity: providers.antigravityEventCapacity },
+  );
   const droid = makeFakeCodexAdapter("droid", { conversationRollback: "restart-session" });
   const openCode = makeFakeCodexAdapter("opencode");
   const registry: typeof ProviderAdapterRegistry.Service = {
@@ -10991,6 +11006,83 @@ it.effect.each(["matching exit", "missing parent exit"] as const)(
         Effect.ensuring(Scope.close(scope, Exit.void)),
       );
     }),
+);
+
+it.effect("ProviderServiceLive releases Antigravity teardown when the journal stays full", () =>
+  Effect.gen(function* () {
+    const scope = yield* Scope.make("sequential");
+    const journalFailure = yield* Deferred.make<void>();
+    const threadId = asThreadId("thread-agy-shutdown-disk-full");
+    const diskFull = new PersistenceSqlError({
+      operation: "append provider event",
+      detail: "database or disk is full",
+    });
+    let writable = false;
+    const shutdown = makeProviderServiceLayer(
+      {
+        persistRuntimeEvent: (event) =>
+          Deferred.succeed(journalFailure, undefined).pipe(
+            Effect.andThen(
+              Effect.suspend(() =>
+                writable ? Effect.succeed({ sequence: 1, event }) : Effect.fail(diskFull),
+              ),
+            ),
+          ),
+        runtimeEventRetryBaseDelayMs: 25,
+        runtimeEventRetryMaxDelayMs: 25,
+      },
+      { antigravityEventCapacity: 1 },
+    );
+
+    yield* Effect.gen(function* () {
+      const services = yield* Layer.buildWithScope(shutdown.rawLayer, scope);
+      const provider = yield* Effect.service(ProviderService).pipe(Effect.provide(services));
+      const agy = shutdown.antigravity;
+      yield* provider.startSession(threadId, {
+        provider: "antigravity",
+        threadId,
+        runtimeMode: "full-access",
+      });
+      yield* agy.waitForRuntimeSubscribers();
+      const event = {
+        provider: "antigravity" as const,
+        threadId,
+        createdAt: new Date().toISOString(),
+      };
+      const ready = {
+        ...event,
+        type: "session.state.changed" as const,
+        payload: { state: "ready" as const },
+      };
+      yield* agy.publish({ ...ready, eventId: asEventId("agy-disk-full") });
+      yield* Deferred.await(journalFailure);
+      yield* agy.publish({ ...ready, eventId: asEventId("agy-buffer-full") });
+      // Like the real adapter, teardown publishes its terminal event to the bounded queue.
+      agy.stopAll.mockImplementationOnce(() =>
+        agy.stopSession(threadId).pipe(
+          Effect.andThen(
+            agy.publish({
+              ...event,
+              eventId: asEventId("agy-exit-after-disk-full"),
+              type: "session.exited",
+              payload: { exitKind: "graceful" },
+            }),
+          ),
+          Effect.asVoid,
+        ),
+      );
+      const closing = yield* provider.closeRuntimeEvents.pipe(Effect.forkChild);
+      const closed = yield* Effect.raceFirst(
+        Fiber.join(closing).pipe(Effect.as(true)),
+        sleep(3_500).pipe(Effect.as(false)),
+      );
+      // Unblock the baseline after observing the timeout so its finalizers can finish.
+      writable = true;
+      yield* Fiber.join(closing);
+      assert.isTrue(closed, "shutdown must finish while the SQLite journal is still full");
+      assert.isFalse(yield* agy.adapter.hasSession(threadId));
+    }).pipe(Effect.ensuring(Scope.close(scope, Exit.void)));
+  }).pipe(Effect.provideService(Clock.Clock, Clock.Clock.defaultValue())),
 );
 
 it.effect("ProviderServiceLive starts independent provider teardown concurrently", () =>

@@ -14,6 +14,7 @@ import {
   Fiber,
   FileSystem,
   Layer,
+  Logger,
   PlatformError,
   Queue,
   Scope,
@@ -184,6 +185,14 @@ function makeControllableRuntime(
     emit,
     finishPrompt,
     rejectPrompt,
+    disconnectPrompt: () =>
+      Deferred.fail(
+        pendingPrompts[0]!,
+        new AcpErrors.AcpTransportError({
+          detail: "ACP connection closed",
+          cause: new Error("ACP connection closed"),
+        }),
+      ),
     exit: Deferred.succeed(exited, undefined),
     requestPermission: (request: Acp.RequestPermissionRequest) =>
       Effect.suspend(() => permissionHandler(request)),
@@ -1338,6 +1347,57 @@ describe("Antigravity ACP adapter", () => {
     // The prompt had returned, so closing the session (not session/cancel)
     // stops the background command.
     expect(fake.cancels()).toBe(0);
+  });
+
+  it("records profile disk space when a prompt loses its ACP connection", async () => {
+    const fake = makeControllableRuntime();
+    const warnings: unknown[][] = [];
+    const logger = Logger.make(({ message }) => {
+      if (Array.isArray(message) && message[0] === "antigravity.acp.prompt_transport_failed") {
+        warnings.push(message);
+      }
+    });
+    await runWithAdapter({ makeRuntime: fake.makeRuntime }, (adapter) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const home = yield* fs.makeTempDirectoryScoped({ prefix: "antigravity-acp-disk-" });
+        yield* fs.makeDirectory(join(home, ".gemini", "antigravity-cli"), { recursive: true });
+        const threadId = ThreadId.makeUnsafe("thread-agy-transport");
+        const collector = yield* adapter.streamEvents.pipe(
+          Stream.takeUntil((event) => event.type === "session.exited"),
+          Stream.runCollect,
+          Effect.forkChild,
+        );
+        yield* adapter.startSession(
+          startInput(threadId, {
+            providerOptions: { antigravity: { environment: { HOME: home, USERPROFILE: home } } },
+          }),
+        );
+        const turn = yield* adapter.sendTurn({
+          threadId,
+          input: "fixture prompt",
+          attachments: [],
+        });
+        yield* Effect.promise(() => waitFor(() => fake.prompts.length === 1));
+        yield* fake.disconnectPrompt();
+        const events = yield* Fiber.join(collector).pipe(Effect.timeout("3 seconds"));
+        expect(Array.from(events).filter((event) => event.type === "turn.completed")).toEqual([
+          expect.objectContaining({
+            turnId: turn.turnId,
+            payload: expect.objectContaining({ state: "failed" }),
+          }),
+        ]);
+        expect(yield* adapter.hasSession(threadId)).toBe(false);
+        expect(fake.prompts).toHaveLength(1);
+      }).pipe(Effect.provide(Logger.layer([logger], { mergeWithExisting: false }))),
+    );
+    expect(warnings).toEqual([
+      [
+        "antigravity.acp.prompt_transport_failed",
+        expect.objectContaining({ availableProfileBytes: expect.any(Number) }),
+      ],
+    ]);
+    expect(JSON.stringify(warnings)).not.toContain("fixture prompt");
   });
 
   it("refuses to replace a conversation it could not resume", async () => {

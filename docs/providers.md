@@ -54,9 +54,14 @@ older automatic continuation; it must not be submitted again by that record.
 At graceful shutdown, provider exit events have a bounded one-second drain
 window to reach the durable journal before the event consumer closes. Only the
 matching root session/provider/lifecycle exit satisfies that drain; a child-task
-exit or an early persisted stop intent does not prove clean completion. If the
-deadline expires, normal crash recovery remains available. This does not prove
+exit or an early persisted stop intent does not prove clean completion. When
+the journal keeps rejecting writes during shutdown, runtime consumers end their
+retries after the grace period so provider teardown can finish. On restart,
+Synara replays journaled events and reconciles interrupted turns. This does not prove
 native process cleanup on every platform or survive an immediate process kill.
+The desktop app also bounds its native-input and local-service shutdown stages
+so a stalled helper can release the desktop instance lock. The backend retains
+its own graceful shutdown and process-exit checks.
 Opted-in desktop installations report fixed recovery failure categories through
 the [anonymous reliability lane](diagnostics.md#anonymous-reliability-reports).
 
@@ -493,6 +498,12 @@ or Gemini Enterprise. [Google ACP guidance](https://antigravity.google/docs/ide/
 Antigravity shows native questions in the composer, including in Full Access. For ACP
 sessions that identify Antigravity 1.5.0 or newer, steering sends the message to the active
 session and lets its child work continue. Older or unidentified runtimes use interrupt and queue.
+
+If a prompt fails with `ACP connection closed`, check the Antigravity CLI log for the same time.
+For a transport failure during a prompt, the local Synara server log records
+`antigravity.acp.prompt_transport_failed` with the available bytes on the Antigravity profile volume,
+when that measurement is available. If the CLI reports that the disk is full, free space on
+that volume before sending a follow-up in the same conversation.
 
 ### Provider-native subagents
 
