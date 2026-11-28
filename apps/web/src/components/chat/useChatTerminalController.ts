@@ -104,10 +104,13 @@ export function useChatTerminalController({
     [activeThreadId, setWorkspaceTabInStore],
   );
   const toggleTerminalVisibility = useCallback(() => {
-    if (!activeThreadId) return;
-    if (!terminalState.terminalOpen) setTerminalPresentationMode("workspace");
-    setTerminalOpen(!terminalState.terminalOpen);
-  }, [activeThreadId, setTerminalOpen, setTerminalPresentationMode, terminalState.terminalOpen]);
+    // Returning to chat keeps the terminal workspace open with the chat tab selected.
+    if (terminalWorkspaceTerminalTabActive) {
+      setTerminalOpen(false);
+    } else {
+      setTerminalPresentationMode("workspace");
+    }
+  }, [setTerminalOpen, setTerminalPresentationMode, terminalWorkspaceTerminalTabActive]);
   const createTerminalFromShortcut = useCallback(() => {
     if (!activeThreadId) return;
     setTerminalPresentationMode("workspace");
