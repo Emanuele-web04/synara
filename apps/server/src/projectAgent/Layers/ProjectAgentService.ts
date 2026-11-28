@@ -662,7 +662,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
   // Apply one settle/stuck event to a managed worker: post the compact system
   // row into the coordinator thread, update the durable worker row, then post
   // the all-workers roll-up once every worker in the creation batch has
-  // settled. The roll-up is keyed by worker admissions, not mutable outcomes.
+  // settled. Each creation batch gets one summary across all follow-up turns.
   const recordWorkerMonitorEvent = (input: {
     readonly worker: ProjectManagedWorker;
     readonly eventType: string;
@@ -821,7 +821,6 @@ export const makeProjectAgentService = Effect.gen(function* () {
         : batch.map((row) => (row.threadId === worker.threadId ? worker : row));
 
       let unstartedWork: ReadonlyArray<{
-        readonly id: string;
         readonly title: string;
         readonly state: string;
       }> = [];
@@ -867,17 +866,19 @@ export const makeProjectAgentService = Effect.gen(function* () {
           .pipe(Effect.mapError(toServiceError("Failed to check worker batch activity.")));
         if (peerShells.some(isThreadActivelyWorking)) return;
 
-        // listManagedWorkersByBatch has stable ordering. Corrections to a
-        // terminal outcome do not admit more work; a new worker or turn does.
+        // Older rows used outcome/turn-dependent keys. Their payload still
+        // identifies the batch even after an upgrade or process restart.
+        if (
+          yield* repository
+            .hasPublishedWorkerBatchRollup({
+              coordinatorThreadId: input.coordinatorThreadId,
+              batchId: worker.batchId,
+            })
+            .pipe(Effect.mapError(toServiceError("Failed to look up the worker batch summary.")))
+        )
+          return;
         const rollupKey = createHash("sha256")
-          .update(
-            JSON.stringify([
-              worker.projectId,
-              worker.batchId,
-              peers.map((peer) => [peer.threadId, peer.activeTurnCommandId]),
-              unstartedWork.map((item) => item.id).sort(),
-            ]),
-          )
+          .update(JSON.stringify([worker.projectId, worker.batchId]))
           .digest("hex");
         const rollupInserted = yield* repository
           .insertInboxEvent({

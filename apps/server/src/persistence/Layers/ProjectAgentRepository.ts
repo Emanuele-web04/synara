@@ -1754,6 +1754,19 @@ const makeProjectAgentRepository = Effect.gen(function* () {
           toPersistenceSqlOrDecodeError("ProjectAgentRepository.listManagedWorkers", "worker"),
         ),
       ),
+    hasPublishedWorkerBatchRollup: ({ coordinatorThreadId, batchId }) =>
+      sql<{ found: number }>`
+        SELECT 1 AS found FROM projection_thread_activities
+        WHERE activity_id GLOB 'agent-monitor:rollup:*'
+          AND thread_id = ${coordinatorThreadId} AND kind = 'synara.workers.settled'
+          AND json_extract(payload_json, '$.batchId') = ${batchId}
+        LIMIT 1
+      `.pipe(
+        Effect.mapError(
+          toPersistenceSqlError("ProjectAgentRepository.hasPublishedWorkerBatchRollup"),
+        ),
+        Effect.map((rows) => rows.length > 0),
+      ),
     listManagedWorkersByBatch: (input) =>
       SqlSchema.findAll({
         Request: Schema.Struct({ projectId: ProjectId, batchId: Schema.String }),
