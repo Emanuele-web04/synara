@@ -2029,8 +2029,10 @@ export const makeProjectAgentService = Effect.gen(function* () {
         eventType: event.eventType,
         sourceEventId: event.sourceEventId,
         createdAt: delivery.completedAt,
-        // The new batch wake must sort after the already-admitted settlement.
-        rollupCreatedAt: new Date(Date.parse(event.createdAt) + 1).toISOString(),
+        // A replayed interruption may be older than the acknowledged cursor.
+        ...(delivery.interrupted
+          ? { rollupCreatedAt: new Date(Date.parse(event.createdAt) + 1).toISOString() }
+          : {}),
         coordinatorThreadId: config.coordinatorThreadId,
         taskId: delivery.worker.taskId,
         lastKnownPr: delivery.prUrl ? { url: delivery.prUrl } : null,
