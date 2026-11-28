@@ -120,6 +120,15 @@ const make = Effect.gen(function* () {
         threadId: payload.threadId as ThreadId,
         sourceEventId: `${event.sequence}:${event.type}`,
         eventType: event.type,
+        ...(event.type === "thread.session-set" && event.payload.session.status === "interrupted"
+          ? {
+              confirmedInterruption: {
+                sequence: event.sequence,
+                updatedAt: event.payload.session.updatedAt,
+                lastError: event.payload.session.lastError,
+              },
+            }
+          : {}),
         // Only a ready diff can serve as a checkpoint completion signal.
         ...("status" in payload && typeof payload.status === "string"
           ? { checkpointStatus: payload.status }

@@ -251,6 +251,12 @@ export interface ProjectAgentServiceShape {
     readonly eventType: string;
     /** Only a ready checkpoint is a settlement signal for a Git worker. */
     readonly checkpointStatus?: string;
+    /** Confirmed status from the event, even if the projection has already advanced. */
+    readonly confirmedInterruption?: {
+      readonly sequence: number;
+      readonly updatedAt: string;
+      readonly lastError: string | null;
+    };
     /** Turn the event belongs to — used to classify coordinator check-in
      * turns for the group activity log. */
     readonly turnId?: string;

@@ -5,6 +5,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
   AutomationId,
+  CommandId,
   DEFAULT_SERVER_SETTINGS,
   ProjectActivityId,
   ProjectDocumentRevisionId,
@@ -15,6 +16,7 @@ import {
   ThreadId,
   type HubWorkRecord,
   type OrchestrationCommand,
+  type OrchestrationEvent,
   type ProviderKind,
   type ProjectAgentStreamEvent,
   type ServerProviderStatus,
@@ -341,7 +343,19 @@ function makeTestLayer(options?: {
       } as unknown as ProjectionSnapshotQuery["Service"];
     }),
   );
+  const threadEvents: Array<
+    Pick<OrchestrationEvent, "aggregateId" | "type" | "commandId" | "sequence">
+  > = [];
   const orchestrationLayer = Layer.succeed(OrchestrationEngineService, {
+    readThreadEvents: (threadId: string, after: number, eventTypes: ReadonlyArray<string>) =>
+      Stream.fromIterable(
+        threadEvents.filter(
+          (event) =>
+            event.aggregateId === threadId &&
+            event.sequence > after &&
+            eventTypes.includes(event.type),
+        ),
+      ),
     dispatch: (command: OrchestrationCommand) =>
       Effect.gen(function* () {
         dispatched.push(command);
@@ -425,6 +439,7 @@ function makeTestLayer(options?: {
     digestGenerationInputs,
     threadShells,
     threadDetails,
+    threadEvents,
     providerSessions,
     toolInFlightByThread,
     shellBatchCalls: () => shellBatchCalls,
@@ -5324,25 +5339,25 @@ it.effect("ignores provisional diffs and reports the confirmed interruption once
     assert.equal(harness.runNowCalls.length, wakesBeforeDiffs);
 
     const stoppedAt = "1970-01-01T00:18:01.000Z";
+    // The projection already sees the next turn, while the ordered worker
+    // event handler is still consuming the previous interruption.
+    harness.threadShells[workerThreadId] = quietRunningShell("1970-01-01T00:18:02.000Z");
+    for (const id of ["session-interrupted-1", "session-interrupted-replayed"]) {
+      yield* service.ingestSettledThreadEvent({
+        threadId: workerThreadId,
+        sourceEventId: id,
+        eventType: "thread.session-set",
+        confirmedInterruption: { sequence: 12, updatedAt: stoppedAt, lastError: null },
+        createdAt: stoppedAt,
+      });
+    }
+    const worker = yield* repository.findManagedWorkerByThread(workerThreadId);
+    assert.equal(Option.isSome(worker) ? worker.value.settleOutcome : null, "interrupted");
     harness.threadShells[workerThreadId] = {
       ...quietRunningShell(stoppedAt),
       session: { status: "interrupted", updatedAt: stoppedAt, lastError: null, activeTurnId: null },
     };
-    yield* service.ingestSettledThreadEvent({
-      threadId: workerThreadId,
-      sourceEventId: "session-interrupted-1",
-      eventType: "thread.session-set",
-      createdAt: stoppedAt,
-    });
-    yield* service.ingestSettledThreadEvent({
-      threadId: workerThreadId,
-      sourceEventId: "session-interrupted-replayed",
-      eventType: "thread.session-set",
-      createdAt: stoppedAt,
-    });
     yield* service.inspectWorkerHealth();
-    const worker = yield* repository.findManagedWorkerByThread(workerThreadId);
-    assert.equal(Option.isSome(worker) ? worker.value.settleOutcome : null, "interrupted");
     // The ladder's own interrupt never refunds the attempts it spent.
     assert.equal(Option.isSome(worker) ? worker.value.recoveriesUsed : null, 2);
     assert.equal(activityRows(harness, "synara.worker.settled").length, 1);
@@ -5357,6 +5372,26 @@ it.effect("ignores provisional diffs and reports the confirmed interruption once
       eventType: "thread.turn-start-requested",
       createdAt: "1970-01-01T00:19:00.000Z",
     });
+    harness.threadEvents.push({
+      aggregateId: workerThreadId,
+      type: "thread.turn-start-requested",
+      commandId: CommandId.makeUnsafe("coordinator:follow-up"),
+      sequence: 14,
+    });
+    yield* service.ingestSettledThreadEvent({
+      threadId: workerThreadId,
+      sourceEventId: "session-interrupted-delayed",
+      eventType: "thread.session-set",
+      confirmedInterruption: {
+        sequence: 13,
+        updatedAt: "1970-01-01T00:18:02.000Z",
+        lastError: null,
+      },
+      createdAt: "1970-01-01T00:19:01.000Z",
+    });
+    const followUp = yield* repository.findManagedWorkerByThread(workerThreadId);
+    assert.equal(Option.getOrThrow(followUp).settleOutcome, null);
+    assert.equal(activityRows(harness, "synara.worker.settled").length, 1);
     harness.threadShells[workerThreadId] = {
       projectId: groupId,
       title: "Stalled worker",

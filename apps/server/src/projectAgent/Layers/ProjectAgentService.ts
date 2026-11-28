@@ -627,7 +627,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
         const fresh = yield* repository
           .findManagedWorkerByThread(worker.threadId)
           .pipe(Effect.mapError(toServiceError("Failed to re-read managed worker.")));
-        // A non-Git completion belongs to the observed attempt, never a newer
+        // An attempt-specific settlement belongs to the observed attempt, never a newer
         // coordinator/user turn that won the monitor write while we awaited I/O.
         if (
           input.expectedTurnCommandId !== undefined &&
@@ -5791,9 +5791,31 @@ export const makeProjectAgentService = Effect.gen(function* () {
           .getConfig(projectId)
           .pipe(Effect.mapError(toServiceError("Failed to load coordinator for event.")));
         if (Option.isNone(config) || !config.value.enabled) return;
+        const managedWorker = Option.isSome(task) || Option.isSome(worker);
+        const confirmedInterruption =
+          input.eventType === "thread.session-set" && managedWorker
+            ? input.confirmedInterruption
+            : undefined;
+        const activeCommandId = Option.isSome(worker) ? worker.value.activeTurnCommandId : null;
+        if (confirmedInterruption && activeCommandId !== null) {
+          // A retry can update the worker row outside the ordered event consumer.
+          // Use the durable command order to keep an old stop off a newer attempt.
+          const newerRequest = yield* orchestrationEngine
+            .readThreadEvents(input.threadId, confirmedInterruption.sequence, [
+              "thread.turn-start-requested",
+              "thread.turn-queued",
+            ])
+            .pipe(
+              Stream.filter((event) => event.commandId === activeCommandId),
+              Stream.runHead,
+              Effect.mapError(toServiceError("Failed to verify the interrupted worker attempt.")),
+            );
+          if (Option.isSome(newerRequest)) return;
+        }
         const nonGitTurn =
+          !confirmedInterruption &&
           (input.eventType === "thread.session-set" || input.eventType === "worker.completed") &&
-          (Option.isSome(worker) || Option.isSome(task)) &&
+          managedWorker &&
           Option.isSome(shell)
             ? yield* completedNonGitTurn(shell.value)
             : null;
@@ -5807,14 +5829,9 @@ export const makeProjectAgentService = Effect.gen(function* () {
         if (nonGitTurn) {
           sourceEventId = `worker-non-git-completed:${input.threadId}:${nonGitTurn.turnId}`;
           eventType = "worker.completed";
-        } else if (
-          input.eventType === "thread.session-set" &&
-          (Option.isSome(worker) || Option.isSome(task)) &&
-          Option.isSome(shell) &&
-          shell.value.session?.status === "interrupted"
-        ) {
+        } else if (confirmedInterruption) {
           // Use the health poller's identity so both observations deliver one wake.
-          sourceEventId = `worker-health:${input.threadId}:interrupted:${shell.value.session.updatedAt}`;
+          sourceEventId = `worker-health:${input.threadId}:interrupted:${confirmedInterruption.updatedAt}`;
           eventType = "worker.interrupted";
         }
         if (Option.isSome(configByCoordinator)) {
@@ -5867,7 +5884,6 @@ export const makeProjectAgentService = Effect.gen(function* () {
         // (silent/nudged/redispatched/waiting-overdue/never-started/… )
         // posts its rows but never burns a coordinator turn; the model is
         // woken only when the ladder gives up or the worker settles.
-        const managedWorker = Option.isSome(task) || Option.isSome(worker);
         const eligibleWake = managedWorker
           ? WORKER_WAKE_EVENT_TYPES.has(eventType)
           : isWorkerAlertEvent(eventType);
@@ -6022,16 +6038,18 @@ export const makeProjectAgentService = Effect.gen(function* () {
           const lastAssistantText = Option.isSome(detail)
             ? lastAssistantTextFromMessages(detail.value.messages)
             : null;
+          const session = Option.isSome(shell) ? shell.value.session : null;
+          const status = confirmedInterruption ? "interrupted" : session?.status;
           const outcome = classifyWorkerSettlement({
             eventType,
-            sessionStatus: Option.isSome(shell) ? shell.value.session?.status : null,
+            sessionStatus: status,
           });
           const report = formatWorkerSettlementReport({
             title,
             threadId: input.threadId,
             eventType,
-            status: Option.isSome(shell) ? shell.value.session?.status : null,
-            lastError: Option.isSome(shell) ? shell.value.session?.lastError : null,
+            status,
+            lastError: confirmedInterruption ? confirmedInterruption.lastError : session?.lastError,
             lastAssistantText,
           });
           const written = yield* upsertSystemDocument({
@@ -6100,7 +6118,9 @@ export const makeProjectAgentService = Effect.gen(function* () {
             worker: worker.value,
             eventType,
             sourceEventId,
-            ...(nonGitTurn ? { expectedTurnCommandId: worker.value.activeTurnCommandId } : {}),
+            ...(nonGitTurn || confirmedInterruption
+              ? { expectedTurnCommandId: worker.value.activeTurnCommandId }
+              : {}),
             createdAt: nonGitTurn?.completedAt ?? input.createdAt,
             coordinatorThreadId: config.value.coordinatorThreadId,
             taskId: Option.isSome(task) ? task.value.id : null,
