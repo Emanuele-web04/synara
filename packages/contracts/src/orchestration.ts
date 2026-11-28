@@ -1661,6 +1661,7 @@ const ThreadMetaUpdateCommand = Schema.Struct({
   type: Schema.Literal("thread.meta.update"),
   commandId: CommandId,
   threadId: ThreadId,
+  projectId: Schema.optional(ProjectId),
   title: Schema.optional(TrimmedNonEmptyString),
   /** Apply the title only while no newer durable title event exists. */
   expectedTitleSequence: Schema.optional(NonNegativeInt),
@@ -2605,6 +2606,7 @@ export type ThreadProviderHandoff = typeof ThreadProviderHandoff.Type;
 export const ThreadMetaUpdatedPayload = Schema.Struct({
   ...UsageLimitRecoveryFields,
   threadId: ThreadId,
+  projectId: Schema.optional(ProjectId),
   title: Schema.optional(TrimmedNonEmptyString),
   modelSelection: Schema.optional(ModelSelection),
   envMode: Schema.optional(ThreadEnvironmentMode),
