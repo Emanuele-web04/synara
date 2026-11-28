@@ -143,7 +143,12 @@ const IMPORT_PROJECTS_SOURCES: readonly {
 }[] = [
   { id: "claude-code", labelKey: "workspace:fromClaudeCode", providers: ["claudeAgent"] },
   { id: "codex", labelKey: "workspace:fromCodex", providers: ["codex"] },
-  { id: "all", labelKey: "workspace:fromClaudeCodeAndCodex", providers: ["claudeAgent", "codex"] },
+  { id: "devin", labelKey: "workspace:fromDevin", providers: ["devin"] },
+  {
+    id: "all",
+    labelKey: "workspace:fromAllTools",
+    providers: ["claudeAgent", "codex", "devin"],
+  },
 ];
 
 function actionHandler(

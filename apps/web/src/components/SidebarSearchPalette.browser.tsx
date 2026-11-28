@@ -289,8 +289,9 @@ it("opens a source page for importing projects and hands the chosen source to th
   expect(onOpenChange).not.toHaveBeenCalled();
   await expect.element(page.getByPlaceholder("Import projects from…")).toBeVisible();
   await expect.element(page.getByRole("option", { name: "From Codex", exact: true })).toBeVisible();
+  await expect.element(page.getByRole("option", { name: "From Devin", exact: true })).toBeVisible();
   await expect
-    .element(page.getByRole("option", { name: "From Claude Code and Codex" }))
+    .element(page.getByRole("option", { name: "From all supported tools" }))
     .toBeVisible();
 
   await page.getByRole("option", { name: "From Claude Code", exact: true }).click();

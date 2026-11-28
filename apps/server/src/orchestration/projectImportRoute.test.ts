@@ -374,6 +374,31 @@ describe("project import routes", () => {
     );
   });
 
+  it("imports a history-only provider's conversation without starting a provider process", async () => {
+    const { root } = await workspace();
+    const test = harness({
+      root,
+      providers: ["devin"],
+      accounts: [{ instanceId: "devin", provider: "devin", catalog: nativeCatalog(root, "devin") }],
+    });
+
+    const result = await Effect.runPromise(test.importProject(await test.request("devin")));
+
+    expect(result.status).toBe("imported");
+    // No fork call: the copy is the store's own conversation, not a new session.
+    expect(test.importExternalThread).not.toHaveBeenCalled();
+    expect(test.readHistory.mock.calls[0]?.[0]).toMatchObject({
+      provider: "devin",
+      nativeId: "devin-original",
+    });
+    expect(test.importedMessages.get(result.threadId!)).toHaveLength(1);
+    const created = test.commands.find((command) => command.type === "thread.create");
+    expect(created?.type === "thread.create" && created.modelSelection).toMatchObject({
+      provider: "devin",
+      model: "adaptive",
+    });
+  });
+
   it("lists a conversation shared by several accounts once, under the default account", async () => {
     const { root } = await workspace();
     const test = harness({

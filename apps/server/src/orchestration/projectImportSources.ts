@@ -22,6 +22,7 @@ import {
 import { claudeHistoricalSessionEnvironment } from "./importThreadRoute";
 import { canonicalImportPath } from "./projectImportPaths";
 import { resolveCodexProjectImportHome } from "../provider/codexProjectImport";
+import { devinStorePathForEnvironment } from "../provider/devinSessionHistory";
 
 export interface ProjectImportSource {
   readonly provider: ProjectImportProvider;
@@ -96,6 +97,15 @@ function projectImportSourceFor(paths: {
       };
       return codex?.homePath ? { ...source, codexHomePath: codex.homePath } : source;
     }
+    if (instance.driver === "devin") {
+      // The store lives under the account's own data dir, so its launch
+      // environment decides which history this account can import.
+      return {
+        ...base,
+        provider: "devin",
+        environment: { ...process.env, ...providerOptions?.devin?.environment },
+      };
+    }
     const claudeEnvironment = claudeHistoricalSessionEnvironment(providerOptions, {
       ...(paths.homeDir ? { homeDir: paths.homeDir } : {}),
       ...(paths.stateDir ? { isolationRootDir: paths.stateDir } : {}),
@@ -120,10 +130,14 @@ function projectImportSourceFor(paths: {
 
 /** The storage identity a source was discovered from; import revalidates it. */
 export function resolveProjectImportSourceHome(source: ProjectImportSource): Promise<string> {
-  return source.provider === "codex"
-    ? resolveCodexProjectImportHome({
-        env: source.environment,
-        ...(source.codexHomePath ? { homePath: source.codexHomePath } : {}),
-      })
-    : canonicalImportPath(source.claudeConfigDir ?? ambientClaudeConfigDir());
+  if (source.provider === "codex") {
+    return resolveCodexProjectImportHome({
+      env: source.environment,
+      ...(source.codexHomePath ? { homePath: source.codexHomePath } : {}),
+    });
+  }
+  if (source.provider === "devin") {
+    return canonicalImportPath(devinStorePathForEnvironment(source.environment));
+  }
+  return canonicalImportPath(source.claudeConfigDir ?? ambientClaudeConfigDir());
 }

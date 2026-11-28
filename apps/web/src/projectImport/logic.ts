@@ -4,10 +4,11 @@ import type {
   ProjectImportProvider,
 } from "@synara/contracts";
 
-export const IMPORT_PROVIDERS: readonly ProjectImportProvider[] = ["codex", "claudeAgent"];
+export const IMPORT_PROVIDERS: readonly ProjectImportProvider[] = ["codex", "claudeAgent", "devin"];
 export const IMPORT_PROVIDER_LABELS: Record<ProjectImportProvider, string> = {
   codex: "Codex",
   claudeAgent: "Claude Code",
+  devin: "Devin",
 };
 
 export interface ProjectImportQueueItem {
