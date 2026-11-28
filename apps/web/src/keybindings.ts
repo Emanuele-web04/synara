@@ -347,6 +347,131 @@ export const DEFAULT_SHORTCUT_FALLBACKS: ResolvedKeybindingsConfig = [
     shortcut: commandShortcut("j", { shiftKey: true }),
   },
   {
+    command: "terminal.tile.splitRight",
+    shortcut: commandShortcut("d"),
+    whenAst: whenAnd(whenIdentifier("terminalFocus"), whenIdentifier("isMac")),
+  },
+  {
+    command: "terminal.tile.splitRight",
+    shortcut: commandShortcut("d", { ctrlKey: true, shiftKey: true, modKey: false }),
+    whenAst: whenAnd(whenIdentifier("terminalFocus"), whenNot(whenIdentifier("isMac"))),
+  },
+  {
+    command: "terminal.tile.splitDown",
+    shortcut: commandShortcut("d", { shiftKey: true }),
+    whenAst: whenAnd(whenIdentifier("terminalFocus"), whenIdentifier("isMac")),
+  },
+  {
+    command: "terminal.tile.splitDown",
+    shortcut: commandShortcut("e", { ctrlKey: true, shiftKey: true, modKey: false }),
+    whenAst: whenAnd(whenIdentifier("terminalFocus"), whenNot(whenIdentifier("isMac"))),
+  },
+  {
+    command: "terminal.tile.focusLeft",
+    shortcut: commandShortcut("h", { altKey: true, modKey: false }),
+    whenAst: whenAnd(whenIdentifier("terminalFocus"), whenNot(whenIdentifier("isMac"))),
+  },
+  {
+    command: "terminal.tile.focusLeft",
+    shortcut: commandShortcut("arrowleft", { altKey: true }),
+    whenAst: whenAnd(whenIdentifier("terminalFocus"), whenIdentifier("isMac")),
+  },
+  {
+    command: "terminal.tile.focusDown",
+    shortcut: commandShortcut("j", { altKey: true, modKey: false }),
+    whenAst: whenAnd(whenIdentifier("terminalFocus"), whenNot(whenIdentifier("isMac"))),
+  },
+  {
+    command: "terminal.tile.focusDown",
+    shortcut: commandShortcut("arrowdown", { altKey: true }),
+    whenAst: whenAnd(whenIdentifier("terminalFocus"), whenIdentifier("isMac")),
+  },
+  {
+    command: "terminal.tile.focusUp",
+    shortcut: commandShortcut("k", { altKey: true, modKey: false }),
+    whenAst: whenAnd(whenIdentifier("terminalFocus"), whenNot(whenIdentifier("isMac"))),
+  },
+  {
+    command: "terminal.tile.focusUp",
+    shortcut: commandShortcut("arrowup", { altKey: true }),
+    whenAst: whenAnd(whenIdentifier("terminalFocus"), whenIdentifier("isMac")),
+  },
+  {
+    command: "terminal.tile.focusRight",
+    shortcut: commandShortcut("l", { altKey: true, modKey: false }),
+    whenAst: whenAnd(whenIdentifier("terminalFocus"), whenNot(whenIdentifier("isMac"))),
+  },
+  {
+    command: "terminal.tile.focusRight",
+    shortcut: commandShortcut("arrowright", { altKey: true }),
+    whenAst: whenAnd(whenIdentifier("terminalFocus"), whenIdentifier("isMac")),
+  },
+  {
+    command: "terminal.tile.resizeLeft",
+    shortcut: commandShortcut("h", { altKey: true, shiftKey: true, modKey: false }),
+    whenAst: whenAnd(whenIdentifier("terminalFocus"), whenNot(whenIdentifier("isMac"))),
+  },
+  {
+    command: "terminal.tile.resizeLeft",
+    shortcut: commandShortcut("arrowleft", { ctrlKey: true, shiftKey: true }),
+    whenAst: whenAnd(whenIdentifier("terminalFocus"), whenIdentifier("isMac")),
+  },
+  {
+    command: "terminal.tile.resizeDown",
+    shortcut: commandShortcut("j", { altKey: true, shiftKey: true, modKey: false }),
+    whenAst: whenAnd(whenIdentifier("terminalFocus"), whenNot(whenIdentifier("isMac"))),
+  },
+  {
+    command: "terminal.tile.resizeDown",
+    shortcut: commandShortcut("arrowdown", { ctrlKey: true, shiftKey: true }),
+    whenAst: whenAnd(whenIdentifier("terminalFocus"), whenIdentifier("isMac")),
+  },
+  {
+    command: "terminal.tile.resizeUp",
+    shortcut: commandShortcut("k", { altKey: true, shiftKey: true, modKey: false }),
+    whenAst: whenAnd(whenIdentifier("terminalFocus"), whenNot(whenIdentifier("isMac"))),
+  },
+  {
+    command: "terminal.tile.resizeUp",
+    shortcut: commandShortcut("arrowup", { ctrlKey: true, shiftKey: true }),
+    whenAst: whenAnd(whenIdentifier("terminalFocus"), whenIdentifier("isMac")),
+  },
+  {
+    command: "terminal.tile.resizeRight",
+    shortcut: commandShortcut("l", { altKey: true, shiftKey: true, modKey: false }),
+    whenAst: whenAnd(whenIdentifier("terminalFocus"), whenNot(whenIdentifier("isMac"))),
+  },
+  {
+    command: "terminal.tile.resizeRight",
+    shortcut: commandShortcut("arrowright", { ctrlKey: true, shiftKey: true }),
+    whenAst: whenAnd(whenIdentifier("terminalFocus"), whenIdentifier("isMac")),
+  },
+  {
+    command: "terminal.tile.zoom",
+    shortcut: commandShortcut("enter", { shiftKey: true }),
+    whenAst: whenIdentifier("terminalFocus"),
+  },
+  {
+    command: "terminal.tab.previous",
+    shortcut: commandShortcut("pageup", { ctrlKey: true, shiftKey: true, modKey: false }),
+    whenAst: whenAnd(whenIdentifier("terminalFocus"), whenNot(whenIdentifier("isMac"))),
+  },
+  {
+    command: "terminal.tab.previous",
+    shortcut: commandShortcut("[", { altKey: true }),
+    whenAst: whenAnd(whenIdentifier("terminalFocus"), whenIdentifier("isMac")),
+  },
+  {
+    command: "terminal.tab.next",
+    shortcut: commandShortcut("pagedown", { ctrlKey: true, shiftKey: true, modKey: false }),
+    whenAst: whenAnd(whenIdentifier("terminalFocus"), whenNot(whenIdentifier("isMac"))),
+  },
+  {
+    command: "terminal.tab.next",
+    shortcut: commandShortcut("]", { altKey: true }),
+    whenAst: whenAnd(whenIdentifier("terminalFocus"), whenIdentifier("isMac")),
+  },
+  {
     command: "terminal.workspace.closeActive",
     shortcut: commandShortcut("w"),
     whenAst: whenIdentifier("terminalWorkspaceOpen"),
@@ -401,6 +526,7 @@ const TERMINAL_LINE_END = "\u0005";
 const EVENT_CODE_KEY_ALIASES: Readonly<Record<string, readonly string[]>> = {
   // Option+Space reports a non-breaking space on macOS, so match it by physical key.
   Space: [" "],
+  Backquote: ["`"],
   BracketLeft: ["["],
   BracketRight: ["]"],
   Digit0: ["0"],

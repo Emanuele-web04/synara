@@ -305,6 +305,18 @@ export function LayoutSettingsView(binding: AppSettingsBinding) {
         />
       </SettingsSection>
 
+      <SettingsSection title="settings:terminalSection">
+        <BooleanSettingRow
+          {...binding}
+          id="setting-compact-bottom-terminal"
+          settingKey="compactBottomTerminal"
+          title="settings:compactBottomTerminal"
+          description="settings:compactBottomTerminalDescription"
+          resetLabel="settings:compactBottomTerminalReset"
+          ariaLabel="settings:compactBottomTerminalAria"
+        />
+      </SettingsSection>
+
       <SettingsSection title="settings:layout_opensOnItsOwn">
         <BooleanSettingRow
           {...binding}

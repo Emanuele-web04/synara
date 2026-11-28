@@ -114,6 +114,7 @@ interface TerminalViewportProps {
   focusRequestId: number;
   autoFocus: boolean;
   isVisible: boolean;
+  density?: "default" | "compact";
 }
 
 export default function TerminalViewport({
@@ -132,6 +133,7 @@ export default function TerminalViewport({
   focusRequestId,
   autoFocus,
   isVisible,
+  density = "default",
 }: TerminalViewportProps) {
   const terminalCliKind = terminalCliKindProp ?? null;
   const containerRef = useRef<HTMLDivElement>(null);
@@ -444,7 +446,12 @@ export default function TerminalViewport({
   }, [clearSelectionAction, showSelectionAction, terminalInstance]);
 
   return (
-    <div className="h-full min-h-0 w-full app-content-surface p-3">
+    <div
+      className={cn(
+        "h-full min-h-0 w-full app-content-surface",
+        density === "compact" ? "px-2 py-1" : "p-3",
+      )}
+    >
       <div className="relative h-full min-h-0 w-full overflow-hidden">
         <TerminalSearch
           searchAddon={searchAddonInstance}

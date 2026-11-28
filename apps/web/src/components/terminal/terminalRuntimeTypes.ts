@@ -84,6 +84,8 @@ export interface TerminalRuntimeEntry {
   pendingWrites: TerminalPendingWrite[];
   pendingWriteLength: number;
   pendingWriteBytes: number;
+  lastWriteFlushAt: number;
+  deferredAddonTimer: number | null;
   linkMatchCache: Map<string, TerminalLinkMatch[]>;
   outputEventVersion: number;
   snapshotReconcileRequestId: number;

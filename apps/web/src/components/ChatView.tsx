@@ -221,6 +221,7 @@ import { useProjectEnvironmentStore } from "../projectEnvironmentStore";
 import { proposedPlanTitle } from "../proposedPlan";
 import { buildModelSelection, buildNextProviderOptions } from "../providerModelOptions";
 import { selectRightDockState, useRightDockStore } from "../rightDockStore";
+import { selectBottomTerminalState, useBottomTerminalStore } from "../bottomTerminalStore";
 import { AutomationDialog, automationsForThread } from "../routes/-automations.shared";
 import {
   deriveActiveBackgroundTasksState,
@@ -1257,8 +1258,12 @@ export default function ChatView({
     isFocusedPane,
     isServerThread,
     confirmTerminalClose: settings.confirmTerminalTabClose,
+    compactBottomTerminal: settings.compactBottomTerminal,
     onDeletePlaceholderThread: deletePlaceholderTerminalThread,
   });
+  const bottomTerminalOpen = useBottomTerminalStore(
+    (state) => selectBottomTerminalState(activeThreadId)(state).open,
+  );
   const localProjectInstructions = useProjectInstructionsStore((state) =>
     activeProjectId ? (state.instructionsByProjectId[activeProjectId] ?? "") : "",
   );
@@ -3488,6 +3493,7 @@ export default function ChatView({
     activeProject,
     gitCwd,
     isGroupContainer,
+    compactBottomTerminal: settings.compactBottomTerminal,
     setThreadError,
   });
   const stopActiveThreadSession = useCallback(async () => {
@@ -4280,6 +4286,8 @@ export default function ChatView({
     setTerminalWorkspaceTab,
     onCloseActiveThreadTab,
     onCloseDockTerminalPane,
+    compactBottomTerminal: settings.compactBottomTerminal,
+    confirmTerminalClose: settings.confirmTerminalTabClose,
     onToggleDiff,
     commitAndPushTriggerRef,
     showGitActions,
@@ -7045,6 +7053,18 @@ export default function ChatView({
           diffDisabledReason={diffDisabledReason}
           rightDockOpen={rightDockOpen}
           {...(onToggleRightDock ? { onToggleRightDock } : {})}
+          bottomTerminalToggle={
+            settings.compactBottomTerminal &&
+            !isEditorRail &&
+            !terminalWorkspaceTerminalTabActive &&
+            activeThreadId
+              ? {
+                  open: bottomTerminalOpen,
+                  shortcutLabel: shortcutLabelForCommand(keybindings, "terminal.toggle"),
+                  onToggle: () => useBottomTerminalStore.getState().toggleDrawer(activeThreadId),
+                }
+              : null
+          }
           environment={isEditorRail ? null : environmentHeaderState}
           projectPanel={isEditorRail ? null : projectHeaderState}
           libraryPanel={isEditorRail ? null : libraryHeaderState}

@@ -56,6 +56,13 @@ export const DISCLOSURE_COLLAPSIBLE_PANEL_CLASS =
 export const DISCLOSURE_WIDTH_MOTION_CLASS =
   "overflow-hidden transition-[width] duration-220 ease-out motion-reduce:transition-none";
 
+/**
+ * Block-axis (height + fade) reveal for bottom drawers that open/close along
+ * the vertical axis using an explicit pixel/percentage height.
+ */
+export const DISCLOSURE_HEIGHT_MOTION_CLASS =
+  "overflow-hidden transition-[height,opacity] duration-220 ease-out motion-reduce:transition-none";
+
 export function disclosureWidthClassName(
   open: boolean,
   openWidthClassName: string,

@@ -23,7 +23,9 @@ import {
   HandoffIcon,
   HistoryIcon,
   MessageCircleIcon,
+  LayoutAlignBottomIcon,
   LayoutAlignRightIcon,
+  LayoutBottomIcon,
   LayoutRightIcon,
   PlusIcon,
   TerminalIcon,
@@ -132,6 +134,11 @@ interface ChatHeaderProps {
   diffDisabledReason?: string | null;
   rightDockOpen?: boolean;
   onToggleRightDock?: () => void;
+  bottomTerminalToggle?: {
+    open: boolean;
+    shortcutLabel: string | null;
+    onToggle: () => void;
+  } | null;
   surfaceMode?: "single" | "split";
   isSidechat?: boolean;
   // When provided, the header collapses the
@@ -467,6 +474,7 @@ export function ChatHeader({
   diffDisabledReason: diffDisabledReasonProp,
   rightDockOpen: rightDockOpenProp,
   onToggleRightDock,
+  bottomTerminalToggle = null,
   surfaceMode: surfaceModeProp,
   isSidechat: isSidechatProp,
   environment: environmentProp,
@@ -547,6 +555,38 @@ export function ChatHeader({
   const togglesRightDock = onToggleRightDock !== undefined;
   const hasActionControls =
     !minimalChrome && (!hideHandoffControls || activeProjectScripts !== undefined);
+  const bottomTerminalToggleControl = bottomTerminalToggle ? (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Toggle
+            className={cn(
+              CHAT_HEADER_TOGGLE_CLASS_NAME,
+              "!size-7 [&_svg,&_[data-slot=central-icon]]:mx-0",
+            )}
+            pressed={bottomTerminalToggle.open}
+            onPressedChange={() => bottomTerminalToggle.onToggle()}
+            aria-label={t("chat:bottomTerminal_toggle")}
+            variant="default"
+            size="xs"
+          >
+            <SurfaceChipIcon
+              icon={bottomTerminalToggle.open ? LayoutBottomIcon : LayoutAlignBottomIcon}
+              className="size-4"
+            />
+          </Toggle>
+        }
+      />
+      <TooltipPopup side="bottom">
+        {bottomTerminalToggle.shortcutLabel
+          ? t("chat:bottomTerminal_toggleWithShortcut", {
+              value0: bottomTerminalToggle.shortcutLabel,
+            })
+          : t("chat:bottomTerminal_toggle")}
+      </TooltipPopup>
+    </Tooltip>
+  ) : null;
+
   const rightPanelToggleControl = showDiffToggle ? (
     <Tooltip>
       <TooltipTrigger
@@ -874,6 +914,7 @@ export function ChatHeader({
                 tooltip={t("chat:library")}
               />
             ) : null}
+            {bottomTerminalToggleControl}
             {rightPanelToggleControl}
           </>
         ) : (
@@ -896,6 +937,7 @@ export function ChatHeader({
                 onRegisterCommitAndPushTrigger={onRegisterCommitAndPushTrigger}
               />
             ) : null}
+            {bottomTerminalToggleControl}
             {rightPanelToggleControl}
           </>
         )}

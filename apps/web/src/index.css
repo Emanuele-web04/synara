@@ -1109,6 +1109,55 @@ input {
   background-color: rgba(255, 255, 255, 0.14);
 }
 
+/* Chat transcript scrollbar: keep idle chats visually quiet and fade the
+   thumb in/out smoothly while scrolling or hovering the scrollbar edge/thumb. */
+@property --chat-scrollbar-alpha {
+  syntax: "<number>";
+  inherits: true;
+  initial-value: 0;
+}
+
+[data-chat-scroll-container="true"] {
+  --chat-scrollbar-alpha: 0;
+  --chat-scrollbar-thumb: rgb(0 0 0 / var(--chat-scrollbar-alpha));
+  --chat-scrollbar-track: transparent;
+  @media (prefers-reduced-motion: no-preference) {
+    transition-property: padding-right, --chat-scrollbar-alpha;
+    transition-duration: 220ms;
+    transition-timing-function: ease-out;
+  }
+}
+
+.dark [data-chat-scroll-container="true"] {
+  --chat-scrollbar-thumb: rgb(255 255 255 / var(--chat-scrollbar-alpha));
+}
+
+[data-chat-scroll-container="true"][data-chat-scrollbar-active="true"],
+[data-chat-scroll-container="true"][data-chat-scrollbar-edge="true"] {
+  --chat-scrollbar-alpha: 0.14;
+}
+
+@supports not selector(::-webkit-scrollbar) {
+  [data-chat-scroll-container="true"] {
+    scrollbar-width: thin;
+    scrollbar-color: var(--chat-scrollbar-thumb) var(--chat-scrollbar-track);
+  }
+}
+
+[data-chat-scroll-container="true"]::-webkit-scrollbar-thumb {
+  background-color: var(--chat-scrollbar-thumb);
+}
+
+[data-chat-scroll-container="true"]::-webkit-scrollbar-thumb:hover,
+[data-chat-scroll-container="true"]::-webkit-scrollbar-thumb:active {
+  background-color: rgb(0 0 0 / 0.24);
+}
+
+.dark [data-chat-scroll-container="true"]::-webkit-scrollbar-thumb:hover,
+.dark [data-chat-scroll-container="true"]::-webkit-scrollbar-thumb:active {
+  background-color: rgb(255 255 255 / 0.24);
+}
+
 .turn-chip-strip {
   scrollbar-width: none;
   -ms-overflow-style: none;

@@ -2,6 +2,7 @@ import { type ThreadId } from "@synara/contracts";
 import { useCallback, useEffect, useState } from "react";
 
 import { selectThreadTerminalState, useTerminalStateStore } from "../../terminalStateStore";
+import { useBottomTerminalStore } from "../../bottomTerminalStore";
 import { type Thread } from "../../types";
 import {
   confirmTerminalTabClose,
@@ -27,6 +28,7 @@ interface UseChatTerminalControllerInput {
   readonly isFocusedPane: boolean;
   readonly isServerThread: boolean;
   readonly confirmTerminalClose: boolean;
+  readonly compactBottomTerminal: boolean;
   readonly onDeletePlaceholderThread: (threadId: ThreadId) => Promise<void> | void;
 }
 
@@ -38,6 +40,7 @@ export function useChatTerminalController({
   isFocusedPane,
   isServerThread,
   confirmTerminalClose,
+  compactBottomTerminal,
   onDeletePlaceholderThread,
 }: UseChatTerminalControllerInput) {
   const terminalState = useTerminalStateStore((state) =>
@@ -105,21 +108,48 @@ export function useChatTerminalController({
   );
   const toggleTerminalVisibility = useCallback(() => {
     if (!activeThreadId) return;
+    if (
+      compactBottomTerminal &&
+      terminalState.entryPoint !== "terminal" &&
+      !terminalWorkspaceOpen
+    ) {
+      useBottomTerminalStore.getState().toggleDrawer(activeThreadId);
+      return;
+    }
     if (!terminalState.terminalOpen) setTerminalPresentationMode("workspace");
     setTerminalOpen(!terminalState.terminalOpen);
-  }, [activeThreadId, setTerminalOpen, setTerminalPresentationMode, terminalState.terminalOpen]);
+  }, [
+    activeThreadId,
+    compactBottomTerminal,
+    setTerminalOpen,
+    setTerminalPresentationMode,
+    terminalState.entryPoint,
+    terminalState.terminalOpen,
+    terminalWorkspaceOpen,
+  ]);
   const createTerminalFromShortcut = useCallback(() => {
     if (!activeThreadId) return;
+    if (
+      compactBottomTerminal &&
+      terminalState.entryPoint !== "terminal" &&
+      !terminalWorkspaceOpen
+    ) {
+      useBottomTerminalStore.getState().addTab(activeThreadId);
+      return;
+    }
     setTerminalPresentationMode("workspace");
     setTerminalOpen(true);
     setTerminalWorkspaceTab("terminal");
     requestTerminalFocus();
   }, [
     activeThreadId,
+    compactBottomTerminal,
     setTerminalPresentationMode,
     setTerminalOpen,
     setTerminalWorkspaceTab,
     requestTerminalFocus,
+    terminalState.entryPoint,
+    terminalWorkspaceOpen,
   ]);
   const openNewFullWidthTerminal = useCallback(() => {
     if (!activeThreadId || !activeProjectPresent) return;

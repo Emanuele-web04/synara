@@ -73,6 +73,7 @@ import {
   type TerminalKillSignal,
 } from "../processTreeKiller";
 import {
+  captureLinuxProcChildrenMap,
   captureProcessChildrenMap,
   defaultSubprocessChecker,
   inspectSubprocessActivity,
@@ -953,6 +954,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
           pendingOutputChunks: [],
           pendingOutputLength: 0,
           outputFlushTimer: null,
+          lastOutputFlushAt: 0,
           streamOutput: input.streamOutput ?? true,
           outputPaused: false,
           outputBufferPauseRequested: false,
@@ -1184,6 +1186,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
           pendingOutputChunks: [],
           pendingOutputLength: 0,
           outputFlushTimer: null,
+          lastOutputFlushAt: 0,
           // Restart has no headless mode of its own; fresh sessions stream normally
           // and existing sessions (below) keep whatever mode they were opened with.
           streamOutput: true,
@@ -1261,7 +1264,9 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
         ? pendingSnapshot === null
           ? null
           : await this.processSnapshotObserver.capture()
-        : await captureProcessChildrenMap();
+        : process.platform === "linux"
+          ? ((await captureLinuxProcChildrenMap()) ?? (await captureProcessChildrenMap()))
+          : await captureProcessChildrenMap();
       if (children === null) {
         throw new Error("Unable to verify terminal activity. The terminal was kept open.");
       }
@@ -1546,9 +1551,19 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
       // Large burst — flush immediately to avoid excessive latency.
       this.flushOutputBuffer(session);
     } else if (session.outputFlushTimer === null) {
-      session.outputFlushTimer = setTimeout(() => {
+      // Leading-edge flush for interactive typing / first prompt bytes: when the
+      // channel has been quiet for at least one frame window, emit right away
+      // instead of adding 16 ms of idle wait. Burst output still coalesces inside
+      // the trailing window.
+      const now = performance.now();
+      if (now - session.lastOutputFlushAt >= OUTPUT_BATCH_INTERVAL_MS) {
         this.flushOutputBuffer(session);
-      }, OUTPUT_BATCH_INTERVAL_MS);
+      } else {
+        const remaining = Math.max(1, OUTPUT_BATCH_INTERVAL_MS - (now - session.lastOutputFlushAt));
+        session.outputFlushTimer = setTimeout(() => {
+          this.flushOutputBuffer(session);
+        }, remaining);
+      }
     }
   }
 
@@ -1611,6 +1626,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     }
     if (session.pendingOutputChunks.length === 0) return;
 
+    session.lastOutputFlushAt = performance.now();
     const data = session.pendingOutputChunks.join("");
     const byteLength = session.pendingOutputLength;
     session.pendingOutputChunks = [];
@@ -2278,7 +2294,9 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     const sharedChildrenMap = this.processSnapshotObserver
       ? await this.processSnapshotObserver.capture()
       : this.useDefaultSubprocessChecker && process.platform !== "win32"
-        ? await captureProcessChildrenMap()
+        ? process.platform === "linux"
+          ? ((await captureLinuxProcChildrenMap()) ?? (await captureProcessChildrenMap()))
+          : await captureProcessChildrenMap()
         : null;
     const sharedSnapshotUnavailable =
       this.processSnapshotObserver !== null && sharedChildrenMap === null;

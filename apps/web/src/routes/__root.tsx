@@ -128,6 +128,7 @@ import {
 } from "../lib/terminalStateCleanup";
 import { useProjectRunStore } from "../projectRunStore";
 import { dockTerminalThreadId } from "../lib/dockTerminalScope";
+import { useBottomTerminalStore } from "../bottomTerminalStore";
 import { TaskCompletionNotifications } from "../notifications/taskCompletion";
 import { useWorkspacePathsStore } from "../workspacePathsStore";
 import {
@@ -2038,6 +2039,7 @@ function EventRouter() {
       }
       removeOrphanedTerminalStates(activeThreadIds);
       removeOrphanedTerminalRuntimes(activeThreadIds);
+      useBottomTerminalStore.getState().pruneThreads(activeThreadIds);
     };
 
     const flushPendingDomainEvents = () => {

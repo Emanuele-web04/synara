@@ -68,6 +68,8 @@ export interface TerminalSessionState {
   pendingOutputLength: number;
   /** Timer handle for the next scheduled output flush. */
   outputFlushTimer: ReturnType<typeof setTimeout> | null;
+  /** Monotonic timestamp (ms) of the previous output flush, used for leading-edge interactive sends. */
+  lastOutputFlushAt: number;
   /**
    * When false, output is still drained and parsed into history but no live
    * `output` events are emitted. Set for headless sessions (e.g. dev servers)
