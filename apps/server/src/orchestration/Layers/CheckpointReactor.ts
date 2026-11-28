@@ -13,6 +13,7 @@ import {
   type OrchestrationThreadShell,
   type ProviderSession,
   type ProviderRuntimeEvent,
+  type RuntimeTurnState,
 } from "@synara/contracts";
 import {
   Cause,
@@ -658,7 +659,7 @@ const make = Effect.fnUntraced(function* (options?: CheckpointReactorLiveOptions
     readonly turnId: TurnId;
     readonly cwd: string;
     readonly turnCount: number;
-    readonly status: "ready" | "missing" | "error";
+    readonly turnState: RuntimeTurnState;
     readonly assistantMessageId: MessageId | undefined;
     readonly createdAt: string;
     readonly commandId?: CommandId;
@@ -711,7 +712,9 @@ const make = Effect.fnUntraced(function* (options?: CheckpointReactorLiveOptions
     // reflects files created or deleted during this turn.
     clearWorkspaceIndexCache(input.cwd);
 
-    const checkpointStatus = fromCheckpointExists ? input.status : ("missing" as const);
+    const checkpointStatus = fromCheckpointExists
+      ? checkpointStatusFromRuntime(input.turnState)
+      : ("missing" as const);
 
     const files = fromCheckpointExists
       ? yield* checkpointStore
@@ -786,6 +789,9 @@ const make = Effect.fnUntraced(function* (options?: CheckpointReactorLiveOptions
       files,
       assistantMessageId,
       checkpointTurnCount: input.turnCount,
+      ...(checkpointStatus === "missing" && input.turnState === "completed"
+        ? { providerTurnSucceeded: true as const }
+        : {}),
       createdAt: input.createdAt,
     });
 
@@ -1022,7 +1028,7 @@ const make = Effect.fnUntraced(function* (options?: CheckpointReactorLiveOptions
       turnId,
       cwd: checkpointCwd,
       turnCount: nextTurnCount,
-      status: checkpointStatusFromRuntime(event.payload.state),
+      turnState: event.payload.state,
       assistantMessageId: newestAssistantMessageId,
       createdAt: event.createdAt,
       workspaceInitializedDuringTurn,

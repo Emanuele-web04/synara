@@ -134,7 +134,13 @@ const make = Effect.gen(function* () {
             }
           : {}),
         ...(event.type === "thread.turn-diff-completed"
-          ? { checkpointStatus: event.payload.status, checkpointRef: event.payload.checkpointRef }
+          ? {
+              checkpointStatus: event.payload.status,
+              checkpointRef: event.payload.checkpointRef,
+              ...(event.payload.providerTurnSucceeded
+                ? { providerTurnSucceeded: true as const }
+                : {}),
+            }
           : {}),
         ...("turnId" in payload && typeof payload.turnId === "string"
           ? { turnId: payload.turnId }

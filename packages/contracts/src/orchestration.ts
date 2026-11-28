@@ -2239,6 +2239,7 @@ const ThreadTurnDiffCompleteCommand = Schema.Struct({
   files: Schema.Array(OrchestrationCheckpointFile),
   assistantMessageId: Schema.optional(MessageId),
   checkpointTurnCount: NonNegativeInt,
+  providerTurnSucceeded: Schema.optional(Schema.Literal(true)),
   preserveLatestTurn: Schema.optional(Schema.Boolean),
   checkpointRevertTurnCount: Schema.optional(NonNegativeInt),
   createdAt: IsoDateTime,
@@ -2874,6 +2875,8 @@ export const ThreadTurnDiffCompletedPayload = Schema.Struct({
   files: Schema.Array(OrchestrationCheckpointFile),
   assistantMessageId: Schema.NullOr(MessageId),
   completedAt: IsoDateTime,
+  /** Canonical capture of a successful provider turn whose Git baseline was unavailable. */
+  providerTurnSucceeded: Schema.optional(Schema.Literal(true)),
   preserveLatestTurn: Schema.optional(Schema.Boolean),
 });
 

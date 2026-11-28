@@ -5781,6 +5781,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
         ) {
           if (
             !missingFinalCheckpoint ||
+            input.providerTurnSucceeded !== true ||
             !input.checkpointRef ||
             !isManagedCheckpointRefForThread(input.checkpointRef, input.threadId) ||
             input.turnId === undefined

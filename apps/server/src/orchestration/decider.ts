@@ -3594,6 +3594,7 @@ const decideCommand = Effect.fn("decideOrchestrationCommand")(function* ({
           files: command.files,
           assistantMessageId: command.assistantMessageId ?? null,
           completedAt: command.completedAt,
+          ...(command.providerTurnSucceeded ? { providerTurnSucceeded: true as const } : {}),
           ...(command.preserveLatestTurn ? { preserveLatestTurn: true } : {}),
         },
       };

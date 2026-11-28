@@ -5449,14 +5449,28 @@ it.effect("settles a completed Git turn whose final checkpoint has no baseline",
       checkpointStatus: "missing",
       checkpointFiles: [],
     });
-    yield* service.ingestSettledThreadEvent({
+    const checkpoint = {
       threadId,
       turnId,
-      sourceEventId: "canonical-missing-checkpoint",
       eventType: "thread.turn-diff-completed",
       checkpointStatus: "missing",
       checkpointRef,
       createdAt: now,
+    };
+    // A canonical missing checkpoint can itself create the above projection
+    // row even when the cancelled provider turn has not been ingested yet.
+    yield* service.ingestSettledThreadEvent({
+      ...checkpoint,
+      sourceEventId: "canonical-missing-unconfirmed",
+    });
+    assert.isNull(
+      Option.getOrThrow(yield* repository.findManagedWorkerByThread(threadId)).settleOutcome,
+    );
+    assert.equal(harness.runNowCalls.length, 0);
+    yield* service.ingestSettledThreadEvent({
+      ...checkpoint,
+      sourceEventId: "canonical-missing-success",
+      providerTurnSucceeded: true,
     });
     const worker = Option.getOrThrow(yield* repository.findManagedWorkerByThread(threadId));
     assert.equal(worker.settleOutcome, "completed");

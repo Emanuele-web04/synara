@@ -252,6 +252,7 @@ export interface ProjectAgentServiceShape {
     /** A final Git checkpoint can have no usable baseline. */
     readonly checkpointStatus?: string;
     readonly checkpointRef?: string;
+    readonly providerTurnSucceeded?: true;
     /** Confirmed status from the event, even if the projection has already advanced. */
     readonly confirmedInterruption?: {
       readonly sequence: number;
