@@ -770,3 +770,18 @@ admission policy; 14 exact-target tests, 57 input tests and three tree tests pas
 with the clipping repair. The live serial/parallel tree comparison stays ignored.
 The overlay enumeration regression fails before filtering; all four window-list
 tests and the exact foreground-classification tests pass afterwards.
+
+### Revision 41: operator-selected JPEG desktop screenshots
+
+`get_desktop_state` accepts `screenshot_format` (`png` default, or `jpeg`) and
+`screenshot_quality` (1-100, default 90). The `screencapture` display backend is
+unchanged; JPEG is a transcode of the same pixels, roughly 70% smaller on the
+wire, selected per deployment for hosts where observation payload size matters
+more than small-text sharpness. `DesktopStateOutput::validate` and the tool
+schema accept `image/png` or `image/jpeg`, and the returned
+`screenshot_mime_type` reports the actual encoding. Earlier patch sections are
+kept verbatim; the revision-41 hunks are appended to them.
+
+Validation: `patch --batch --forward -p1` and `git apply --check` both apply the
+appended hunks to the pinned upstream tree, and the patched tree is
+byte-identical to the regenerated revision-41 source.

@@ -597,6 +597,26 @@ describe("agent gateway computer tools", () => {
     });
   });
 
+  it("delivers a state image under the backend's real screenshot mimeType", async () => {
+    const backend = new FakeComputerBackend();
+    const { call, manager } = await setup(backend);
+    try {
+      const realGetState = backend.getState.bind(backend);
+      vi.spyOn(backend, "getState").mockImplementation(async (options) => {
+        const state = await realGetState(options);
+        if (!state.screenshot) return state;
+        return { ...state, screenshot: { ...state.screenshot, mimeType: "image/jpeg" } };
+      });
+      const result = await call("computer_get_state", { include_screenshot: true });
+      expect(result.isError).not.toBe(true);
+      expect(result.content.find((entry) => entry.type === "image")).toMatchObject({
+        mimeType: "image/jpeg",
+      });
+    } finally {
+      await manager.dispose();
+    }
+  });
+
   /**
    * The elements digest is the parity lever with macOS visual understanding:
    * without it the model's only grounding is pixel estimation from a

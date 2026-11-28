@@ -1695,7 +1695,7 @@ export function makeAgentGatewayComputerTools(
             },
           }),
         },
-        { type: "image", data: bytesBase64, mimeType: "image/png" },
+        { type: "image", data: bytesBase64, mimeType: screenshot.mimeType },
       ],
     };
   };
