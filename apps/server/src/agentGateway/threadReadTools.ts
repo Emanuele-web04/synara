@@ -1,12 +1,13 @@
 import {
   SYNARA_GATEWAY_MAX_THREADS_PER_OPERATION,
+  SYNARA_GATEWAY_MAX_WAIT_MS,
   SYNARA_GATEWAY_MAX_THREADS_PER_TURN,
   ThreadId,
   ProjectId,
   type OrchestrationThreadShell,
   type ProviderKind,
 } from "@synara/contracts";
-import { Effect, Option } from "effect";
+import { Clock, Effect, Option } from "effect";
 
 import {
   isOrdinaryProjectRow,
@@ -54,6 +55,9 @@ import {
 
 const LIST_THREADS_DEFAULT_LIMIT = 50;
 const LIST_THREADS_MAX_LIMIT = 200;
+// Leave time for the progress response before the caller's 60-second tool deadline.
+const WAIT_PROGRESS_INTERVAL_MS = 30_000;
+const WAIT_SUMMARY_BUDGET_MS = 2_000;
 
 export interface ThreadReadToolsInput {
   readonly snapshotQuery: ProjectionSnapshotQueryShape;
@@ -206,7 +210,7 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
           providers,
           limits: {
             maxThreadsPerOperation: SYNARA_GATEWAY_MAX_THREADS_PER_OPERATION,
-            maxWaitMs: 60_000,
+            maxWaitMs: SYNARA_GATEWAY_MAX_WAIT_MS,
             oneCreationPlanPerActiveTurn: false,
             maxThreadsPerActiveTurn: SYNARA_GATEWAY_MAX_THREADS_PER_TURN,
           },
@@ -413,7 +417,7 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
     requiredCapability: "thread:read",
     definition: {
       name: "synara_wait_for_threads",
-      description: `Wait for the pinned turns of 1–20 Synara threads and return every outcome in input order. When results are required, keep calling until allTerminal is true, passing the returned runIds to each subsequent call. A timedOut response is progress, not completion; do not finish or ask the user to check again while required work is pending. Assistant summaries are capped at ${WAIT_THREAD_SUMMARY_MAX_CHARS} characters; use each result's readThread call to page the full transcript. Timeouts never retry, replace, cancel, or create work.`,
+      description: `Wait for the pinned turns of 1–20 Synara threads and return every outcome in input order. When results are required, keep calling until allTerminal is true, passing the returned runIds to each subsequent call. A timedOut response is progress, not completion; do not finish or ask the user to check again while required work is pending. Assistant summaries are capped at ${WAIT_THREAD_SUMMARY_MAX_CHARS} characters and can be omitted if collecting them takes too long. Use each result's readThread call to page the full transcript. Timeouts never retry, replace, cancel, or create work.`,
       inputSchema: {
         type: "object",
         properties: {
@@ -433,8 +437,8 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
           timeoutMs: {
             type: "integer",
             minimum: 0,
-            maximum: 60_000,
-            description: "Long-poll duration; defaults to 30000ms.",
+            maximum: SYNARA_GATEWAY_MAX_WAIT_MS,
+            description: `Upper bound for this wait. Pending work returns progress after at most ${WAIT_PROGRESS_INTERVAL_MS}ms of polling.`,
           },
         },
         required: ["threadIds"],
@@ -454,8 +458,11 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
         if (waitInput.runIds && waitInput.runIds.length !== waitInput.threadIds.length) {
           throw new ToolInputError('Argument "runIds" must have the same length as "threadIds".');
         }
-        const timeoutMs = waitInput.timeoutMs ?? 30_000;
-        const deadline = Date.now() + timeoutMs;
+        const timeoutMs = Math.min(
+          waitInput.timeoutMs ?? WAIT_PROGRESS_INTERVAL_MS,
+          WAIT_PROGRESS_INTERVAL_MS,
+        );
+        const deadline = (yield* Clock.currentTimeMillis) + timeoutMs;
         const targets: ProjectionAgentWaitTarget[] = waitInput.threadIds.map((threadId, index) => ({
           threadId,
           turnId: waitInput.runIds?.[index] ?? null,
@@ -504,17 +511,22 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
 
         let results = yield* readPinnedStates(true);
         let pollDelayMs = 200;
-        while (results.some((result) => !result.terminal) && Date.now() < deadline) {
-          yield* Effect.sleep(Math.min(pollDelayMs, Math.max(1, deadline - Date.now())));
+        while (results.some((result) => !result.terminal)) {
+          const remainingMs = deadline - (yield* Clock.currentTimeMillis);
+          if (remainingMs <= 0) break;
+          yield* Effect.sleep(Math.min(pollDelayMs, remainingMs));
           results = yield* readPinnedStates(false);
           pollDelayMs = Math.min(1_000, Math.ceil(pollDelayMs * 1.5));
         }
         const timedOut = results.some((result) => !result.terminal);
+        const summaryDeadline = (yield* Clock.currentTimeMillis) + WAIT_SUMMARY_BUDGET_MS;
         const finalResults = yield* Effect.forEach(results, (result) =>
           Effect.gen(function* () {
             if (!result.terminal || result.runId === null) {
               return { ...result, timedOut: !result.terminal && timedOut };
             }
+            const remainingMs = summaryDeadline - (yield* Clock.currentTimeMillis);
+            if (remainingMs <= 0) return result;
             const detail = yield* snapshotQuery.getThreadDetailById(result.threadId).pipe(
               Effect.mapError((error) => new ToolInputError(errorText(error))),
               Effect.flatMap(
@@ -529,18 +541,21 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
                   onSome: Effect.succeed,
                 }),
               ),
+              Effect.timeoutOrElse({
+                duration: remainingMs,
+                onTimeout: () => Effect.succeed(null),
+              }),
             );
+            if (detail === null) return result;
             const assistantMessage = detail.messages.findLast(
               (message) => message.role === "assistant" && message.turnId === result.runId,
             );
             const summary = summarizeWaitThreadText(assistantMessage?.text);
             return {
               ...result,
-              timedOut: false,
               summary: summary.summary,
               summaryTruncated: summary.truncated,
-              error:
-                result.state === "error" ? (detail.session?.lastError ?? "Turn failed.") : null,
+              error: result.state === "error" ? (detail.session?.lastError ?? result.error) : null,
             };
           }),
         );

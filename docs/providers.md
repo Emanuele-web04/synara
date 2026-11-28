@@ -957,8 +957,12 @@ task keys and worker queue.
 When an orchestrator needs delegated results to finish the user's request, it must keep calling
 `synara_wait_for_threads` with the returned `runIds` until `allTerminal` is true, then read and
 synthesize the results, or use the explicitly requested asynchronous continuation described
-below. A timeout reports progress; it is not completion. Native provider
-subagents use their provider's own completion mechanism. Neither launching work nor opting
+below. A timeout reports progress; it is not completion. Each call polls for up to 30
+seconds. For a queued start, the call follows the original message until a provider run ID
+exists. If the call returns a null run ID, a later wait resolves the currently queued or latest
+turn for that thread. If summary collection exceeds its budget, the response still includes the
+known states and run IDs. Use the returned `readThread` action to retrieve the result. Native
+provider subagents use their provider's own completion mechanism. Neither launching work nor opting
 into passive receipts is a substitute for collecting required results before ending the turn.
 
 An authenticated agent can pass `notifyCreatorOnComplete: true` to
