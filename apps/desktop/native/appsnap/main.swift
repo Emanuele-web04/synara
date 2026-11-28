@@ -153,11 +153,7 @@ do {
         _ = NSApplication.shared.setActivationPolicy(.accessory)
 
         let (coach, parentProcessMonitor): (GrantCoach, ParentProcessMonitor) = MainActor.assumeIsolated {
-            let coach = GrantCoach(
-                appName: appName,
-                appPath: appPath,
-                pane: pane
-            )
+            let coach = GrantCoach(appName: appName, pane: pane)
             let parentProcessMonitor = ParentProcessMonitor()
             parentProcessMonitor.start()
             coach.present(
@@ -191,7 +187,7 @@ do {
         }
 
         // NSApplication.run() is what pumps NSEvents; a bare RunLoop.main.run()
-        // never dispatches mouse events, which left the drag chip dead.
+        // never dispatches the close button's clicks.
         withExtendedLifetime((coach, parentProcessMonitor)) {
             NSApplication.shared.run()
         }

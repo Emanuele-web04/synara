@@ -369,7 +369,7 @@ import { AUDIO_TRAIL_BETA_FEATURE, isBetaFeatureEnabled } from "@synara/shared/b
 import { hardenBrowserAnnotationWebviewPreferences } from "./browserAnnotations/webviewSecurity";
 import { LOCAL_HTML_PREVIEW_SCHEME } from "./localHtmlPreviewProtocol";
 import {
-  APP_SNAP_SETTINGS_PANE_URLS,
+  resolveAppSnapSettingsPaneUrl,
   registerAppSnapIpcHandlers,
   sendAppSnapCaptured,
   sendAppSnapError,
@@ -2206,8 +2206,8 @@ function resolveAppSnapHelperPath(): string {
   return Path.resolve(__dirname, "..", ".electron-runtime", "appsnap", "synara-appsnap-helper");
 }
 
-/// The .app bundle that owns this process; the permission guide drags this
-/// bundle into the System Settings privacy lists.
+/// The .app bundle that owns this process, which is the copy the permission
+/// guide asks the user to turn on in the System Settings privacy lists.
 function resolveAppSnapAppBundlePath(): string {
   let directory = Path.dirname(app.getPath("exe"));
   while (directory !== Path.dirname(directory)) {
@@ -2258,8 +2258,8 @@ function initializeDesktopAppSnap(): void {
     appBundlePath: resolveAppSnapAppBundlePath(),
     shortcutRegistry: globalShortcut,
     openSettingsPane: (pane) => {
-      const paneUrl = APP_SNAP_SETTINGS_PANE_URLS[pane];
-      if (paneUrl) void shell.openExternal(paneUrl).catch(() => undefined);
+      const paneUrl = resolveAppSnapSettingsPaneUrl(pane, process.getSystemVersion());
+      void shell.openExternal(paneUrl).catch(() => undefined);
     },
     // Best effort: quit System Settings after a permission setup session lands
     // every grant, so the user is not left staring at a pane they are done with.
@@ -5931,8 +5931,7 @@ function registerIpcHandlers(): void {
   if (appSnapManager) {
     registerAppSnapIpcHandlers(ipcMain, appSnapManager, {
       openPermissionSettingsPane: (pane) => {
-        const paneUrl = APP_SNAP_SETTINGS_PANE_URLS[pane];
-        if (!paneUrl) return Promise.resolve(false);
+        const paneUrl = resolveAppSnapSettingsPaneUrl(pane, process.getSystemVersion());
         return shell
           .openExternal(paneUrl)
           .then(() => true)

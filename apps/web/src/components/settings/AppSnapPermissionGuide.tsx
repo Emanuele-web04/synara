@@ -1,23 +1,23 @@
 // FILE: AppSnapPermissionGuide.tsx
 // Purpose: Guided macOS permission setup shared by AppSnap and Computer control — deep-links
-//          the exact System Settings pane and explains granting access to this installed build.
+//          System Settings and explains granting access to this installed build.
 // Layer: Settings UI component
 
 import type { DesktopAppSnapSettingsPane } from "@synara/contracts";
+import {
+  computerPermissionForPane,
+  computerPermissionPaneKey,
+} from "@synara/shared/computerGrants";
 
 import { Button } from "~/components/ui/button";
 import { Spinner } from "~/components/ui/spinner";
 import { useTranslation } from "~/i18n";
 
-const GUIDE_PANE_LABELS: Record<DesktopAppSnapSettingsPane, string> = {
-  accessibility: "settings:accessibility",
-  "input-monitoring": "settings:inputMonitoring",
-  "screen-recording": "settings:screenRecording",
-};
-
 export function AppSnapPermissionGuide(props: {
   pane: DesktopAppSnapSettingsPane;
   appDisplayName: string;
+  /** macOS the app runs on; the pane was renamed twice and the copy follows it. */
+  osVersion?: string | null;
   waiting: boolean;
   onOpenSettings: () => void;
   onRestart: () => void;
@@ -25,6 +25,10 @@ export function AppSnapPermissionGuide(props: {
   const { t } = useTranslation();
 
   const app = props.appDisplayName;
+  const permission = computerPermissionForPane(props.pane);
+  const paneKey = computerPermissionPaneKey(permission, props.osVersion);
+  const paneLabel = t(`settings:${paneKey}`);
+  const opensPrivacySettings = paneKey === "systemAndAppProtectionOverride";
   const steps = [
     <Button
       key="open-settings"
@@ -33,9 +37,15 @@ export function AppSnapPermissionGuide(props: {
       variant="outline"
       onClick={props.onOpenSettings}
     >
-      {t("settings:openSettings", { value0: t(GUIDE_PANE_LABELS[props.pane]) })}
+      {opensPrivacySettings
+        ? t("settings:permissionGuideOpenPrivacySettings")
+        : t("settings:openSettings", { value0: paneLabel })}
     </Button>,
+    ...(opensPrivacySettings
+      ? [t("settings:permissionGuideSelectPane", { value0: paneLabel })]
+      : []),
     t("settings:permissionGuideEnableInstalledApp", { app }),
+    ...(opensPrivacySettings ? [t("settings:permissionGuideChooseApps", { app })] : []),
     t("settings:permissionGuideCompleteAuthentication"),
   ];
 

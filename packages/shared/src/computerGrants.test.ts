@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  computerPermissionPaneKey,
+  computerPermissionPaneMessageKey,
   computerPermissionSetupMessage,
   computerGrantsBlockControl,
   computerStaleGrantAdvice,
@@ -117,5 +119,37 @@ describe("computerGrantsBlockControl", () => {
     expect(computerGrantsBlockControl(["screenRecording"])).toBe(false);
     expect(computerGrantsBlockControl(["inputMonitoring"])).toBe(true);
     expect(computerGrantsBlockControl([])).toBe(false);
+  });
+});
+
+describe("naming the System Settings pane a grant lives in", () => {
+  it("names the page each macOS opens, and the pre-rename page when it cannot read one", () => {
+    // Verified against the panes on macOS 27.0.1: `Privacy_Accessibility` opens
+    // a page titled "Device Control and Data Access", `Privacy_ScreenCapture`
+    // one titled "Screen & System Audio Recording". Copy that says
+    // "Accessibility" sends the user hunting a page that is not there.
+    expect(computerPermissionPaneKey("accessibility", "27.0.1")).toBe("deviceControlAndDataAccess");
+    expect(computerPermissionPaneKey("accessibility", "26.5.1")).toBe("accessibility");
+    expect(computerPermissionPaneKey("screenRecording", "15.0")).toBe(
+      "screenAndSystemAudioRecording",
+    );
+    expect(computerPermissionPaneKey("screenRecording", "14.6")).toBe("screenRecording");
+    expect(computerPermissionPaneKey("inputMonitoring", "27.0.1")).toBe("inputMonitoring");
+    for (const version of [undefined, null, "", "26A434", "27.0.1 (26A434)", "10.15.7"]) {
+      expect(computerPermissionPaneKey("screenRecording", version)).toBe("screenRecording");
+    }
+  });
+
+  it("routes Synara's desktop control to System & App Protection Override from 27.3", () => {
+    expect(computerPermissionPaneKey("accessibility", "27.2")).toBe("deviceControlAndDataAccess");
+    for (const version of ["27.3", "27.3.1", "27.4", "28.0"]) {
+      expect(computerPermissionPaneMessageKey("accessibility", version)).toBe(
+        "settings:systemAndAppProtectionOverride",
+      );
+    }
+    expect(computerPermissionPaneKey("screenRecording", "27.3")).toBe(
+      "screenAndSystemAudioRecording",
+    );
+    expect(computerPermissionPaneKey("inputMonitoring", "27.3")).toBe("inputMonitoring");
   });
 });

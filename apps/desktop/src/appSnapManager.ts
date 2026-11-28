@@ -768,9 +768,9 @@ export class DesktopAppSnapManager {
    *
    * No macOS permission prompt is raised here on purpose: the prompt adds the
    * app with its switch off and cannot be re-raised once denied, while the
-   * guide uses the pane's toggle or supported drag-and-drop. Registration must
-   * first resolve this exact running app. Prompt args from tools never reach a
-   * request path either.
+   * guide uses the pane's own switch, or its Add button when macOS never filed
+   * a row for this app. Registration must first resolve this exact running app.
+   * Prompt args from tools never reach a request path either.
    */
   async startPermissionSetup(
     permissions: readonly DesktopAppSnapPermissionKind[],

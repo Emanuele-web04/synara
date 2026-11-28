@@ -1,5 +1,7 @@
 # Automatic macOS permission setup — 10 September 2026
 
+> Superseded: the app no longer asks for a drag into the permission list. The guide opens the pane the running macOS shows and points at the app's switch, or at the list's Add button when macOS has not listed the app.
+
 > Historical implementation and evidence record. The current shared guide asks
 > Computer for Accessibility, Input Monitoring and Screen Recording, and checks
 > listener health separately. Follow [current setup and recovery](README.md#permissions-and-interruption);

@@ -9,11 +9,11 @@ Computer Use is **in beta and available on macOS only**, including Synara 1.0.4 
 
 Install and open the intended Synara app from Applications. In Settings, open Computer control and choose **Set up**. The shared guide checks these macOS permissions in order:
 
-- **Accessibility** lets Synara inspect controls and deliver native input.
+- **Accessibility** lets Synara inspect controls and deliver native input. On macOS 27.0 through 27.2, open **Device Control and Data Access**. On macOS 27.3 and later, open **System & App Protection Override**; if asked, choose only the apps Synara should control.
 - **Input Monitoring** enables physical Escape and human-takeover detection during Computer work.
-- **Screen Recording** supplies screenshots and preview frames.
+- **Screen Recording** supplies screenshots and preview frames. macOS 15 and later list it as **Screen & System Audio Recording**.
 
-Enable the exact app copy shown by the guide. Where macOS accepts it, drag the app chip into the permission list. Synara checks the actual grant; seeing an entry or dropping an icon does not prove access. Follow a macOS relaunch request if one appears.
+The guide opens System Settings and names the page to use. Turn on the exact app copy it shows; if macOS has not listed that copy yet, press **Add** below the list and choose the app from Applications. Synara checks the actual grant, so seeing an entry does not prove access. Follow a macOS relaunch request if one appears.
 
 If macOS resolves another copy, quit the other copies and reopen the installed app. A switch left enabled for an older build can still represent a stale grant: follow the setup guide's recovery instructions for the current copy. Setup does not send a pending task automatically.
 

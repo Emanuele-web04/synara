@@ -1,5 +1,7 @@
 # Computer Use: current implementation and qualification
 
+> Superseded: the app no longer asks for a drag into the permission list. The guide opens the pane the running macOS shows and points at the app's switch, or at the list's Add button when macOS has not listed the app.
+
 This directory contains implementation notes and historical experiments. It is
 not a release certification. Results belong to the exact application, driver
 revision, platform and provider named in each report; an older passing fixture
