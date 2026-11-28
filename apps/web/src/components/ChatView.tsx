@@ -73,7 +73,6 @@ import {
 import { executionNamespace, readExecutionContext } from "~/lib/hosts/executionContext";
 import { SINGLE_CHAT_PANE_SCOPE_ID } from "~/lib/chatPaneScope";
 import { formatComposerMentionToken } from "~/lib/composerMentions";
-import { hasActiveComposerSend } from "~/lib/composerSendOwnership";
 import {
   GIT_WORKING_TREE_DIFF_LIVE_REFETCH_INTERVAL_MS,
   gitBranchesQueryOptions,
@@ -94,7 +93,6 @@ import { findProviderStatus, resolveVoiceTranscriptionTarget } from "~/lib/provi
 import { resolveProviderInstanceLabel } from "~/lib/providerInstancePresentation";
 import { holdQueuedComposerTurnsForStop } from "~/lib/queuedComposerDrain";
 import { resolveAuxiliaryTextGenerationSelection } from "~/lib/textGenerationCapabilities";
-import { resolveInheritedThreadContext } from "~/lib/threadBootstrap";
 import { cn, isMacNavigatorPlatform, newCommandId, newThreadId, randomUUID } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
 import { dispatchThreadSnoozedUntil, resolveSnoozeDeadline } from "~/lib/threadSnooze";
@@ -4794,7 +4792,6 @@ export default function ChatView({
     currentActiveGitBranch,
     isContainerLandingProject,
     syncServerShellSnapshot,
-    activeRootBranch,
     gitBranchSourceCwd,
     setStoreThreadError,
     queryClient,
@@ -5698,8 +5695,8 @@ export default function ChatView({
   const onRunProjectScriptFromHeader = useStableCallback((script: ProjectScript) => {
     void runProjectScript(script);
   });
-  // Header "New thread" preserves the current project workspace. Home falls back
-  // to the most recently used ordinary project in the active Space.
+  // Header "New thread" opens a chat in the current project. Home falls back to the
+  // most recently used ordinary project in the active Space.
   const onNewThreadFromHeader = useStableCallback(() => {
     const state = useStore.getState();
     if (!state.threadsHydrated) return;
@@ -5721,26 +5718,8 @@ export default function ChatView({
       useCreateProjectDialogStore.getState().setOpen(true);
       return;
     }
-    // The shared New thread path reopens a pending draft before creating a chat. Keep
-    // that draft's workspace instead of retargeting its unsent text to the viewed chat.
-    const pendingProjectDraft = useComposerDraftStore
-      .getState()
-      .getDraftThreadByProjectId(targetProjectId);
-    void handleNewThread(
-      targetProjectId,
-      currentProjectId
-        ? resolveInheritedThreadContext({
-            activeThread,
-            activeDraftThread:
-              draftThread ??
-              (pendingProjectDraft &&
-              pendingProjectDraft.isTemporary !== true &&
-              !hasActiveComposerSend(pendingProjectDraft.threadId)
-                ? pendingProjectDraft
-                : null),
-          })
-        : undefined,
-    );
+    // Only a terminal joins the workspace on screen.
+    void handleNewThread(targetProjectId);
   });
   const dismissActiveThreadError = useCallback(() => {
     if (!activeThread) return;

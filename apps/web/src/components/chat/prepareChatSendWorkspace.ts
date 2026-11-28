@@ -68,7 +68,6 @@ interface Input {
     typeof useComposerDraftStore.getState
   >["clearProjectDraftThreadId"];
   setDraftThreadContext: ReturnType<typeof useComposerDraftStore.getState>["setDraftThreadContext"];
-  activeRootBranch: string | null;
   gitBranchSourceCwd: string | null;
   setStoreThreadError: (threadId: ThreadId, error: string | null) => void;
   queryClient: QueryClient;
@@ -102,7 +101,6 @@ export async function prepareChatSendWorkspace({
   syncServerShellSnapshot,
   clearProjectDraftThreadId,
   setDraftThreadContext,
-  activeRootBranch,
   gitBranchSourceCwd,
   setStoreThreadError,
   queryClient,
@@ -202,6 +200,7 @@ export async function prepareChatSendWorkspace({
     nextThreadEnvMode === "local" &&
     nextThreadWorktreePath === null;
   let currentActiveGitBranchForSend = currentActiveGitBranch;
+  let worktreeSourceBranch: string | null = null;
 
   if (isFirstMessage && isContainerLandingProject && firstSendTarget.kind !== "current") {
     if (firstSendTarget.kind === "create-project") {
@@ -279,15 +278,24 @@ export async function prepareChatSendWorkspace({
     nextAssociatedWorktreeRef = null;
   }
 
-  // The branch query can finish just after the user chooses New worktree. Use the
-  // resolved active branch at send time instead of rejecting an otherwise valid fast send.
-  if (
-    isFirstMessage &&
-    nextThreadEnvMode === "worktree" &&
-    !nextThreadWorktreePath &&
-    !nextThreadBranch
-  ) {
-    nextThreadBranch = activeRootBranch ?? null;
+  const shouldCreateWorktree =
+    isFirstMessage && nextThreadEnvMode === "worktree" && !nextThreadWorktreePath;
+  if (shouldCreateWorktree) {
+    // The picker can lag behind a checkout change, or show the selected ref before
+    // branches load. Only fresh status can tell us whether to copy the source edits.
+    try {
+      const status = await queryClient.fetchQuery({
+        ...gitStatusQueryOptions(targetProjectCwdForSend),
+        staleTime: 0,
+      });
+      worktreeSourceBranch = status.branch;
+    } catch {
+      // This read only decides whether the new worktree copies uncommitted changes.
+      // With an explicit base branch the send can still proceed; without one, the
+      // base-branch guard below gives the actionable error.
+      worktreeSourceBranch = null;
+    }
+    nextThreadBranch ??= worktreeSourceBranch;
   }
 
   // A settled local thread keeps its historical branch until the user resumes it, so the
@@ -318,15 +326,7 @@ export async function prepareChatSendWorkspace({
     }
   }
 
-  const baseBranchForWorktree =
-    isFirstMessage && nextThreadEnvMode === "worktree" && !nextThreadWorktreePath
-      ? nextThreadBranch
-      : null;
-
-  // In worktree mode, require an explicit base branch so we don't silently
-  // fall back to local execution when branch selection is missing.
-  const shouldCreateWorktree =
-    isFirstMessage && nextThreadEnvMode === "worktree" && !nextThreadWorktreePath;
+  const baseBranchForWorktree = shouldCreateWorktree ? nextThreadBranch : null;
   if (shouldCreateWorktree && !nextThreadBranch) {
     setStoreThreadError(
       threadIdForSend,
@@ -342,7 +342,7 @@ export async function prepareChatSendWorkspace({
   // Branching off the checkout's current branch also carries its uncommitted
   // changes into the worktree, which the setup card surfaces as its own step.
   const worktreeCopiesLocalChanges =
-    Boolean(baseBranchForWorktree) && baseBranchForWorktree === activeRootBranch;
+    Boolean(baseBranchForWorktree) && baseBranchForWorktree === worktreeSourceBranch;
   return {
     threadIdForSend,
     title,

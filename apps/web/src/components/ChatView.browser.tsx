@@ -12620,6 +12620,58 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
+  it("opens a new chat on the project's branch instead of the worktree chat on screen", async () => {
+    useProjectEnvironmentStore.setState({ envModeByProjectId: { [PROJECT_ID]: "worktree" } });
+    const snapshot = createSnapshotForTargetUser({
+      targetMessageId: "msg-user-worktree-chat-default" as MessageId,
+      targetText: "worktree chat",
+    });
+    const worktreeThread = {
+      ...snapshot.threads[0]!,
+      envMode: "worktree" as const,
+      branch: "synara/feature-work",
+      worktreePath: "/repo/project/.worktrees/feature-work",
+    };
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: { ...snapshot, threads: [worktreeThread] },
+      configureFixture: (nextFixture) => {
+        nextFixture.gitBranchByCwd["/repo/project"] = "main";
+      },
+    });
+
+    try {
+      await page.getByRole("button", { name: "New thread in this workspace" }).click();
+      const path = await waitForURL(
+        mounted.router,
+        (value) => UUID_ROUTE_RE.test(value),
+        "The tab strip should open a chat draft.",
+      );
+      const draftId = ThreadId.makeUnsafe(path.slice(1));
+      await vi.waitFor(() => {
+        expect(useComposerDraftStore.getState().getDraftThread(draftId)).toMatchObject({
+          projectId: PROJECT_ID,
+          envMode: "worktree",
+          branch: "main",
+          worktreePath: null,
+        });
+      });
+      await expect.element(await waitForWorktreeCheckbox()).toHaveAttribute("aria-checked", "true");
+      // The picker shows the same branch the draft will use.
+      const trayPickerLabels = () =>
+        Array.from(
+          document.querySelectorAll<HTMLElement>(
+            '[data-empty-landing-controls] [data-slot="combobox-trigger"]',
+          ),
+        ).map((trigger) => trigger.textContent ?? "");
+      await vi.waitFor(() =>
+        expect(trayPickerLabels().some((label) => label.includes("main"))).toBe(true),
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("remembers the Worktree checkbox choice for subsequent project chats", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
@@ -13086,9 +13138,10 @@ describe("ChatView transcript geometry (full app)", () => {
     "active project",
     "temporary project draft",
     "sending project draft",
-  ] as const)("respects the %s when the thread-strip + opens a chat", async (workspaceSource) => {
+  ] as const)("opens a chat in the project environment alongside a %s", async (workspaceSource) => {
     const activeWorkspace = "/repo/worktrees/header-active";
     const draftWorkspace = "/repo/worktrees/header-draft";
+    useProjectEnvironmentStore.setState({ envModeByProjectId: { [PROJECT_ID]: "worktree" } });
     const snapshot = createSnapshotForTargetUser({
       targetMessageId: MessageId.makeUnsafe("header-new-thread-workspace"),
       targetText: "Saved chat in the active workspace",
@@ -13137,13 +13190,17 @@ describe("ChatView transcript geometry (full app)", () => {
       const targetId = ThreadId.makeUnsafe(mounted.router.state.location.pathname.slice(1));
       if (reusesDraft) expect(targetId).toBe(OTHER_THREAD_ID);
       else expect(targetId).not.toBe(OTHER_THREAD_ID);
-      const draft = useComposerDraftStore.getState().getDraftThread(targetId);
-      expect(draft).toMatchObject({
-        projectId: PROJECT_ID,
-        branch: reusesDraft ? "feature/draft" : "feature/active",
-        worktreePath: reusesDraft ? draftWorkspace : activeWorkspace,
-        envMode: "worktree",
-      });
+      // A reopened draft keeps the workspace it already had. A new chat takes the project's
+      // environment — its saved local/worktree choice and the branch its checkout is on —
+      // and never the worktree of the chat on screen.
+      await vi.waitFor(() =>
+        expect(useComposerDraftStore.getState().getDraftThread(targetId)).toMatchObject({
+          projectId: PROJECT_ID,
+          ...(reusesDraft
+            ? { branch: "feature/draft", worktreePath: draftWorkspace, envMode: "worktree" }
+            : { branch: "main", worktreePath: null, envMode: "worktree" }),
+        }),
+      );
       if (reusesDraft) {
         expect(useComposerDraftStore.getState().draftsByThreadId[targetId]?.prompt).toBe(
           "Keep this unsent work",
