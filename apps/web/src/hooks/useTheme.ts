@@ -26,6 +26,7 @@ import {
   resolveProfileThemeAccent,
   resolveThemeVariant,
   serializeThemeState,
+  setThemeFamily as setThemeFamilyState,
   setThemeCodeThemeId,
   setThemeFonts,
   setWindowTranslucency as setWindowTranslucencyState,
@@ -312,6 +313,10 @@ function setCodeThemeId(variant: ThemeVariant, codeThemeId: string) {
   updateStoredThemeState((state) => setThemeCodeThemeId(state, variant, codeThemeId));
 }
 
+function setThemeFamily(codeThemeId: string) {
+  updateStoredThemeState((state) => setThemeFamilyState(state, codeThemeId));
+}
+
 /** Read at mutation time so every profile writer publishes the current selection. */
 export function readProfileThemeAccent() {
   return resolveProfileThemeAccent(readStoredThemeState());
@@ -383,6 +388,7 @@ export function useTheme() {
     resetThemeVariant,
     resolvedTheme,
     setCodeThemeId,
+    setThemeFamily,
     setTheme,
     setWindowTranslucency,
     theme,
