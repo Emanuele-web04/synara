@@ -6490,6 +6490,7 @@ describe("AgentGateway", () => {
       assert.isFalse(isToolError(response.result), toolErrorText(response.result));
       const result = toolResultJson(response.result);
       assert.equal(result.threadId, "thread-parent");
+      assert.equal(result.wasLinked, false);
       assert.deepInclude(result.pullRequest as Record<string, unknown>, {
         number: 841,
         headBranch: "fix/created-at-thread-order",
@@ -6507,6 +6508,89 @@ describe("AgentGateway", () => {
         state: "open",
       });
     }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  it.effect("succeeds when the server already linked the pull request unchanged", () => {
+    const parent = makeThreadDetail(makeThreadShell("thread-parent"));
+    const pullRequest = {
+      number: 841,
+      title: "Fix created-at thread ordering",
+      url: "https://github.com/Emanuele-web04/synara/pull/841",
+      baseBranch: "main",
+      headBranch: "fix/created-at-thread-order",
+      state: "open" as const,
+      isDraft: false,
+      mergeability: "mergeable" as const,
+      additions: 12,
+      deletions: 4,
+      changedFiles: 2,
+    };
+    const engineLayer = OrchestrationEngineLive.pipe(
+      Layer.provide(OrchestrationProjectionPipelineLive),
+      Layer.provideMerge(OrchestrationProjectionSnapshotQueryLive),
+      Layer.provide(OrchestrationEventStoreLive),
+      Layer.provideMerge(OrchestrationCommandReceiptRepositoryLive),
+      Layer.provide(SqlitePersistenceMemory),
+      Layer.provide(ServerSettingsService.layerTest()),
+      Layer.provide(ServerConfig.layerTest(process.cwd(), process.cwd())),
+      Layer.provide(NodeServices.layer),
+    );
+    return Effect.gen(function* () {
+      const engine = yield* OrchestrationEngineService;
+      const snapshots = yield* ProjectionSnapshotQuery;
+      yield* engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.makeUnsafe("setup-project"),
+        projectId: PROJECT_ID,
+        title: "Demo",
+        workspaceRoot: "/tmp/demo",
+        defaultModelSelection: null,
+        createdAt: NOW,
+      });
+      yield* engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.makeUnsafe("setup-thread"),
+        threadId: parent.id,
+        projectId: PROJECT_ID,
+        title: parent.title,
+        modelSelection: parent.modelSelection,
+        runtimeMode: parent.runtimeMode,
+        interactionMode: parent.interactionMode,
+        branch: null,
+        worktreePath: null,
+        createdAt: NOW,
+      });
+      // What the git metadata reactor does when a command run by the agent creates the PR.
+      yield* engine.dispatch({
+        type: "thread.pull-request.link",
+        commandId: CommandId.makeUnsafe("server:command-pr"),
+        threadId: parent.id,
+        pullRequest,
+        source: "created",
+      });
+
+      const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads, [], {
+        dispatch: engine.dispatch,
+      });
+      yield* Effect.gen(function* () {
+        const harness = yield* makeHarness;
+        const response = yield* harness.callTool({
+          token: "token-parent",
+          name: "synara_set_thread_pull_request",
+          args: { reference: pullRequest.url },
+        });
+
+        // The engine has nothing to change; the tool reports the existing link.
+        assert.isFalse(isToolError(response.result), toolErrorText(response.result));
+        assert.equal(toolResultJson(response.result).wasLinked, true);
+      }).pipe(Effect.provide(gatewayLayer));
+
+      const detail = Option.getOrThrow(yield* snapshots.getThreadDetailById(parent.id));
+      assert.deepEqual(
+        detail.pullRequests?.map((link) => [link.pullRequest.url, link.source]),
+        [[pullRequest.url, "created"]],
+      );
+    }).pipe(Effect.provide(engineLayer));
   });
 
   it.effect("rejects thread goals over the contract limit", () => {

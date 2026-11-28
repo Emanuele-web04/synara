@@ -216,6 +216,7 @@ import {
   type TranscriptBootstrap,
 } from "../handoff.ts";
 import {
+  COMMAND_PRODUCED_NO_EVENTS,
   NATIVE_REVIEW_ATTACHMENTS_UNSUPPORTED,
   OrchestrationCommandInternalError,
   OrchestrationCommandInvariantError,
@@ -3483,7 +3484,7 @@ const make = Effect.gen(function* () {
           }),
         ),
         Effect.catchTag("OrchestrationCommandInvariantError", (error) =>
-          error.detail === "Command produced no events." ? Effect.void : Effect.fail(error),
+          error.detail === COMMAND_PRODUCED_NO_EVENTS ? Effect.void : Effect.fail(error),
         ),
       );
 
@@ -6206,7 +6207,7 @@ const make = Effect.gen(function* () {
       .pipe(
         Effect.catchTag("OrchestrationCommandInvariantError", (error) =>
           Effect.gen(function* () {
-            if (error.detail === "Command produced no events.") return;
+            if (error.detail === COMMAND_PRODUCED_NO_EVENTS) return;
             const current = (yield* resolveThreadShell(event.threadId))?.claudeCacheReview;
             if (
               current?.reviewId === review.reviewId &&
