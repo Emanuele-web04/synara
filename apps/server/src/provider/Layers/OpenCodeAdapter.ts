@@ -1560,28 +1560,35 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         }),
       );
 
-      // Stops a root context and every child session it owns. Child sessions
-      // have their own turns; aborting the provider work alone would leave each
-      // child thread stuck at "running", so close those turns first.
+      // The child turns belong to separate threads and need their own terminal events.
+      const settleActiveSubagentTurns = (
+        children: Iterable<OpenCodeSessionContext>,
+        outcome: {
+          readonly raw: unknown;
+          readonly interrupted?: boolean;
+          readonly errorMessage?: string;
+        },
+      ) =>
+        Effect.forEach(
+          children,
+          (child) => {
+            const turnId = child.activeTurnId;
+            return turnId === undefined
+              ? Effect.void
+              : completeOpenCodeTurn(child, { turnId, ...outcome });
+          },
+          { concurrency: "unbounded", discard: true },
+        );
+
       const stopOpenCodeContextTree = (
         context: OpenCodeSessionContext,
         beforeRelease?: Effect.Effect<void>,
       ) =>
         Effect.gen(function* () {
-          yield* Effect.forEach(
-            [...context.subagentSessions.values()],
-            (child) => {
-              const turnId = child.activeTurnId;
-              return turnId === undefined
-                ? Effect.void
-                : completeOpenCodeTurn(child, {
-                    turnId,
-                    raw: { source: "synara.opencode.stop", reason: "Session stopped." },
-                    interrupted: true,
-                  });
-            },
-            { concurrency: "unbounded", discard: true },
-          );
+          yield* settleActiveSubagentTurns([...context.subagentSessions.values()], {
+            raw: { source: "synara.opencode.stop", reason: "Session stopped." },
+            interrupted: true,
+          });
           yield* stopOpenCodeContext(context, beforeRelease);
         });
 
@@ -1734,6 +1741,32 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         }
         const turnId = context.activeTurnId;
         sessions.delete(context.session.threadId);
+        const pendingInteractionSessions = new Set(
+          [...context.pendingPermissions.values(), ...context.pendingQuestions.values()].map(
+            (request) => request.sessionID,
+          ),
+        );
+        // Leave already-settled children in their final state unless they still
+        // own an interaction that the retired transport can no longer answer.
+        const lostChildren = [...context.subagentSessions.values()].filter(
+          (child) =>
+            child.activeTurnId !== undefined ||
+            pendingInteractionSessions.has(child.openCodeSessionId),
+        );
+        yield* settleActiveSubagentTurns(lostChildren, {
+          raw: { source: "synara.opencode.server-exit", reason: message },
+          errorMessage: message,
+        });
+        yield* Effect.forEach(
+          lostChildren,
+          (child) =>
+            emit(child, {
+              ...buildEventBase({ threadId: child.session.threadId }),
+              type: "session.exited",
+              payload: { reason: message, recoverable: false, exitKind: "error" },
+            }),
+          { discard: true },
+        );
         yield* emit(context, {
           ...buildEventBase({ threadId: context.session.threadId, turnId }),
           type: "runtime.error",
@@ -2597,17 +2630,24 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             }
             if (turnId && (backgroundTaskId === undefined || context.subagentRefs !== undefined)) {
               if (context.nativeTranscriptNeedsReconciliation) {
-                const snapshotsExit = yield* Effect.exit(loadCurrentMessageSnapshots(context));
+                const loadSnapshots = loadCurrentMessageSnapshots(context);
+                const snapshotsExit = yield* Effect.exit(
+                  context.subagentRefs === undefined
+                    ? loadSnapshots
+                    : loadSnapshots.pipe(Effect.timeout("2 seconds"), Effect.retry({ times: 1 })),
+                );
                 if (Exit.isFailure(snapshotsExit)) {
                   yield* Effect.logWarning(
                     `${adapterConfig.displayName} terminal transcript reconciliation failed`,
                     Cause.squash(snapshotsExit.cause),
                   );
-                  // Keep the turn active so a later terminal or the watchdog can retry.
-                  break;
+                  // The root watchdog can retry. A child already has its terminal
+                  // outcome and has no watchdog to settle it after a failed read.
+                  if (context.subagentRefs === undefined) break;
+                } else {
+                  if (context.activeTurnId !== turnId) break;
+                  yield* replayOpenCodeMessageSnapshots(context, snapshotsExit.value, turnId);
                 }
-                if (context.activeTurnId !== turnId) break;
-                yield* replayOpenCodeMessageSnapshots(context, snapshotsExit.value, turnId);
                 if (context.activeTurnId !== turnId) break;
                 context.nativeTranscriptNeedsReconciliation = false;
               }
@@ -3756,10 +3796,8 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
       const loadCurrentMessageSnapshots = Effect.fn("loadCurrentMessageSnapshots")(function* (
         context: OpenCodeSessionContext,
       ) {
-        const messages = yield* runOpenCodeSdk("session.messages", () =>
-          context.client.session.messages({
-            sessionID: context.openCodeSessionId,
-          }),
+        const messages = yield* runOpenCodeSdk("session.messages", (signal) =>
+          context.client.session.messages({ sessionID: context.openCodeSessionId }, { signal }),
         );
         return openCodeMessageSnapshotsFromResponse(messages.data ?? []);
       });
@@ -4014,6 +4052,11 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             // A new V2 subscription has no mapper state for pre-disconnect messages,
             // and events may also have been missed while disconnected.
             context.nativeTranscriptNeedsReconciliation = true;
+            for (const child of context.subagentSessions.values()) {
+              if (child.activeTurnId !== undefined) {
+                child.nativeTranscriptNeedsReconciliation = true;
+              }
+            }
             const delayMs =
               OPENCODE_EVENT_RECONNECT_DELAYS_MS[
                 Math.min(reconnectAttempt, OPENCODE_EVENT_RECONNECT_DELAYS_MS.length - 1)
@@ -4651,9 +4694,28 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
       };
 
       const interruptTurn: OpenCodeAdapterShape["interruptTurn"] = Effect.fn("interruptTurn")(
-        function* (threadId, turnId) {
-          const context = ensureAdapterSessionContext(threadId);
+        function* (threadId, turnId, providerThreadId) {
+          const rootContext = ensureAdapterSessionContext(threadId);
+          const context =
+            providerThreadId === undefined
+              ? rootContext
+              : rootContext.subagentSessions.get(providerThreadId);
+          if (context === undefined) {
+            return yield* new ProviderAdapterRequestError({
+              provider,
+              method: "session.abort",
+              detail: `Unknown OpenCode child session: ${providerThreadId}`,
+            });
+          }
+          if (providerThreadId !== undefined && context.activeTurnId === undefined) return;
           if (turnId !== undefined && turnId !== context.activeTurnId) {
+            if (providerThreadId !== undefined) {
+              return yield* new ProviderAdapterRequestError({
+                provider,
+                method: "session.abort",
+                detail: `The active turn changed for OpenCode child session ${providerThreadId}.`,
+              });
+            }
             yield* Effect.logWarning("opencode.stale_interrupt_ignored", {
               provider,
               threadId,
@@ -4664,20 +4726,29 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           }
           const activeTurnId = turnId ?? context.activeTurnId;
           context.allowNativeContinuation = false;
-          yield* withAgentGatewayTurnCancellation(
-            context.gatewaySessionLease,
-            activeTurnId,
+          // Child work shares the parent's MCP lease and gateway turn.
+          const interrupted = yield* withAgentGatewayTurnCancellation(
+            rootContext.gatewaySessionLease,
+            rootContext.activeTurnId,
             Effect.gen(function* () {
-              yield* runOpenCodeSdk("session.abort", () =>
-                context.client.session.abort({
-                  sessionID: context.openCodeSessionId,
-                }),
+              yield* runOpenCodeSdk("session.abort", (signal) =>
+                context.client.session.abort({ sessionID: context.openCodeSessionId }, { signal }),
               ).pipe(Effect.mapError(toAdapterRequestError));
+              if (providerThreadId !== undefined && context.activeTurnId !== activeTurnId) {
+                return false;
+              }
               yield* clearActiveTurnState(context, { cancelGatewayTurn: false });
               updateProviderSession(context, { status: "ready" }, { clearActiveTurnId: true });
+              if (providerThreadId !== undefined) {
+                const taskId = rootContext.backgroundTaskIdBySessionId.get(providerThreadId);
+                if (taskId !== undefined) {
+                  yield* settleOpenCodeBackgroundTask(rootContext, { taskId, status: "stopped" });
+                }
+              }
+              return true;
             }),
           );
-          if (activeTurnId) {
+          if (interrupted && activeTurnId) {
             yield* emit(context, {
               ...buildEventBase({ threadId, turnId: activeTurnId }),
               type: "turn.aborted",

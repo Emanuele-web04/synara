@@ -169,7 +169,7 @@ function createMockOpenCodeRuntime(options?: {
     data?: ReadonlyArray<{ name: string; description?: string }>;
   }>;
   readonly commandLists?: ReadonlyArray<ReadonlyArray<{ name: string; description?: string }>>;
-  readonly messages?: () => Promise<{
+  readonly messages?: (input: { sessionID: string }) => Promise<{
     data: Array<{ info: Record<string, unknown>; parts: Part[] }>;
   }>;
   readonly session?: Record<string, unknown>;
@@ -5490,10 +5490,10 @@ describe("OpenCode background subagent tasks", () => {
 
   async function runWithAdapter<A, E>(
     runtime: ReturnType<typeof createMockOpenCodeRuntime>,
-    eventQueue: ReturnType<typeof createSubscribedEventQueue>,
+    eventQueue: ReturnType<typeof createSubscribedEventQueue> | undefined,
     program: (adapter: OpenCodeAdapterShape, threadId: ThreadId) => Effect.Effect<A, E>,
   ): Promise<A> {
-    routeEventsTo(runtime, eventQueue);
+    if (eventQueue !== undefined) routeEventsTo(runtime, eventQueue);
     return await Effect.runPromise(
       Effect.gen(function* () {
         const adapter = yield* OpenCodeAdapter;
@@ -6287,5 +6287,166 @@ describe("OpenCode background subagent tasks", () => {
         ),
       ),
     );
+  });
+
+  it("interrupts only the requested child's active turn", async () => {
+    const eventQueue = createSubscribedEventQueue();
+    const runtime = createMockOpenCodeRuntime();
+    const childSessionId = "child-session-1";
+    const events = await runWithAdapter(runtime, eventQueue, (adapter, threadId) =>
+      Effect.gen(function* () {
+        const childStarted = yield* Deferred.make<TurnId>();
+        const collected = yield* adapter.streamEvents.pipe(
+          Stream.tap((event) =>
+            event.type === "turn.started" &&
+            event.providerRefs?.providerThreadId === childSessionId &&
+            event.turnId
+              ? Deferred.succeed(childStarted, TurnId.makeUnsafe(event.turnId))
+              : Effect.void,
+          ),
+          Stream.takeUntil((event) => event.type === "turn.aborted"),
+          Stream.runCollect,
+          Effect.forkChild,
+        );
+        yield* startFullAccess(adapter, threadId);
+        yield* sendTestTurn(adapter, threadId, "delegate this");
+        pushOpenCodePart(eventQueue, backgroundTaskToolPart(childSessionId));
+        const childTurnId = yield* Deferred.await(childStarted);
+
+        const stale = yield* adapter
+          .interruptTurn(threadId, TurnId.makeUnsafe("old-child-turn"), childSessionId)
+          .pipe(Effect.exit);
+        expect(Exit.isFailure(stale)).toBe(true);
+        expect(runtime.abortCalls).toEqual([]);
+        yield* adapter.interruptTurn(threadId, childTurnId, childSessionId);
+
+        const result = Array.from(yield* Fiber.join(collected));
+        expect(runtime.abortCalls).toEqual([{ sessionID: childSessionId }]);
+        expect(yield* adapter.hasSession(threadId)).toBe(true);
+        eventQueue.close();
+        return result;
+      }),
+    );
+    const aborted = events.at(-1);
+    expect(aborted).toMatchObject({
+      type: "turn.aborted",
+      turnId: events.find((event) => event.providerRefs?.providerThreadId === childSessionId)
+        ?.turnId,
+      providerRefs: { providerThreadId: childSessionId },
+    });
+    expect(events.find((event) => event.type === "task.completed")?.payload).toMatchObject({
+      taskId: childSessionId,
+      status: "stopped",
+    });
+  });
+
+  it("recovers missing child transcript before completing its V2 turn after reconnect", async () => {
+    const disconnected = createSubscribedEventQueue();
+    const reconnected = createSubscribedEventQueue();
+    const childSessionId = "child-session-1";
+    let childSnapshotAttempts = 0;
+    const runtime = createMockOpenCodeRuntime({
+      eventSubscriptions: [disconnected.stream, reconnected.stream],
+      messages: async ({ sessionID }) => {
+        if (sessionID !== childSessionId) return { data: [] };
+        childSnapshotAttempts += 1;
+        if (childSnapshotAttempts === 1) throw new Error("snapshot temporarily unavailable");
+        return {
+          data: [
+            {
+              info: { id: "missed-message", role: "assistant" },
+              parts: [
+                {
+                  id: "missed-part",
+                  messageID: "missed-message",
+                  sessionID: childSessionId,
+                  type: "text",
+                  text: "Recovered child output.",
+                  time: { start: 1, end: 2 },
+                },
+              ],
+            },
+          ],
+        };
+      },
+    });
+    const events = await runWithAdapter(runtime, undefined, (adapter, threadId) =>
+      Effect.gen(function* () {
+        const childStarted = yield* Deferred.make<void>();
+        const collected = yield* adapter.streamEvents.pipe(
+          Stream.filter((event) => event.providerRefs?.providerThreadId === childSessionId),
+          Stream.tap((event) =>
+            event.type === "turn.started" ? Deferred.succeed(childStarted, undefined) : Effect.void,
+          ),
+          Stream.takeUntil((event) => event.type === "turn.completed"),
+          Stream.runCollect,
+          Effect.forkChild,
+        );
+        yield* startFullAccess(adapter, threadId);
+        yield* sendTestTurn(adapter, threadId, "delegate this");
+        pushOpenCodePart(disconnected, backgroundTaskToolPart(childSessionId));
+        yield* Deferred.await(childStarted);
+        disconnected.close();
+        reconnected.push({
+          type: "synara.opencode.execution",
+          properties: { sessionID: childSessionId, outcome: "succeeded" },
+        });
+        const result = Array.from(yield* Fiber.join(collected));
+        reconnected.close();
+        return result;
+      }),
+    );
+    expect(
+      events.filter((event) => event.type === "content.delta" || event.type === "turn.completed"),
+    ).toMatchObject([
+      { type: "content.delta", payload: { delta: "Recovered child output." } },
+      { type: "turn.completed", payload: { state: "completed" } },
+    ]);
+    expect(childSnapshotAttempts).toBe(2);
+  });
+
+  it("fails a running child turn when the managed server exits", async () => {
+    const eventQueue = createSubscribedEventQueue();
+    const serverExit = Deferred.makeUnsafe<number>();
+    const runtime = createMockOpenCodeRuntime({ serverExit: Deferred.await(serverExit) });
+    const childSessionId = "child-session-1";
+    const events = await runWithAdapter(runtime, eventQueue, (adapter, threadId) =>
+      Effect.gen(function* () {
+        const childStarted = yield* Deferred.make<void>();
+        const collected = yield* adapter.streamEvents.pipe(
+          Stream.tap((event) =>
+            event.type === "turn.started" && event.providerRefs?.providerThreadId === childSessionId
+              ? Deferred.succeed(childStarted, undefined)
+              : Effect.void,
+          ),
+          Stream.takeUntil(
+            (event) => event.type === "session.exited" && event.providerRefs === undefined,
+          ),
+          Stream.runCollect,
+          Effect.forkChild,
+        );
+        yield* startFullAccess(adapter, threadId);
+        yield* sendTestTurn(adapter, threadId, "delegate this");
+        pushOpenCodePart(eventQueue, backgroundTaskToolPart("finished-child"));
+        eventQueue.push({ type: "session.idle", properties: { sessionID: "finished-child" } });
+        pushOpenCodePart(eventQueue, backgroundTaskToolPart(childSessionId));
+        yield* Deferred.await(childStarted);
+        yield* Deferred.succeed(serverExit, 17);
+        const result = Array.from(yield* Fiber.join(collected));
+        eventQueue.close();
+        return result;
+      }),
+    );
+    expect(events.filter((event) => event.type === "turn.completed")).toMatchObject([
+      { providerRefs: { providerThreadId: "finished-child" }, payload: { state: "completed" } },
+      {
+        providerRefs: { providerThreadId: childSessionId },
+        payload: { state: "failed", errorMessage: "OpenCode server exited unexpectedly (17)." },
+      },
+    ]);
+    expect(events.filter((event) => event.type === "session.exited")).toMatchObject([
+      { providerRefs: { providerThreadId: childSessionId }, payload: { exitKind: "error" } },
+      { payload: { exitKind: "error" } },
+    ]);
   });
 });
