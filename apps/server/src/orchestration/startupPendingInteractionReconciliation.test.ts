@@ -224,6 +224,7 @@ describe("boot-time pending interaction reconciliation", () => {
 
     return {
       engine,
+      snapshotQuery,
       pendingInteractions,
       appendActivity,
       readThread,
@@ -713,5 +714,73 @@ describe("boot-time pending interaction reconciliation", () => {
     // start belongs to, rather than taking the unrelated orchestration counter.
     expect(retired[0]!.sequenceSource).toBeUndefined();
     expect(retired[0]!.sequence).toBe(12);
+  });
+
+  it("retires older background_tasks_changed notices outside the detail window even after a clean runtime stop", async () => {
+    const harness = await createHarness();
+    const beforeBoot = new Date(Date.now() - process.uptime() * 1000 - 60_000).toISOString();
+    await harness.appendActivity({
+      id: "old-bg-notice",
+      kind: "runtime.warning",
+      payload: {
+        nativeEventType: "background_tasks_changed",
+        data: { tasks: [{ task_id: "stuck-bg-task", task_type: "local_bash" }] },
+      },
+      sequence: 1,
+      createdAt: beforeBoot,
+    });
+    // Push the older notice past the detail window and supersede its singleton
+    // slot with a newer background_tasks_changed notice whose own task completed.
+    for (let i = 0; i < 501; i++) {
+      await harness.appendActivity({
+        id: `filler-${i}`,
+        kind: "tool.progress",
+        payload: {},
+        sequence: i + 2,
+        createdAt: beforeBoot,
+      });
+    }
+    await harness.appendActivity({
+      id: "newer-bg-notice",
+      kind: "runtime.warning",
+      payload: {
+        nativeEventType: "background_tasks_changed",
+        data: { tasks: [{ task_id: "finished-bg-task", task_type: "local_bash" }] },
+      },
+      sequence: 503,
+      createdAt: beforeBoot,
+    });
+    await harness.appendActivity({
+      id: "newer-bg-done",
+      kind: "task.completed",
+      payload: { taskId: "finished-bg-task", status: "completed" },
+      sequence: 504,
+      createdAt: beforeBoot,
+    });
+
+    const beforeShell = await harness.managed.runPromise(harness.snapshotQuery.getShellSnapshot());
+    expect(
+      beforeShell.threads.find((thread) => thread.id === THREAD_ID)?.pendingBackgroundTaskCount,
+    ).toBe(1);
+
+    await harness.runBootReconciliation();
+    await harness.runBootReconciliation();
+
+    const afterShell = await harness.managed.runPromise(harness.snapshotQuery.getShellSnapshot());
+    expect(
+      afterShell.threads.find((thread) => thread.id === THREAD_ID)?.pendingBackgroundTaskCount,
+    ).toBe(0);
+
+    const retired = ((await harness.readThread())?.activities ?? []).filter(
+      (activity) =>
+        activity.kind === "task.completed" &&
+        (activity.payload as { taskId?: string } | null)?.taskId === "stuck-bg-task",
+    );
+    expect(retired).toHaveLength(1);
+    expect(retired[0]).toMatchObject({
+      summary: "Task stopped",
+      payload: { taskId: "stuck-bg-task", status: "stopped" },
+      sequence: 505,
+    });
   });
 });

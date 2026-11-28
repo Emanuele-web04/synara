@@ -71,6 +71,8 @@ import { ProjectionSnapshotQuery } from "./Services/ProjectionSnapshotQuery.ts";
 import { ProviderCommandReactor } from "./Services/ProviderCommandReactor.ts";
 import { reportReliabilityIssue } from "../reliability";
 
+const TASK_DISCOVERY_THREAD_BATCH_SIZE = 100;
+
 /** The `thread.session.set` variant of the internal orchestration command union. */
 type ThreadSessionSetCommand = Extract<
   OrchestrationCommand,
@@ -299,6 +301,45 @@ function taskPayloadRecord(payload: unknown): Record<string, unknown> | null {
 function taskPayloadString(record: Record<string, unknown> | null, key: string) {
   const value = record?.[key];
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function taskActivityLifecycleRank(kind: string): number {
+  if (kind === "task.started") return 0;
+  return kind === "task.completed" ? 2 : 1;
+}
+
+function compareReconcilableActivities(
+  left: NonNullable<ReconcilableThread["activities"]>[number],
+  right: NonNullable<ReconcilableThread["activities"]>[number],
+): number {
+  if (left.sequence !== undefined && right.sequence !== undefined) {
+    if (left.sequence !== right.sequence) return left.sequence - right.sequence;
+  } else if (left.sequence !== undefined) {
+    return 1;
+  } else if (right.sequence !== undefined) {
+    return -1;
+  }
+  const createdAtComparison = left.createdAt.localeCompare(right.createdAt);
+  if (createdAtComparison !== 0) return createdAtComparison;
+  const rankComparison =
+    taskActivityLifecycleRank(left.kind) - taskActivityLifecycleRank(right.kind);
+  if (rankComparison !== 0) return rankComparison;
+  return String(left.id).localeCompare(String(right.id));
+}
+
+function mergeActivitiesWithFullTaskHistory(
+  detailActivities: NonNullable<ReconcilableThread["activities"]>,
+  fullTaskActivities: NonNullable<ReconcilableThread["activities"]>,
+): NonNullable<ReconcilableThread["activities"]> {
+  if (fullTaskActivities.length === 0) {
+    return detailActivities;
+  }
+  const seenIds = new Set(detailActivities.map((activity) => activity.id));
+  const missing = fullTaskActivities.filter((activity) => !seenIds.has(activity.id));
+  if (missing.length === 0) {
+    return detailActivities;
+  }
+  return [...detailActivities, ...missing].toSorted(compareReconcilableActivities);
 }
 
 /**
@@ -611,19 +652,53 @@ export const reconcileRestartStuckTurns: Effect.Effect<
   const now = new Date().toISOString();
   // Work started by this process is live; everything opened before it is not.
   const processStartedAt = new Date(Date.now() - process.uptime() * 1000).toISOString();
-  const threadsNeedingRestartCleanup = readModel.threads.filter(
-    (thread) =>
-      needsRestartReconciliation(thread) ||
-      threadHasCheckpointRevertInProgress(thread) ||
-      thread.hasPendingApprovals ||
-      thread.hasPendingUserInput ||
-      unsettledByThread.has(thread.id) ||
-      deadRuntimeThreadIds.has(thread.id) ||
-      // Native children share their root runtime and have no runtime row of
-      // their own. Hydrate their pinned task state before trusting the capped tail.
-      (thread.parentThreadId != null && deadRuntimeThreadIds.has(thread.parentThreadId)) ||
-      findRestartOrphanedTasks(thread.activities ?? [], processStartedAt).length > 0,
-  );
+  // `engine.getReadModel()` only carries checkpoint-revert activities, so
+  // scan task-lifecycle rows across live threads via the indexed query to find
+  // background or agent tasks left open by a prior process or clean stop.
+  const readTaskLifecycleActivities = (threadIds: ReadonlyArray<ThreadId>, mode?: "discovery") =>
+    snapshotQuery.listTaskLifecycleActivitiesByThreads(threadIds, mode).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("failed to read restart-orphaned task activities", { cause }).pipe(
+          Effect.tap(() => noteFailure),
+          Effect.as([]),
+        ),
+      ),
+    );
+  const threadsNeedingRestartCleanup: Array<(typeof readModel.threads)[number]> = [];
+  // Limit the startup scan to one batch of thread histories in memory. The
+  // later read under the lease still includes progress rows for sequence allocation.
+  for (const threads of Arr.chunksOf(readModel.threads, TASK_DISCOVERY_THREAD_BATCH_SIZE)) {
+    const taskActivitiesByThread = new Map(
+      Object.entries(
+        Arr.groupBy(
+          yield* readTaskLifecycleActivities(
+            threads.map((thread) => thread.id),
+            "discovery",
+          ),
+          (row) => row.threadId,
+        ),
+      ),
+    );
+    for (const thread of threads) {
+      if (
+        needsRestartReconciliation(thread) ||
+        threadHasCheckpointRevertInProgress(thread) ||
+        thread.hasPendingApprovals ||
+        thread.hasPendingUserInput ||
+        unsettledByThread.has(thread.id) ||
+        deadRuntimeThreadIds.has(thread.id) ||
+        // Native children share their root runtime and have no runtime row of
+        // their own. Hydrate their pinned task state before trusting the capped tail.
+        (thread.parentThreadId != null && deadRuntimeThreadIds.has(thread.parentThreadId)) ||
+        findRestartOrphanedTasks(
+          taskActivitiesByThread.get(thread.id) ?? thread.activities ?? [],
+          processStartedAt,
+        ).length > 0
+      ) {
+        threadsNeedingRestartCleanup.push(thread);
+      }
+    }
+  }
   if (threadsNeedingRestartCleanup.length === 0) {
     return;
   }
@@ -652,8 +727,19 @@ export const reconcileRestartStuckTurns: Effect.Effect<
                 ),
               ),
             );
+            // Re-read full task-lifecycle rows under the lease so orphaned
+            // background_tasks_changed notices older than the detail window are
+            // still retired alongside the detail tail's lastProviderSequence.
+            const fullTaskActivities = yield* readTaskLifecycleActivities([thread.id]);
+            const detailWithFullTasks: ReconcilableThread = {
+              ...detail,
+              activities: mergeActivitiesWithFullTaskHistory(
+                detail.activities ?? [],
+                fullTaskActivities,
+              ),
+            };
             const commands = planRestartTurnReconciliation({
-              threads: [detail],
+              threads: [detailWithFullTasks],
               pendingInteractions: pendingInteractions ?? [],
               now,
               retireTasksStartedBefore: processStartedAt,

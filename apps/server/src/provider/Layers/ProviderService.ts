@@ -1518,6 +1518,9 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             return Effect.succeed(event);
           }
           if (binding.provider !== event.provider) {
+            if (event.type === "task.completed") {
+              return Effect.succeed(event);
+            }
             return Effect.logWarning("dropping provider event from stale provider binding", {
               threadId: event.threadId,
               eventProvider: event.provider,
@@ -1532,6 +1535,9 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             bindingInstanceId !== undefined &&
             event.providerInstanceId !== bindingInstanceId
           ) {
+            if (event.type === "task.completed") {
+              return Effect.succeed(event);
+            }
             return Effect.logWarning("dropping provider event from stale provider instance", {
               threadId: event.threadId,
               provider: event.provider,
@@ -2300,6 +2306,21 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               (currentGeneration === undefined ||
                 event.turnId !== undefined ||
                 (isTerminalRuntimeEvent(event) && !isSubagentChildRuntimeEvent(event)));
+            if (event.type === "task.completed") {
+              // Background/foreground tasks retired when a session stops or rotates
+              // cannot outlive their process. Dropping task.completed after the
+              // lifecycle rotates leaves them open in the activity log and pins the
+              // sidebar to "In Background". updateSessionBindingFromRuntimeEvent
+              // ignores stale non-terminal events, so this cannot clobber the new
+              // session's binding.
+              return Effect.logInfo("provider.session.stale_generation_terminal_event_accepted", {
+                threadId: event.threadId,
+                provider: event.provider,
+                eventType: event.type,
+                eventLifecycleGeneration: event.lifecycleGeneration,
+                currentLifecycleGeneration: currentGeneration,
+              }).pipe(Effect.andThen(() => journalAndPublish(canonicalEvent)));
+            }
             if (
               currentGeneration !== undefined &&
               isSubagentChildRuntimeEvent(event) &&

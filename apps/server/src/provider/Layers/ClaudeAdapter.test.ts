@@ -15196,6 +15196,143 @@ describe("Claude subagent tracking", () => {
     );
   });
 
+  it.effect(
+    "routes a subagent's descriptionless background Bash notice to its child thread via parent_task_id or raw command and retires it there on Stop",
+    () => {
+      const harness = makeHarness();
+      const OUTER = "toolu_outer_bash_owner";
+      const BG_WITH_PARENT = "toolu_bg_with_parent";
+      const BG_BY_COMMAND = "toolu_bg_by_command";
+      const cmdWithParent = "cd /repo/apple && xcodebuild build";
+      const cmdByFallback = "cd /repo/apple && swift test";
+      return Effect.gen(function* () {
+        const events = yield* eventsThroughStop(
+          harness,
+          [
+            rootToolUse(0, OUTER, "Agent", {
+              description: "Outer worker",
+              prompt: "Run two background commands without descriptions.",
+            }),
+            system("task_started", {
+              task_id: "task-outer-bash",
+              tool_use_id: OUTER,
+              task_type: "local_agent",
+              subagent_type: "worker-high",
+              spawn_depth: 1,
+              is_backgrounded: true,
+              description: "Outer worker",
+            }),
+            system("background_tasks_changed", {
+              tasks: [
+                {
+                  task_id: "task-outer-bash",
+                  task_type: "local_agent",
+                  description: "Outer worker",
+                },
+              ],
+            }),
+            userMessage(OUTER, [
+              { type: "text", text: "Run two background commands without descriptions." },
+            ]),
+            subagentAssistant(OUTER, [
+              {
+                type: "tool_use",
+                id: BG_WITH_PARENT,
+                name: "Bash",
+                input: { command: cmdWithParent, run_in_background: true },
+              },
+            ]),
+            // SDK emits background_tasks_changed before task_started with parent_task_id
+            // and the raw command as description (no tool.input.description set).
+            system("background_tasks_changed", {
+              tasks: [
+                {
+                  task_id: "task-outer-bash",
+                  task_type: "local_agent",
+                  description: "Outer worker",
+                },
+                {
+                  task_id: "bash-parent-id",
+                  task_type: "local_bash",
+                  description: cmdWithParent,
+                  parent_task_id: "task-outer-bash",
+                },
+              ],
+            }),
+            system("task_started", {
+              task_id: "bash-parent-id",
+              tool_use_id: BG_WITH_PARENT,
+              task_type: "local_bash",
+              is_backgrounded: true,
+              description: cmdWithParent,
+            }),
+            userMessage(OUTER, [
+              trackingToolResult(BG_WITH_PARENT, "Command running in background."),
+            ]),
+            // Also verify matching by raw command when parent_task_id is omitted.
+            subagentAssistant(OUTER, [
+              {
+                type: "tool_use",
+                id: BG_BY_COMMAND,
+                name: "Bash",
+                input: { command: cmdByFallback, run_in_background: true },
+              },
+            ]),
+            system("background_tasks_changed", {
+              tasks: [
+                {
+                  task_id: "task-outer-bash",
+                  task_type: "local_agent",
+                  description: "Outer worker",
+                },
+                {
+                  task_id: "bash-parent-id",
+                  task_type: "local_bash",
+                  description: cmdWithParent,
+                  parent_task_id: "task-outer-bash",
+                },
+                {
+                  task_id: "bash-cmd-fallback",
+                  task_type: "local_bash",
+                  description: cmdByFallback,
+                },
+              ],
+            }),
+            system("task_started", {
+              task_id: "bash-cmd-fallback",
+              tool_use_id: BG_BY_COMMAND,
+              task_type: "local_bash",
+              is_backgrounded: true,
+              description: cmdByFallback,
+            }),
+          ],
+          (event) => event.type === "task.started" && taskIdOf(event) === "bash-cmd-fallback",
+        );
+
+        const rootWarnings = events
+          .filter((event) => isRootEvent(event) && event.type === "runtime.warning")
+          .flatMap(detailTaskIds);
+        assert.deepEqual(rootWarnings, ["task-outer-bash"]);
+
+        const outerWarnings = events
+          .filter((event) => onChild(event, OUTER) && event.type === "runtime.warning")
+          .map((event) => payloadRecord(event).message);
+        assert.deepEqual(outerWarnings, [cmdWithParent, cmdByFallback]);
+
+        // On Stop, the subagent's own background Bash tasks retire on the subagent's
+        // child thread rather than leaking or leaving open entries there.
+        assert.deepEqual(taskCompletions(events), [
+          { taskId: "task-outer-bash", status: "stopped", toolUseId: OUTER, onRoot: true },
+          { taskId: "bash-parent-id", status: "stopped", toolUseId: undefined, onRoot: false },
+          { taskId: "bash-cmd-fallback", status: "stopped", toolUseId: undefined, onRoot: false },
+        ]);
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
+      );
+    },
+  );
+
   it.effect("records a background subagent's failure on its launching tool call", () => {
     const harness = makeHarness();
     const BG = "toolu_background_agent";

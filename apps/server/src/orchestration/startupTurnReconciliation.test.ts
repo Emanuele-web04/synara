@@ -898,7 +898,10 @@ describe("reconcileRestartStuckTurns selection", () => {
               Effect.succeed({ threads: [thread, makeThread("untouched", { activities: [] })] }),
             dispatch,
           } as never),
-          Effect.provideService(ProjectionSnapshotQuery, { getThreadDetailById } as never),
+          Effect.provideService(ProjectionSnapshotQuery, {
+            getThreadDetailById,
+            listTaskLifecycleActivitiesByThreads: () => Effect.succeed([]),
+          } as never),
           Effect.provideService(ProjectionPendingInteractionRepository, {
             listUnsettled: () => Effect.succeed([row]),
           } as never),
@@ -921,4 +924,115 @@ describe("reconcileRestartStuckTurns selection", () => {
       );
     },
   );
+
+  it("finds orphaned background tasks via the indexed task query even when readModel activities are empty and runtime is stopped", async () => {
+    const beforeBoot = new Date(Date.now() - process.uptime() * 1000 - 60_000).toISOString();
+    const thread = {
+      ...makeThread("stuck-bg", {
+        session: makeSession("stuck-bg", { status: "ready", activeTurnId: null }),
+        latestTurn: { state: "completed" },
+      }),
+      activities: [],
+      hasPendingApprovals: false,
+      hasPendingUserInput: false,
+    };
+    const oldNotice = {
+      id: EventId.makeUnsafe("bg-old"),
+      threadId: thread.id,
+      turnId: null,
+      kind: "runtime.warning",
+      payload: {
+        nativeEventType: "background_tasks_changed",
+        data: { tasks: [{ task_id: "orphan-bg-1", task_type: "local_bash" }] },
+      },
+      sequence: 10,
+      createdAt: beforeBoot,
+    };
+    const dispatch = vi.fn(() => Effect.void);
+    const getThreadDetailById = vi.fn(() =>
+      Effect.succeed(
+        Option.some({
+          ...thread,
+          // Detail tail no longer includes the old notice, only newer activity.
+          activities: [
+            {
+              id: EventId.makeUnsafe("tail-activity"),
+              tone: "info" as const,
+              kind: "turn.completed",
+              summary: "Turn completed",
+              payload: {},
+              turnId: null,
+              sequence: 500,
+              createdAt: beforeBoot,
+            },
+          ],
+        }),
+      ),
+    );
+    const idleThreads = Array.from({ length: 100 }, (_, index) =>
+      makeThread(`idle-${index}`, { activities: [] }),
+    );
+    const listTaskLifecycleActivitiesByThreads = vi.fn(
+      (threadIds: ReadonlyArray<ThreadId>, mode?: "discovery") =>
+        Effect.succeed(
+          !threadIds.includes(thread.id)
+            ? []
+            : mode === "discovery"
+              ? [oldNotice]
+              : [
+                  oldNotice,
+                  {
+                    ...oldNotice,
+                    id: EventId.makeUnsafe("late-progress"),
+                    kind: "task.updated",
+                    payload: { taskId: "orphan-bg-1", status: "running" },
+                    sequence: 600,
+                  },
+                ],
+        ),
+    );
+    await Effect.runPromise(
+      reconcileRestartStuckTurns.pipe(
+        Effect.provideService(ProviderCommandReactor, {
+          withRestartOrphanedThread: (_threadId, effect) => effect.pipe(Effect.map(Option.some)),
+        } as Pick<
+          (typeof ProviderCommandReactor)["Service"],
+          "withRestartOrphanedThread"
+        > as never),
+        Effect.provideService(OrchestrationEngineService, {
+          getReadModel: () => Effect.succeed({ threads: [...idleThreads, thread] }),
+          dispatch,
+        } as never),
+        Effect.provideService(ProjectionSnapshotQuery, {
+          getThreadDetailById,
+          listTaskLifecycleActivitiesByThreads,
+        } as never),
+        Effect.provideService(ProjectionPendingInteractionRepository, {
+          listUnsettled: () => Effect.succeed([]),
+        } as never),
+        Effect.provideService(ProviderSessionRuntimeRepository, {
+          // Clean shutdown already marked the runtime stopped.
+          list: () => Effect.succeed([]),
+        } as never),
+      ),
+    );
+    expect(listTaskLifecycleActivitiesByThreads.mock.calls).toEqual([
+      [idleThreads.map(({ id }) => id), "discovery"],
+      [[thread.id], "discovery"],
+      [[thread.id], undefined],
+    ]);
+    expect(getThreadDetailById).toHaveBeenCalledExactlyOnceWith(thread.id);
+    expect(dispatch).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        type: "thread.activity.append",
+        threadId: thread.id,
+        activity: expect.objectContaining({
+          kind: "task.completed",
+          summary: "Task stopped",
+          payload: { taskId: "orphan-bg-1", status: "stopped" },
+          sequence: 601,
+        }),
+      }),
+    );
+  });
 });
